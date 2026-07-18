@@ -30,8 +30,20 @@ from ai_trading.features.indicators import (
 )
 from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.models.contracts import (
+    DAY_SLEEVE_ML_BAR_TIMEFRAME,
+    infer_day_sleeve_regimes,
+)
 from ai_trading.config.management import get_env
 from ai_trading.paths import CACHE_DIR
+from ai_trading.research.walk_forward import (
+    ContiguousWalkForwardConfig,
+    contiguous_walk_forward_splits,
+)
+from ai_trading.registry.manifest import (
+    MARKET_REGIME_CLASSIFIER_ID,
+    derive_market_regime_policy,
+)
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.offline_replay import (
     LiveCostReplayModel,
@@ -79,6 +91,9 @@ class ReplayAlignedTrainingConfig:
     live_cost_model_usable: bool = False
     training_cache_enabled: bool = True
     training_cache_dir: str | None = None
+    walk_forward_folds: int = 5
+    walk_forward_embargo_bars: int = 1
+    walk_forward_embargo_percent: float = 0.0
 
 
 def _resolve_symbol_paths(data_dir: Path, symbols: str) -> dict[str, Path]:
@@ -400,6 +415,7 @@ def _build_symbol_dataset(
         round_trip_cost_bps=round_trip_cost_bps,
     )
     out = features.copy()
+    out["close"] = close.to_numpy(dtype=float)
     out["symbol"] = symbol
     out["timestamp"] = frame.index
     label_end_timestamp = pd.Series(frame.index, index=frame.index).shift(-int(horizon_bars))
@@ -841,6 +857,501 @@ def _attach_model_metadata(
             )
 
 
+def _ranking_separation(
+    dataset: pd.DataFrame,
+    probabilities: np.ndarray,
+) -> dict[str, Any]:
+    scores = np.asarray(probabilities, dtype=float)
+    net = pd.to_numeric(dataset["net_long_bps"], errors="coerce").to_numpy(dtype=float)
+    valid = np.isfinite(scores) & np.isfinite(net)
+    if not bool(valid.any()):
+        return {
+            "rows": 0,
+            "quantile_fraction": 0.20,
+            "high_score_mean_net_edge_bps": None,
+            "low_score_mean_net_edge_bps": None,
+            "high_minus_low_net_edge_bps": None,
+        }
+    valid_scores = scores[valid]
+    valid_net = net[valid]
+    bucket_size = max(1, int(np.ceil(valid_scores.size * 0.20)))
+    order = np.argsort(valid_scores, kind="stable")
+    low_mean = float(np.mean(valid_net[order[:bucket_size]]))
+    high_mean = float(np.mean(valid_net[order[-bucket_size:]]))
+    return {
+        "rows": int(valid_scores.size),
+        "quantile_fraction": 0.20,
+        "high_score_mean_net_edge_bps": high_mean,
+        "low_score_mean_net_edge_bps": low_mean,
+        "high_minus_low_net_edge_bps": float(high_mean - low_mean),
+    }
+
+
+def _selected_post_cost_metrics(
+    dataset: pd.DataFrame,
+    probabilities: np.ndarray,
+    *,
+    confidence_threshold: float,
+    entry_score_threshold: float,
+) -> tuple[dict[str, Any], np.ndarray]:
+    probability = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
+    score = (2.0 * probability) - 1.0
+    selected = (probability >= float(confidence_threshold)) & (
+        score >= float(entry_score_threshold)
+    )
+    net = pd.to_numeric(dataset["net_long_bps"], errors="coerce").to_numpy(dtype=float)
+    selected_net = net[selected & np.isfinite(net)]
+    gains = float(selected_net[selected_net > 0.0].sum()) if selected_net.size else 0.0
+    losses = float(-selected_net[selected_net < 0.0].sum()) if selected_net.size else 0.0
+    cumulative = np.cumsum(selected_net) if selected_net.size else np.asarray([], dtype=float)
+    running_peak = np.maximum.accumulate(np.concatenate([np.asarray([0.0]), cumulative]))
+    equity = np.concatenate([np.asarray([0.0]), cumulative])
+    max_drawdown = float(np.max(running_peak - equity)) if equity.size else 0.0
+    metrics = {
+        "selected_candidates": int(selected_net.size),
+        "trades": int(selected_net.size),
+        "mean_post_cost_net_edge_bps": (
+            float(np.mean(selected_net)) if selected_net.size else None
+        ),
+        "total_post_cost_net_edge_bps": float(np.sum(selected_net)),
+        "gross_positive_net_edge_bps": gains,
+        "gross_negative_net_edge_bps": losses,
+        "profit_factor": (float(gains / losses) if losses > 0.0 else None),
+        "max_drawdown_bps": max_drawdown,
+        "hit_rate": (
+            float(np.mean(selected_net > 0.0)) if selected_net.size else None
+        ),
+        "confidence_threshold": float(confidence_threshold),
+        "entry_score_threshold": float(entry_score_threshold),
+        "ranking_separation": _ranking_separation(dataset, probability),
+    }
+    return metrics, selected
+
+
+def _regime_post_cost_metrics(
+    dataset: pd.DataFrame,
+    probabilities: np.ndarray,
+    *,
+    confidence_threshold: float,
+    entry_score_threshold: float,
+) -> tuple[str | None, dict[str, dict[str, Any]]]:
+    regime_col = next(
+        (name for name in ("market_regime", "session_regime") if name in dataset.columns),
+        None,
+    )
+    if regime_col is None:
+        return None, {}
+    regimes = dataset[regime_col].astype(str).str.strip().str.lower()
+    out: dict[str, dict[str, Any]] = {}
+    for regime in sorted(value for value in regimes.unique().tolist() if value):
+        mask = (regimes == regime).to_numpy()
+        metrics, _ = _selected_post_cost_metrics(
+            dataset.loc[mask].copy(),
+            np.asarray(probabilities, dtype=float)[mask],
+            confidence_threshold=confidence_threshold,
+            entry_score_threshold=entry_score_threshold,
+        )
+        metrics["oos_rows"] = int(mask.sum())
+        out[regime] = metrics
+    return regime_col, out
+
+
+def _fold_market_regimes(
+    history: pd.DataFrame,
+    test: pd.DataFrame,
+) -> tuple[pd.Series, dict[str, Any]]:
+    """Label OOS rows with the canonical past-only live-serving classifier."""
+
+    if "close" not in history.columns or "close" not in test.columns:
+        raise ValueError("Canonical market-regime inference requires close prices")
+    combined = history.copy()
+    combined["_walk_forward_test_row"] = combined.index.isin(test.index)
+    combined = combined.sort_values(
+        ["symbol", "timestamp"], kind="mergesort"
+    )
+    result = pd.Series("sideways", index=test.index, dtype="object")
+    for _, symbol_rows in combined.groupby("symbol", sort=True):
+        symbol_rows = symbol_rows.sort_values("timestamp", kind="mergesort")
+        close = pd.to_numeric(symbol_rows["close"], errors="coerce").ffill().bfill()
+        labels = np.asarray(infer_day_sleeve_regimes(close.to_numpy(dtype=float)), dtype=object)
+        test_mask = symbol_rows["_walk_forward_test_row"].astype(bool).to_numpy()
+        result.loc[symbol_rows.index[test_mask]] = labels[test_mask]
+    counts = result.astype(str).value_counts().sort_index()
+    return (
+        result,
+        {
+            "market_regime_classifier": "day_sleeve_past_only_v1",
+            "canonical_helper": "ai_trading.models.contracts.infer_day_sleeve_regimes",
+            "method": "canonical_past_only_close_inference",
+            "raw_close_return_proxy_used": False,
+            "bar_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
+            "past_only": True,
+            "history_scope": "full_causal_symbol_history_through_fold_test_end",
+            "test_label_counts": {
+                str(regime): int(count) for regime, count in counts.items()
+            },
+        },
+    )
+
+
+def _walk_forward_qualification(
+    folds: list[dict[str, Any]],
+    *,
+    required_folds: int,
+    min_trades: int,
+    min_mean_net_edge_bps: float,
+    min_profitable_fold_ratio: float,
+    min_ranking_separation_bps: float,
+) -> dict[str, Any]:
+    supported = [fold for fold in folds if int(fold.get("trades", 0) or 0) > 0]
+    fold_edges = [float(fold["mean_post_cost_net_edge_bps"]) for fold in supported]
+    total_trades = sum(int(fold.get("trades", 0) or 0) for fold in folds)
+    total_edge = sum(float(fold.get("total_post_cost_net_edge_bps", 0.0) or 0.0) for fold in folds)
+    mean_edge = float(total_edge / total_trades) if total_trades else None
+    profitable_folds = sum(edge > 0.0 for edge in fold_edges)
+    profitable_ratio = float(profitable_folds / len(folds)) if folds else 0.0
+    separation_values = [
+        float(value)
+        for fold in folds
+        for value in [
+            cast(Mapping[str, Any], fold.get("ranking_separation", {})).get(
+                "high_minus_low_net_edge_bps"
+            )
+        ]
+        if value is not None
+    ]
+    mean_separation = (
+        float(np.mean(separation_values)) if separation_values else None
+    )
+    reasons: list[str] = []
+    if len(folds) < int(required_folds):
+        reasons.append(f"insufficient_folds:{len(folds)}<{int(required_folds)}")
+    if total_trades < int(min_trades):
+        reasons.append(f"insufficient_support:{total_trades}<{int(min_trades)}")
+    if mean_edge is None or mean_edge <= float(min_mean_net_edge_bps):
+        reasons.append(
+            f"nonpositive_or_below_minimum_net_edge:{mean_edge}"
+        )
+    if profitable_ratio < float(min_profitable_fold_ratio):
+        reasons.append(
+            "unstable_profitable_folds:"
+            f"{profitable_ratio:.6f}<{float(min_profitable_fold_ratio):.6f}"
+        )
+    if mean_separation is None or mean_separation <= float(min_ranking_separation_bps):
+        reasons.append(f"insufficient_ranking_separation:{mean_separation}")
+    edge_std = float(np.std(fold_edges)) if len(fold_edges) > 1 else 0.0
+    stability_score = (
+        float(max(0.0, 1.0 - (edge_std / max(abs(float(mean_edge or 0.0)), 1.0))))
+        if fold_edges
+        else 0.0
+    )
+    worst_fold = min(
+        supported,
+        key=lambda fold: float(fold.get("mean_post_cost_net_edge_bps", 0.0) or 0.0),
+        default=None,
+    )
+    return {
+        "evidence_qualified": not reasons,
+        "qualification_reasons": reasons,
+        "fold_count": int(len(folds)),
+        "supported_fold_count": int(len(supported)),
+        "profitable_fold_count": int(profitable_folds),
+        "profitable_fold_ratio": profitable_ratio,
+        "selected_candidates": int(total_trades),
+        "trades": int(total_trades),
+        "mean_post_cost_net_edge_bps": mean_edge,
+        "total_post_cost_net_edge_bps": float(total_edge),
+        "fold_edge_std_bps": edge_std,
+        "stability_score": stability_score,
+        "mean_ranking_high_minus_low_bps": mean_separation,
+        "worst_fold": (
+            {
+                "fold_index": int(worst_fold.get("fold_index", 0) or 0),
+                "mean_post_cost_net_edge_bps": worst_fold.get(
+                    "mean_post_cost_net_edge_bps"
+                ),
+            }
+            if worst_fold is not None
+            else None
+        ),
+        "governance_status": "shadow",
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
+def _aggregate_market_regime_results(
+    oos_frame: pd.DataFrame,
+    *,
+    min_trades: int,
+    min_profitable_fold_ratio: float,
+    min_mean_net_edge_bps: float,
+    min_ranking_separation_bps: float,
+) -> dict[str, dict[str, Any]]:
+    regime_names = sorted(oos_frame["market_regime"].astype(str).unique().tolist())
+    out: dict[str, dict[str, Any]] = {}
+    regime_min_trades = max(25, int(np.ceil(int(min_trades) / max(1, len(regime_names)))))
+    for regime in regime_names:
+        regime_frame = oos_frame.loc[
+            oos_frame["market_regime"].astype(str) == regime
+        ].copy()
+        selected_frame = regime_frame.loc[
+            regime_frame["walk_forward_selected"].astype(bool)
+        ].copy()
+        selected_net = pd.to_numeric(
+            selected_frame["net_long_bps"], errors="coerce"
+        ).dropna().to_numpy(dtype=float)
+        trades = int(selected_net.size)
+        total_edge = float(np.sum(selected_net))
+        gross_positive = float(selected_net[selected_net > 0.0].sum())
+        gross_negative = float(-selected_net[selected_net < 0.0].sum())
+        fold_edges = [
+            float(pd.to_numeric(group["net_long_bps"], errors="coerce").mean())
+            for _, group in selected_frame.groupby("walk_forward_fold")
+            if not group.empty
+        ]
+        fold_count = int(regime_frame["walk_forward_fold"].nunique())
+        supported_fold_count = int(selected_frame["walk_forward_fold"].nunique())
+        profitable = sum(edge > 0.0 for edge in fold_edges)
+        profitable_ratio = float(profitable / fold_count) if fold_count else 0.0
+        mean_edge = float(total_edge / trades) if trades else 0.0
+        cumulative = np.cumsum(selected_net) if trades else np.asarray([], dtype=float)
+        equity = np.concatenate([np.asarray([0.0]), cumulative])
+        running_peak = np.maximum.accumulate(equity)
+        max_drawdown = float(np.max(running_peak - equity)) if equity.size else 0.0
+        ranking = _ranking_separation(
+            regime_frame,
+            pd.to_numeric(
+                regime_frame["walk_forward_probability"], errors="coerce"
+            ).to_numpy(dtype=float),
+        )
+        ranking_separation = ranking.get("high_minus_low_net_edge_bps")
+        reasons: list[str] = []
+        if trades < regime_min_trades:
+            reasons.append(f"insufficient_regime_support:{trades}<{regime_min_trades}")
+        if mean_edge <= float(min_mean_net_edge_bps):
+            reasons.append(f"nonpositive_regime_net_edge:{mean_edge}")
+        if profitable_ratio < float(min_profitable_fold_ratio):
+            reasons.append(
+                "unstable_regime_folds:"
+                f"{profitable_ratio:.6f}<{float(min_profitable_fold_ratio):.6f}"
+            )
+        if (
+            ranking_separation is None
+            or float(ranking_separation) <= float(min_ranking_separation_bps)
+        ):
+            reasons.append(f"insufficient_regime_ranking_separation:{ranking_separation}")
+        out[regime] = {
+            "oos_rows": int(len(regime_frame)),
+            "support": int(trades),
+            "fold_count": fold_count,
+            "supported_fold_count": supported_fold_count,
+            "profitable_fold_count": int(profitable),
+            "profitable_fold_ratio": profitable_ratio,
+            "trades": int(trades),
+            "mean_post_cost_net_edge_bps": mean_edge,
+            "total_post_cost_net_edge_bps": float(total_edge),
+            "profit_factor": (
+                float(gross_positive / gross_negative) if gross_negative > 0.0 else None
+            ),
+            "max_drawdown_bps": max_drawdown,
+            "hit_rate": float(np.mean(selected_net > 0.0)) if trades else None,
+            "ranking_separation": ranking,
+            "evidence_qualified": not reasons,
+            "qualification_reasons": reasons,
+            "shadow_disposition": "observe" if not reasons else "abstain",
+            "promotion_authority": False,
+            "live_money_authority": False,
+        }
+    return out
+
+
+def _run_fold_local_walk_forward(
+    dataset: pd.DataFrame,
+    *,
+    args: argparse.Namespace,
+    edge_global_threshold: float | None,
+    cost_model_identity: Mapping[str, Any],
+) -> tuple[dict[str, Any], Any, pd.DataFrame, pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray]:
+    requested_folds = max(2, int(getattr(args, "walk_forward_folds", 5) or 5))
+    embargo_bars = max(1, int(getattr(args, "walk_forward_embargo_bars", 1) or 1))
+    embargo_percent = max(
+        0.0, float(getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0)
+    )
+    split_config = ContiguousWalkForwardConfig(
+        folds=requested_folds,
+        horizon_bars=int(args.horizon_bars),
+        embargo_bars=embargo_bars,
+        embargo_percent=embargo_percent,
+    )
+    splits = contiguous_walk_forward_splits(dataset, split_config)
+    fold_reports: list[dict[str, Any]] = []
+    oos_frames: list[pd.DataFrame] = []
+    last_bundle: tuple[Any, pd.DataFrame, pd.DataFrame, np.ndarray] | None = None
+    for fold, train, test in splits:
+        if train["target"].nunique() < 2:
+            continue
+        model = _make_model(
+            str(args.model_type),
+            random_state=int(args.random_state) + int(fold.fold_index),
+        )
+        train_features = train[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
+        test_features = test[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
+        model.fit(train_features, train["target"].astype(int))
+        positive_index = _positive_class_index(model)
+        train_probabilities = np.asarray(
+            model.predict_proba(train_features), dtype=float
+        )[:, positive_index]
+        test_probabilities = np.asarray(
+            model.predict_proba(test_features), dtype=float
+        )[:, positive_index]
+        train_thresholds = _threshold_report(train, train_probabilities)
+        best_train_threshold = next(
+            (
+                row
+                for row in train_thresholds
+                if int(row.get("candidates", 0) or 0) > 0
+                and row.get("mean_net_markout_bps") is not None
+            ),
+            None,
+        )
+        confidence_threshold = float(
+            edge_global_threshold
+            if edge_global_threshold is not None
+            else (
+                best_train_threshold.get("confidence_threshold", 0.66)
+                if best_train_threshold is not None
+                else 0.66
+            )
+        )
+        entry_score_threshold = float(
+            best_train_threshold.get("entry_score_threshold", 0.05)
+            if best_train_threshold is not None
+            else 0.05
+        )
+        metrics, selected = _selected_post_cost_metrics(
+            test,
+            test_probabilities,
+            confidence_threshold=confidence_threshold,
+            entry_score_threshold=entry_score_threshold,
+        )
+        regime_test = test.copy()
+        regime_history = dataset.loc[
+            pd.to_datetime(dataset["timestamp"], errors="coerce", utc=True)
+            <= fold.test_end
+        ].copy()
+        market_regimes, regime_definition = _fold_market_regimes(regime_history, test)
+        regime_test["market_regime"] = market_regimes
+        regime_source, by_regime = _regime_post_cost_metrics(
+            regime_test,
+            test_probabilities,
+            confidence_threshold=confidence_threshold,
+            entry_score_threshold=entry_score_threshold,
+        )
+        fold_report = {
+            "fold_index": int(fold.fold_index),
+            "train_start": str(fold.train_start),
+            "train_end": str(fold.train_end),
+            "test_start": str(fold.test_start),
+            "test_end": str(fold.test_end),
+            "initial_train_rows": int(fold.initial_train_rows),
+            "train_rows": int(fold.train_rows),
+            "test_rows": int(fold.test_rows),
+            "purged_train_rows": int(fold.purged_train_rows),
+            "embargoed_train_rows": int(fold.embargoed_train_rows),
+            "horizon_bars": int(fold.horizon_bars),
+            "embargo_bars": int(fold.embargo_bars),
+            "embargo_percent": float(fold.embargo_percent),
+            "chronological_non_overlap": bool(fold.chronological_non_overlap),
+            "label_purge_ok": bool(fold.label_purge_ok),
+            "fit_scope": "fold_train_only",
+            "threshold_scope": "fold_train_only",
+            "cost_model": dict(cost_model_identity),
+            "validation": _evaluate_probabilities(test["target"], test_probabilities),
+            "regime_source": regime_source,
+            "regime_definition": regime_definition,
+            "by_market_regime": by_regime,
+            **metrics,
+        }
+        fold_reports.append(fold_report)
+        oos = test.copy()
+        oos["market_regime"] = market_regimes
+        oos["walk_forward_probability"] = test_probabilities
+        oos["walk_forward_selected"] = selected
+        oos["walk_forward_fold"] = int(fold.fold_index)
+        oos_frames.append(oos)
+        last_bundle = (model, train, test, test_probabilities)
+    if last_bundle is None or not oos_frames:
+        raise RuntimeError("No usable fold-local walk-forward evaluations")
+
+    min_trades = max(1, int(getattr(args, "walk_forward_min_trades", 250) or 250))
+    min_profitable_ratio = float(
+        getattr(args, "walk_forward_min_profitable_fold_ratio", 0.60) or 0.60
+    )
+    min_mean_edge = float(
+        getattr(args, "walk_forward_min_mean_net_edge_bps", 0.0) or 0.0
+    )
+    min_separation = float(
+        getattr(args, "walk_forward_min_ranking_separation_bps", 0.0) or 0.0
+    )
+    aggregate = _walk_forward_qualification(
+        fold_reports,
+        required_folds=requested_folds,
+        min_trades=min_trades,
+        min_mean_net_edge_bps=min_mean_edge,
+        min_profitable_fold_ratio=min_profitable_ratio,
+        min_ranking_separation_bps=min_separation,
+    )
+    oos_frame = pd.concat(oos_frames, axis=0, ignore_index=True).sort_values(
+        ["timestamp", "symbol"], kind="mergesort"
+    )
+    oos_probabilities = pd.to_numeric(
+        oos_frame["walk_forward_probability"], errors="coerce"
+    ).to_numpy(dtype=float)
+    aggregate_by_market_regime = _aggregate_market_regime_results(
+        oos_frame,
+        min_trades=min_trades,
+        min_profitable_fold_ratio=min_profitable_ratio,
+        min_mean_net_edge_bps=min_mean_edge,
+        min_ranking_separation_bps=min_separation,
+    )
+    walk_forward_report = {
+        "evaluation_type": "expanding_contiguous_walk_forward",
+        "market_regime_classifier": MARKET_REGIME_CLASSIFIER_ID,
+        "fold_local_fitting": True,
+        "time_ordered": True,
+        "test_blocks_non_overlapping": True,
+        "label_horizon_purged": True,
+        "config": {
+            "requested_folds": requested_folds,
+            "horizon_bars": int(args.horizon_bars),
+            "embargo_bars": embargo_bars,
+            "embargo_percent": embargo_percent,
+            "min_trades": min_trades,
+            "min_profitable_fold_ratio": min_profitable_ratio,
+            "min_mean_net_edge_bps": min_mean_edge,
+            "min_ranking_separation_bps": min_separation,
+        },
+        "folds": fold_reports,
+        "aggregate": aggregate,
+        "by_market_regime": aggregate_by_market_regime,
+        "governance_status": "shadow",
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "offline_replay_required": True,
+    }
+    model, final_train, final_test, final_probabilities = last_bundle
+    return (
+        walk_forward_report,
+        model,
+        final_train,
+        final_test,
+        final_probabilities,
+        oos_frame,
+        oos_probabilities,
+    )
+
+
 def _split_train_validation_with_purge(
     dataset: pd.DataFrame,
     *,
@@ -910,37 +1421,59 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     if dataset["target"].nunique() < 2:
         raise RuntimeError("Replay-aligned target has fewer than two classes")
 
-    train, validation, split_diagnostics = _split_train_validation_with_purge(
-        dataset,
-        train_fraction=float(args.train_fraction),
-        horizon_bars=int(args.horizon_bars),
-    )
-    if train.empty or validation.empty:
-        raise RuntimeError("Train/validation split is empty after horizon purge")
-    if train["target"].nunique() < 2 or validation["target"].nunique() < 2:
-        raise RuntimeError("Train/validation split must contain both target classes")
-
-    model = _make_model(str(args.model_type), random_state=int(args.random_state))
-    X_train = train[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
-    y_train = train["target"].astype(int)
-    X_validation = validation[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
-    y_validation = validation["target"].astype(int)
-    model.fit(X_train, y_train)
-    positive_index = _positive_class_index(model)
-    probabilities = np.asarray(model.predict_proba(X_validation), dtype=float)[:, positive_index]
-
     edge_global_threshold = _optional_threshold(getattr(args, "edge_global_threshold", None))
-    validation_report = _evaluate_probabilities(y_validation, probabilities)
-    threshold_report = _threshold_report(validation, probabilities)
-    threshold_report_by_regime = _threshold_report_by_regime(validation, probabilities)
-    edge_thresholds_by_regime = _best_thresholds_by_regime(threshold_report_by_regime)
+    live_cost_metadata = _live_cost_request_metadata(args, live_cost_model)
+    cost_model_identity = {
+        "version": (
+            f"live_cost_model:{live_cost_metadata.get('source_sha256')}"
+            if live_cost_metadata.get("source_sha256")
+            else "static_fee_spread_slippage_v1"
+        ),
+        "fee_bps": float(args.fee_bps),
+        "slippage_bps": float(args.slippage_bps),
+        "live_cost_model_source_sha256": live_cost_metadata.get("source_sha256"),
+    }
+    (
+        walk_forward_report,
+        model,
+        train,
+        validation,
+        _final_probabilities,
+        oos_frame,
+        oos_probabilities,
+    ) = _run_fold_local_walk_forward(
+        dataset,
+        args=args,
+        edge_global_threshold=edge_global_threshold,
+        cost_model_identity=cost_model_identity,
+    )
+    final_train_features = train[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
+    positive_index = _positive_class_index(model)
+    final_train_probabilities = np.asarray(
+        model.predict_proba(final_train_features), dtype=float
+    )[:, positive_index]
+    training_threshold_report_by_regime = _threshold_report_by_regime(
+        train, final_train_probabilities
+    )
+    edge_thresholds_by_regime = _best_thresholds_by_regime(
+        training_threshold_report_by_regime
+    )
+    validation_report = _evaluate_probabilities(oos_frame["target"], oos_probabilities)
+    threshold_report = _threshold_report(oos_frame, oos_probabilities)
+    threshold_report_by_regime = _threshold_report_by_regime(
+        oos_frame, oos_probabilities
+    )
     _attach_model_metadata(
         model,
         edge_global_threshold=edge_global_threshold,
         edge_thresholds_by_regime=edge_thresholds_by_regime,
     )
     feature_importance = _feature_importance(model)
-    live_cost_metadata = _live_cost_request_metadata(args, live_cost_model)
+    generated_at = datetime.now(UTC)
+    market_regime_policy = derive_market_regime_policy(
+        walk_forward_report,
+        generated_at=generated_at,
+    )
 
     model_name = str(args.model_name or f"replay_aligned_{args.model_type}").strip()
     model_path = output_dir / f"{model_name}.joblib"
@@ -967,6 +1500,16 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             else getattr(args, "training_cache", True)
         ),
         training_cache_dir=str(_training_cache_dir(getattr(args, "training_cache_dir", None))),
+        walk_forward_folds=max(
+            2, int(getattr(args, "walk_forward_folds", 5) or 5)
+        ),
+        walk_forward_embargo_bars=max(
+            1, int(getattr(args, "walk_forward_embargo_bars", 1) or 1)
+        ),
+        walk_forward_embargo_percent=max(
+            0.0,
+            float(getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0),
+        ),
     )
     manifest_path = write_artifact_manifest(
         model_path=model_path,
@@ -984,12 +1527,17 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "thresholds_by_regime": edge_thresholds_by_regime,
             "feature_importance": feature_importance[:25],
             "live_cost_model": live_cost_metadata,
+            "walk_forward": walk_forward_report,
+            "market_regime_policy": market_regime_policy,
+            "governance_status": "shadow",
+            "promotion_authority": False,
+            "live_money_authority": False,
         },
     )
     report = {
         "schema_version": "1.0.0",
         "artifact_type": "replay_aligned_training_report",
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": generated_at.isoformat(),
         "authority": _training_authority(dataset),
         "model_path": str(model_path),
         "manifest_path": str(manifest_path),
@@ -998,11 +1546,11 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "load_reports": dataset.attrs.get("load_reports", {}),
             "rows": int(len(dataset)),
             "train_rows": int(len(train)),
-            "validation_rows": int(len(validation)),
+            "validation_rows": int(len(oos_frame)),
             "symbols": int(dataset["symbol"].nunique()),
             "positive_rate": float(dataset["target"].mean()),
             "train_positive_rate": float(train["target"].mean()),
-            "validation_positive_rate": float(validation["target"].mean()),
+            "validation_positive_rate": float(oos_frame["target"].mean()),
             "mean_round_trip_cost_bps": float(dataset["round_trip_cost_bps"].mean()),
             "mean_entry_slippage_bps": float(dataset["entry_slippage_bps"].mean()),
             "mean_exit_slippage_bps": float(dataset["exit_slippage_bps"].mean()),
@@ -1010,7 +1558,19 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "mean_max_favorable_excursion_bps": float(dataset["max_favorable_excursion_bps"].mean()),
             "mean_risk_adjusted_net_bps": float(dataset["risk_adjusted_net_bps"].mean()),
             "mean_label_score_bps": float(dataset["label_score_bps"].mean()),
-            "split_purge": split_diagnostics,
+            "split_purge": {
+                "method": "per_fold_label_end_timestamp_purge_plus_embargo",
+                "folds": [
+                    {
+                        "fold_index": fold["fold_index"],
+                        "purged_train_rows": fold["purged_train_rows"],
+                        "embargoed_train_rows": fold["embargoed_train_rows"],
+                        "embargo_bars": fold["embargo_bars"],
+                        "label_purge_ok": fold["label_purge_ok"],
+                    }
+                    for fold in walk_forward_report["folds"]
+                ],
+            },
         },
         "live_cost_model": live_cost_metadata,
         "feature_importance": feature_importance[:25],
@@ -1018,7 +1578,12 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         "threshold_sweep": threshold_report,
         "threshold_sweep_by_regime": threshold_report_by_regime,
         "thresholds_by_regime": edge_thresholds_by_regime,
-        "recommendation": "evaluate_candidate_with_offline_replay_before_promotion",
+        "walk_forward": walk_forward_report,
+        "market_regime_policy": market_regime_policy,
+        "governance_status": "shadow",
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "recommendation": "evaluate_candidate_in_shadow_with_governed_offline_replay",
     }
     report_path = output_dir / f"{model_name}_training_report.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -1075,6 +1640,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
     parser.add_argument("--train-fraction", type=float, default=0.70)
+    parser.add_argument("--walk-forward-folds", type=int, default=5)
+    parser.add_argument("--walk-forward-embargo-bars", type=int, default=1)
+    parser.add_argument("--walk-forward-embargo-percent", type=float, default=0.0)
+    parser.add_argument("--walk-forward-min-trades", type=int, default=250)
+    parser.add_argument(
+        "--walk-forward-min-profitable-fold-ratio", type=float, default=0.60
+    )
+    parser.add_argument("--walk-forward-min-mean-net-edge-bps", type=float, default=0.0)
+    parser.add_argument(
+        "--walk-forward-min-ranking-separation-bps", type=float, default=0.0
+    )
     parser.add_argument(
         "--edge-global-threshold",
         type=float,

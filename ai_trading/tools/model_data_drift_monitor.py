@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.tools.model_data_drift_baseline import EVIDENCE_CONTRACT_VERSION
 
 
 _DRIFT_CATEGORIES = (
@@ -68,6 +69,93 @@ def _mapping(payload: Mapping[str, Any], *keys: str) -> Mapping[str, Any]:
             return {}
         current = current.get(key)
     return current if isinstance(current, Mapping) else {}
+
+
+def _derived_coverage(payload: Mapping[str, Any]) -> dict[str, Any]:
+    declared = payload.get("coverage")
+    if isinstance(declared, Mapping):
+        categories = declared.get("categories")
+        return {
+            "complete": bool(declared.get("complete")),
+            "missing_categories": list(declared.get("missing_categories") or []),
+            "categories": dict(categories) if isinstance(categories, Mapping) else {},
+        }
+    availability = {
+        "feature": bool(_mapping(payload, "features")),
+        "label": bool(_mapping(payload, "labels")),
+        "calibration": bool(_mapping(payload, "calibration")),
+        "live_cost": bool(_mapping(payload, "live_cost")),
+        "symbol": bool(_distribution(_mapping(payload, "symbols"))),
+        "provider": bool(_distribution(_mapping(payload, "providers"))),
+        "regime": bool(_distribution(_mapping(payload, "regimes"))),
+    }
+    missing = [name for name, available in availability.items() if not available]
+    return {
+        "complete": not missing,
+        "missing_categories": missing,
+        "categories": {
+            name: {"available": available} for name, available in availability.items()
+        },
+    }
+
+
+def _model_identity(payload: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    model = _mapping(payload, "model")
+    model_id = str(model.get("model_id") or "").strip() or None
+    model_hash = str(model.get("model_hash") or "").strip() or None
+    return model_id, model_hash
+
+
+def _contract_reasons(
+    baseline: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    reasons: list[str] = []
+    baseline_type = str(baseline.get("artifact_type") or "").strip()
+    current_type = str(current.get("artifact_type") or "").strip()
+    baseline_contract = str(baseline.get("evidence_contract_version") or "").strip() or None
+    current_contract = str(current.get("evidence_contract_version") or "").strip() or None
+    baseline_coverage = _derived_coverage(baseline)
+    current_coverage = _derived_coverage(current)
+
+    if baseline_type and baseline_type != "model_data_drift_baseline":
+        reasons.append("baseline_contract_invalid")
+    if baseline_type == "model_data_drift_baseline":
+        approval = _mapping(baseline, "approval")
+        if baseline.get("status") != "approved" or not bool(approval.get("approved")):
+            reasons.append("baseline_unapproved")
+    if current_type and current_type != "model_data_drift_evidence":
+        reasons.append("current_contract_invalid")
+    if baseline_contract and baseline_contract != EVIDENCE_CONTRACT_VERSION:
+        reasons.append("baseline_contract_incompatible")
+    if current_contract and current_contract != EVIDENCE_CONTRACT_VERSION:
+        reasons.append("current_contract_incompatible")
+    if baseline_contract and current_contract and baseline_contract != current_contract:
+        reasons.append("evidence_contract_mismatch")
+    if baseline and not bool(baseline_coverage["complete"]):
+        reasons.append("baseline_coverage_incomplete")
+    if current and not bool(current_coverage["complete"]):
+        reasons.append("current_coverage_incomplete")
+
+    baseline_model_id, baseline_model_hash = _model_identity(baseline)
+    current_model_id, current_model_hash = _model_identity(current)
+    if baseline_model_id and current_model_id and baseline_model_id != current_model_id:
+        reasons.append("model_id_mismatch")
+    if baseline_model_hash and current_model_hash and baseline_model_hash != current_model_hash:
+        reasons.append("model_hash_mismatch")
+    return reasons, {
+        "expected_contract_version": EVIDENCE_CONTRACT_VERSION,
+        "baseline_contract_version": baseline_contract,
+        "current_contract_version": current_contract,
+        "baseline_artifact_type": baseline_type or None,
+        "current_artifact_type": current_type or None,
+        "baseline_model_id": baseline_model_id,
+        "current_model_id": current_model_id,
+        "baseline_model_hash": baseline_model_hash,
+        "current_model_hash": current_model_hash,
+        "baseline_coverage": baseline_coverage,
+        "current_coverage": current_coverage,
+    }
 
 
 def _freshness(payload: Mapping[str, Any], *, max_age_hours: float, now: datetime) -> dict[str, Any]:
@@ -219,6 +307,8 @@ def build_model_data_drift_monitor(
         reasons.append("current_missing")
     elif not current_freshness["fresh"]:
         reasons.append("current_stale")
+    contract_reasons, contract = _contract_reasons(baseline, current)
+    reasons.extend(reason for reason in contract_reasons if reason not in reasons)
 
     feature = _feature_drift(_mapping(baseline, "features"), _mapping(current, "features"))
     label_rows = _numeric_drift(
@@ -284,7 +374,7 @@ def build_model_data_drift_monitor(
     ]
     status = "blocked" if reasons else ("drift_detected" if drift_categories else "ok")
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "artifact_type": "model_data_drift_monitor",
         "generated_at": generated.isoformat().replace("+00:00", "Z"),
         "status": status,
@@ -293,6 +383,7 @@ def build_model_data_drift_monitor(
             "baseline": baseline_freshness,
             "current": current_freshness,
         },
+        "contract": contract,
         "summary": {
             "covered_categories": list(_DRIFT_CATEGORIES),
             "drift_categories": drift_categories,
@@ -301,7 +392,10 @@ def build_model_data_drift_monitor(
             "current_fresh": current_freshness["fresh"],
         },
         "checks": checks,
-        "operator_note": "Baseline freshness is fail-closed; stale baselines block drift recommendations.",
+        "operator_note": (
+            "Baseline approval, contract compatibility, category coverage, model identity, and "
+            "freshness are fail-closed; baselines never roll forward automatically."
+        ),
     }
 
 

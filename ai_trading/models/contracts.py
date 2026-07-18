@@ -58,7 +58,16 @@ def infer_day_sleeve_regimes(close_values: object) -> tuple[str, ...]:
             if finite_thresholds.size
             else 0.02
         )
-        if np.isfinite(vol[idx]) and vol[idx] >= vol_threshold:
+        threshold_distribution_varies = bool(
+            finite_thresholds.size > 1
+            and float(np.ptp(finite_thresholds))
+            > max(1e-12, abs(vol_threshold) * 1e-9)
+        )
+        if (
+            threshold_distribution_varies
+            and np.isfinite(vol[idx])
+            and vol[idx] > vol_threshold
+        ):
             labels.append("volatile")
         elif np.isfinite(trend[idx]) and trend[idx] >= 0.02:
             labels.append("uptrend")

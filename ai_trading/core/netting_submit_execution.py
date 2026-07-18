@@ -133,6 +133,39 @@ def execute_netting_submission(
     submit_annotations.setdefault("expected_net_edge_bps", expected_net_edge_bps)
     submit_metadata = dict(order_lineage_metadata)
     submit_metadata.setdefault("expected_net_edge_bps", expected_net_edge_bps)
+    quote_context = submit_annotations.get("quote")
+    if isinstance(quote_context, Mapping):
+        quote_age_ms = safe_float(quote_context.get("quote_age_ms"))
+        if quote_age_ms is not None:
+            submit_metadata["decision_quote_age_ms"] = float(quote_age_ms)
+        for source_key, destination_key in (
+            ("bid", "decision_bid"),
+            ("ask", "decision_ask"),
+            ("midpoint", "decision_mid"),
+        ):
+            quote_value = safe_float(quote_context.get(source_key))
+            if quote_value is not None:
+                submit_metadata[destination_key] = float(quote_value)
+    if submit_bid_at_arrival is not None:
+        submit_metadata["decision_bid"] = float(submit_bid_at_arrival)
+    if submit_ask_at_arrival is not None:
+        submit_metadata["decision_ask"] = float(submit_ask_at_arrival)
+    if submit_mid_at_arrival is not None:
+        submit_metadata["decision_mid"] = float(submit_mid_at_arrival)
+    if (
+        submit_bid_at_arrival is not None
+        and submit_ask_at_arrival is not None
+        and submit_ask_at_arrival >= submit_bid_at_arrival
+    ):
+        spread_mid = submit_mid_at_arrival
+        if spread_mid is None:
+            spread_mid = (float(submit_bid_at_arrival) + float(submit_ask_at_arrival)) / 2.0
+        if spread_mid > 0.0:
+            submit_metadata["decision_spread_bps"] = (
+                (float(submit_ask_at_arrival) - float(submit_bid_at_arrival))
+                / float(spread_mid)
+                * 10_000.0
+            )
     try:
         order = submit_order_func(
             runtime,
@@ -262,6 +295,31 @@ def execute_netting_submission(
         safe_float=safe_float,
         has_persistable_fill=has_persistable_fill_func,
     )
+    execution_metadata = dict(submit_metadata)
+    execution_metadata["client_order_id"] = str(
+        extract_order_value_func(order, "client_order_id") or client_order_id
+    )
+    broker_order_id = getattr(order_state, "broker_order_id", None)
+    if broker_order_id in (None, ""):
+        broker_order_id = extract_order_value_func(
+            order,
+            "id",
+            "order_id",
+            "broker_order_id",
+        )
+    if broker_order_id not in (None, ""):
+        execution_metadata["broker_order_id"] = str(broker_order_id)
+        execution_metadata["order_id"] = str(broker_order_id)
+    for destination_key, source_keys in (
+        ("order_type", ("type", "order_type")),
+        ("time_in_force", ("time_in_force", "tif")),
+        ("venue", ("exchange", "venue", "route")),
+    ):
+        value = extract_order_value_func(order, *source_keys)
+        if value not in (None, ""):
+            execution_metadata[destination_key] = str(
+                getattr(value, "value", value)
+            ).strip()
     status_token = str(getattr(order_state, "status_token", "") or "").strip().lower()
     if status_token in _NON_ACCEPTED_ORDER_STATUSES:
         reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
@@ -297,7 +355,7 @@ def execute_netting_submission(
             compute_attribution_metrics_func=compute_attribution_metrics_func,
             safe_float=safe_float,
             logger=logger,
-            order_lineage_metadata=submit_metadata,
+            order_lineage_metadata=execution_metadata,
         )
         return NettingSubmitExecutionResult(
             status=status_token,
@@ -355,7 +413,7 @@ def execute_netting_submission(
         compute_attribution_metrics_func=compute_attribution_metrics_func,
         safe_float=safe_float,
         logger=logger,
-        order_lineage_metadata=submit_metadata,
+        order_lineage_metadata=execution_metadata,
     )
     return NettingSubmitExecutionResult(
         status="submitted",

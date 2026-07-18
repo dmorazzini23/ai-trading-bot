@@ -9,7 +9,7 @@ import math
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
@@ -19,6 +19,8 @@ _SCHEMA_VERSION = "1.0.0"
 _DEFAULT_OUTPUT_DIR = "runtime/research_reports/model_registry"
 _ALLOWED_ROLES = {"champion", "challenger"}
 _OK_STATUSES = {"ok", "pass", "passed", "ready", "success", "complete", "completed"}
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_TRUSTED_ARTIFACT_ROOTS = (Path("/var/lib/ai-trading-bot"), _REPOSITORY_ROOT)
 
 
 def _utc_now() -> datetime:
@@ -133,6 +135,183 @@ def _registry_models(registry: Mapping[str, Any] | None) -> list[dict[str, Any]]
     if not isinstance(raw, list):
         return []
     return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+
+def _evaluation_models(registry: Mapping[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Normalize advisory and governed registry schemas for read-only evaluation."""
+
+    raw = registry.get("models")
+    if isinstance(raw, list):
+        models = [dict(item) for item in raw if isinstance(item, Mapping)]
+        return models, "legacy_models_list"
+
+    models: list[dict[str, Any]] = []
+    for model_id, raw_model in registry.items():
+        if not isinstance(model_id, str) or not isinstance(raw_model, Mapping):
+            continue
+        governance = raw_model.get("governance")
+        if not isinstance(governance, Mapping):
+            continue
+        governance_status = str(governance.get("status") or "").strip().lower()
+        if governance_status not in {"production", "shadow"}:
+            continue
+        model = dict(raw_model)
+        model["model_id"] = str(model.get("model_id") or model_id).strip()
+        model["role"] = "champion" if governance_status == "production" else "challenger"
+        model["status"] = governance_status
+        if not isinstance(model.get("metrics"), Mapping):
+            governed_metrics = governance.get("metrics")
+            model["metrics"] = (
+                dict(governed_metrics) if isinstance(governed_metrics, Mapping) else {}
+            )
+        models.append(model)
+    return models, "governed_keyed_mapping"
+
+
+def _model_role(model: Mapping[str, Any]) -> str:
+    role = str(model.get("role") or "").strip().lower()
+    if role in _ALLOWED_ROLES:
+        return role
+    governance = model.get("governance")
+    governance_status = (
+        str(governance.get("status") or "").strip().lower()
+        if isinstance(governance, Mapping)
+        else ""
+    )
+    if governance_status == "production":
+        return "champion"
+    if governance_status == "shadow":
+        return "challenger"
+    return ""
+
+
+def _model_is_active(model: Mapping[str, Any]) -> bool:
+    if model.get("active") is False:
+        return False
+    return str(model.get("status") or "").strip().lower() not in {"blocked", "failed"}
+
+
+def _model_sort_key(model: Mapping[str, Any], position: int) -> tuple[datetime, int, int]:
+    registered_at = _parse_timestamp(model.get("registered_at")) or datetime.min.replace(
+        tzinfo=UTC
+    )
+    try:
+        registered_seq = int(model.get("registered_seq", 0) or 0)
+    except (TypeError, ValueError):
+        registered_seq = 0
+    return registered_at, registered_seq, position
+
+
+def _artifact_candidates(model: Mapping[str, Any]) -> list[tuple[str, Path]]:
+    candidates: list[tuple[str, Path]] = []
+    governance = model.get("governance")
+    if isinstance(governance, Mapping):
+        runtime_promotion = governance.get("runtime_promotion")
+        if isinstance(runtime_promotion, Mapping):
+            runtime_path = str(runtime_promotion.get("model_path") or "").strip()
+            if runtime_path:
+                candidates.append(("runtime_promotion", Path(runtime_path)))
+    for key in ("model_path", "artifact_path"):
+        raw_path = str(model.get(key) or "").strip()
+        if raw_path:
+            candidates.append((key, Path(raw_path)))
+    model_dir = str(model.get("path") or "").strip()
+    if model_dir:
+        candidates.append(("model_dir", Path(model_dir) / "model.json"))
+    return candidates
+
+
+def _normalise_trusted_artifact_roots(
+    roots: Iterable[str | Path] | None,
+) -> tuple[Path, ...]:
+    raw_roots = roots if roots is not None else _DEFAULT_TRUSTED_ARTIFACT_ROOTS
+    resolved_roots: list[Path] = []
+    for root in raw_roots:
+        try:
+            resolved_roots.append(Path(root).expanduser().resolve())
+        except (OSError, RuntimeError):
+            continue
+    return tuple(resolved_roots)
+
+
+def _artifact_viability(
+    model: Mapping[str, Any],
+    *,
+    trusted_roots: tuple[Path, ...] | None,
+) -> dict[str, Any]:
+    candidates = _artifact_candidates(model)
+    untrusted_paths: list[str] = []
+    for source, candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+            viable = resolved.is_file()
+        except (OSError, RuntimeError):
+            continue
+        if viable and trusted_roots is not None and not any(
+            resolved.is_relative_to(root) for root in trusted_roots
+        ):
+            untrusted_paths.append(str(resolved))
+            continue
+        if viable:
+            return {
+                "ok": True,
+                "reason": "ok",
+                "path": str(resolved),
+                "source": source,
+            }
+    return {
+        "ok": False,
+        "reason": "artifact_untrusted" if untrusted_paths else "artifact_missing",
+        "path": None,
+        "source": None,
+        "candidate_paths": [str(path) for _, path in candidates],
+        "untrusted_paths": untrusted_paths,
+    }
+
+
+def _select_viable_identity(
+    candidates: list[dict[str, Any]],
+    *,
+    identity: str,
+    trusted_roots: tuple[Path, ...] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    ordered = sorted(
+        enumerate(candidates),
+        key=lambda item: _model_sort_key(item[1], item[0]),
+        reverse=True,
+    )
+    rejected: list[dict[str, Any]] = []
+    for _, model in ordered:
+        viability = _artifact_viability(model, trusted_roots=trusted_roots)
+        if viability["ok"]:
+            selected = dict(model)
+            selected["artifact_viability"] = viability
+            return selected, {
+                "reason": "ok",
+                "candidate_count": len(candidates),
+                "artifact_rejected_count": len(rejected),
+                "artifact_rejections": rejected,
+            }
+        rejected.append(
+            {
+                "model_id": model.get("model_id"),
+                "reason": viability["reason"],
+                "candidate_paths": viability.get("candidate_paths", []),
+                "untrusted_paths": viability.get("untrusted_paths", []),
+            }
+        )
+    if not candidates:
+        reason = f"{identity}_missing"
+    elif any(row["reason"] == "artifact_untrusted" for row in rejected):
+        reason = f"{identity}_artifact_untrusted"
+    else:
+        reason = f"{identity}_artifact_missing"
+    return None, {
+        "reason": reason,
+        "candidate_count": len(candidates),
+        "artifact_rejected_count": len(rejected),
+        "artifact_rejections": rejected,
+    }
 
 
 def _active_champion(models: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -284,26 +463,57 @@ def build_model_evaluation(
     min_delta: float = 0.0,
     generated_at: datetime | None = None,
     max_evidence_age_hours: float = 96.0,
+    trusted_artifact_roots: Iterable[str | Path] | None = None,
 ) -> dict[str, Any]:
     """Compare champion and challenger records without promotion authority."""
 
     generated = generated_at.astimezone(UTC) if generated_at else _utc_now()
-    models = _registry_models(registry)
-    champion = _active_champion(models)
+    models, registry_schema = _evaluation_models(registry)
+    enforce_artifact_trust = bool(
+        registry_schema == "governed_keyed_mapping" or trusted_artifact_roots is not None
+    )
+    trusted_roots = (
+        _normalise_trusted_artifact_roots(trusted_artifact_roots)
+        if enforce_artifact_trust
+        else None
+    )
     requested = str(challenger_id or "").strip()
-    challengers = [
+    challenger_candidates = [
         model
         for model in models
-        if str(model.get("role") or "").lower() == "challenger"
-        and str(model.get("status") or "").lower() not in {"blocked", "failed"}
+        if _model_role(model) == "challenger"
+        and _model_is_active(model)
         and (not requested or str(model.get("model_id") or "") == requested)
     ]
-    challenger = challengers[-1] if challengers else None
+    challenger, challenger_discovery = _select_viable_identity(
+        challenger_candidates,
+        identity="challenger",
+        trusted_roots=trusted_roots,
+    )
+    challenger_strategy = str((challenger or {}).get("strategy") or "").strip()
+    if not challenger_strategy and challenger_candidates:
+        challenger_strategy = str(challenger_candidates[-1].get("strategy") or "").strip()
+    champion_candidates = [
+        model
+        for model in models
+        if _model_role(model) == "champion"
+        and _model_is_active(model)
+        and (
+            not challenger_strategy
+            or not str(model.get("strategy") or "").strip()
+            or str(model.get("strategy") or "").strip() == challenger_strategy
+        )
+    ]
+    champion, champion_discovery = _select_viable_identity(
+        champion_candidates,
+        identity="champion",
+        trusted_roots=trusted_roots,
+    )
     blocked_reasons: list[str] = []
     if champion is None:
-        blocked_reasons.append("champion_missing")
+        blocked_reasons.append(str(champion_discovery["reason"]))
     if challenger is None:
-        blocked_reasons.append("challenger_missing")
+        blocked_reasons.append(str(challenger_discovery["reason"]))
 
     champion_freshness = (
         _model_freshness(
@@ -369,6 +579,17 @@ def build_model_evaluation(
         "manual_promotion_required": bool(beats_champion),
         "primary_metric": primary_metric,
         "min_delta": float(min_delta),
+        "registry_schema": registry_schema,
+        "artifact_trust": {
+            "enforced": enforce_artifact_trust,
+            "trusted_roots": [str(root) for root in trusted_roots or ()],
+        },
+        "active_champion": champion,
+        "active_challenger": challenger,
+        "identity_discovery": {
+            "champion": champion_discovery,
+            "challenger": challenger_discovery,
+        },
         "champion": champion,
         "challenger": challenger,
         "metrics": {
@@ -385,7 +606,11 @@ def build_model_evaluation(
         "promotion_boundary": "evaluation is advisory and cannot promote or deploy a model",
         "rollback": {
             "current_champion_model_id": (champion or {}).get("model_id"),
-            "current_champion_path": (champion or {}).get("model_path"),
+            "current_champion_path": (
+                (champion or {}).get("artifact_viability", {}).get("path")
+                if isinstance((champion or {}).get("artifact_viability"), Mapping)
+                else (champion or {}).get("model_path")
+            ),
         },
     }
 

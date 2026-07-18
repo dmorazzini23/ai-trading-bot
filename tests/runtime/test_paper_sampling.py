@@ -18,14 +18,16 @@ from ai_trading.runtime.paper_sampling import (
 def _cfg(**updates):
     values = {
         "paper_sampling_enabled": True,
-        "paper_sampling_allowed_symbols": ("AAPL", "AMZN"),
+        "paper_sampling_allowed_symbols": ("AAPL", "AMZN", "MSFT"),
         "paper_sampling_max_trades_per_day": 1,
         "paper_sampling_max_trades_per_symbol_per_day": 4,
         "paper_sampling_max_trades_per_side_per_day": 6,
         "paper_sampling_max_opening_trades_per_day": 3,
         "paper_sampling_max_midday_trades_per_day": 4,
         "paper_sampling_max_closing_trades_per_day": 3,
-        "paper_sampling_max_notional_per_order": 250.0,
+        "paper_sampling_max_notional_per_order": 750.0,
+        "paper_sampling_passive_only": True,
+        "paper_sampling_relax_edge_gates_enabled": False,
         "execution_mode": "paper",
         "paper": True,
         "alpaca_base_url": "https://paper-api.alpaca.markets",
@@ -62,7 +64,7 @@ def test_config_rejects_paper_sampling_for_live_canary_profile() -> None:
         )
 
 
-def test_config_exposes_paper_only_relaxed_sampling_knobs() -> None:
+def test_config_exposes_conservative_paper_sampling_knobs() -> None:
     cfg = TradingConfig.from_env(
         {
             "APP_ENV": "test",
@@ -71,11 +73,12 @@ def test_config_exposes_paper_only_relaxed_sampling_knobs() -> None:
             "AI_TRADING_LAUNCH_PROFILE": "paper_trade",
             "AI_TRADING_PAPER_SAMPLING_ENABLED": "1",
             "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS": "AAPL,AMZN,MSFT",
-            "AI_TRADING_PAPER_SAMPLING_RELAX_EDGE_GATES_ENABLED": "1",
+            "AI_TRADING_PAPER_SAMPLING_PASSIVE_ONLY": "1",
+            "AI_TRADING_PAPER_SAMPLING_RELAX_EDGE_GATES_ENABLED": "0",
             "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER": "750",
-            "AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS": "1.0",
-            "AI_TRADING_PAPER_SAMPLING_EDGE_MIN_EXPECTED_BPS": "2.0",
-            "AI_TRADING_PAPER_SAMPLING_EDGE_COST_MIN_RATIO": "1.03",
+            "AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS": "4.0",
+            "AI_TRADING_PAPER_SAMPLING_EDGE_MIN_EXPECTED_BPS": "4.0",
+            "AI_TRADING_PAPER_SAMPLING_EDGE_COST_MIN_RATIO": "1.10",
             "AI_TRADING_PAPER_SAMPLING_MAX_MANUAL_EDGE_PENALTY_BPS": "5.0",
             "MAX_DRAWDOWN_THRESHOLD": "0.2",
         }
@@ -83,11 +86,60 @@ def test_config_exposes_paper_only_relaxed_sampling_knobs() -> None:
 
     assert cfg.paper_sampling_allowed_symbols == ("AAPL", "AMZN", "MSFT")
     assert cfg.paper_sampling_max_notional_per_order == 750.0
-    assert cfg.paper_sampling_relax_edge_gates_enabled is True
-    assert cfg.paper_sampling_min_expected_net_edge_bps == 1.0
-    assert cfg.paper_sampling_edge_min_expected_bps == 2.0
-    assert cfg.paper_sampling_edge_cost_min_ratio == 1.03
+    assert cfg.paper_sampling_passive_only is True
+    assert cfg.paper_sampling_relax_edge_gates_enabled is False
+    assert cfg.paper_sampling_min_expected_net_edge_bps == 4.0
+    assert cfg.paper_sampling_edge_min_expected_bps == 4.0
+    assert cfg.paper_sampling_edge_cost_min_ratio == 1.10
     assert cfg.paper_sampling_max_manual_edge_penalty_bps == 5.0
+
+
+@pytest.mark.parametrize(
+    ("env_key", "env_value", "message"),
+    (
+        (
+            "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS",
+            "AAPL,NVDA",
+            "must be limited to AAPL,AMZN,MSFT",
+        ),
+        (
+            "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER",
+            "751",
+            "must be <= 750",
+        ),
+        (
+            "AI_TRADING_PAPER_SAMPLING_RELAX_EDGE_GATES_ENABLED",
+            "1",
+            "must remain disabled",
+        ),
+        (
+            "AI_TRADING_PAPER_SAMPLING_PASSIVE_ONLY",
+            "0",
+            "must remain enabled",
+        ),
+    ),
+)
+def test_config_rejects_unsafe_paper_sampling_policy(
+    env_key: str,
+    env_value: str,
+    message: str,
+) -> None:
+    env = {
+        "APP_ENV": "test",
+        "EXECUTION_MODE": "paper",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+        "AI_TRADING_LAUNCH_PROFILE": "paper_trade",
+        "AI_TRADING_PAPER_SAMPLING_ENABLED": "1",
+        "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS": "AAPL,AMZN,MSFT",
+        "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER": "750",
+        "AI_TRADING_PAPER_SAMPLING_PASSIVE_ONLY": "1",
+        "AI_TRADING_PAPER_SAMPLING_RELAX_EDGE_GATES_ENABLED": "0",
+        "MAX_DRAWDOWN_THRESHOLD": "0.2",
+    }
+    env[env_key] = env_value
+
+    with pytest.raises(ValueError, match=message):
+        TradingConfig.from_env(env)
 
 
 def test_paper_sampling_higher_cap_allows_one_share_msft_sample() -> None:
@@ -126,7 +178,7 @@ def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) 
 
     symbol_decision = evaluate_paper_sampling_order(
         cfg,
-        symbol="MSFT",
+        symbol="NVDA",
         side="buy",
         qty=1,
         price=100.0,
@@ -139,7 +191,7 @@ def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) 
         symbol="AMZN",
         side="buy",
         qty=10,
-        price=310.0,
+        price=800.0,
     )
     assert size_decision.allowed is False
     assert size_decision.reason == "PAPER_SAMPLING_MAX_NOTIONAL_BLOCK"
@@ -153,7 +205,7 @@ def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) 
         price=100.0,
     )
     assert capped_decision.allowed is True
-    assert capped_decision.qty == 2
+    assert capped_decision.qty == 7
 
     now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
     first = reserve_paper_sampling_order(

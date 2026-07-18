@@ -156,10 +156,31 @@ def test_production_loader_returns_verified_model_and_immutable_lineage(
     assert len(loaded.lineage["model_artifact_hash"]) == 64
     assert loaded.selected_threshold == pytest.approx(0.55)
     assert loaded.thresholds_by_regime["volatile"] == pytest.approx(0.7)
+    assert loaded.market_regime_policy is None
     assert loaded.governance_status == "production"
     assert loaded.serving_authority == "production"
     with pytest.raises(TypeError):
         loaded.lineage["model_id"] = "changed"  # type: ignore[index]
+
+
+def test_production_loader_preserves_declared_market_regime_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declared_policy = {
+        "schema_version": "market_regime_policy.v1",
+        "governance_status": "shadow",
+        "promotion_authority": False,
+    }
+    _register_model(
+        tmp_path,
+        monkeypatch,
+        metadata_overrides={"market_regime_policy": declared_policy},
+    )
+
+    loaded = load_day_sleeve_production_model()
+
+    assert dict(loaded.market_regime_policy or {}) == declared_policy
 
 
 def test_production_loader_rejects_shadow_model(

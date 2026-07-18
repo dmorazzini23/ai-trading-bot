@@ -91,6 +91,56 @@ def test_expected_edge_calibration_reports_sell_exit_quality() -> None:
     assert payload["calibration_correction"]["side_multipliers"]["sell"]["expected_edge_multiplier"] == 0.0
 
 
+def test_expected_edge_calibration_enriches_exact_tca_metadata_without_changing_gate() -> None:
+    fill = {
+        "ts": "2026-05-05T14:00:03Z",
+        "client_order_id": "client-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "realized_net_edge_bps": 6.0,
+    }
+    tca = {
+        "ts": "2026-05-05T14:00:00Z",
+        "client_order_id": "client-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "expected_net_edge_bps": 8.0,
+        "order_type": "limit",
+        "session": "opening",
+        "decision_quote_age_ms": 125.0,
+        "decision_spread_bps": 3.0,
+        "market_regime": "sideways",
+        "execution_profile": "patient_passive",
+        "regime_profile": "legacy_execution_profile",
+    }
+
+    payload = report_tool.build_expected_edge_calibration_report(
+        report_date="2026-05-05",
+        fills=[fill],
+        tca_rows=[tca],
+        min_samples=2,
+    )
+
+    assert payload["sample_gate"] == {
+        "min_samples": 2,
+        "realized_samples": 1,
+        "sufficient": False,
+    }
+    row = payload["normalized_rows"][0]
+    assert row["metadata_join_method"] == "exact_id"
+    assert row["order_type"] == "limit"
+    assert row["session"] == "opening"
+    assert row["quote_age_ms"] == 125.0
+    assert row["spread_bps"] == 3.0
+    assert row["market_regime"] == "sideways"
+    assert row["regime"] == "sideways"
+    assert row["execution_profile"] == "patient_passive"
+    assert payload["bucketed_by_regime"]["sideways"]["count"] == 1
+    assert payload["bucketed_by_execution_profile"]["patient_passive"]["count"] == 1
+    assert payload["metadata_quality"]["status"] == "complete"
+    assert payload["metadata_quality"]["join_method_counts"] == {"exact_id": 1}
+
+
 def test_expected_edge_calibration_cli_writes_latest(tmp_path: Path) -> None:
     fills = tmp_path / "fills.jsonl"
     out = tmp_path / "calibration.json"

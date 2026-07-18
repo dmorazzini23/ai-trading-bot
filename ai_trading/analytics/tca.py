@@ -185,6 +185,15 @@ def build_tca_record(
     config_snapshot_hash: str | None = None,
     rank_reason: str | None = None,
     rank_reasons: list[str] | tuple[str, ...] | None = None,
+    broker_order_id: str | None = None,
+    time_in_force: str | None = None,
+    session: str | None = None,
+    decision_quote_age_ms: float | None = None,
+    decision_spread_bps: float | None = None,
+    market_regime: str | None = None,
+    volatility_regime: str | None = None,
+    trend_regime: str | None = None,
+    execution_profile: str | None = None,
 ) -> dict[str, Any]:
     side_token = _normalize_order_side(side) or str(side or "").strip().lower()
     arrival = float(benchmark.arrival_price)
@@ -207,6 +216,8 @@ def build_tca_record(
     record = {
         "ts": (generated_ts if generated_ts is not None else datetime.now(UTC)).isoformat(),
         "client_order_id": client_order_id,
+        "order_id": broker_order_id,
+        "broker_order_id": broker_order_id,
         "symbol": symbol,
         "side": side_token,
         "order_side": side_token,
@@ -217,8 +228,19 @@ def build_tca_record(
         "rank_reason": rank_reason,
         "rank_reasons": list(rank_reasons or []),
         "regime_profile": regime_profile,
+        "execution_profile": execution_profile,
+        "market_regime": market_regime,
+        "volatility_regime": volatility_regime,
+        "trend_regime": trend_regime,
+        "session": session,
+        "session_regime": session,
         "provider": provider,
         "order_type": order_type,
+        "time_in_force": time_in_force,
+        "decision_quote_age_ms": decision_quote_age_ms,
+        "quote_age_ms": decision_quote_age_ms,
+        "decision_spread_bps": decision_spread_bps,
+        "spread_bps": decision_spread_bps,
         "decision_price": arrival,
         "submit_price_reference": (
             float(benchmark.mid_at_arrival) if benchmark.mid_at_arrival is not None else arrival

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -201,3 +203,47 @@ def test_aws_cli_env_drops_unrelated_application_secrets(monkeypatch: pytest.Mon
     assert env["AWS_REGION"] == "us-east-1"
     assert "ALPACA_SECRET_KEY" not in env
     assert "AI_TRADING_SLACK_WEBHOOK_URL" not in env
+
+
+def test_script_ignores_stale_runtime_config_while_rendering_source(tmp_path: Path) -> None:
+    src = tmp_path / ".env"
+    dst = tmp_path / "runtime" / "ai-trading-runtime.env"
+    src.write_text(
+        "\n".join(
+            [
+                "AI_TRADING_SECRETS_BACKEND=none",
+                "AI_TRADING_PAPER_SAMPLING_ENABLED=1",
+                "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS=AAPL,AMZN,MSFT",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stale_env = dict(os.environ)
+    stale_env.update(
+        {
+            "AI_TRADING_PAPER_SAMPLING_ENABLED": "1",
+            "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS": "AAPL,GOOG",
+        }
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT_PATH),
+            "--src",
+            str(src),
+            "--dst",
+            str(dst),
+            "--json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=stale_env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS=AAPL,AMZN,MSFT" in dst.read_text(
+        encoding="utf-8"
+    )

@@ -297,6 +297,107 @@ def test_submit_order_releases_paper_sampling_slot_when_broker_rejects(
     assert payload["by_symbol"] == {"AMZN": 1}
 
 
+def test_submit_order_forces_opening_paper_sample_to_passive_day_limit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    engine = _DummyExecEngine()
+    ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
+    cfg = _base_cfg(
+        paper_sampling_enabled=True,
+        paper_sampling_allowed_symbols=("AAPL", "AMZN", "MSFT"),
+        paper_sampling_max_trades_per_day=12,
+        paper_sampling_max_notional_per_order=750.0,
+        paper_sampling_passive_only=True,
+        execution_mode="paper",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        launch_profile="paper_trade",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    _reset_submit_state(monkeypatch)
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            99.9,
+            100.1,
+            100.0,
+            100.0,
+            datetime.now(UTC),
+        ),
+    )
+
+    order = bot_engine.submit_order(ctx, "MSFT", 3, "buy", price=100.0)
+
+    assert order is not None
+    assert len(engine.calls) == 1
+    call = engine.calls[0]
+    assert call["qty"] == 3
+    kwargs = call["kwargs"]
+    assert kwargs["order_type"] == "limit"
+    assert kwargs["limit_price"] == 99.9
+    assert kwargs["time_in_force"] == "day"
+    annotations = kwargs["annotations"]
+    assert annotations["paper_sampling_policy"] == "passive_only"
+    assert annotations["paper_sampling_order_type"] == "limit"
+    assert annotations["paper_sampling_time_in_force"] == "day"
+    assert annotations["paper_sampling_limit_price"] == 99.9
+
+
+def test_submit_order_does_not_reserve_sampling_quota_before_hard_pretrade_acceptance(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    engine = _DummyExecEngine()
+    ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
+    cfg = _base_cfg(
+        quote_max_age_ms=5,
+        paper_sampling_enabled=True,
+        paper_sampling_allowed_symbols=("AAPL", "AMZN", "MSFT"),
+        paper_sampling_max_trades_per_day=12,
+        paper_sampling_max_notional_per_order=750.0,
+        paper_sampling_passive_only=True,
+        execution_mode="paper",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        launch_profile="paper_trade",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    _reset_submit_state(monkeypatch)
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            99.9,
+            100.1,
+            100.0,
+            100.0,
+            datetime.now(UTC) - timedelta(seconds=30),
+        ),
+    )
+
+    order = bot_engine.submit_order(ctx, "AAPL", 1, "buy", price=100.0)
+
+    assert order is None
+    assert engine.calls == []
+    assert engine.skips[-1]["reason"] == "STALE_QUOTE_BLOCK"
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    assert not state_path.exists()
+
+
 def test_submit_order_propagates_generated_identity_to_execution_engine(monkeypatch) -> None:
     engine = _DummyExecEngine()
     ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
@@ -433,6 +534,9 @@ def test_submit_order_paper_sampling_cap_does_not_block_reducing_sell(
     assert kwargs["closing_position"] is True
     assert kwargs["reduce_only"] is True
     assert kwargs["annotations"]["paper_sampling_consumes_daily_slot"] is False
+    assert "order_type" not in kwargs
+    assert "limit_price" not in kwargs
+    assert "time_in_force" not in kwargs
     state_path = resolve_runtime_artifact_path(
         "runtime/paper_sampling_state_latest.json",
         default_relative="runtime/paper_sampling_state_latest.json",

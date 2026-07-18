@@ -6,7 +6,12 @@ import pandas as pd
 import pytest
 
 from ai_trading.research.leakage_tests import run_leakage_guards
-from ai_trading.research.walk_forward import WalkForwardConfig, run_walk_forward
+from ai_trading.research.walk_forward import (
+    ContiguousWalkForwardConfig,
+    WalkForwardConfig,
+    contiguous_walk_forward_splits,
+    run_walk_forward,
+)
 
 
 def _score(train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, float]:
@@ -90,3 +95,42 @@ def test_leakage_guard_does_not_double_count_label_horizon() -> None:
             horizon_days=5,
             embargo_days=2,
         )
+
+
+def test_contiguous_walk_forward_purges_labels_and_embargoes_timestamp_bars() -> None:
+    timestamps = pd.date_range("2026-01-02 14:30:00+00:00", periods=36, freq="min")
+    rows = [
+        {
+            "timestamp": timestamp,
+            "label_end_timestamp": timestamp + pd.Timedelta(minutes=3),
+            "symbol": symbol,
+            "value": idx,
+        }
+        for idx, timestamp in enumerate(timestamps)
+        for symbol in ("AAPL", "MSFT")
+    ]
+
+    splits = contiguous_walk_forward_splits(
+        pd.DataFrame(rows),
+        ContiguousWalkForwardConfig(
+            folds=5,
+            horizon_bars=3,
+            embargo_bars=2,
+            embargo_percent=0.10,
+        ),
+    )
+
+    assert len(splits) == 5
+    previous_test_end = None
+    for fold, train, test in splits:
+        assert fold.chronological_non_overlap is True
+        assert fold.label_purge_ok is True
+        assert fold.purged_train_rows == 6
+        assert fold.embargoed_train_rows == 4
+        assert fold.embargo_bars == 2
+        assert train["label_end_timestamp"].max() < test["timestamp"].min()
+        assert train["timestamp"].max() < test["timestamp"].min()
+        assert set(test.groupby("timestamp")["symbol"].nunique()) == {2}
+        if previous_test_end is not None:
+            assert pd.Timestamp(previous_test_end) < test["timestamp"].min()
+        previous_test_end = test["timestamp"].max()

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ai_trading.tools import model_data_drift_monitor
+from ai_trading.tools import model_data_drift_baseline
 
 
 def _payload(generated_at: str) -> dict[str, object]:
@@ -95,3 +96,103 @@ def test_model_data_drift_monitor_cli_writes_artifact(tmp_path: Path) -> None:
     assert payload["artifact_type"] == "model_data_drift_monitor"
     assert payload["status"] == "ok"
 
+
+def _governed_evidence(now: datetime, *, model_id: str = "shadow-1") -> dict[str, object]:
+    fills = [
+        {
+            "ts": (now - timedelta(minutes=index)).isoformat(),
+            "symbol": "AAPL" if index % 2 == 0 else "AMZN",
+            "confidence": 0.60,
+            "expected_net_edge_bps": 3.0,
+            "realized_net_edge_bps": 1.0 if index % 3 else -0.5,
+            "slippage_bps": 0.5,
+            "fee_bps": 0.1,
+        }
+        for index in range(30)
+    ]
+    tca = [
+        {
+            "ts": (now - timedelta(minutes=index)).isoformat(),
+            "provider": "alpaca",
+            "market_regime": "sideways" if index % 2 == 0 else "downtrend",
+            "fill_latency_ms": 100.0,
+            "spread_paid_bps": 1.0,
+            "decision_quote_age_ms": 50.0,
+        }
+        for index in range(30)
+    ]
+    return model_data_drift_baseline.build_model_data_drift_evidence(
+        fills=fills,
+        tca_rows=tca,
+        generated_at=now,
+        min_samples=25,
+        model_id=model_id,
+        model_hash="abc123",
+    )
+
+
+def test_model_data_drift_monitor_accepts_approved_compatible_baseline() -> None:
+    now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
+    current = _governed_evidence(now)
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        current,
+        baseline_id="shadow-1-20260718",
+        approved_by="operator",
+        approved_at=now,
+    )
+
+    report = model_data_drift_monitor.build_model_data_drift_monitor(
+        baseline=baseline,
+        current=current,
+        now=now,
+    )
+
+    assert report["status"] == "ok"
+    assert report["reasons"] == []
+    assert report["contract"]["baseline_model_id"] == "shadow-1"
+    assert report["contract"]["baseline_coverage"]["complete"] is True
+
+
+def test_model_data_drift_monitor_rejects_unapproved_or_mismatched_evidence() -> None:
+    now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
+    current = _governed_evidence(now, model_id="shadow-2")
+    baseline = dict(_governed_evidence(now, model_id="shadow-1"))
+    baseline.update(
+        {
+            "artifact_type": "model_data_drift_baseline",
+            "status": "proposed",
+            "approval": {"approved": False},
+        }
+    )
+
+    report = model_data_drift_monitor.build_model_data_drift_monitor(
+        baseline=baseline,
+        current=current,
+        now=now,
+    )
+
+    assert report["status"] == "blocked"
+    assert "baseline_unapproved" in report["reasons"]
+    assert "model_id_mismatch" in report["reasons"]
+
+
+def test_model_data_drift_monitor_rejects_wrong_current_contract() -> None:
+    now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
+    evidence = _governed_evidence(now)
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        evidence,
+        baseline_id="shadow-1-20260718",
+        approved_by="operator",
+        approved_at=now,
+    )
+    wrong_current = dict(evidence)
+    wrong_current["artifact_type"] = "expected_edge_calibration_report"
+
+    report = model_data_drift_monitor.build_model_data_drift_monitor(
+        baseline=baseline,
+        current=wrong_current,
+        now=now,
+    )
+
+    assert report["status"] == "blocked"
+    assert "current_contract_invalid" in report["reasons"]

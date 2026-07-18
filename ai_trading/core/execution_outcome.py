@@ -40,7 +40,7 @@ def normalize_submitted_order(
     status_text = str(status_value).strip() if status_value not in (None, "") else "submitted"
     status_token = normalize_order_status_token(status_value)
     broker_order_id_raw = (
-        extract_order_value(order, "id", "order_id", "client_order_id")
+        extract_order_value(order, "id", "order_id")
         if order is not None
         else None
     )
@@ -253,8 +253,66 @@ def build_order_metrics_and_tca(
         rank_reasons.insert(0, rank_reason)
     rank_reasons = list(dict.fromkeys(rank_reasons))
     rank_reason = rank_reasons[0] if rank_reasons else None
+    client_order_id = str(
+        lineage.get("client_order_id")
+        or getattr(order, "client_order_id", None)
+        or ""
+    ).strip()
+    broker_order_id = str(
+        lineage.get("broker_order_id")
+        or lineage.get("order_id")
+        or order_state.broker_order_id
+        or getattr(order, "id", None)
+        or ""
+    ).strip()
+    order_type_raw = (
+        lineage.get("order_type")
+        or getattr(order, "order_type", None)
+        or getattr(order, "type", None)
+    )
+    order_type = str(
+        getattr(order_type_raw, "value", order_type_raw) or ""
+    ).strip().lower() or None
+    time_in_force_raw = (
+        lineage.get("time_in_force")
+        or lineage.get("tif")
+        or getattr(order, "time_in_force", None)
+    )
+    time_in_force = str(
+        getattr(time_in_force_raw, "value", time_in_force_raw) or ""
+    ).strip().lower() or None
+    session_token = str(
+        lineage.get("session")
+        or lineage.get("session_regime")
+        or session_bucket_from_ts_func(now)
+        or ""
+    ).strip().lower() or None
+    decision_quote_age_ms = safe_float(
+        lineage.get("decision_quote_age_ms", lineage.get("quote_age_ms"))
+    )
+    decision_spread_bps = safe_float(
+        lineage.get("decision_spread_bps", lineage.get("spread_bps"))
+    )
+    if (
+        decision_spread_bps is None
+        and submit_bid_at_arrival is not None
+        and submit_ask_at_arrival is not None
+    ):
+        spread_mid = submit_mid_at_arrival
+        if spread_mid is None:
+            spread_mid = (float(submit_bid_at_arrival) + float(submit_ask_at_arrival)) / 2.0
+        if spread_mid > 0.0 and submit_ask_at_arrival >= submit_bid_at_arrival:
+            decision_spread_bps = (
+                (float(submit_ask_at_arrival) - float(submit_bid_at_arrival))
+                / float(spread_mid)
+                * 10_000.0
+            )
+    regime_profile = str(get_regime_signal_profile_func() or "").strip() or None
+    execution_profile = str(
+        lineage.get("execution_profile") or regime_profile or ""
+    ).strip() or None
     tca_record = build_tca_record(
-        client_order_id=str(getattr(order, "client_order_id", None) or getattr(order, "id", None) or ""),
+        client_order_id=client_order_id,
         symbol=symbol,
         side=side,
         benchmark=benchmark,
@@ -265,12 +323,23 @@ def build_order_metrics_and_tca(
         config_snapshot_hash=str(lineage.get("config_snapshot_hash") or "") or None,
         rank_reason=rank_reason,
         rank_reasons=rank_reasons,
-        regime_profile=get_regime_signal_profile_func(),
+        regime_profile=regime_profile,
         provider="alpaca",
-        order_type="limit",
+        order_type=order_type,
         quote_proxy=allow_proxy_quotes,
+        broker_order_id=broker_order_id or None,
+        time_in_force=time_in_force,
+        session=session_token,
+        decision_quote_age_ms=decision_quote_age_ms,
+        decision_spread_bps=decision_spread_bps,
+        market_regime=str(lineage.get("market_regime") or "").strip().lower() or None,
+        volatility_regime=(
+            str(lineage.get("volatility_regime") or "").strip().lower() or None
+        ),
+        trend_regime=str(lineage.get("trend_regime") or "").strip().lower() or None,
+        execution_profile=execution_profile,
     )
-    session_regime_token = session_bucket_from_ts_func(now)
+    session_regime_token = session_token or session_bucket_from_ts_func(now)
     spread_paid_for_role = safe_float(tca_record.get("spread_paid_bps"))
     liquidity_role_token = "maker"
     if str(side).strip().lower() in {"buy", "sell"} and spread_paid_for_role is not None:
@@ -279,13 +348,15 @@ def build_order_metrics_and_tca(
         elif float(spread_paid_for_role) > 0.05:
             liquidity_role_token = "mixed"
     venue_token = str(
-        getattr(order, "exchange", None) or getattr(order, "venue", None) or "ALPACA"
+        lineage.get("venue")
+        or getattr(order, "exchange", None)
+        or getattr(order, "venue", None)
+        or "ALPACA"
     ).strip().upper() or "ALPACA"
     tca_record["liquidity_role"] = str(liquidity_role_token)
     tca_record["venue"] = str(venue_token)
     tca_record["session_regime"] = str(session_regime_token)
-    if tca_record.get("market_regime") in (None, "") and tca_record.get("regime_profile") not in (None, ""):
-        tca_record["market_regime"] = str(tca_record.get("regime_profile"))
+    tca_record["session"] = str(session_regime_token)
     tca_record["venue_session"] = f"{venue_token}:{session_regime_token}"
     expected_edge_for_tca = safe_float(candidate_expected_net_edge.get(symbol))
     if expected_edge_for_tca is not None:

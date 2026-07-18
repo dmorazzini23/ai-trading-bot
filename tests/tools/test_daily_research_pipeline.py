@@ -35,6 +35,42 @@ def test_daily_research_report_blocks_live_profile_without_promotion(monkeypatch
     assert report["memory_status"]["status"] == "ok"
 
 
+def test_daily_research_report_exposes_shadow_when_champion_is_blocked(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    challenger = {
+        "model_id": "one-bar-shadow",
+        "artifact_viability": {
+            "ok": True,
+            "path": "/models/one-bar-shadow.joblib",
+        },
+    }
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-07-18",
+        model_registry={
+            "status": "blocked",
+            "blocked_reasons": ["champion_artifact_missing"],
+            "active_champion": None,
+            "active_challenger": challenger,
+            "identity_discovery": {
+                "champion": {"reason": "champion_artifact_missing"},
+                "challenger": {"reason": "ok"},
+            },
+            "promotion_authority": False,
+        },
+    )
+
+    assert report["model_registry"]["status"] == "blocked"
+    assert report["model_registry"]["active_champion"] == {}
+    assert report["model_registry"]["active_challenger"] == challenger
+    assert report["model_registry"]["blocked_reasons"] == ["champion_artifact_missing"]
+    assert report["model_registry"]["promotion_authority"] is False
+    assert report["model_registry"]["live_money_authority"] is False
+    assert report["model_registry"]["manual_approval_required"] is True
+
+
 def test_daily_research_report_blocks_on_critical_memory(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
 

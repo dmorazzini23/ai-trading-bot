@@ -73,32 +73,47 @@ def _write_replay_payload(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(serializable, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _candidate_rank_key(record: Mapping[str, Any]) -> tuple[float, float, int]:
+def _walk_forward_aggregate(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    walk_forward = record.get("walk_forward")
+    if not isinstance(walk_forward, Mapping):
+        return {}
+    aggregate = walk_forward.get("aggregate")
+    return aggregate if isinstance(aggregate, Mapping) else {}
+
+
+def _candidate_rank_key(
+    record: Mapping[str, Any],
+) -> tuple[int, float, float, float, int, float]:
     replay = record.get("replay")
-    validation = record.get("validation")
-    expectancy = 0.0
-    auc = 0.0
+    walk_forward = _walk_forward_aggregate(record)
+    replay_expectancy = 0.0
     trades = 0
     if isinstance(replay, Mapping):
         raw_expectancy = replay.get("expectancy_bps")
         raw_trades = replay.get("total_trades")
-        expectancy = float(raw_expectancy) if raw_expectancy is not None else 0.0
+        replay_expectancy = float(raw_expectancy) if raw_expectancy is not None else 0.0
         trades = int(raw_trades) if raw_trades is not None else 0
-    if isinstance(validation, Mapping):
-        raw_auc = validation.get("roc_auc")
-        auc = float(raw_auc) if raw_auc is not None else 0.0
-    return (expectancy, auc, trades)
+    qualified = int(bool(walk_forward.get("evidence_qualified")))
+    mean_edge = float(walk_forward.get("mean_post_cost_net_edge_bps") or -1e12)
+    profitable_ratio = float(walk_forward.get("profitable_fold_ratio") or 0.0)
+    stability = float(walk_forward.get("stability_score") or 0.0)
+    support = int(walk_forward.get("trades") or 0)
+    return (
+        qualified,
+        mean_edge,
+        profitable_ratio,
+        stability,
+        support,
+        replay_expectancy + (trades * 1e-12),
+    )
 
 
-def _candidate_training_rank_key(record: Mapping[str, Any]) -> tuple[float, int, float]:
-    validation = record.get("validation")
+def _candidate_training_rank_key(
+    record: Mapping[str, Any],
+) -> tuple[int, float, float, float, int, float]:
+    walk_forward = _walk_forward_aggregate(record)
     threshold_sweep = record.get("threshold_sweep")
-    auc = 0.0
-    horizon = int(record.get("horizon_bars", 0) or 0)
     sweep_edge = 0.0
-    if isinstance(validation, Mapping):
-        raw_auc = validation.get("roc_auc")
-        auc = float(raw_auc) if raw_auc is not None else 0.0
     if isinstance(threshold_sweep, list):
         for row in threshold_sweep:
             if not isinstance(row, Mapping):
@@ -111,7 +126,14 @@ def _candidate_training_rank_key(record: Mapping[str, Any]) -> tuple[float, int,
                     sweep_edge = max(sweep_edge, float(raw))
                 except (TypeError, ValueError):
                     continue
-    return (auc, horizon, sweep_edge)
+    return (
+        int(bool(walk_forward.get("evidence_qualified"))),
+        float(walk_forward.get("mean_post_cost_net_edge_bps") or -1e12),
+        float(walk_forward.get("profitable_fold_ratio") or 0.0),
+        float(walk_forward.get("stability_score") or 0.0),
+        int(walk_forward.get("trades") or 0),
+        sweep_edge,
+    )
 
 
 def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
@@ -130,6 +152,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "horizon_bars": int(horizon),
                 "label_objective": objective,
                 "model_name": model_name,
+                "governance_status": "shadow",
+                "promotion_authority": False,
+                "live_money_authority": False,
             }
             try:
                 training_report = train_replay_aligned_model(
@@ -148,6 +173,42 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         use_live_cost_model=getattr(args, "use_live_cost_model", None),
                         min_net_edge_bps=float(args.min_net_edge_bps),
                         train_fraction=float(args.train_fraction),
+                        walk_forward_folds=int(
+                            getattr(args, "walk_forward_folds", 5) or 5
+                        ),
+                        walk_forward_embargo_bars=int(
+                            getattr(args, "walk_forward_embargo_bars", 1) or 1
+                        ),
+                        walk_forward_embargo_percent=float(
+                            getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0
+                        ),
+                        walk_forward_min_trades=int(
+                            getattr(args, "walk_forward_min_trades", 250) or 250
+                        ),
+                        walk_forward_min_profitable_fold_ratio=float(
+                            getattr(
+                                args,
+                                "walk_forward_min_profitable_fold_ratio",
+                                0.60,
+                            )
+                            or 0.60
+                        ),
+                        walk_forward_min_mean_net_edge_bps=float(
+                            getattr(
+                                args,
+                                "walk_forward_min_mean_net_edge_bps",
+                                0.0,
+                            )
+                            or 0.0
+                        ),
+                        walk_forward_min_ranking_separation_bps=float(
+                            getattr(
+                                args,
+                                "walk_forward_min_ranking_separation_bps",
+                                0.0,
+                            )
+                            or 0.0
+                        ),
                         edge_global_threshold=getattr(args, "edge_global_threshold", None),
                         random_state=int(args.random_state) + int(horizon),
                         training_cache=getattr(args, "training_cache", None),
@@ -164,6 +225,10 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         "validation": training_report.get("validation"),
                         "threshold_sweep": training_report.get("threshold_sweep", [])[:10],
                         "threshold_sweep_by_regime": training_report.get("threshold_sweep_by_regime"),
+                        "walk_forward": training_report.get("walk_forward"),
+                        "market_regime_policy": training_report.get(
+                            "market_regime_policy"
+                        ),
                         "feature_importance": training_report.get("feature_importance", [])[:25],
                         "live_cost_model": training_report.get("live_cost_model"),
                         "replay_status": "pending_selection",
@@ -251,7 +316,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         reverse=True,
     )
     report = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "artifact_type": "multi_horizon_research_report",
         "generated_at": datetime.now(UTC).isoformat(),
         "config": {
@@ -268,6 +333,15 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 str(args.training_cache_dir) if getattr(args, "training_cache_dir", None) else None
             ),
             "max_replay_candidates": max_replay_candidates,
+            "walk_forward_folds": int(
+                getattr(args, "walk_forward_folds", 5) or 5
+            ),
+            "walk_forward_embargo_bars": int(
+                getattr(args, "walk_forward_embargo_bars", 1) or 1
+            ),
+            "walk_forward_embargo_percent": float(
+                getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0
+            ),
         },
         "replay_config": {
             "confidence_threshold": float(args.replay_confidence_threshold),
@@ -307,6 +381,12 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             for record in ranked
             if int(record.get("horizon_bars", 0)) == int(args.lead_horizon_bars)
         ],
+        "one_bar_challengers": [
+            record for record in candidates if int(record.get("horizon_bars", 0)) == 1
+        ],
+        "governance_status": "shadow",
+        "promotion_authority": False,
+        "live_money_authority": False,
         "recommendation": (
             "evaluate_ranked_candidates_in_shadow_only"
             if ranked
@@ -344,6 +424,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-live-cost-model", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
     parser.add_argument("--train-fraction", type=float, default=0.70)
+    parser.add_argument("--walk-forward-folds", type=int, default=5)
+    parser.add_argument("--walk-forward-embargo-bars", type=int, default=1)
+    parser.add_argument("--walk-forward-embargo-percent", type=float, default=0.0)
+    parser.add_argument("--walk-forward-min-trades", type=int, default=250)
+    parser.add_argument(
+        "--walk-forward-min-profitable-fold-ratio", type=float, default=0.60
+    )
+    parser.add_argument("--walk-forward-min-mean-net-edge-bps", type=float, default=0.0)
+    parser.add_argument(
+        "--walk-forward-min-ranking-separation-bps", type=float, default=0.0
+    )
     parser.add_argument("--edge-global-threshold", type=float, default=0.66)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--training-cache", action=argparse.BooleanOptionalAction, default=None)

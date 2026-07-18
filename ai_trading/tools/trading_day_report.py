@@ -447,6 +447,16 @@ def build_trading_day_report(
         live_status_payload if isinstance(live_status_payload, Mapping) else live_cost_model
     )
     calibration_status = _status(expected_edge_calibration or {})
+    registry_payload = {
+        **dict(model_registry or {}),
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+    registry_challenger = (
+        registry_payload.get("active_challenger")
+        if isinstance(registry_payload.get("active_challenger"), Mapping)
+        else {}
+    )
     report = {
         "schema_version": "1.0.0",
         "artifact_type": "trading_day_report",
@@ -530,7 +540,7 @@ def build_trading_day_report(
         "counterfactual_execution": dict(counterfactual_execution or {}),
         "portfolio_edge_control": dict(portfolio_edge or {}),
         "decision_receipts": dict(decision_receipts or {}),
-        "model_registry": dict(model_registry or {}),
+        "model_registry": registry_payload,
         "pretrade_risk_control_verifier": dict(pretrade_risk_verifier or {}),
         "post_trade_surveillance": dict(post_trade_surveillance or {}),
         "experiment_ledger": dict(experiment_ledger or {}),
@@ -575,6 +585,12 @@ def build_trading_day_report(
         "expected_edge_calibration_status": calibration_status,
         "execution_capture_improvement_status": _status(execution_capture_improvement or {}),
         "model_registry_status": _status(model_registry or {}),
+        "model_registry_active_challenger_id": registry_challenger.get("model_id"),
+        "model_registry_active_challenger_path": (
+            registry_challenger.get("artifact_viability", {}).get("path")
+            if isinstance(registry_challenger.get("artifact_viability"), Mapping)
+            else registry_challenger.get("artifact_path")
+        ),
         "pretrade_risk_status": _status(pretrade_risk_verifier or {}),
         "post_trade_surveillance_status": _status(post_trade_surveillance or {}),
         "experiment_ledger_status": _status(experiment_ledger or {}),
@@ -651,6 +667,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Portfolio edge: `{report.get('portfolio_edge_control', {}).get('output', 'missing')}`",
             f"- Decision receipts: `{report.get('decision_receipts', {}).get('status', 'missing')}`",
             f"- Model registry: `{report.get('model_registry', {}).get('status', 'missing')}`",
+            f"- Active shadow challenger: `{report.get('model_registry', {}).get('active_challenger', {}).get('model_id', 'missing')}`",
             f"- Pre-trade risk verifier: `{report.get('pretrade_risk_control_verifier', {}).get('status', 'missing')}`",
             f"- Post-trade surveillance: `{report.get('post_trade_surveillance', {}).get('status', 'missing')}`",
             f"- Experiment ledger: `{report.get('experiment_ledger', {}).get('status', 'missing')}`",

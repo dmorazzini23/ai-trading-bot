@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import UTC, datetime
 import json
 import logging
 from pathlib import Path
@@ -14,6 +15,10 @@ import pytest
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.execution.simulated_broker import SimulatedBroker
 from ai_trading.replay.event_loop import ReplayEventLoop
+from ai_trading.registry.manifest import (
+    MARKET_REGIME_CLASSIFIER_ID,
+    derive_market_regime_policy,
+)
 from ai_trading.tools import offline_replay as replay_tool
 from ai_trading.tools.offline_replay import (
     _accepted_candidate_row,
@@ -132,6 +137,7 @@ def _write_model(
     p_edge: float,
     orientation: str = "direct",
     penalties: dict[str, dict[str, float]] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     import joblib
 
@@ -144,7 +150,10 @@ def _write_model(
     write_artifact_manifest(
         model_path=path,
         model_version="offline-replay-test-model-v1",
-        metadata={"source": "tests.test_offline_replay"},
+        metadata={
+            "source": "tests.test_offline_replay",
+            **(metadata or {}),
+        },
     )
 
 
@@ -1182,6 +1191,87 @@ def test_offline_replay_model_scoring_sanitizes_duplicate_timestamps(
     assert payload["aggregate"]["model_score"]["enabled"] is True
     assert int(payload["aggregate"]["total_trades"]) > 0
     assert not any(record.msg == "OFFLINE_REPLAY_MODEL_SCORING_FAILED" for record in caplog.records)
+
+
+def test_offline_replay_applies_declared_all_abstain_market_regime_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    csv_path = tmp_path / "REGIME_POLICY.csv"
+    model_path = tmp_path / "regime_policy_model.joblib"
+    out_path = tmp_path / "regime_policy_replay.json"
+    _write_synthetic_bars(csv_path, periods=80)
+    policy = derive_market_regime_policy(
+        {
+            "market_regime_classifier": MARKET_REGIME_CLASSIFIER_ID,
+            "aggregate": {"evidence_qualified": False},
+            "config": {
+                "min_trades": 25,
+                "min_mean_net_edge_bps": 0.0,
+                "min_ranking_separation_bps": 0.0,
+                "min_profitable_fold_ratio": 0.60,
+            },
+            "by_market_regime": {
+                "sideways": {
+                    "support": 0,
+                    "mean_post_cost_net_edge_bps": -1.0,
+                    "profitable_fold_ratio": 0.0,
+                    "ranking_separation": {
+                        "high_minus_low_net_edge_bps": -1.0,
+                    },
+                    "evidence_qualified": False,
+                }
+            },
+        },
+        generated_at=datetime.now(UTC),
+    )
+    _write_model(
+        model_path,
+        p_edge=0.9,
+        orientation="direct",
+        metadata={"market_regime_policy": policy},
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", "0")
+
+    assert (
+        main(
+            [
+                "--csv",
+                str(csv_path),
+                "--simulation-mode",
+                "--use-model-score",
+                "--model-path",
+                str(model_path),
+                "--confidence-threshold",
+                "0.0",
+                "--entry-score-threshold",
+                "0.0",
+                "--no-allow-shorts",
+                "--output-json",
+                str(out_path),
+            ]
+        )
+        == 0
+    )
+
+    aggregate = _load_json(out_path)["aggregate"]
+    diagnostics = aggregate["model_score"]["market_regime_policy"]
+    assert aggregate["total_trades"] == 0
+    assert diagnostics["declared"] is True
+    assert diagnostics["governance_status"] == "shadow"
+    assert diagnostics["promotion_authority"] is False
+    assert diagnostics["evidence_identity"] == policy["evidence"]["identity"]
+    assert diagnostics["evidence_sha256"] == policy["evidence"]["sha256"]
+    assert diagnostics["evaluated"] == 80
+    assert diagnostics["abstained"] == 80
+    assert sum(diagnostics["decisions_by_reason"].values()) == 80
+    assert set(diagnostics["decisions_by_reason"]) <= {
+        "market_regime_unknown",
+        "regime_abstain",
+    }
 
 
 def test_offline_replay_persist_rerun_skips_terminal_existing_intents(

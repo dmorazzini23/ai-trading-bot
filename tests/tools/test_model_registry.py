@@ -153,6 +153,190 @@ def test_evaluate_challenger_is_advisory_and_requires_manual_promotion(
     assert evaluation["manual_promotion_required"] is True
 
 
+def test_evaluate_governed_keyed_registry_discovers_viable_identities_read_only(
+    tmp_path: Path,
+) -> None:
+    champion_model = tmp_path / "champion.joblib"
+    challenger_model = tmp_path / "challenger.joblib"
+    champion_model.write_text("champion", encoding="utf-8")
+    challenger_model.write_text("challenger", encoding="utf-8")
+    registry = {
+        "champion-live": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-04T20:00:00Z",
+            "artifact_path": str(champion_model),
+            "active": True,
+            "governance": {"status": "production", "metrics": _metrics(2.0)},
+        },
+        "champion-dead-newer": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T20:00:00Z",
+            "artifact_path": str(tmp_path / "dead-champion.joblib"),
+            "active": True,
+            "governance": {"status": "production", "metrics": _metrics(9.0)},
+        },
+        "challenger-shadow": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T20:30:00Z",
+            "artifact_path": str(challenger_model),
+            "active": True,
+            "governance": {"status": "shadow", "metrics": _metrics(3.5)},
+        },
+    }
+    original = json.loads(json.dumps(registry))
+
+    evaluation = model_registry.build_model_evaluation(
+        registry=registry,
+        primary_metric="net_edge_bps",
+        min_delta=1.0,
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+        trusted_artifact_roots=[tmp_path],
+    )
+
+    assert evaluation["status"] == "evaluated"
+    assert evaluation["registry_schema"] == "governed_keyed_mapping"
+    assert evaluation["active_champion"]["model_id"] == "champion-live"
+    assert evaluation["active_challenger"]["model_id"] == "challenger-shadow"
+    assert evaluation["identity_discovery"]["champion"]["artifact_rejected_count"] == 1
+    assert evaluation["metrics"]["champion"] == 2.0
+    assert evaluation["metrics"]["challenger"] == 3.5
+    assert registry == original
+
+
+def test_evaluate_governed_registry_reports_shadow_when_champion_artifact_missing(
+    tmp_path: Path,
+) -> None:
+    challenger_model = tmp_path / "challenger.joblib"
+    challenger_model.write_text("challenger", encoding="utf-8")
+    registry = {
+        "champion-dead": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T19:00:00Z",
+            "artifact_path": str(tmp_path / "missing.joblib"),
+            "governance": {"status": "production", "metrics": _metrics(2.0)},
+        },
+        "challenger-shadow": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T20:00:00Z",
+            "artifact_path": str(challenger_model),
+            "governance": {"status": "shadow", "metrics": _metrics(3.0)},
+        },
+    }
+
+    evaluation = model_registry.build_model_evaluation(
+        registry=registry,
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+        trusted_artifact_roots=[tmp_path],
+    )
+
+    assert evaluation["status"] == "blocked"
+    assert "champion_artifact_missing" in evaluation["blocked_reasons"]
+    assert evaluation["active_champion"] is None
+    assert evaluation["active_challenger"]["model_id"] == "challenger-shadow"
+    assert evaluation["identity_discovery"]["champion"]["artifact_rejected_count"] == 1
+    assert evaluation["recommendation"] == "blocked"
+
+
+def test_evaluate_governed_registry_does_not_alias_mean_expectancy_to_net_edge(
+    tmp_path: Path,
+) -> None:
+    champion_model = tmp_path / "champion.joblib"
+    challenger_model = tmp_path / "challenger.joblib"
+    champion_model.write_text("champion", encoding="utf-8")
+    challenger_model.write_text("challenger", encoding="utf-8")
+    registry = {
+        "champion": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T19:00:00Z",
+            "artifact_path": str(champion_model),
+            "governance": {
+                "status": "production",
+                "metrics": {
+                    "generated_at": "2026-05-05T20:00:00Z",
+                    "mean_expectancy_bps": 1.0,
+                },
+            },
+        },
+        "challenger": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T20:00:00Z",
+            "artifact_path": str(challenger_model),
+            "governance": {
+                "status": "shadow",
+                "metrics": {
+                    "generated_at": "2026-05-05T20:00:00Z",
+                    "mean_expectancy_bps": 4.0,
+                },
+            },
+        },
+    }
+
+    evaluation = model_registry.build_model_evaluation(
+        registry=registry,
+        primary_metric="net_edge_bps",
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+        trusted_artifact_roots=[tmp_path],
+    )
+
+    assert evaluation["status"] == "blocked"
+    assert "champion_primary_metric_missing" in evaluation["blocked_reasons"]
+    assert "challenger_primary_metric_missing" in evaluation["blocked_reasons"]
+    assert evaluation["active_champion"]["model_id"] == "champion"
+    assert evaluation["active_challenger"]["model_id"] == "challenger"
+    assert evaluation["metrics"]["champion"] is None
+    assert evaluation["metrics"]["challenger"] is None
+    assert evaluation["metrics"]["delta"] is None
+
+
+def test_governed_registry_rejects_existing_artifact_outside_trusted_roots(
+    tmp_path: Path,
+) -> None:
+    trusted_root = tmp_path / "trusted"
+    ephemeral_root = tmp_path / "pytest-of-aiuser"
+    trusted_root.mkdir()
+    ephemeral_root.mkdir()
+    challenger_model = trusted_root / "challenger.joblib"
+    ephemeral_model = ephemeral_root / "ml_latest.joblib"
+    challenger_model.write_text("challenger", encoding="utf-8")
+    ephemeral_model.write_text("pytest artifact", encoding="utf-8")
+    registry = {
+        "champion-stale": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T19:00:00Z",
+            "artifact_path": str(trusted_root / "missing.joblib"),
+            "governance": {
+                "status": "production",
+                "metrics": _metrics(2.0),
+                "runtime_promotion": {"model_path": str(ephemeral_model)},
+            },
+        },
+        "challenger-shadow": {
+            "strategy": "ml_edge",
+            "registered_at": "2026-05-05T20:00:00Z",
+            "artifact_path": str(challenger_model),
+            "governance": {"status": "shadow", "metrics": _metrics(3.0)},
+        },
+    }
+
+    evaluation = model_registry.build_model_evaluation(
+        registry=registry,
+        generated_at=datetime(2026, 5, 5, 21, 0, tzinfo=UTC),
+        trusted_artifact_roots=[trusted_root],
+    )
+
+    assert evaluation["status"] == "blocked"
+    assert "champion_artifact_untrusted" in evaluation["blocked_reasons"]
+    assert evaluation["active_champion"] is None
+    assert evaluation["active_challenger"]["model_id"] == "challenger-shadow"
+    assert evaluation["artifact_trust"] == {
+        "enforced": True,
+        "trusted_roots": [str(trusted_root.resolve())],
+    }
+    rejection = evaluation["identity_discovery"]["champion"]["artifact_rejections"][0]
+    assert rejection["reason"] == "artifact_untrusted"
+    assert rejection["untrusted_paths"] == [str(ephemeral_model.resolve())]
+
+
 def test_model_registry_cli_writes_dated_and_latest_outputs(tmp_path: Path) -> None:
     model = tmp_path / "challenger.joblib"
     metrics = tmp_path / "metrics.json"

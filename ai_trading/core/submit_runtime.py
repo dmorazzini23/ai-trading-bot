@@ -376,6 +376,8 @@ def _resolve_execution_intent_context(
         {
             "submit_arrival_price": submit_arrival_price,
             "submit_quote_source": submit_quote_source,
+            "submit_bid_at_arrival": submit_bid_at_arrival,
+            "submit_ask_at_arrival": submit_ask_at_arrival,
         },
         {
             "auth_forbidden_retry_after_sec": broker_cooldown_remaining_sec,
@@ -710,6 +712,68 @@ def submit_order_runtime(
         )
         return None
 
+    passive_sampling_limit: float | None = None
+    passive_sampling_required = bool(
+        sampling_decision.enabled
+        and consumes_sampling_slot
+        and getattr(cfg, "paper_sampling_passive_only", True)
+    )
+    if passive_sampling_required:
+        if intent_side != "buy":
+            details: dict[str, Any] = {
+                "symbol": str(symbol).strip().upper(),
+                "side": side_norm,
+                "policy": "passive_only",
+            }
+            be.logger.warning("PAPER_SAMPLING_SHORT_BLOCK", extra=details)
+            _record_skip_submit(
+                be,
+                symbol=symbol,
+                side=side_norm,
+                reason="PAPER_SAMPLING_SHORT_BLOCK",
+                detail="opening paper samples must be long-only",
+                context=details,
+            )
+            return None
+        passive_bid = _safe_float(submit_snapshot.get("submit_bid_at_arrival"))
+        passive_ask = _safe_float(submit_snapshot.get("submit_ask_at_arrival"))
+        if (
+            passive_bid is None
+            or passive_ask is None
+            or passive_bid <= 0.0
+            or passive_ask <= passive_bid
+        ):
+            details = {
+                "symbol": str(symbol).strip().upper(),
+                "side": side_norm,
+                "quote_source": submit_snapshot.get("submit_quote_source"),
+                "bid": passive_bid,
+                "ask": passive_ask,
+                "policy": "passive_only",
+            }
+            be.logger.warning("PAPER_SAMPLING_PASSIVE_QUOTE_BLOCK", extra=details)
+            _record_skip_submit(
+                be,
+                symbol=symbol,
+                side=side_norm,
+                reason="PAPER_SAMPLING_PASSIVE_QUOTE_BLOCK",
+                detail="valid unlocked bid/ask required for passive sampling",
+                context=details,
+            )
+            return None
+        passive_sampling_limit = float(passive_bid)
+        annotations.update(
+            {
+                "paper_sampling_policy": "passive_only",
+                "paper_sampling_order_type": "limit",
+                "paper_sampling_time_in_force": "day",
+                "paper_sampling_limit_price": passive_sampling_limit,
+                "paper_sampling_quote_source": submit_snapshot.get(
+                    "submit_quote_source"
+                ),
+            }
+        )
+
     sampling_reservation = reserve_paper_sampling_order(
         cfg,
         symbol=symbol,
@@ -753,6 +817,10 @@ def submit_order_runtime(
         "price_hint",
         float(submit_snapshot.get("submit_arrival_price") or price),
     )
+    if passive_sampling_limit is not None:
+        engine_kwargs["order_type"] = "limit"
+        engine_kwargs["limit_price"] = float(passive_sampling_limit)
+        engine_kwargs["time_in_force"] = "day"
 
     for lineage_key in (
         "model_id",

@@ -14,6 +14,11 @@ from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_FEATURE_COLUMNS,
     DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
 )
+from ai_trading.registry.manifest import (
+    MARKET_REGIME_CLASSIFIER_ID,
+    derive_market_regime_policy,
+)
+from ai_trading.tools import offline_replay
 
 
 class _ProbabilityModel:
@@ -31,7 +36,11 @@ class _BrokenModel:
         raise ValueError("prediction failed")
 
 
-def _bundle(model: Any) -> SimpleNamespace:
+def _bundle(
+    model: Any,
+    *,
+    market_regime_policy: dict[str, Any] | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         model=model,
         lineage={
@@ -48,8 +57,66 @@ def _bundle(model: Any) -> SimpleNamespace:
             "downtrend": 0.5,
             "volatile": 0.5,
         },
+        market_regime_policy=market_regime_policy,
         governance_status="shadow",
         serving_authority="paper_only",
+    )
+
+
+def _market_regime_policy(now: datetime) -> dict[str, Any]:
+    def row(
+        *,
+        support: int,
+        edge: float,
+        separation: float,
+        profitable_ratio: float,
+        qualified: bool,
+    ) -> dict[str, Any]:
+        return {
+            "support": support,
+            "mean_post_cost_net_edge_bps": edge,
+            "profitable_fold_ratio": profitable_ratio,
+            "ranking_separation": {
+                "high_minus_low_net_edge_bps": separation,
+            },
+            "evidence_qualified": qualified,
+        }
+
+    return derive_market_regime_policy(
+        {
+            "market_regime_classifier": MARKET_REGIME_CLASSIFIER_ID,
+            "aggregate": {"evidence_qualified": True},
+            "config": {
+                "min_trades": 75,
+                "min_mean_net_edge_bps": 0.0,
+                "min_ranking_separation_bps": 0.0,
+                "min_profitable_fold_ratio": 0.60,
+            },
+            "by_market_regime": {
+                "sideways": row(
+                    support=40,
+                    edge=6.21,
+                    separation=2.5,
+                    profitable_ratio=0.80,
+                    qualified=True,
+                ),
+                "downtrend": row(
+                    support=30,
+                    edge=-4.0,
+                    separation=-1.0,
+                    profitable_ratio=0.40,
+                    qualified=False,
+                ),
+                "volatile": row(
+                    support=30,
+                    edge=-8.0,
+                    separation=-2.0,
+                    profitable_ratio=0.20,
+                    qualified=False,
+                ),
+            },
+        },
+        generated_at=now,
     )
 
 
@@ -215,6 +282,63 @@ def test_day_sleeve_low_long_probability_abstains_instead_of_shorting(
     assert debug["ml_raw_score"] == 0.0
     assert shadow_rows[0]["champion_side"] == "hold"
     assert shadow_rows[0]["champion_would_trade"] is False
+
+
+@pytest.mark.parametrize(
+    ("market_regime", "expected_allowed"),
+    [
+        ("sideways", True),
+        ("downtrend", False),
+        ("volatile", False),
+    ],
+)
+def test_day_sleeve_market_regime_policy_has_live_replay_parity(
+    monkeypatch: pytest.MonkeyPatch,
+    market_regime: str,
+    expected_allowed: bool,
+) -> None:
+    now = datetime(2026, 7, 18, 14, 12, tzinfo=UTC)
+    frame = _frame().iloc[:2]
+    policy = _market_regime_policy(now)
+    monkeypatch.setattr(
+        bot_engine,
+        "build_day_sleeve_features",
+        lambda _frame: _feature_row(frame.index),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "infer_day_sleeve_regimes",
+        lambda _close: (market_regime,),
+    )
+    monkeypatch.setattr(bot_engine, "_record_shadow_prediction", lambda _payload: None)
+    monkeypatch.setattr(bot_engine, "_ml_shadow_quote_snapshot", lambda symbol=None: {})
+    monkeypatch.setattr(bot_engine, "_ml_shadow_provider_snapshot", lambda: {})
+
+    score, _confidence, debug, error = bot_engine._score_day_sleeve_with_ml(
+        symbol="AAPL",
+        frame=frame,
+        bundle=_bundle(
+            _ProbabilityModel(0.8),
+            market_regime_policy=policy,
+        ),
+        heuristic_score=0.0,
+        heuristic_confidence=0.0,
+        blend_weight=1.0,
+        now=now,
+    )
+
+    assert bot_engine.evaluate_market_regime_policy is (
+        offline_replay.evaluate_market_regime_policy
+    )
+    assert error is None
+    assert debug is not None
+    assert debug["ml_regime_policy_declared"] is True
+    assert debug["ml_regime_policy_allowed"] is expected_allowed
+    assert debug["ml_regime_policy_reason"] == (
+        "regime_observe" if expected_allowed else "regime_abstain"
+    )
+    assert debug["ml_abstained"] is (not expected_allowed)
+    assert score == pytest.approx(0.6 if expected_allowed else 0.0)
 
 
 def test_day_sleeve_prediction_failure_preserves_heuristic_fallback(

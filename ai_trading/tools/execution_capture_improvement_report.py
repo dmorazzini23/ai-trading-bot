@@ -33,6 +33,46 @@ _EDGE_BUCKETS: tuple[tuple[str, float, float], ...] = (
     ("edge_gt_50", 50.0, math.inf),
 )
 
+_FALLBACK_JOIN_WINDOW_SECONDS = 300.0
+_ENRICHMENT_FIELDS: tuple[str, ...] = (
+    "expected_net_edge_bps",
+    "expected_edge_bps",
+    "predicted_net_edge_bps",
+    "realized_net_edge_bps",
+    "net_edge_bps",
+    "markout_bps",
+    "slippage_bps",
+    "slippage_drag_bps",
+    "spread_bps",
+    "decision_spread_bps",
+    "spread_paid_bps",
+    "quote_age_ms",
+    "decision_quote_age_ms",
+    "quote_fresh_ms",
+    "order_type",
+    "submitted_order_type",
+    "time_in_force",
+    "session",
+    "session_bucket",
+    "session_regime",
+    "venue_session",
+    "market_regime",
+    "volatility_regime",
+    "trend_regime",
+    "execution_profile",
+    "regime_profile",
+    "latency_ms",
+    "fill_latency_ms",
+    "submit_latency_ms",
+)
+_REQUIRED_METADATA_FIELDS: tuple[str, ...] = (
+    "order_type",
+    "session",
+    "quote_age_ms",
+    "spread_bps",
+    "market_regime",
+)
+
 
 def _read_jsonl(path: Path | None, *, report_date: str | None = None) -> list[dict[str, Any]]:
     if path is None or not path.exists():
@@ -75,6 +115,131 @@ def _safe_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return float(parsed) if math.isfinite(parsed) else None
+
+
+def _nonempty(value: Any) -> bool:
+    return value is not None and (not isinstance(value, str) or bool(value.strip()))
+
+
+def _identifier(row: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _identifiers(row: Mapping[str, Any], *keys: str) -> set[str]:
+    return {
+        value
+        for key in keys
+        if (value := str(row.get(key) or "").strip())
+    }
+
+
+def _event_timestamp(row: Mapping[str, Any]) -> datetime | None:
+    for key in (
+        "filled_at",
+        "pending_resolved_ts",
+        "ts",
+        "timestamp",
+        "submitted_at",
+        "decision_ts",
+    ):
+        value = str(row.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def _metadata_join(
+    fill: Mapping[str, Any],
+    tca_rows: Sequence[Mapping[str, Any]],
+    *,
+    fallback_window_seconds: float,
+) -> tuple[Mapping[str, Any] | None, str]:
+    if not tca_rows:
+        return None, "tca_unavailable"
+    client_ids = _identifiers(fill, "client_order_id")
+    order_ids = _identifiers(fill, "order_id", "broker_order_id", "alpaca_order_id")
+    exact: list[Mapping[str, Any]] = []
+    for tca in tca_rows:
+        client_match = bool(client_ids & _identifiers(tca, "client_order_id"))
+        order_match = bool(order_ids & _identifiers(
+            tca,
+            "order_id",
+            "broker_order_id",
+            "alpaca_order_id",
+        ))
+        if client_match or order_match:
+            exact.append(tca)
+    if len(exact) == 1:
+        return exact[0], "exact_id"
+    if len(exact) > 1:
+        return None, "ambiguous_exact_id"
+    # An explicit identifier that did not match is stronger evidence than temporal
+    # proximity. Do not risk attaching another order's metadata.
+    if client_ids or order_ids:
+        return None, "unmatched_id"
+
+    fill_ts = _event_timestamp(fill)
+    fill_symbol = _symbol(fill)
+    fill_side = _side(fill)
+    if fill_ts is None or fill_symbol == "UNKNOWN" or fill_side == "unknown":
+        return None, "fallback_keys_missing"
+    fallback: list[Mapping[str, Any]] = []
+    for tca in tca_rows:
+        tca_ts = _event_timestamp(tca)
+        if tca_ts is None or _symbol(tca) != fill_symbol or _side(tca) != fill_side:
+            continue
+        if abs((fill_ts - tca_ts).total_seconds()) <= float(fallback_window_seconds):
+            fallback.append(tca)
+    if len(fallback) == 1:
+        return fallback[0], "unique_symbol_side_time"
+    if len(fallback) > 1:
+        return None, "ambiguous_symbol_side_time"
+    return None, "no_match"
+
+
+def enrich_fills_with_tca(
+    fills: Sequence[Mapping[str, Any]],
+    tca_rows: Sequence[Mapping[str, Any]],
+    *,
+    fallback_window_seconds: float = _FALLBACK_JOIN_WINDOW_SECONDS,
+) -> list[dict[str, Any]]:
+    """Conservatively attach canonical TCA metadata to fill evidence."""
+
+    enriched_rows: list[dict[str, Any]] = []
+    for fill in fills:
+        enriched = dict(fill)
+        matched, join_method = _metadata_join(
+            fill,
+            tca_rows,
+            fallback_window_seconds=fallback_window_seconds,
+        )
+        enriched["metadata_join_method"] = join_method
+        field_sources: dict[str, str] = {}
+        for field in _ENRICHMENT_FIELDS:
+            if _nonempty(enriched.get(field)):
+                field_sources[field] = "fill"
+                continue
+            if matched is not None and _nonempty(matched.get(field)):
+                enriched[field] = matched[field]
+                field_sources[field] = "tca"
+        if matched is not None and not isinstance(enriched.get("benchmark"), Mapping):
+            benchmark = matched.get("benchmark")
+            if isinstance(benchmark, Mapping):
+                enriched["benchmark"] = dict(benchmark)
+        enriched["metadata_field_sources"] = field_sources
+        enriched_rows.append(enriched)
+    return enriched_rows
 
 
 def _first_float(row: Mapping[str, Any], *keys: str) -> float | None:
@@ -154,6 +319,117 @@ def _capture_ratio(expected: Sequence[float], realized: Sequence[float]) -> floa
     return float(sum(realized) / expected_positive)
 
 
+def _decision_spread(row: Mapping[str, Any]) -> tuple[float | None, str]:
+    explicit = _first_float(row, "spread_bps", "decision_spread_bps")
+    if explicit is not None:
+        return explicit, "captured"
+    benchmark = row.get("benchmark")
+    benchmark_row = benchmark if isinstance(benchmark, Mapping) else {}
+    bid = _first_float(row, "decision_bid", "submit_bid_at_arrival")
+    ask = _first_float(row, "decision_ask", "submit_ask_at_arrival")
+    mid = _first_float(row, "decision_mid", "submit_mid_at_arrival")
+    if bid is None:
+        bid = _first_float(benchmark_row, "bid_at_arrival")
+    if ask is None:
+        ask = _first_float(benchmark_row, "ask_at_arrival")
+    if mid is None:
+        mid = _first_float(benchmark_row, "mid_at_arrival")
+    if bid is None or ask is None or mid is None or mid <= 0.0 or ask < bid:
+        return None, "unknown"
+    return float((ask - bid) / mid * 10_000.0), "derived_bid_ask_mid"
+
+
+def _field_source(row: Mapping[str, Any], *keys: str) -> str:
+    sources = row.get("metadata_field_sources")
+    source_map = sources if isinstance(sources, Mapping) else {}
+    for key in keys:
+        if _nonempty(row.get(key)):
+            return str(source_map.get(key) or "fill")
+    return "unknown"
+
+
+def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    fields = (*_REQUIRED_METADATA_FIELDS, "execution_profile")
+    diagnostics: dict[str, dict[str, Any]] = {}
+    predominantly_unknown: list[str] = []
+    sample_count = len(rows)
+    for field in fields:
+        known = sum(
+            1
+            for row in rows
+            if row.get(field) not in (None, "", "unknown")
+        )
+        unknown = sample_count - known
+        coverage_rate = float(known / sample_count) if sample_count else 0.0
+        diagnostics[field] = {
+            "known_count": known,
+            "unknown_count": unknown,
+            "coverage_rate": coverage_rate,
+        }
+        if field in _REQUIRED_METADATA_FIELDS and unknown > known:
+            predominantly_unknown.append(field)
+    join_methods = Counter(str(row.get("metadata_join_method") or "unknown") for row in rows)
+    if not rows:
+        status = "no_samples"
+    elif predominantly_unknown:
+        status = "metadata_incomplete"
+    else:
+        status = "complete"
+    return {
+        "status": status,
+        "sample_count": sample_count,
+        "required_fields": list(_REQUIRED_METADATA_FIELDS),
+        "fields": diagnostics,
+        "predominantly_unknown_fields": predominantly_unknown,
+        "join_method_counts": dict(sorted(join_methods.items())),
+        "warnings": ["metadata_incomplete"] if status == "metadata_incomplete" else [],
+    }
+
+
+def normalize_execution_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
+    spread, spread_source = _decision_spread(row)
+    quote_age = _first_float(row, "quote_age_ms", "quote_fresh_ms", "decision_quote_age_ms")
+    market_regime = _token(row, "market_regime", "regime", "volatility_regime")
+    return {
+        "client_order_id": _identifier(row, "client_order_id"),
+        "order_id": _identifier(row, "order_id", "broker_order_id", "alpaca_order_id"),
+        "session": _token(row, "session_bucket", "session_regime", "session", "venue_session"),
+        "spread_bps": spread,
+        "spread_bucket": _spread_bucket(spread),
+        "quote_age_ms": quote_age,
+        "quote_age_bucket": _quote_age_bucket(quote_age),
+        "order_type": _token(row, "order_type", "submitted_order_type"),
+        "market_regime": market_regime,
+        "regime": market_regime,
+        "execution_profile": _token(row, "execution_profile", "regime_profile"),
+        "metadata_join_method": str(row.get("metadata_join_method") or "unavailable"),
+        "metadata_sources": {
+            "order_type": _field_source(row, "order_type", "submitted_order_type"),
+            "session": _field_source(
+                row,
+                "session_bucket",
+                "session_regime",
+                "session",
+                "venue_session",
+            ),
+            "quote_age_ms": _field_source(
+                row,
+                "quote_age_ms",
+                "quote_fresh_ms",
+                "decision_quote_age_ms",
+            ),
+            "spread_bps": spread_source,
+            "market_regime": _field_source(
+                row,
+                "market_regime",
+                "regime",
+                "volatility_regime",
+            ),
+            "execution_profile": _field_source(row, "execution_profile", "regime_profile"),
+        },
+    }
+
+
 def _normalize_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
     expected = _first_float(row, "expected_net_edge_bps", "expected_edge_bps", "predicted_net_edge_bps")
     if expected is None:
@@ -168,19 +444,13 @@ def _normalize_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         realized = 0.0
     if realized is None:
         return None
-    spread = _first_float(row, "spread_bps", "decision_spread_bps", "spread_paid_bps")
-    quote_age = _first_float(row, "quote_age_ms", "quote_fresh_ms", "decision_quote_age_ms")
     fill_ratio = None
     if requested_qty is not None and requested_qty > 0.0 and resolved_qty is not None:
         fill_ratio = max(0.0, min(float(resolved_qty) / float(requested_qty), 1.0))
     normalized = {
+        **normalize_execution_metadata(row),
         "symbol": _symbol(row),
         "side": _side(row),
-        "session": _token(row, "session_bucket", "session_regime", "session", "venue_session"),
-        "spread_bucket": _spread_bucket(spread),
-        "quote_age_bucket": _quote_age_bucket(quote_age),
-        "order_type": _token(row, "order_type", "submitted_order_type"),
-        "regime": _token(row, "regime", "market_regime", "regime_profile", "volatility_regime"),
         "expected_edge_bucket": _edge_bucket(expected),
         "expected_net_edge_bps": float(expected),
         "realized_net_edge_bps": float(realized),
@@ -340,7 +610,8 @@ def build_execution_capture_improvement_report(
 ) -> dict[str, Any]:
     normalized: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-    for row in [*fills, *tca_rows]:
+    enriched_fills = enrich_fills_with_tca(fills, tca_rows)
+    for row in enriched_fills:
         normalized_row = _normalize_row(row)
         if normalized_row is None:
             continue
@@ -383,6 +654,13 @@ def build_execution_capture_improvement_report(
         min_bucket_samples=min_bucket_samples,
         min_capture_ratio=min_capture_ratio,
     )
+    by_execution_profile = _grouped(
+        normalized,
+        ("execution_profile",),
+        min_bucket_samples=min_bucket_samples,
+        min_capture_ratio=min_capture_ratio,
+    )
+    metadata_quality = build_metadata_quality(normalized)
     status = "insufficient_samples"
     if len(normalized) >= int(min_bucket_samples):
         capture = _safe_float(overall.get("capture_ratio"))
@@ -411,6 +689,8 @@ def build_execution_capture_improvement_report(
         "report_date": report_date,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "status": status,
+        "metadata_status": metadata_quality["status"],
+        "warnings": metadata_quality["warnings"],
         "recommended_next_action": recommended,
         "sample_gate": {
             "min_bucket_samples": int(min_bucket_samples),
@@ -432,12 +712,16 @@ def build_execution_capture_improvement_report(
             "by_symbol": _worst_buckets(by_symbol),
             "by_symbol_side_session": _worst_buckets(by_symbol_side_session),
             "by_order_context": _worst_buckets(by_order_bucket),
+            "by_execution_profile": _worst_buckets(by_execution_profile),
         },
         "bucket_diagnostics": {
             "by_symbol": by_symbol,
             "by_symbol_side_session": by_symbol_side_session,
             "by_order_context": by_order_bucket,
+            "by_execution_profile": by_execution_profile,
         },
+        "metadata_quality": metadata_quality,
+        "normalized_rows": normalized,
         "edge_haircuts": {
             "global": _recommendation(
                 overall,

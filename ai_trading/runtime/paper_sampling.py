@@ -17,6 +17,7 @@ from ai_trading.runtime.atomic_io import atomic_write_text
 
 
 _STATE_LOCK = RLock()
+_GOVERNED_PAPER_SAMPLING_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
 
 
 @dataclass(frozen=True)
@@ -78,14 +79,18 @@ def _write_state(path: Path, state: Mapping[str, Any]) -> None:
 
 
 def _allowed_symbols(cfg: Any) -> set[str]:
-    raw_symbols = getattr(cfg, "paper_sampling_allowed_symbols", ("AAPL", "AMZN"))
+    raw_symbols = getattr(
+        cfg,
+        "paper_sampling_allowed_symbols",
+        tuple(sorted(_GOVERNED_PAPER_SAMPLING_SYMBOLS)),
+    )
     candidates: Iterable[Any]
     if isinstance(raw_symbols, str):
         candidates = raw_symbols.split(",")
     else:
         candidates = raw_symbols or ()
     symbols = {str(symbol).strip().upper() for symbol in candidates if str(symbol).strip()}
-    return symbols or {"AAPL", "AMZN"}
+    return symbols.intersection(_GOVERNED_PAPER_SAMPLING_SYMBOLS)
 
 
 def _is_paper_sampling_active(cfg: Any) -> tuple[bool, str | None]:
@@ -191,7 +196,10 @@ def evaluate_paper_sampling_order(
 
     requested_qty = int(max(0, qty))
     price_value = float(price)
-    max_notional = float(getattr(cfg, "paper_sampling_max_notional_per_order", 250.0) or 250.0)
+    configured_max_notional = float(
+        getattr(cfg, "paper_sampling_max_notional_per_order", 750.0) or 750.0
+    )
+    max_notional = min(configured_max_notional, 750.0)
     if not math.isfinite(price_value) or price_value <= 0.0 or requested_qty <= 0:
         details.update({"qty": requested_qty, "price": price})
         return PaperSamplingDecision(True, False, 0, "PAPER_SAMPLING_INPUT_BLOCK", details)

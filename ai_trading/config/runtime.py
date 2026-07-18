@@ -991,7 +991,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_allowed_symbols",
         env=("AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS",),
         cast="tuple[str]",
-        default=("AAPL", "AMZN"),
+        default=("AAPL", "AMZN", "MSFT"),
         description="Symbols eligible for diagnostic paper-order sampling.",
     ),
     ConfigSpec(
@@ -1046,9 +1046,16 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_max_notional_per_order",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER",),
         cast="float",
-        default=250.0,
+        default=750.0,
         description="Maximum diagnostic paper-sampling order notional; orders above the cap are blocked.",
         min_value=0.01,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_only",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_ONLY",),
+        cast="bool",
+        default=True,
+        description="Require opening paper samples to use non-marketable DAY limit orders at the accepted quote.",
     ),
     ConfigSpec(
         field="paper_sampling_relax_edge_gates_enabled",
@@ -3223,6 +3230,29 @@ def _validate_paper_sampling_config(values: Mapping[str, Any], env_map: Mapping[
         raise ValueError(
             "AI_TRADING_PAPER_SAMPLING_ENABLED requires EXECUTION_MODE=paper, "
             "a paper Alpaca base URL, and a non-live launch profile."
+        )
+    configured_symbols = {
+        str(symbol).strip().upper()
+        for symbol in values.get("paper_sampling_allowed_symbols", ())
+        if str(symbol).strip()
+    }
+    governed_symbols = {"AAPL", "AMZN", "MSFT"}
+    if not configured_symbols or not configured_symbols.issubset(governed_symbols):
+        raise ValueError(
+            "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS must be limited to "
+            "AAPL,AMZN,MSFT."
+        )
+    if float(values.get("paper_sampling_max_notional_per_order") or 0.0) > 750.0:
+        raise ValueError(
+            "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER must be <= 750."
+        )
+    if bool(values.get("paper_sampling_relax_edge_gates_enabled")):
+        raise ValueError(
+            "AI_TRADING_PAPER_SAMPLING_RELAX_EDGE_GATES_ENABLED must remain disabled."
+        )
+    if not bool(values.get("paper_sampling_passive_only")):
+        raise ValueError(
+            "AI_TRADING_PAPER_SAMPLING_PASSIVE_ONLY must remain enabled."
         )
 
 

@@ -15820,6 +15820,13 @@ class ExecutionEngine:
         market_regime: str | None = None,
         volatility_regime: str | None = None,
         trend_regime: str | None = None,
+        time_in_force: str | None = None,
+        decision_bid: float | None = None,
+        decision_ask: float | None = None,
+        decision_mid: float | None = None,
+        decision_spread_bps: float | None = None,
+        decision_quote_age_ms: float | None = None,
+        execution_profile: str | None = None,
     ) -> str | None:
         """Create and claim the canonical durable OMS intent for a live submit."""
 
@@ -15859,6 +15866,19 @@ class ExecutionEngine:
             metadata["volatility_regime"] = str(volatility_regime).strip().lower()
         if trend_regime is not None:
             metadata["trend_regime"] = str(trend_regime).strip().lower()
+        if time_in_force not in (None, ""):
+            metadata["time_in_force"] = str(time_in_force).strip().lower()
+        for key, value in (
+            ("decision_bid", decision_bid),
+            ("decision_ask", decision_ask),
+            ("decision_mid", decision_mid),
+            ("decision_spread_bps", decision_spread_bps),
+            ("decision_quote_age_ms", decision_quote_age_ms),
+        ):
+            if value is not None and math.isfinite(float(value)):
+                metadata[key] = float(value)
+        if execution_profile not in (None, ""):
+            metadata["execution_profile"] = str(execution_profile).strip().lower()
         metadata = {
             key: value for key, value in metadata.items() if value not in (None, "")
         }
@@ -16755,6 +16775,7 @@ class ExecutionEngine:
             "signal_tags": signal_tags,
             "confidence": confidence,
             "order_id": order_id,
+            "broker_order_id": order_id,
             "fill_id": fill_id,
             "expected_price": expected_price,
             "slippage_bps": slippage_bps,
@@ -16843,6 +16864,7 @@ class ExecutionEngine:
             fill_record["venue"] = str(venue_value)
         if session_regime_value is not None:
             fill_record["session_regime"] = str(session_regime_value)
+            fill_record["session"] = str(session_regime_value)
             if venue_value is not None:
                 fill_record["venue_session"] = (
                     f"{str(venue_value)}:{str(session_regime_value)}"
@@ -22472,6 +22494,7 @@ class ExecutionEngine:
             capacity_reservation_active = False
 
         order_type_submitted = order_type_normalized
+        resolved_submission_tif = self._resolve_time_in_force(time_in_force)
         order: Any | None = None
         try:
             durable_intent_id = self._begin_durable_order_lifecycle(
@@ -22515,6 +22538,27 @@ class ExecutionEngine:
                 trend_regime=(
                     str(metadata_raw.get("trend_regime") or "")
                     if isinstance(metadata_raw, Mapping)
+                    else None
+                ),
+                time_in_force=(
+                    str(resolved_submission_tif)
+                    if resolved_submission_tif not in (None, "")
+                    else None
+                ),
+                decision_bid=float(bid_val) if bid_val is not None else None,
+                decision_ask=float(ask_val) if ask_val is not None else None,
+                decision_mid=(
+                    (float(bid_val) + float(ask_val)) / 2.0
+                    if bid_val is not None and ask_val is not None
+                    else None
+                ),
+                decision_spread_bps=spread_bps_hint_for_profile,
+                decision_quote_age_ms=(
+                    float(quote_age_ms) if quote_age_ms is not None else None
+                ),
+                execution_profile=(
+                    str(execution_profile_context.get("profile") or "")
+                    if isinstance(execution_profile_context, Mapping)
                     else None
                 ),
             )
@@ -23331,6 +23375,45 @@ class ExecutionEngine:
                 ),
                 error=(rejection_detail or parsed_rejection),
             )
+        actual_order_type_raw = _extract_value(final_order, "type", "order_type")
+        actual_order_type = str(
+            getattr(actual_order_type_raw, "value", actual_order_type_raw)
+            or order_type_normalized
+        ).strip().lower()
+        actual_tif_raw = _extract_value(final_order, "time_in_force", "tif")
+        actual_tif = str(
+            getattr(actual_tif_raw, "value", actual_tif_raw)
+            or resolved_submission_tif
+            or ""
+        ).strip().lower()
+        submission_context: dict[str, Any] = {
+            "order_type": actual_order_type,
+        }
+        if actual_tif:
+            submission_context["time_in_force"] = actual_tif
+        for key, value in (
+            ("decision_bid", bid_val),
+            ("decision_ask", ask_val),
+            ("decision_spread_bps", spread_bps_hint_for_profile),
+            ("decision_quote_age_ms", quote_age_ms),
+        ):
+            if value is not None and math.isfinite(float(value)):
+                submission_context[key] = float(value)
+        if bid_val is not None and ask_val is not None:
+            submission_context["decision_mid"] = (
+                float(bid_val) + float(ask_val)
+            ) / 2.0
+        for key, value in (
+            ("session_regime", execution_profile_context.get("session_regime")),
+            ("execution_profile", execution_profile_context.get("profile")),
+        ):
+            if value not in (None, ""):
+                submission_context[key] = str(value).strip().lower()
+        if isinstance(metadata_raw, Mapping):
+            for key in ("market_regime", "volatility_regime", "trend_regime"):
+                value = metadata_raw.get(key)
+                if value not in (None, ""):
+                    submission_context[key] = str(value).strip().lower()
         final_payload = {
             "symbol": symbol,
             "order_id": str(order_id_display) if order_id_display is not None else None,
@@ -23338,6 +23421,7 @@ class ExecutionEngine:
             "status": order_status_lower,
             "quantity": requested_qty,
             "filled_qty": float(filled_qty or 0),
+            **submission_context,
         }
         if benchmark_price is not None and benchmark_price > 0:
             final_payload["expected_price"] = float(benchmark_price)
@@ -23379,7 +23463,6 @@ class ExecutionEngine:
             logger.warning("ORDER_REJECTED", extra=final_payload)
         final_event_payload = dict(final_payload)
         final_event_payload["event"] = "final_state"
-        final_event_payload["order_type"] = order_type_normalized
         final_event_payload["ack_timed_out"] = bool(ack_timed_out)
         self._record_runtime_order_event(final_event_payload)
         if order_status_lower in _TERMINAL_ORDER_STATUSES and order_status_lower != "filled":
@@ -23395,6 +23478,10 @@ class ExecutionEngine:
                 pending_entry["symbol"] = symbol
                 pending_entry["side"] = lifecycle_side
                 pending_entry["qty"] = requested_qty
+                pending_entry["order_id"] = str(order_id_display)
+                if client_order_id not in (None, ""):
+                    pending_entry["client_order_id"] = str(client_order_id)
+                pending_entry.update(submission_context)
                 if benchmark_price is not None and benchmark_price > 0:
                     pending_entry["expected_price"] = float(benchmark_price)
                 if expected_edge_hint is not None and math.isfinite(float(expected_edge_hint)):
@@ -23653,7 +23740,7 @@ class ExecutionEngine:
                         parsed_fill_ts = parsed_fill_ts.replace(tzinfo=UTC)
                     fill_timestamp = parsed_fill_ts.astimezone(UTC)
             runtime_fill_payload = (
-                dict(final_order) if isinstance(final_order, Mapping) else None
+                dict(final_order) if isinstance(final_order, Mapping) else {}
             )
             runtime_source = "live"
             liquidity_role_hint = self._infer_liquidity_role(
@@ -23668,10 +23755,27 @@ class ExecutionEngine:
             if isinstance(runtime_fill_payload, dict):
                 if runtime_fill_payload.get("source") in (None, ""):
                     runtime_fill_payload["source"] = "live"
-                runtime_fill_payload.setdefault("order_type", str(order_type_normalized))
+                actual_order_type = _extract_value(final_order, "type", "order_type")
+                runtime_fill_payload.setdefault(
+                    "order_type",
+                    str(getattr(actual_order_type, "value", actual_order_type) or order_type_normalized)
+                    .strip()
+                    .lower(),
+                )
                 runtime_fill_payload.setdefault("submitted_order_type", str(order_type_normalized))
-                if kwargs.get("time_in_force") not in (None, ""):
-                    runtime_fill_payload.setdefault("time_in_force", str(kwargs.get("time_in_force")))
+                actual_tif = _extract_value(final_order, "time_in_force", "tif")
+                if actual_tif in (None, ""):
+                    actual_tif = resolved_submission_tif
+                if actual_tif not in (None, ""):
+                    runtime_fill_payload.setdefault(
+                        "time_in_force",
+                        str(getattr(actual_tif, "value", actual_tif)).strip().lower(),
+                    )
+                if order_id_display not in (None, ""):
+                    runtime_fill_payload.setdefault("order_id", str(order_id_display))
+                    runtime_fill_payload.setdefault("broker_order_id", str(order_id_display))
+                if client_order_id not in (None, ""):
+                    runtime_fill_payload.setdefault("client_order_id", str(client_order_id))
                 submitted_limit = _safe_float(resolved_limit_price)
                 if submitted_limit is None:
                     submitted_limit = _safe_float(price_for_limit)
@@ -23715,6 +23819,12 @@ class ExecutionEngine:
                     runtime_fill_payload["session_regime"] = str(
                         execution_profile_context.get("session_regime")
                     ).strip().lower()
+                    runtime_fill_payload.setdefault(
+                        "session",
+                        str(execution_profile_context.get("session_regime"))
+                        .strip()
+                        .lower(),
+                    )
                 if (
                     execution_profile_context.get("profile")
                     and runtime_fill_payload.get("execution_profile") in (None, "")
@@ -33585,6 +33695,17 @@ class ExecutionEngine:
                 "model_artifact_hash",
                 "policy_hash",
                 "decision_trace_id",
+                "time_in_force",
+                "decision_bid",
+                "decision_ask",
+                "decision_mid",
+                "decision_spread_bps",
+                "decision_quote_age_ms",
+                "session_regime",
+                "execution_profile",
+                "market_regime",
+                "volatility_regime",
+                "trend_regime",
             ):
                 if metadata.get(key) not in (None, ""):
                     candidate[key] = metadata.get(key)
@@ -33658,7 +33779,7 @@ class ExecutionEngine:
             if qty_value is None:
                 qty_value = _safe_float(row.get("qty"))
             expected_price = _resolve_expected_order_price(row)
-            candidates[order_id] = {
+            candidate = {
                 "status": status,
                 "symbol": str(row.get("symbol") or "").strip().upper(),
                 "side": self._normalized_order_side(row.get("side")),
@@ -33671,6 +33792,31 @@ class ExecutionEngine:
                 "updated_at": row.get("ts"),
                 "order_id": order_id,
             }
+            for key in (
+                "expected_net_edge_bps",
+                "model_id",
+                "model_version",
+                "config_snapshot_hash",
+                "dataset_hash",
+                "feature_version",
+                "model_artifact_hash",
+                "policy_hash",
+                "decision_trace_id",
+                "time_in_force",
+                "decision_bid",
+                "decision_ask",
+                "decision_mid",
+                "decision_spread_bps",
+                "decision_quote_age_ms",
+                "session_regime",
+                "execution_profile",
+                "market_regime",
+                "volatility_regime",
+                "trend_regime",
+            ):
+                if row.get(key) not in (None, ""):
+                    candidate[key] = row.get(key)
+            candidates[order_id] = candidate
             if len(candidates) >= max_candidates:
                 break
         if not durable_candidates:
@@ -33689,6 +33835,18 @@ class ExecutionEngine:
                     "updated_at",
                     "expected_price",
                     "client_order_id",
+                    "order_type",
+                    "time_in_force",
+                    "decision_bid",
+                    "decision_ask",
+                    "decision_mid",
+                    "decision_spread_bps",
+                    "decision_quote_age_ms",
+                    "session_regime",
+                    "execution_profile",
+                    "market_regime",
+                    "volatility_regime",
+                    "trend_regime",
                 ):
                     if artifact_candidate.get(key) not in (None, ""):
                         candidate[key] = artifact_candidate.get(key)
@@ -34020,11 +34178,46 @@ class ExecutionEngine:
             side_token = self._normalized_order_side(
                 _extract_value(refreshed, "side") or _extract_value(entry, "side")
             )
+            order_type_raw = _extract_value(refreshed, "type", "order_type")
+            if order_type_raw in (None, ""):
+                order_type_raw = _extract_value(entry, "order_type")
             order_type_token = str(
-                _extract_value(entry, "order_type")
-                or _extract_value(refreshed, "type", "order_type")
-                or ""
+                getattr(order_type_raw, "value", order_type_raw) or ""
             ).strip().lower() or None
+            time_in_force_raw = _extract_value(refreshed, "time_in_force", "tif")
+            if time_in_force_raw in (None, ""):
+                time_in_force_raw = _extract_value(entry, "time_in_force", "tif")
+            time_in_force_token = str(
+                getattr(time_in_force_raw, "value", time_in_force_raw) or ""
+            ).strip().lower() or None
+            reconcile_context: dict[str, Any] = {}
+            for context_key in (
+                "decision_bid",
+                "decision_ask",
+                "decision_mid",
+                "decision_spread_bps",
+                "decision_quote_age_ms",
+                "session_regime",
+                "execution_profile",
+                "market_regime",
+                "volatility_regime",
+                "trend_regime",
+                "model_id",
+                "model_version",
+                "config_snapshot_hash",
+                "dataset_hash",
+                "feature_version",
+                "model_artifact_hash",
+                "policy_hash",
+                "decision_trace_id",
+            ):
+                context_value = _extract_value(entry, context_key)
+                if context_value not in (None, ""):
+                    reconcile_context[context_key] = context_value
+            if order_type_token is not None:
+                reconcile_context["order_type"] = order_type_token
+            if time_in_force_token is not None:
+                reconcile_context["time_in_force"] = time_in_force_token
             expected_net_edge_hint = None
             if isinstance(refreshed, Mapping):
                 expected_net_edge_hint = self._order_expected_edge_bps(refreshed)
@@ -34060,6 +34253,7 @@ class ExecutionEngine:
                     "order_type": order_type_token,
                     "quantity": int(max(float(refreshed_requested_qty or qty_fallback), 0.0)),
                     "filled_qty": float(max(float(refreshed_filled_qty or 0.0), 0.0)),
+                    **reconcile_context,
                 }
                 if expected_price_value is not None and expected_price_value > 0:
                     transition_payload["expected_price"] = float(expected_price_value)
@@ -34089,6 +34283,7 @@ class ExecutionEngine:
                     "quantity": int(max(float(refreshed_requested_qty or qty_fallback), 0.0)),
                     "filled_qty": float(max(float(refreshed_filled_qty or 0.0), 0.0)),
                     "ack_timed_out": False,
+                    **reconcile_context,
                 }
                 if expected_price_value is not None and expected_price_value > 0:
                     final_payload["expected_price"] = float(expected_price_value)
@@ -34154,12 +34349,18 @@ class ExecutionEngine:
                             meta = meta_store.get(str(resolved_client_order_id))
                         if isinstance(meta, _SignalMeta):
                             signal = meta.signal
-                    runtime_fill_payload = (
-                        dict(refreshed) if isinstance(refreshed, Mapping) else None
-                    )
-                    if isinstance(runtime_fill_payload, dict):
-                        if runtime_fill_payload.get("source") in (None, ""):
-                            runtime_fill_payload["source"] = "broker_reconcile"
+                    runtime_fill_payload = dict(entry)
+                    if isinstance(refreshed, Mapping):
+                        for payload_key, payload_value in refreshed.items():
+                            if payload_value not in (None, ""):
+                                runtime_fill_payload[payload_key] = payload_value
+                    runtime_fill_payload.update(reconcile_context)
+                    runtime_fill_payload["order_id"] = resolved_order_id
+                    runtime_fill_payload["broker_order_id"] = resolved_order_id
+                    if resolved_client_order_id:
+                        runtime_fill_payload["client_order_id"] = resolved_client_order_id
+                    if runtime_fill_payload.get("source") in (None, ""):
+                        runtime_fill_payload["source"] = "broker_reconcile"
                     self._persist_fill_derived_trade_record(
                         symbol=symbol_token or "",
                         side=side_token,
@@ -34254,8 +34455,20 @@ class ExecutionEngine:
                             if float(refreshed_requested_qty or qty_fallback) > 0.0
                             else None
                         ),
-                        market_regime=None,
-                        execution_profile_context=None,
+                        market_regime=(
+                            str(reconcile_context.get("market_regime"))
+                            if reconcile_context.get("market_regime") not in (None, "")
+                            else None
+                        ),
+                        execution_profile_context={
+                            key: value
+                            for key, value in (
+                                ("profile", reconcile_context.get("execution_profile")),
+                                ("session_regime", reconcile_context.get("session_regime")),
+                            )
+                            if value not in (None, "")
+                        }
+                        or None,
                     )
 
                 store.pop(key, None)

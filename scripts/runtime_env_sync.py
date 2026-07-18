@@ -13,11 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from ai_trading.config.managed_secrets import (
+from ai_trading.managed_secrets_transport import (
     BACKEND_AWS,
     BACKEND_NONE,
-    aws_cli_env as _aws_cli_env,
-    fetch_aws_secret_payload as _fetch_aws_secret_payload,
+    aws_cli_env as _transport_aws_cli_env,
+    fetch_aws_secret_payload as _transport_fetch_aws_secret_payload,
     parse_secret_string as _parse_secret_string,
 )
 
@@ -65,6 +65,24 @@ _DEFAULT_EXCLUDED_MANAGED_KEYS = {
 
 _BACKEND_NONE = BACKEND_NONE
 _BACKEND_AWS = BACKEND_AWS
+
+
+def _aws_cli_env() -> dict[str, str]:
+    return _transport_aws_cli_env(env=os.environ)
+
+
+def _fetch_aws_secret_payload(
+    secret_id: str,
+    *,
+    region: str,
+    profile: str,
+) -> dict[str, str]:
+    return _transport_fetch_aws_secret_payload(
+        secret_id,
+        region=region,
+        profile=profile,
+        env=os.environ,
+    )
 
 
 @dataclass(frozen=True)

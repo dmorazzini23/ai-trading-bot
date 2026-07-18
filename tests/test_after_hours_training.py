@@ -23,10 +23,17 @@ pytest.importorskip("sklearn")
 
 
 @pytest.fixture(autouse=True)
-def _disable_no_new_data_skip_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_after_hours_runtime_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Most tests in this module assert training/promotion behavior and should not
     # short-circuit on persisted dataset fingerprint state.
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SKIP_IF_NO_NEW_SIGNAL_DATA", "0")
+    # Training always records model governance metadata. Keep that write inside
+    # each test's temporary directory so the suite cannot pollute the governed
+    # server registry with short-lived pytest artifact paths.
+    monkeypatch.setenv("MODEL_REGISTRY_DIR", str(tmp_path / "model-registry"))
 
 
 def _write_tca(path: Path, n: int = 300) -> None:
@@ -106,6 +113,15 @@ def _positive_candidate_metrics(name: str, dataset: pd.DataFrame, **_kwargs):
             "inverse_applied": False,
             "valid_samples": len(dataset),
             "expectancy_delta_bps": 1.0,
+            "oriented_expectancy_delta_bps": 1.0,
+            "ranking_separation_passed": True,
+        },
+        score_expectancy_delta_bps=1.0,
+        regime_stability_report={
+            "supported_regime_count": 1,
+            "profitable_regime_count": 1,
+            "profitable_regime_ratio": 1.0,
+            "worst_expectancy_bps": 2.5,
         },
     )
 
@@ -489,6 +505,50 @@ def test_candidate_selection_score_penalizes_profitable_fold_shortfall(
     )
 
 
+def test_candidate_selection_score_rewards_ranking_and_regime_stability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_ENABLED", "0")
+    weak = after_hours.CandidateMetrics(
+        name="weak",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=160,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=100.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.12,
+        score_expectancy_delta_bps=0.1,
+        regime_stability_report={"profitable_regime_ratio": 0.25},
+    )
+    stable = after_hours.CandidateMetrics(
+        name="stable",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=160,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=100.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.12,
+        score_expectancy_delta_bps=2.0,
+        regime_stability_report={"profitable_regime_ratio": 1.0},
+    )
+
+    assert after_hours._candidate_selection_score(stable) > after_hours._candidate_selection_score(
+        weak
+    )
+
+
 def test_filter_candidates_for_selection_enforces_fold_quality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -510,6 +570,11 @@ def test_filter_candidates_for_selection_enforces_fold_quality(
         regime_metrics={},
         oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
         brier_score=0.14,
+        score_expectancy_delta_bps=1.0,
+        regime_stability_report={
+            "supported_regime_count": 1,
+            "profitable_regime_ratio": 1.0,
+        },
     )
     high_quality = after_hours.CandidateMetrics(
         name="high_quality",
@@ -525,6 +590,11 @@ def test_filter_candidates_for_selection_enforces_fold_quality(
         regime_metrics={},
         oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
         brier_score=0.14,
+        score_expectancy_delta_bps=1.0,
+        regime_stability_report={
+            "supported_regime_count": 1,
+            "profitable_regime_ratio": 1.0,
+        },
     )
     filtered, diagnostics = after_hours._filter_candidates_for_selection(
         [low_quality, high_quality]
@@ -533,6 +603,76 @@ def test_filter_candidates_for_selection_enforces_fold_quality(
     assert diagnostics["eligible_count"] == 1
     assert diagnostics["rejected_by_reason"]["profitable_folds"] == 1
     assert diagnostics["rejected_by_reason"]["profitable_fold_ratio"] == 1
+
+
+def test_filter_candidates_for_selection_fails_closed_without_positive_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_CONSTRAINTS_ENABLED", "1")
+    candidate = after_hours.CandidateMetrics(
+        name="negative_only_candidate",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=180,
+        mean_expectancy_bps=-0.01,
+        max_drawdown_bps=50.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        score_expectancy_delta_bps=2.0,
+        regime_stability_report={
+            "supported_regime_count": 2,
+            "profitable_regime_ratio": 1.0,
+        },
+    )
+
+    filtered, diagnostics = after_hours._filter_candidates_for_selection([candidate])
+
+    assert filtered == []
+    assert diagnostics["fallback_to_unfiltered"] is False
+    assert diagnostics["selection_failed_closed"] is True
+    assert diagnostics["rejected_models"] == {"negative_only_candidate": ["expectancy"]}
+
+
+def test_filter_candidates_for_selection_rejects_flat_ranking_and_unstable_regimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_CONSTRAINTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_SCORE_DELTA_BPS", "0.5")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_PROFITABLE_REGIME_RATIO",
+        "0.6",
+    )
+    candidate = after_hours.CandidateMetrics(
+        name="flat_unstable",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=180,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=50.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        score_expectancy_delta_bps=0.01,
+        regime_stability_report={
+            "supported_regime_count": 3,
+            "profitable_regime_ratio": 1.0 / 3.0,
+        },
+    )
+
+    filtered, diagnostics = after_hours._filter_candidates_for_selection([candidate])
+
+    assert filtered == []
+    assert diagnostics["rejected_models"]["flat_unstable"] == [
+        "score_separation",
+        "regime_stability",
+    ]
 
 
 def test_model_quality_diagnostics_reports_deciles_and_symbol_contributions() -> None:
@@ -629,7 +769,25 @@ def test_orient_probabilities_for_edge_flips_when_high_scores_underperform(
     oriented, report = after_hours._orient_probabilities_for_edge(probs, edges)
     assert report["orientation"] == "inverse"
     assert report["inverse_applied"] is True
+    assert report["oriented_expectancy_delta_bps"] > 0.1
+    assert report["ranking_separation_passed"] is True
     assert np.allclose(oriented, 1.0 - probs)
+
+
+def test_orient_probabilities_for_edge_flags_near_zero_ranking_separation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_QUANTILE", "0.25")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", "0.5")
+    probabilities = np.asarray([0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9], dtype=float)
+    edges = np.asarray([1.0, -1.0, 4.0, -4.0, 3.0, -3.0, 1.05, -0.95], dtype=float)
+
+    oriented, report = after_hours._orient_probabilities_for_edge(probabilities, edges)
+
+    assert np.allclose(oriented, probabilities)
+    assert report["orientation"] == "direct"
+    assert abs(report["oriented_expectancy_delta_bps"]) < 0.5
+    assert report["ranking_separation_passed"] is False
 
 
 def test_label_quality_diagnostics_flags_inverse_orientation() -> None:
@@ -3235,6 +3393,64 @@ def test_after_hours_training_handles_leakage_assertions(
     assert result["reason"] == "no_candidate_models"
 
 
+def test_after_hours_training_does_not_fit_artifact_when_all_candidates_are_negative(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+    model_dir = tmp_path / "models"
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_DAY_SLEEVE_INTRADAY_LOOKBACK_DAYS", "365")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_day_sleeve_bars",
+        lambda symbol, _start, _end: _synthetic_intraday(symbol),
+    )
+
+    def _negative_candidate(name: str, dataset: pd.DataFrame, **_kwargs):
+        return after_hours.CandidateMetrics(
+            name=name,
+            fold_count=5,
+            profitable_fold_count=4,
+            profitable_fold_ratio=0.8,
+            support=180,
+            mean_expectancy_bps=-0.01,
+            max_drawdown_bps=50.0,
+            turnover_ratio=0.2,
+            mean_hit_rate=0.55,
+            hit_rate_stability=0.7,
+            regime_metrics={},
+            oof_probabilities=np.full(len(dataset), 0.8, dtype=float),
+            score_expectancy_delta_bps=2.0,
+            regime_stability_report={
+                "supported_regime_count": 2,
+                "profitable_regime_ratio": 1.0,
+            },
+        )
+
+    monkeypatch.setattr(after_hours, "_evaluate_candidate", _negative_candidate)
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no_qualified_candidate"
+    assert result["governance_status"] == "shadow"
+    assert result["selection_constraints"]["selection_failed_closed"] is True
+    assert all(not item["selected"] for item in result["candidate_metrics"])
+    assert not model_dir.exists()
+
+
 def test_after_hours_training_no_global_leakage_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3298,6 +3514,7 @@ def test_after_hours_uses_dedicated_ticker_csv(
         "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: _synthetic_intraday(symbol),
     )
+    monkeypatch.setattr(after_hours, "_evaluate_candidate", _positive_candidate_metrics)
 
     result = after_hours.run_after_hours_training(
         now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),  # 16:10 New York

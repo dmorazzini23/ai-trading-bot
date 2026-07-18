@@ -172,6 +172,7 @@ from ai_trading.models.contracts import (
 )
 from ai_trading.features.day_sleeve import build_day_sleeve_features
 from ai_trading.model_loader import load_day_sleeve_production_model
+from ai_trading.registry.manifest import evaluate_market_regime_policy
 from ai_trading.policy.compiler import (
     EffectivePolicy,
     ExecutionCandidate,
@@ -7365,7 +7366,14 @@ def _score_day_sleeve_with_ml(
         serving_threshold = float(regime_thresholds.get(regime, selected_threshold))
         if not 0.0 <= serving_threshold <= 1.0:
             raise ValueError("Day-sleeve serving threshold is outside [0, 1]")
-        abstained = probability < serving_threshold
+        regime_policy_decision = evaluate_market_regime_policy(
+            getattr(bundle, "market_regime_policy", None),
+            market_regime=regime,
+            now=now,
+        )
+        abstained = (
+            not regime_policy_decision.allowed or probability < serving_threshold
+        )
         if abstained or serving_threshold >= 1.0:
             model_score = 0.0
         else:
@@ -7437,6 +7445,15 @@ def _score_day_sleeve_with_ml(
             "ml_serving_threshold": serving_threshold,
             "ml_serving_regime": regime,
             "ml_abstained": abstained,
+            "ml_regime_policy_declared": regime_policy_decision.declared,
+            "ml_regime_policy_allowed": regime_policy_decision.allowed,
+            "ml_regime_policy_reason": regime_policy_decision.reason,
+            "ml_regime_policy_evidence_identity": (
+                regime_policy_decision.evidence_identity
+            ),
+            "ml_regime_policy_evidence_sha256": (
+                regime_policy_decision.evidence_sha256
+            ),
             "ml_blend_weight": bounded_weight,
             "ml_serving_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
             "ml_serving_bar_timestamp": bar_timestamp,
@@ -7468,6 +7485,14 @@ def _score_day_sleeve_with_ml(
             "blend_weight": bounded_weight,
             "heuristic_score": float(heuristic_score),
             "serving_score": serving_score,
+            "market_regime": regime,
+            "market_regime_policy": {
+                "declared": regime_policy_decision.declared,
+                "allowed": regime_policy_decision.allowed,
+                "reason": regime_policy_decision.reason,
+                "evidence_identity": regime_policy_decision.evidence_identity,
+                "evidence_sha256": regime_policy_decision.evidence_sha256,
+            },
             "market": market_snapshot,
             "quote_status": quote_snapshot,
             "provider": _ml_shadow_provider_snapshot(),

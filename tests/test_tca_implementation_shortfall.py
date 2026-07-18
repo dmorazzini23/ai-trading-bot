@@ -51,6 +51,17 @@ def test_tca_record_includes_canonical_price_fields() -> None:
         config_snapshot_hash="cfg-1",
         rank_reason="EDGE_RANKED",
         rank_reasons=["EDGE_RANKED", "CAPTURE_OK"],
+        broker_order_id="oid-1",
+        order_type="limit",
+        time_in_force="day",
+        session="opening",
+        decision_quote_age_ms=150.0,
+        decision_spread_bps=2.0,
+        regime_profile="balanced",
+        execution_profile="balanced",
+        market_regime="sideways",
+        volatility_regime="low",
+        trend_regime="flat",
     )
     assert record["decision_price"] == 100.0
     assert record["submit_price_reference"] == 100.2
@@ -61,6 +72,18 @@ def test_tca_record_includes_canonical_price_fields() -> None:
     assert record["config_snapshot_hash"] == "cfg-1"
     assert record["rank_reason"] == "EDGE_RANKED"
     assert record["rank_reasons"] == ["EDGE_RANKED", "CAPTURE_OK"]
+    assert record["order_id"] == "oid-1"
+    assert record["broker_order_id"] == "oid-1"
+    assert record["order_type"] == "limit"
+    assert record["time_in_force"] == "day"
+    assert record["session"] == "opening"
+    assert record["quote_age_ms"] == 150.0
+    assert record["spread_bps"] == 2.0
+    assert record["execution_profile"] == "balanced"
+    assert record["regime_profile"] == "balanced"
+    assert record["market_regime"] == "sideways"
+    assert record["volatility_regime"] == "low"
+    assert record["trend_regime"] == "flat"
 
 
 def test_resolve_pending_tca_from_fill_updates_pending_fields() -> None:

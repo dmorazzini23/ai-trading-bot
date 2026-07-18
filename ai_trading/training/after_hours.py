@@ -121,6 +121,20 @@ _MODEL_SELECTION_WEIGHT_SPECS: tuple[tuple[str, str, float, float, float], ...] 
         0.0,
         40.0,
     ),
+    (
+        "ranking_separation_weight",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_RANKING_SEPARATION_WEIGHT",
+        0.5,
+        0.0,
+        5.0,
+    ),
+    (
+        "regime_stability_weight",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_STABILITY_WEIGHT",
+        1.0,
+        0.0,
+        5.0,
+    ),
 )
 def _resolve_after_hours_output_path(path_value: str, *, default_relative: str) -> Path:
     """Resolve output paths relative to writable runtime roots when possible."""
@@ -264,6 +278,8 @@ class CandidateMetrics:
     selected_threshold: float = 0.5
     score_orientation: str = "direct"
     score_orientation_report: dict[str, Any] = field(default_factory=dict)
+    score_expectancy_delta_bps: float = 0.0
+    regime_stability_report: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -276,6 +292,8 @@ class _CandidateSnapshot:
     brier_score: float
     support: int
     profitable_fold_ratio: float
+    score_expectancy_delta_bps: float = 0.0
+    profitable_regime_ratio: float = 0.0
 
 
 @dataclass
@@ -903,6 +921,9 @@ def _orient_probabilities_for_edge(
         "high_score_expectancy_bps": 0.0,
         "low_score_expectancy_bps": 0.0,
         "expectancy_delta_bps": 0.0,
+        "oriented_expectancy_delta_bps": 0.0,
+        "min_expectancy_delta_bps": 0.0,
+        "ranking_separation_passed": False,
     }
     if probs.size <= 0 or edges.size <= 0 or probs.size != edges.size:
         return probs, report
@@ -935,11 +956,16 @@ def _orient_probabilities_for_edge(
     min_delta = float(
         get_env("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", 0.5, cast=float)
     )
+    report["min_expectancy_delta_bps"] = float(min_delta)
     inverse_applied = delta_expectancy < -float(min_delta)
     if inverse_applied:
         report["orientation"] = "inverse"
         report["inverse_applied"] = True
+        report["oriented_expectancy_delta_bps"] = float(-delta_expectancy)
+        report["ranking_separation_passed"] = bool(-delta_expectancy >= float(min_delta))
         return np.asarray(1.0 - probs, dtype=float), report
+    report["oriented_expectancy_delta_bps"] = float(delta_expectancy)
+    report["ranking_separation_passed"] = bool(delta_expectancy >= float(min_delta))
     return probs, report
 
 
@@ -976,6 +1002,55 @@ def _regime_summary(
             "hit_rate": float(np.mean(selected_edges > 0)),
         }
     return out
+
+
+def _regime_stability_summary(
+    regime_metrics: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize whether selected post-cost edge persists across supported regimes."""
+
+    min_support = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_MIN_SUPPORT",
+                10,
+                cast=int,
+            )
+        ),
+    )
+    supported: dict[str, dict[str, float]] = {}
+    for regime, raw_metrics in regime_metrics.items():
+        support = int(float(raw_metrics.get("support", 0.0) or 0.0))
+        expectancy = float(raw_metrics.get("expectancy_bps", 0.0) or 0.0)
+        if support < min_support or not math.isfinite(expectancy):
+            continue
+        supported[str(regime)] = {
+            "support": float(support),
+            "expectancy_bps": float(expectancy),
+        }
+    expectancy_values = [item["expectancy_bps"] for item in supported.values()]
+    profitable_count = sum(value > 0.0 for value in expectancy_values)
+    supported_count = len(expectancy_values)
+    profitable_ratio = (
+        float(profitable_count / supported_count) if supported_count > 0 else 0.0
+    )
+    return {
+        "regime_min_support": int(min_support),
+        "supported_regime_count": int(supported_count),
+        "profitable_regime_count": int(profitable_count),
+        "profitable_regime_ratio": float(profitable_ratio),
+        "mean_expectancy_bps": (
+            float(mean(expectancy_values)) if expectancy_values else 0.0
+        ),
+        "worst_expectancy_bps": (
+            float(min(expectancy_values)) if expectancy_values else 0.0
+        ),
+        "expectancy_std_bps": (
+            float(np.std(expectancy_values)) if expectancy_values else 0.0
+        ),
+        "supported_regimes": supported,
+    }
 
 
 def _expected_calibration_error(
@@ -1470,6 +1545,7 @@ def _evaluate_candidate(
     selected_threshold = float(selected_metrics.get("threshold", threshold) or threshold)
     selected_all = valid_probs_mask & (oriented_probs >= selected_threshold)
     regime_metrics = dict(selected_metrics.get("regime_metrics", {}) or {})
+    regime_stability_report = _regime_stability_summary(regime_metrics)
     brier_score = 1.0
     y_values_all = y.to_numpy(dtype=float)
     regime_calibration: dict[str, dict[str, float]] = {}
@@ -1508,6 +1584,14 @@ def _evaluate_candidate(
         selected_threshold=float(selected_threshold),
         score_orientation=str(orientation_report.get("orientation", "direct")),
         score_orientation_report=dict(orientation_report),
+        score_expectancy_delta_bps=float(
+            orientation_report.get(
+                "oriented_expectancy_delta_bps",
+                orientation_report.get("expectancy_delta_bps", 0.0),
+            )
+            or 0.0
+        ),
+        regime_stability_report=regime_stability_report,
     )
 
 
@@ -1620,6 +1704,8 @@ def _candidate_selection_score_from_snapshot(
     support_log_weight = float(weights["support_log_weight"])
     profitable_fold_weight = float(weights["profitable_fold_weight"])
     profitable_fold_shortfall_penalty = float(weights["profitable_fold_shortfall_penalty"])
+    ranking_separation_weight = float(weights["ranking_separation_weight"])
+    regime_stability_weight = float(weights["regime_stability_weight"])
     profitable_fold_target = _clamp(
         float(
             get_env(
@@ -1646,6 +1732,8 @@ def _candidate_selection_score_from_snapshot(
         + (float(math.log1p(max(0, int(metrics.support)))) * support_log_weight)
         + (profitable_fold_ratio * profitable_fold_weight)
         - (profitable_fold_shortfall * profitable_fold_shortfall_penalty)
+        + (float(metrics.score_expectancy_delta_bps) * ranking_separation_weight)
+        + (float(metrics.profitable_regime_ratio) * regime_stability_weight)
     )
 
 
@@ -1668,8 +1756,29 @@ def _candidate_selection_score(
         brier_score=float(metrics.brier_score),
         support=int(metrics.support),
         profitable_fold_ratio=float(metrics.profitable_fold_ratio),
+        score_expectancy_delta_bps=float(metrics.score_expectancy_delta_bps),
+        profitable_regime_ratio=float(
+            metrics.regime_stability_report.get("profitable_regime_ratio", 0.0) or 0.0
+        ),
     )
     return _candidate_selection_score_from_snapshot(snapshot, weights=resolved_weights)
+
+
+def _candidate_selection_evidence(metrics: CandidateMetrics) -> dict[str, Any]:
+    return {
+        "oof_post_cost_expectancy_bps": float(metrics.mean_expectancy_bps),
+        "support": int(metrics.support),
+        "fold_count": int(metrics.fold_count),
+        "profitable_fold_count": int(metrics.profitable_fold_count),
+        "profitable_fold_ratio": float(metrics.profitable_fold_ratio),
+        "fold_expectancy_bps": [float(value) for value in metrics.fold_expectancy_bps],
+        "score_orientation": str(metrics.score_orientation),
+        "score_expectancy_delta_bps": float(metrics.score_expectancy_delta_bps),
+        "ranking_separation_passed": bool(
+            metrics.score_orientation_report.get("ranking_separation_passed", False)
+        ),
+        "regime_stability_report": dict(metrics.regime_stability_report),
+    }
 
 
 def _coerce_finite_float(raw: Any, *, default: float) -> float:
@@ -1709,6 +1818,20 @@ def _selection_eval_weights() -> dict[str, float]:
                 cast=float,
             )
         ),
+        "ranking_separation_weight": float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RETUNE_EVAL_RANKING_SEPARATION_WEIGHT",
+                0.5,
+                cast=float,
+            )
+        ),
+        "regime_stability_weight": float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RETUNE_EVAL_REGIME_STABILITY_WEIGHT",
+                1.0,
+                cast=float,
+            )
+        ),
     }
     return _normalize_model_selection_weights(defaults, defaults=defaults)
 
@@ -1745,15 +1868,53 @@ def _selection_constraint_config() -> dict[str, Any]:
     min_expectancy_bps = float(
         get_env(
             "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_EXPECTANCY_BPS",
-            -25.0,
+            0.0,
             cast=float,
         )
+    )
+    min_score_expectancy_delta_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_SCORE_DELTA_BPS",
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS",
+                    0.5,
+                    cast=float,
+                ),
+                cast=float,
+            )
+        ),
+    )
+    min_supported_regimes = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_SUPPORTED_REGIMES",
+                1,
+                cast=int,
+            )
+        ),
+    )
+    min_profitable_regime_ratio = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_MIN_PROFITABLE_REGIME_RATIO",
+                0.5,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
     )
     return {
         "enabled": bool(enabled),
         "min_profitable_folds": int(min_profitable_folds),
         "min_profitable_fold_ratio": float(min_profitable_fold_ratio),
         "min_expectancy_bps": float(min_expectancy_bps),
+        "min_score_expectancy_delta_bps": float(min_score_expectancy_delta_bps),
+        "min_supported_regimes": int(min_supported_regimes),
+        "min_profitable_regime_ratio": float(min_profitable_regime_ratio),
     }
 
 
@@ -1767,15 +1928,19 @@ def _filter_candidates_for_selection(
         "input_count": int(len(candidates)),
         "eligible_count": int(len(candidates)),
         "fallback_to_unfiltered": False,
+        "selection_failed_closed": False,
         "rejected_by_reason": {},
         "rejected_models": {},
     }
-    if not bool(config["enabled"]) or len(candidates) <= 1:
+    if not bool(config["enabled"]):
         return list(candidates), diagnostics
 
     min_profitable_folds = int(config["min_profitable_folds"])
     min_profitable_fold_ratio = float(config["min_profitable_fold_ratio"])
     min_expectancy_bps = float(config["min_expectancy_bps"])
+    min_score_expectancy_delta_bps = float(config["min_score_expectancy_delta_bps"])
+    min_supported_regimes = int(config["min_supported_regimes"])
+    min_profitable_regime_ratio = float(config["min_profitable_regime_ratio"])
     eligible: list[CandidateMetrics] = []
     rejected_by_reason: dict[str, int] = {}
     rejected_models: dict[str, list[str]] = {}
@@ -1787,6 +1952,18 @@ def _filter_candidates_for_selection(
             reasons.append("profitable_fold_ratio")
         if float(candidate.mean_expectancy_bps) < min_expectancy_bps:
             reasons.append("expectancy")
+        if float(candidate.score_expectancy_delta_bps) < min_score_expectancy_delta_bps:
+            reasons.append("score_separation")
+        supported_regime_count = int(
+            candidate.regime_stability_report.get("supported_regime_count", 0) or 0
+        )
+        profitable_regime_ratio = float(
+            candidate.regime_stability_report.get("profitable_regime_ratio", 0.0) or 0.0
+        )
+        if supported_regime_count < min_supported_regimes:
+            reasons.append("supported_regimes")
+        if profitable_regime_ratio < min_profitable_regime_ratio:
+            reasons.append("regime_stability")
         if reasons:
             rejected_models[str(candidate.name)] = list(reasons)
             for reason in reasons:
@@ -1799,8 +1976,8 @@ def _filter_candidates_for_selection(
     diagnostics["eligible_count"] = int(len(eligible))
     if eligible:
         return eligible, diagnostics
-    diagnostics["fallback_to_unfiltered"] = True
-    return list(candidates), diagnostics
+    diagnostics["selection_failed_closed"] = True
+    return [], diagnostics
 
 
 def _selection_utility(
@@ -1840,6 +2017,14 @@ def _report_candidate_from_payload(payload: Mapping[str, Any]) -> _CandidateSnap
         support=max(0, int(_coerce_finite_float(payload.get("support"), default=0.0))),
         profitable_fold_ratio=_coerce_finite_float(
             payload.get("profitable_fold_ratio"),
+            default=0.0,
+        ),
+        score_expectancy_delta_bps=_coerce_finite_float(
+            payload.get("score_expectancy_delta_bps"),
+            default=0.0,
+        ),
+        profitable_regime_ratio=_coerce_finite_float(
+            payload.get("profitable_regime_ratio"),
             default=0.0,
         ),
     )
@@ -4870,6 +5055,7 @@ def _serialize_candidate_metrics(
                 "profitable_fold_ratio": item.profitable_fold_ratio,
                 "support": item.support,
                 "mean_expectancy_bps": item.mean_expectancy_bps,
+                "oof_post_cost_expectancy_bps": item.mean_expectancy_bps,
                 "max_drawdown_bps": item.max_drawdown_bps,
                 "turnover_ratio": item.turnover_ratio,
                 "mean_hit_rate": item.mean_hit_rate,
@@ -4880,6 +5066,13 @@ def _serialize_candidate_metrics(
                 "fold_expectancy_bps": [float(value) for value in item.fold_expectancy_bps],
                 "regime_metrics": item.regime_metrics,
                 "regime_calibration": item.regime_calibration,
+                "profitable_regime_ratio": float(
+                    item.regime_stability_report.get("profitable_regime_ratio", 0.0) or 0.0
+                ),
+                "regime_stability_report": dict(item.regime_stability_report),
+                "score_orientation": str(item.score_orientation),
+                "score_orientation_report": dict(item.score_orientation_report),
+                "score_expectancy_delta_bps": float(item.score_expectancy_delta_bps),
             }
         )
     return payload
@@ -6426,6 +6619,20 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "rejected_by_reason": dict(selection_constraints.get("rejected_by_reason", {})),
         },
     )
+    if not candidate_pool:
+        return {
+            "status": "skipped",
+            "reason": "no_qualified_candidate",
+            "governance_status": "shadow",
+            "timestamp": now_utc.isoformat(),
+            "candidate_metrics": _serialize_candidate_metrics(
+                candidate_results,
+                best_name="",
+                selection_weights=selection_weights,
+            ),
+            "selection_weights": dict(selection_weights),
+            "selection_constraints": selection_constraints,
+        }
     best = max(
         candidate_pool,
         key=lambda item: (
@@ -6435,6 +6642,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             item.support,
         ),
     )
+    selection_evidence = _candidate_selection_evidence(best)
     candidate_metrics_payload = _serialize_candidate_metrics(
         candidate_results,
         best_name=best.name,
@@ -6645,6 +6853,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     setattr(final_model, "regime_calibration_", best.regime_calibration)
     setattr(final_model, "edge_score_orientation_", str(best.score_orientation))
     setattr(final_model, "edge_score_orientation_report_", dict(best.score_orientation_report))
+    setattr(final_model, "edge_selection_evidence_", dict(selection_evidence))
     setattr(final_model, "edge_label_quality_", dict(label_quality))
     setattr(final_model, "edge_negative_symbol_penalties_", dict(negative_symbol_penalties))
     setattr(final_model, "required_bar_timeframe_", DAY_SLEEVE_ML_BAR_TIMEFRAME)
@@ -6664,6 +6873,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     manifest_metadata["sample_weighting"] = dict(sample_weighting_report)
     manifest_metadata["score_orientation"] = str(best.score_orientation)
     manifest_metadata["score_orientation_report"] = dict(best.score_orientation_report)
+    manifest_metadata["selection_evidence"] = dict(selection_evidence)
     manifest_metadata["label_quality"] = dict(label_quality)
     manifest_metadata["negative_symbol_penalties"] = dict(negative_symbol_penalties)
     manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
@@ -6714,6 +6924,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "regime_threshold_adjustments": regime_threshold_adjustments,
             "score_orientation": str(best.score_orientation),
             "score_orientation_report": dict(best.score_orientation_report),
+            "selection_evidence": dict(selection_evidence),
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "selection_constraints": dict(selection_constraints),
             "manifest_metadata": manifest_metadata,
@@ -6751,6 +6962,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "hit_rate_stability": best.hit_rate_stability,
                 "selected_threshold": best.selected_threshold,
                 "score_orientation": str(best.score_orientation),
+                "score_expectancy_delta_bps": float(best.score_expectancy_delta_bps),
+                "regime_stability_report": dict(best.regime_stability_report),
                 "brier_score": best.brier_score,
                 "selection_score": _candidate_selection_score(best, weights=selection_weights),
                 "profitable_fold_count": best.profitable_fold_count,
@@ -6839,6 +7052,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         },
         "metrics": {
             "mean_expectancy_bps": best.mean_expectancy_bps,
+            "oof_post_cost_expectancy_bps": best.mean_expectancy_bps,
             "max_drawdown_bps": best.max_drawdown_bps,
             "turnover_ratio": best.turnover_ratio,
             "mean_hit_rate": best.mean_hit_rate,
@@ -6858,6 +7072,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "regime_calibration": best.regime_calibration,
         "score_orientation": str(best.score_orientation),
         "score_orientation_report": dict(best.score_orientation_report),
+        "selection_evidence": dict(selection_evidence),
         "thresholds_by_regime": thresholds_by_regime,
         "thresholds_by_regime_raw": raw_thresholds_by_regime,
         "regime_threshold_adjustments": regime_threshold_adjustments,
@@ -6984,6 +7199,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "rows": int(len(dataset)),
         "selected_threshold": float(best.selected_threshold),
         "score_orientation": str(best.score_orientation),
+        "selection_evidence": dict(selection_evidence),
         "selection_score": _candidate_selection_score(best, weights=selection_weights),
         "brier_score": best.brier_score,
         "candidate_metrics": candidate_metrics_payload,

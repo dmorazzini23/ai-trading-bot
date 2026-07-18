@@ -460,7 +460,21 @@ def test_synchronize_broker_state_reconciles_pending_fill_events(monkeypatch, tm
             "side": "buy",
             "qty": 5,
             "order_type": "limit",
+            "time_in_force": "day",
             "client_order_id": "client-1",
+            "decision_bid": 100.0,
+            "decision_ask": 100.2,
+            "decision_mid": 100.1,
+            "decision_spread_bps": 19.98001998,
+            "decision_quote_age_ms": 250.0,
+            "session_regime": "closing",
+            "execution_profile": "protective",
+            "market_regime": "sideways",
+            "volatility_regime": "low",
+            "trend_regime": "flat",
+            "model_id": "model-reconcile",
+            "model_version": "v7",
+            "config_snapshot_hash": "cfg-reconcile",
         }
     }
 
@@ -497,6 +511,18 @@ def test_synchronize_broker_state_reconciles_pending_fill_events(monkeypatch, tm
         row.get("event") == "fill_recorded"
         and row.get("symbol") == "AAPL"
         and row.get("order_id") == "order-reconcile"
+        and row.get("client_order_id") == "client-1"
+        and row.get("order_type") == "limit"
+        and row.get("time_in_force") == "day"
+        and row.get("quote_age_ms") == 250.0
+        and row.get("session") == "closing"
+        and row.get("execution_profile") == "protective"
+        and row.get("market_regime") == "sideways"
+        and row.get("volatility_regime") == "low"
+        and row.get("trend_regime") == "flat"
+        and row.get("model_id") == "model-reconcile"
+        and row.get("model_version") == "v7"
+        and row.get("config_snapshot_hash") == "cfg-reconcile"
         for row in fill_rows
     )
     assert engine._pending_orders == {}
@@ -808,11 +834,41 @@ def test_synchronize_broker_state_bootstraps_pending_from_durable_intents(
         symbol="IBM",
         side="buy",
         quantity=2.0,
-        metadata={"order_type": "limit", "expected_price": 145.0},
+        metadata={
+            "order_type": "limit",
+            "time_in_force": "day",
+            "expected_price": 145.0,
+            "decision_bid": 144.9,
+            "decision_ask": 145.1,
+            "decision_mid": 145.0,
+            "decision_spread_bps": 13.793103,
+            "decision_quote_age_ms": 125.0,
+            "session_regime": "midday",
+            "execution_profile": "balanced",
+            "market_regime": "sideways",
+            "volatility_regime": "low",
+            "trend_regime": "flat",
+            "model_id": "restart-model",
+        },
     )
     assert created is True
     assert store.claim_for_submit(intent.intent_id) is True
     store.mark_submitted(intent.intent_id, "order-intent-bootstrap")
+
+    candidates = engine._load_pending_candidates_from_durable_intents(
+        max_candidates=10
+    )
+    recovered = candidates["order-intent-bootstrap"]
+    assert recovered["client_order_id"] == "client-intent-bootstrap"
+    assert recovered["order_type"] == "limit"
+    assert recovered["time_in_force"] == "day"
+    assert recovered["decision_quote_age_ms"] == 125.0
+    assert recovered["session_regime"] == "midday"
+    assert recovered["execution_profile"] == "balanced"
+    assert recovered["market_regime"] == "sideways"
+    assert recovered["volatility_regime"] == "low"
+    assert recovered["trend_regime"] == "flat"
+    assert recovered["model_id"] == "restart-model"
 
     snapshot = engine.synchronize_broker_state()
 

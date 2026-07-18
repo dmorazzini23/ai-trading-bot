@@ -51,6 +51,7 @@ class DaySleeveProductionModel:
     lineage: Mapping[str, str]
     selected_threshold: float
     thresholds_by_regime: Mapping[str, float]
+    market_regime_policy: Mapping[str, Any] | None
     governance_status: str
     serving_authority: str
 
@@ -198,6 +199,15 @@ def load_day_sleeve_production_model(
     if not thresholds_by_regime:
         _clear_day_sleeve_model_cache()
         raise RuntimeError("Day-sleeve regime thresholds are empty")
+    market_regime_policy_raw = metadata.get("market_regime_policy")
+    if market_regime_policy_raw is None:
+        market_regime_policy: Mapping[str, Any] | None = None
+    elif isinstance(market_regime_policy_raw, Mapping):
+        market_regime_policy = MappingProxyType(dict(market_regime_policy_raw))
+    else:
+        market_regime_policy = MappingProxyType(
+            {"invalid_declared_policy": market_regime_policy_raw}
+        )
 
     model = load_verified_joblib_artifact(
         artifact_path,
@@ -236,6 +246,7 @@ def load_day_sleeve_production_model(
         lineage=MappingProxyType(lineage_values),
         selected_threshold=selected_threshold,
         thresholds_by_regime=MappingProxyType(thresholds_by_regime),
+        market_regime_policy=market_regime_policy,
         governance_status=governance_status,
         serving_authority=serving_authority,
     )

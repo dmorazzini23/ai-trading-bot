@@ -260,12 +260,16 @@ def test_persist_fill_derived_trade_record_includes_execution_attribution(monkey
         runtime_payload={
             "source": "live",
             "order_type": "limit",
+            "time_in_force": "day",
             "submitted_limit_price": 262.55,
             "bid": 262.45,
             "ask": 262.55,
             "quote_age_ms": 425,
             "session_regime": "opening",
-            "market_regime": "normal_volatility",
+            "execution_profile": "balanced",
+            "market_regime": "sideways",
+            "volatility_regime": "low",
+            "trend_regime": "flat",
         },
         closing_position=False,
         expected_net_edge_bps=8.0,
@@ -276,10 +280,18 @@ def test_persist_fill_derived_trade_record_includes_execution_attribution(monkey
     assert isinstance(payload, dict)
     assert payload["event"] == "fill_recorded"
     assert payload["order_type"] == "limit"
+    assert payload["time_in_force"] == "day"
     assert payload["submitted_limit_price"] == 262.55
     assert payload["quote_age_ms"] == 425.0
     assert payload["session_regime"] == "opening"
-    assert payload["market_regime"] == "normal_volatility"
+    assert payload["session"] == "opening"
+    assert payload["execution_profile"] == "balanced"
+    assert payload["market_regime"] == "sideways"
+    assert payload["volatility_regime"] == "low"
+    assert payload["trend_regime"] == "flat"
+    assert payload["order_id"] == "oid-attr"
+    assert payload["broker_order_id"] == "oid-attr"
+    assert payload["client_order_id"] == "cid-attr"
     assert payload["spread_bps"] > 0.0
 
 

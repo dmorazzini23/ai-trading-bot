@@ -26,6 +26,19 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
             "validation": {"roc_auc": 0.50 + (int(args.horizon_bars) / 100.0)},
             "threshold_sweep": [{"confidence_threshold": 0.66}],
             "threshold_sweep_by_regime": {"midday": [{"confidence_threshold": 0.66}]},
+            "walk_forward": {
+                "aggregate": {
+                    "evidence_qualified": int(args.horizon_bars) == 1,
+                    "mean_post_cost_net_edge_bps": (
+                        6.0 if int(args.horizon_bars) == 1 else 20.0
+                    ),
+                    "profitable_fold_ratio": (
+                        0.8 if int(args.horizon_bars) == 1 else 0.4
+                    ),
+                    "stability_score": 0.75,
+                    "trades": 300,
+                }
+            },
         }
 
     def _fake_replay(argv: list[str]) -> dict[str, Any]:
@@ -86,11 +99,15 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
 
     assert len(calls) == 4
     assert all(call[0] in {1, 15} for call in calls)
-    assert report["ranked_candidates"][0]["horizon_bars"] == 15
+    assert report["ranked_candidates"][0]["horizon_bars"] == 1
     assert report["config"]["training_cache"] is True
     assert report["replay_config"]["confidence_threshold"] == 0.66
     assert report["replay_config"]["max_hold_bars"] == 45
     assert report["lead_candidates"]
+    assert report["one_bar_challengers"]
+    assert report["governance_status"] == "shadow"
+    assert report["promotion_authority"] is False
+    assert report["live_money_authority"] is False
     assert (tmp_path / "out" / "multi_horizon_research_report.json").is_file()
     replay_outputs = [
         Path(candidate["replay_output"])
@@ -121,6 +138,20 @@ def test_multi_horizon_pipeline_replays_only_top_training_candidates(
             "dataset": {"rows": 100, "symbols": 2},
             "validation": {"roc_auc": 0.50 + (int(args.horizon_bars) / 100.0)},
             "threshold_sweep": [{"confidence_threshold": 0.66}],
+            "walk_forward": {
+                "aggregate": {
+                    "evidence_qualified": int(args.horizon_bars) in {1, 3},
+                    "mean_post_cost_net_edge_bps": {
+                        1: 9.0,
+                        3: 7.0,
+                        5: 30.0,
+                        15: 40.0,
+                    }[int(args.horizon_bars)],
+                    "profitable_fold_ratio": 0.8,
+                    "stability_score": 0.7,
+                    "trades": 300,
+                }
+            },
         }
 
     def _fake_replay(argv: list[str]) -> dict[str, Any]:
@@ -171,7 +202,9 @@ def test_multi_horizon_pipeline_replays_only_top_training_candidates(
     )
 
     assert len(replayed) == 2
-    assert all("_h" in path for path in replayed)
+    assert any("_h1_" in path for path in replayed)
+    assert any("_h3_" in path for path in replayed)
+    assert not any("_h15_" in path for path in replayed)
     assert report["replay_selection"]["strategy"] == "successive_halving_top_n"
     assert report["replay_selection"]["trained_candidate_count"] == 4
     assert report["replay_selection"]["replayed_candidate_count"] == 2

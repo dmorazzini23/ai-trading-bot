@@ -29,6 +29,8 @@ from ai_trading.features.indicators import (
 from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.models.artifacts import load_verified_joblib_artifact
+from ai_trading.models.contracts import infer_day_sleeve_regimes
+from ai_trading.registry.manifest import evaluate_market_regime_policy
 from ai_trading.replay.event_loop import ReplayEventLoop
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
@@ -124,6 +126,7 @@ class ReplayModelContext:
     orientation_inverse: bool
     symbol_penalties: dict[str, dict[str, float]]
     supports_short_scores: bool = False
+    market_regime_policy: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -416,6 +419,15 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
         class_count = len(list(classes)) if classes is not None else 2
     except TypeError:
         class_count = 2
+    manifest_metadata = getattr(model, "artifact_manifest_metadata_", None)
+    market_regime_policy: Mapping[str, Any] | None = None
+    if isinstance(manifest_metadata, Mapping) and "market_regime_policy" in manifest_metadata:
+        raw_policy = manifest_metadata.get("market_regime_policy")
+        market_regime_policy = (
+            dict(raw_policy)
+            if isinstance(raw_policy, Mapping)
+            else {"invalid_declared_policy": raw_policy}
+        )
     context = ReplayModelContext(
         model=model,
         model_path=str(model_path),
@@ -429,6 +441,7 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
             getattr(model, "edge_negative_symbol_penalties_", None)
         ),
         supports_short_scores=supports_short_scores,
+        market_regime_policy=market_regime_policy,
     )
     logger.info(
         "OFFLINE_REPLAY_MODEL_SCORING_ENABLED",
@@ -2192,6 +2205,7 @@ def _run_parity_simulation(
     load_reports: dict[str, HistoricalBarLoadReport] = {}
     order_context_by_client_id: dict[str, dict[str, Any]] = {}
     policy_counters: Counter[str] = Counter()
+    regime_policy_counters: Counter[str] = Counter()
     markout_veto_counters: Counter[str] = Counter()
     markout_veto_config = _resolve_markout_veto_config(args)
     markout_veto_history: dict[str, deque[float]] = {}
@@ -2217,6 +2231,9 @@ def _run_parity_simulation(
             score_source = "model"
         else:
             score, confidence = _compute_signal(frame)
+        market_regimes = infer_day_sleeve_regimes(
+            frame["close"].astype(float).to_numpy()
+        )
         per_symbol.append({"symbol": symbol, "bars": int(len(frame)), "score_source": score_source})
         for pos, (ts, row) in enumerate(frame.iterrows()):
             close = float(row["close"])
@@ -2237,12 +2254,27 @@ def _run_parity_simulation(
                     "close": close,
                     "score": float(score.iloc[pos]),
                     "confidence": float(confidence.iloc[pos]),
+                    "market_regime": (
+                        market_regimes[pos]
+                        if pos < len(market_regimes)
+                        else "unknown"
+                    ),
                     "seq": int(bar_seq),
                     "next_close": next_close,
                 }
             )
     if policy_profile is not None:
         _attach_policy_context(bars)
+    regime_policy_evaluated_at = datetime.now(UTC)
+    regime_policy_probe = (
+        evaluate_market_regime_policy(
+            model_context.market_regime_policy,
+            market_regime=(bars[0].get("market_regime") if bars else "unknown"),
+            now=regime_policy_evaluated_at,
+        )
+        if model_context is not None
+        else None
+    )
 
     def strategy(bar: Mapping[str, Any]) -> Mapping[str, Any] | None:
         symbol = str(bar.get("symbol", "")).upper()
@@ -2255,6 +2287,18 @@ def _run_parity_simulation(
         confidence_threshold, entry_score_threshold, session_regime, threshold_source = (
             _thresholds_for_regime(cfg, ts=ts_iso)
         )
+        if model_context is not None:
+            regime_policy_decision = evaluate_market_regime_policy(
+                model_context.market_regime_policy,
+                market_regime=bar.get("market_regime"),
+                now=regime_policy_evaluated_at,
+            )
+            if regime_policy_decision.declared:
+                regime_policy_counters["evaluated"] += 1
+                regime_policy_counters[regime_policy_decision.reason] += 1
+            if not regime_policy_decision.allowed:
+                regime_policy_counters["abstained"] += 1
+                return None
         if confidence < confidence_threshold:
             return None
         side: str | None = None
@@ -2418,6 +2462,7 @@ def _run_parity_simulation(
             "entry_score_threshold": float(entry_score_threshold),
             "confidence_threshold": float(confidence_threshold),
             "session_regime": session_regime,
+            "market_regime": str(bar.get("market_regime") or "unknown"),
             "threshold_source": threshold_source,
             "policy_fill_prob_proxy": float(fill_prob_proxy),
             "policy_expected_capture_proxy_bps": float(expected_capture_proxy),
@@ -2556,6 +2601,34 @@ def _run_parity_simulation(
             "symbol_penalty_count": len(model_context.symbol_penalties),
             "feature_count": len(model_context.feature_names),
             "supports_short_scores": bool(model_context.supports_short_scores),
+            "market_regime_policy": {
+                "declared": model_context.market_regime_policy is not None,
+                "governance_status": "shadow",
+                "promotion_authority": False,
+                "evaluated_at": regime_policy_evaluated_at.isoformat(),
+                "validation_reason": (
+                    regime_policy_probe.reason
+                    if regime_policy_probe is not None
+                    else "not_evaluated"
+                ),
+                "evidence_identity": (
+                    regime_policy_probe.evidence_identity
+                    if regime_policy_probe is not None
+                    else None
+                ),
+                "evidence_sha256": (
+                    regime_policy_probe.evidence_sha256
+                    if regime_policy_probe is not None
+                    else None
+                ),
+                "evaluated": int(regime_policy_counters.get("evaluated", 0)),
+                "abstained": int(regime_policy_counters.get("abstained", 0)),
+                "decisions_by_reason": {
+                    key: int(value)
+                    for key, value in sorted(regime_policy_counters.items())
+                    if key not in {"evaluated", "abstained"}
+                },
+            },
         }
     else:
         aggregate["model_score"] = {"enabled": False}

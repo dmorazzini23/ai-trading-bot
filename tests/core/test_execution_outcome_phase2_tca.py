@@ -50,6 +50,29 @@ def test_normalize_submitted_order_defaults_pending_payload() -> None:
     assert result.persistable_fill is False
 
 
+def test_normalize_submitted_order_does_not_conflate_client_and_broker_ids() -> None:
+    order = SimpleNamespace(client_order_id="client-only", status="accepted")
+
+    result = execution_outcome.normalize_submitted_order(
+        order,
+        delta_shares=2,
+        extract_order_value=lambda obj, *fields: next(
+            (
+                getattr(obj, field, None)
+                for field in fields
+                if getattr(obj, field, None) is not None
+            ),
+            None,
+        ),
+        extract_order_fill_timestamp=lambda _obj: None,
+        normalize_order_status_token=lambda value: str(value or "submitted"),
+        safe_float=_safe_float,
+        has_persistable_fill=lambda **_kwargs: False,
+    )
+
+    assert result.broker_order_id is None
+
+
 def test_record_successful_submission_without_ledger_or_turnover_target() -> None:
     state = SimpleNamespace(last_order_bar_ts={}, last_order_client_id={}, turnover_dollars={})
     now = datetime(2026, 4, 25, 16, tzinfo=UTC)
@@ -195,6 +218,17 @@ def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.Monke
             "model_version": "v1",
             "config_snapshot_hash": "cfg-1",
             "rank_reasons": ["CAPTURE_OK"],
+            "client_order_id": "client-2",
+            "broker_order_id": "broker-2",
+            "order_type": "market",
+            "time_in_force": "day",
+            "decision_quote_age_ms": 175.0,
+            "decision_spread_bps": 2.5,
+            "session_regime": "opening",
+            "execution_profile": "balanced",
+            "market_regime": "sideways",
+            "volatility_regime": "low",
+            "trend_regime": "flat",
         },
     )
 
@@ -206,12 +240,24 @@ def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.Monke
     assert tca_record["quote_proxy_source"] == "last_trade"
     assert tca_record["expected_net_edge_bps"] == pytest.approx(7.5)
     assert tca_record["expected_capture_bps"] == pytest.approx(2.25)
-    assert tca_record["venue_session"] == "IEX:regular"
+    assert tca_record["venue_session"] == "IEX:opening"
     assert tca_record["model_id"] == "ml-main"
     assert tca_record["model_version"] == "v1"
     assert tca_record["config_snapshot_hash"] == "cfg-1"
     assert tca_record["rank_reason"] == "EDGE_RANKED"
     assert tca_record["rank_reasons"] == ["EDGE_RANKED", "CAPTURE_OK"]
+    assert tca_record["client_order_id"] == "client-2"
+    assert tca_record["broker_order_id"] == "broker-2"
+    assert tca_record["order_type"] == "market"
+    assert tca_record["time_in_force"] == "day"
+    assert tca_record["quote_age_ms"] == pytest.approx(175.0)
+    assert tca_record["spread_bps"] == pytest.approx(2.5)
+    assert tca_record["session"] == "opening"
+    assert tca_record["execution_profile"] == "balanced"
+    assert tca_record["regime_profile"] == "regular"
+    assert tca_record["market_regime"] == "sideways"
+    assert tca_record["volatility_regime"] == "low"
+    assert tca_record["trend_regime"] == "flat"
     assert metrics["tca"] == {
         "is_bps": None,
         "spread_paid_bps": None,

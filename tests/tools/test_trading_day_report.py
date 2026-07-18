@@ -130,6 +130,45 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["missed_opportunities"]["symbols"] == {"MSFT": 1}
 
 
+def test_trading_day_report_preserves_blocked_registry_shadow_identity():
+    challenger = {
+        "model_id": "one-bar-shadow",
+        "artifact_viability": {
+            "ok": True,
+            "path": "/models/one-bar-shadow.joblib",
+        },
+    }
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-07-18",
+        order_intents=[],
+        fills=[],
+        shadow_rows=[],
+        gate_rows=[],
+        live_cost_model={},
+        symbol_scorecard={},
+        model_registry={
+            "status": "blocked",
+            "blocked_reasons": ["champion_artifact_missing"],
+            "active_champion": None,
+            "active_challenger": challenger,
+            "promotion_authority": True,
+        },
+    )
+
+    assert report["model_registry"]["status"] == "blocked"
+    assert report["model_registry"]["active_challenger"] == challenger
+    assert report["model_registry"]["promotion_authority"] is False
+    assert report["model_registry"]["live_money_authority"] is False
+    assert (
+        report["health_report_summary"]["model_registry_active_challenger_id"]
+        == "one-bar-shadow"
+    )
+    assert (
+        report["health_report_summary"]["model_registry_active_challenger_path"]
+        == "/models/one-bar-shadow.joblib"
+    )
+
+
 def test_trading_day_report_separates_metrics_control_skips_from_rejects():
     report = trading_day_report.build_trading_day_report(
         report_date="2026-06-11",

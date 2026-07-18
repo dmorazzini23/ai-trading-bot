@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.tools.execution_capture_improvement_report import (
+    build_metadata_quality,
+    enrich_fills_with_tca,
+    normalize_execution_metadata,
+)
 
 
 _EDGE_BUCKETS: tuple[tuple[str, float, float], ...] = (
@@ -378,32 +383,29 @@ def build_expected_edge_calibration_report(
     *,
     report_date: str,
     fills: Sequence[Mapping[str, Any]],
+    tca_rows: Sequence[Mapping[str, Any]] = (),
     candidates: Sequence[Mapping[str, Any]] = (),
     gate_rows: Sequence[Mapping[str, Any]] = (),
     min_samples: int = 25,
 ) -> dict[str, Any]:
     realized_rows: list[dict[str, Any]] = []
-    for row in fills:
+    for row in enrich_fills_with_tca(fills, tca_rows):
         expected = _first_float(row, "expected_net_edge_bps", "expected_edge_bps", "predicted_net_edge_bps")
         realized = _first_float(row, "realized_net_edge_bps", "net_edge_bps", "markout_bps")
         if expected is None or realized is None:
             continue
-        spread = _first_float(row, "spread_bps", "decision_spread_bps")
-        quote_age = _first_float(row, "quote_age_ms", "quote_fresh_ms")
         slippage = _first_float(row, "slippage_bps", "slippage_drag_bps")
+        execution_metadata = normalize_execution_metadata(row)
         normalized = {
+            **execution_metadata,
             "symbol": _symbol(row),
             "side": _side(row),
-            "session_bucket": _session(row),
-            "regime": _regime(row),
-            "order_type": str(row.get("order_type") or row.get("submitted_order_type") or "unknown").lower(),
+            "session_bucket": execution_metadata["session"],
             "expected_net_edge_bps": float(expected),
             "realized_net_edge_bps": float(realized),
             "slippage_bps": float(slippage) if slippage is not None else None,
-            "spread_bucket": _spread_bucket(spread),
-            "quote_age_bucket": _quote_age_bucket(quote_age),
             "expected_edge_bucket": _edge_bucket(expected),
-            "attribution": _classify_attribution(row),
+            "attribution": _classify_attribution({**dict(row), **execution_metadata}),
         }
         realized_rows.append(normalized)
 
@@ -449,12 +451,15 @@ def build_expected_edge_calibration_report(
     attribution_counts = Counter(str(row["attribution"]) for row in realized_rows)
     rejected_by_bucket = Counter(str(row["expected_edge_bucket"]) for row in rejected_rows)
     rejected_by_reason = Counter(str(row["reason"]) for row in rejected_rows)
+    metadata_quality = build_metadata_quality(realized_rows)
     return {
         "schema_version": "1.0.0",
         "artifact_type": "expected_edge_calibration_report",
         "report_date": report_date,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "status": status,
+        "metadata_status": metadata_quality["status"],
+        "warnings": metadata_quality["warnings"],
         "recommended_next_action": action,
         "sample_gate": {
             "min_samples": int(min_samples),
@@ -480,7 +485,10 @@ def build_expected_edge_calibration_report(
         "bucketed_by_spread": _bucket_summary(realized_rows, "spread_bucket"),
         "bucketed_by_quote_age": _bucket_summary(realized_rows, "quote_age_bucket"),
         "bucketed_by_regime": _bucket_summary(realized_rows, "regime"),
+        "bucketed_by_execution_profile": _bucket_summary(realized_rows, "execution_profile"),
         "bucketed_by_order_type": _bucket_summary(realized_rows, "order_type"),
+        "metadata_quality": metadata_quality,
+        "normalized_rows": realized_rows,
         "execution_capture_diagnosis": {
             "attribution_counts": dict(sorted(attribution_counts.items())),
             "worst_buckets": worst_buckets,
@@ -519,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-date", default=datetime.now(UTC).strftime("%Y-%m-%d"))
     parser.add_argument("--fills-jsonl", type=Path, default=None)
+    parser.add_argument("--tca-jsonl", type=Path, default=None)
     parser.add_argument("--candidates-jsonl", type=Path, default=None)
     parser.add_argument("--gate-jsonl", type=Path, default=None)
     parser.add_argument("--min-samples", type=int, default=25)
@@ -531,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_expected_edge_calibration_report(
         report_date=str(args.report_date),
         fills=_read_jsonl(args.fills_jsonl, report_date=str(args.report_date)),
+        tca_rows=_read_jsonl(args.tca_jsonl, report_date=str(args.report_date)),
         candidates=_read_jsonl(args.candidates_jsonl, report_date=str(args.report_date)),
         gate_rows=_read_jsonl(args.gate_jsonl, report_date=str(args.report_date)),
         min_samples=int(args.min_samples),

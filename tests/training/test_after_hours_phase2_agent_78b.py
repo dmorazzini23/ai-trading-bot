@@ -58,6 +58,11 @@ def _candidate(
         oof_probabilities=np.array([0.2, 0.8]),
         fold_expectancy_bps=(expectancy - 1.0, expectancy, expectancy + 1.0),
         brier_score=0.18,
+        score_expectancy_delta_bps=1.0,
+        regime_stability_report={
+            "supported_regime_count": 1,
+            "profitable_regime_ratio": profitable_ratio,
+        },
     )
 
 
@@ -364,6 +369,7 @@ def test_selection_constraints_and_weight_retune_branches(monkeypatch: pytest.Mo
         "expectancy": 1,
         "profitable_fold_ratio": 1,
         "profitable_folds": 1,
+        "regime_stability": 1,
     }
 
     fallback, fallback_diag = ah._filter_candidates_for_selection(
@@ -372,8 +378,9 @@ def test_selection_constraints_and_weight_retune_branches(monkeypatch: pytest.Mo
             _candidate("bad2", expectancy=-4.0, profitable_folds=0, profitable_ratio=0.2),
         ]
     )
-    assert [item.name for item in fallback] == ["bad1", "bad2"]
-    assert fallback_diag["fallback_to_unfiltered"] is True
+    assert fallback == []
+    assert fallback_diag["fallback_to_unfiltered"] is False
+    assert fallback_diag["selection_failed_closed"] is True
 
     reports = [
         ah._ReportSnapshot(

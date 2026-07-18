@@ -10,6 +10,7 @@ def test_research_automation_script_help_does_not_notify(tmp_path: Path) -> None
     root = Path(__file__).resolve().parents[2]
     env = {
         **os.environ,
+        "AI_TRADING_RESEARCH_AUTO_SOURCE_RUNTIME_ENV": "0",
         "AI_TRADING_RESEARCH_LOCK_DIR": str(tmp_path),
         "AI_TRADING_RESEARCH_NOTIFY_SLACK": "1",
         "AI_TRADING_RESEARCH_SLACK_WEBHOOK_URL": "https://hooks.slack.test/research",
@@ -35,6 +36,7 @@ def test_research_automation_script_delegates_plan_only(tmp_path: Path) -> None:
     report_root = tmp_path / "reports"
     env = {
         **os.environ,
+        "AI_TRADING_RESEARCH_AUTO_SOURCE_RUNTIME_ENV": "0",
         "AI_TRADING_RESEARCH_REPORT_ROOT": str(report_root),
         "AI_TRADING_RESEARCH_PLAN_ONLY": "1",
         "AI_TRADING_RESEARCH_LOCK_DIR": str(tmp_path),
@@ -64,6 +66,7 @@ def test_research_automation_script_delegates_weekend_plan_only(tmp_path: Path) 
     report_root = tmp_path / "reports"
     env = {
         **os.environ,
+        "AI_TRADING_RESEARCH_AUTO_SOURCE_RUNTIME_ENV": "0",
         "AI_TRADING_RESEARCH_REPORT_ROOT": str(report_root),
         "AI_TRADING_RESEARCH_PLAN_ONLY": "1",
         "AI_TRADING_RESEARCH_LOCK_DIR": str(tmp_path),
@@ -96,6 +99,7 @@ def test_research_automation_script_dry_run_skips_completion_notification(
     report_root = tmp_path / "reports"
     env = {
         **os.environ,
+        "AI_TRADING_RESEARCH_AUTO_SOURCE_RUNTIME_ENV": "0",
         "AI_TRADING_RESEARCH_REPORT_ROOT": str(report_root),
         "AI_TRADING_RESEARCH_DRY_RUN": "1",
         "AI_TRADING_RESEARCH_NOTIFY_SLACK": "1",

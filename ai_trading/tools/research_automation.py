@@ -278,6 +278,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     order_type_optimizer = config.run_dir / "order_type_optimizer.json"
     regime_champions = config.run_dir / "regime_champion_models.json"
     adversarial_failure = config.run_dir / "adversarial_failure_simulation.json"
+    current_drift_evidence = config.run_dir / "model_data_drift_current.json"
     drift_monitor = config.run_dir / "model_data_drift_monitor.json"
     operator_control = config.run_dir / "operator_control_plane.json"
     hf_discovery = config.run_dir / "hf_discovery.json"
@@ -446,6 +447,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 config.report_date,
                 "--fills-jsonl",
                 _runtime_input_path("runtime/fill_events.jsonl"),
+                "--tca-jsonl",
+                _runtime_input_path("runtime/tca_records.jsonl"),
                 "--gate-jsonl",
                 _runtime_input_path("runtime/gate_effectiveness.jsonl"),
                 "--min-samples",
@@ -818,21 +821,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"live_money_authority": False, "enforcement_authority": False},
         ),
         ResearchStep(
-            name="model_data_drift_monitor",
-            command=_python_module(
-                "ai_trading.tools.model_data_drift_monitor",
-                "--baseline-json",
-                config.report_root / "latest" / "model_data_drift_baseline.json",
-                "--current-json",
-                expected_edge_calibration,
-                "--output-json",
-                drift_monitor,
-            ),
-            purpose="Check model/data drift with stale-baseline fail-closed semantics.",
-            output_path=drift_monitor,
-            metadata={"live_money_authority": False},
-        ),
-        ResearchStep(
             name="model_registry_evaluation",
             command=_python_module(
                 "ai_trading.tools.model_registry",
@@ -849,6 +837,50 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             skip_if_missing=(model_registry_source,),
             blocked_returncodes=(2,),
             metadata={"promotion_authority": False, "manual_approval_required": True},
+        ),
+        ResearchStep(
+            name="model_data_drift_current_evidence",
+            command=_python_module(
+                "ai_trading.tools.model_data_drift_baseline",
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--tca-jsonl",
+                _runtime_input_path("runtime/tca_records.jsonl"),
+                "--model-registry-json",
+                model_registry,
+                "--output-json",
+                current_drift_evidence,
+                "--lookback-days",
+                _env_text("AI_TRADING_MODEL_DRIFT_LOOKBACK_DAYS", "30"),
+                "--min-samples",
+                _env_text("AI_TRADING_MODEL_DRIFT_MIN_SAMPLES", "25"),
+            ),
+            purpose="Normalize current fill/TCA evidence and bind it to the governed registry identity.",
+            output_path=current_drift_evidence,
+            skip_if_missing=(model_registry,),
+            metadata={
+                "baseline_mutation": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
+        ),
+        ResearchStep(
+            name="model_data_drift_monitor",
+            command=_python_module(
+                "ai_trading.tools.model_data_drift_monitor",
+                "--baseline-json",
+                config.report_root / "latest" / "model_data_drift_baseline.json",
+                "--current-json",
+                current_drift_evidence,
+                "--output-json",
+                drift_monitor,
+            ),
+            purpose="Check normalized model-bound evidence with stale-baseline fail-closed semantics.",
+            output_path=drift_monitor,
+            metadata={
+                "baseline_mutation": False,
+                "live_money_authority": False,
+            },
         ),
         ResearchStep(
             name="huggingface_research_discovery",
@@ -1715,6 +1747,8 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 config.report_date,
                 "--fills-jsonl",
                 _runtime_input_path("runtime/fill_events.jsonl"),
+                "--tca-jsonl",
+                _runtime_input_path("runtime/tca_records.jsonl"),
                 "--gate-jsonl",
                 _runtime_input_path("runtime/gate_effectiveness.jsonl"),
                 "--min-samples",
@@ -2027,6 +2061,8 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
                 config.report_date,
                 "--fills-jsonl",
                 _runtime_input_path("runtime/fill_events.jsonl"),
+                "--tca-jsonl",
+                _runtime_input_path("runtime/tca_records.jsonl"),
                 "--gate-jsonl",
                 _runtime_input_path("runtime/gate_effectiveness.jsonl"),
                 "--min-samples",

@@ -61,6 +61,15 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "huggingface_cache_materialization_plan" in step_names
     assert "upward_trajectory_report" in step_names
     assert "evidence_manifest" in payload
+    calibration = next(
+        step
+        for step in payload["steps"]  # type: ignore[index]
+        if step["name"] == "expected_edge_calibration_report"
+    )
+    calibration_command = [str(token) for token in calibration["command"]]
+    assert calibration_command[calibration_command.index("--tca-jsonl") + 1].endswith(
+        "/runtime/tca_records.jsonl"
+    )
     summary = _read(summary_path)
     assert summary["health_report_summary"]["daily_research"]["status"] == "missing"
     assert summary["slack_openclaw_summary"]["service"] == "ai-trading-research-automation"
@@ -113,6 +122,38 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     registry_json_arg = registry_command[registry_command.index("--registry-json") + 1]
     assert registry_json_arg.endswith("/models/registry_index.json")
     assert not registry_json_arg.endswith("/research_reports/latest/model_registry_latest.json")
+    ordered_step_names = [str(step["name"]) for step in payload["steps"]]  # type: ignore[index]
+    current_drift = next(
+        step
+        for step in payload["steps"]  # type: ignore[index]
+        if step["name"] == "model_data_drift_current_evidence"
+    )
+    drift_monitor = next(
+        step
+        for step in payload["steps"]  # type: ignore[index]
+        if step["name"] == "model_data_drift_monitor"
+    )
+    assert ordered_step_names.index("model_registry_evaluation") < ordered_step_names.index(
+        "model_data_drift_current_evidence"
+    )
+    assert ordered_step_names.index(
+        "model_data_drift_current_evidence"
+    ) < ordered_step_names.index("model_data_drift_monitor")
+    current_command = [str(token) for token in current_drift["command"]]
+    monitor_command = [str(token) for token in drift_monitor["command"]]
+    registry_output = str(registry["output_path"])
+    current_output = str(current_drift["output_path"])
+    assert current_command[current_command.index("--model-registry-json") + 1] == registry_output
+    assert current_command[current_command.index("--fills-jsonl") + 1].endswith(
+        "/runtime/fill_events.jsonl"
+    )
+    assert current_command[current_command.index("--tca-jsonl") + 1].endswith(
+        "/runtime/tca_records.jsonl"
+    )
+    assert monitor_command[monitor_command.index("--current-json") + 1] == current_output
+    assert "expected_edge_calibration.json" not in monitor_command
+    assert current_drift["metadata"]["baseline_mutation"] is False
+    assert drift_monitor["metadata"]["baseline_mutation"] is False
 
 
 def test_hf_research_api_requires_second_explicit_toggle(

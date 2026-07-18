@@ -516,7 +516,13 @@ def build_daily_research_report(
             "artifact_type": model_registry.get("artifact_type"),
             "summary": _nested(model_registry, "summary"),
             "active_champion": _nested(model_registry, "active_champion"),
-            "promotion_authority": bool(model_registry.get("promotion_authority", False)),
+            "active_challenger": _nested(model_registry, "active_challenger"),
+            "identity_discovery": _nested(model_registry, "identity_discovery"),
+            "blocked_reasons": list(model_registry.get("blocked_reasons", []))
+            if isinstance(model_registry.get("blocked_reasons"), list)
+            else [],
+            "promotion_authority": False,
+            "live_money_authority": False,
             "manual_approval_required": True,
         },
         "pretrade_risk_control_verifier": {
@@ -705,7 +711,10 @@ def build_daily_research_report(
         },
         "model_registry": {
             "status": _summary_status(_nested(report, "model_registry")),
-            "promotion_authority": bool(_nested(report, "model_registry").get("promotion_authority", False)),
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "active_challenger": _nested(report, "model_registry", "active_challenger"),
+            "blocked_reasons": _nested(report, "model_registry").get("blocked_reasons", []),
             "manual_approval_required": True,
         },
         "pretrade_risk_control_verifier": {
@@ -861,6 +870,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Expected-edge calibration: `{_nested(report, 'expected_edge_calibration').get('status', 'missing')}`",
             f"- Evidence starvation: `{_nested(report, 'evidence_starvation').get('status', 'missing')}`",
             f"- Model registry: `{_nested(report, 'model_registry').get('status', 'missing')}`",
+            f"- Active shadow challenger: `{_nested(report, 'model_registry', 'active_challenger').get('model_id', 'missing')}`",
             f"- Pre-trade risk verifier: `{_nested(report, 'pretrade_risk_control_verifier').get('status', 'missing')}`",
             f"- Post-trade surveillance: `{_nested(report, 'post_trade_surveillance').get('status', 'missing')}`",
             f"- Experiment ledger: `{_nested(report, 'experiment_ledger').get('status', 'missing')}`",
