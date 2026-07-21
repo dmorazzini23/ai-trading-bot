@@ -6,6 +6,10 @@ from datetime import UTC, datetime
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
+from ai_trading.core.evidence_lineage import (
+    deterministic_opportunity_correlation_id,
+    normalize_evidence_timestamp,
+)
 from ai_trading.oms.ledger import deterministic_client_order_id
 from ai_trading.oms.pretrade import OrderIntent as PretradeOrderIntent
 
@@ -74,6 +78,10 @@ def _regime_context_from_snapshot(
 class ExecutionIntentContext:
     client_order_id: str
     decision_trace_id: str
+    correlation_id: str
+    decision_timestamp: datetime
+    source_timestamp: datetime
+    quote_timestamp: datetime | None
     pretrade_intent: PretradeOrderIntent
     order_lineage_metadata: dict[str, Any] = field(default_factory=dict)
     order_annotations: dict[str, Any] = field(default_factory=dict)
@@ -108,21 +116,43 @@ def build_execution_intent_context(
     broker_ready: bool,
     broker_ready_reason: str | None,
     broker_cooldown_remaining_sec: float | None,
+    correlation_id: str | None = None,
+    decision_timestamp: datetime | None = None,
+    source_timestamp: datetime | None = None,
+    order_type: str | None = None,
+    execution_profile: str | None = None,
+    paper_sampling_reservation_token: str | None = None,
 ) -> ExecutionIntentContext:
     """Build pretrade intent and broker annotation context for a candidate."""
+    source_ts = normalize_evidence_timestamp(source_timestamp) or normalize_evidence_timestamp(
+        bar_ts
+    )
+    if source_ts is None:
+        raise ValueError("source timestamp is required for execution intent")
+    decision_ts = normalize_evidence_timestamp(decision_timestamp) or source_ts
+    resolved_correlation_id = str(correlation_id or "").strip() or (
+        deterministic_opportunity_correlation_id(
+            symbol=symbol,
+            source_timestamp=source_ts,
+            side=side,
+            strategy_id=(
+                config_snapshot.get("strategy_id")
+                or config_snapshot.get("strategy")
+            ),
+            opportunity_key=config_snapshot.get("opportunity_key"),
+        )
+    )
     client_order_id = deterministic_client_order_id(
         salt=salt,
         symbol=symbol,
-        bar_ts=bar_ts.isoformat(),
+        bar_ts=source_ts.isoformat(),
         side=side,
         qty=abs(delta_shares),
         limit_price=price,
     )
     decision_trace_id = str(client_order_id or "").strip() or f"{symbol}:{bar_ts.isoformat()}:decision_trace"
     now_utc = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
-    quote_ts = submit_quote_ts if submit_quote_ts is None else (
-        submit_quote_ts if submit_quote_ts.tzinfo is not None else submit_quote_ts.replace(tzinfo=UTC)
-    )
+    quote_ts = normalize_evidence_timestamp(submit_quote_ts)
     quote_age_ms = None
     if quote_ts is not None:
         quote_age_ms = max(
@@ -145,6 +175,11 @@ def build_execution_intent_context(
     if derived_spread is None:
         derived_spread = (float(spread_bps) / 10_000.0) * float(price)
     regime_context = _regime_context_from_snapshot(config_snapshot, bar_ts=bar_ts)
+    resolved_execution_profile = (
+        _safe_text(execution_profile)
+        or _safe_text(config_snapshot.get("execution_profile"))
+        or _safe_text(config_snapshot.get("regime_profile"))
+    )
 
     pretrade_intent = PretradeOrderIntent(
         symbol=symbol,
@@ -189,7 +224,32 @@ def build_execution_intent_context(
         broker_cooldown_remaining_sec=broker_cooldown_remaining_sec,
     )
 
-    order_lineage_metadata: dict[str, Any] = {}
+    order_lineage_metadata: dict[str, Any] = {
+        "correlation_id": resolved_correlation_id,
+        "decision_ts": decision_ts.isoformat(),
+        "source_timestamp": source_ts.isoformat(),
+        "reference_price": float(price),
+        "evidence_type": "execution_intent",
+    }
+    has_observed_spread = float(spread_bps) > 0.0 or (
+        submit_bid_at_arrival is not None and submit_ask_at_arrival is not None
+    )
+    if has_observed_spread:
+        order_lineage_metadata["decision_spread_bps"] = float(spread_bps)
+        order_lineage_metadata["spread_bps"] = float(spread_bps)
+    if quote_ts is not None:
+        order_lineage_metadata["quote_timestamp"] = quote_ts.isoformat()
+    if quote_age_ms is not None:
+        order_lineage_metadata["decision_quote_age_ms"] = float(quote_age_ms)
+        order_lineage_metadata["quote_age_ms"] = float(quote_age_ms)
+    if _safe_text(order_type):
+        order_lineage_metadata["order_type"] = str(order_type).strip().lower()
+    if resolved_execution_profile:
+        order_lineage_metadata["execution_profile"] = resolved_execution_profile
+    if _safe_text(paper_sampling_reservation_token):
+        order_lineage_metadata["paper_sampling_reservation_token"] = str(
+            paper_sampling_reservation_token
+        ).strip()
     for source_key in (
         "model_id",
         "model_version",
@@ -213,7 +273,26 @@ def build_execution_intent_context(
         order_lineage_metadata["price_source"] = submit_quote_source
     order_lineage_metadata.update(regime_context)
 
-    order_annotations: dict[str, Any] = {}
+    order_annotations: dict[str, Any] = {
+        "correlation_id": resolved_correlation_id,
+        "decision_ts": decision_ts.isoformat(),
+        "source_timestamp": source_ts.isoformat(),
+        "reference_price": float(price),
+    }
+    if has_observed_spread:
+        order_annotations["spread_bps"] = float(spread_bps)
+    if quote_ts is not None:
+        order_annotations["quote_timestamp"] = quote_ts.isoformat()
+    if quote_age_ms is not None:
+        order_annotations["quote_age_ms"] = float(quote_age_ms)
+    if _safe_text(order_type):
+        order_annotations["order_type"] = str(order_type).strip().lower()
+    if resolved_execution_profile:
+        order_annotations["execution_profile"] = resolved_execution_profile
+    if _safe_text(paper_sampling_reservation_token):
+        order_annotations["paper_sampling_reservation_token"] = str(
+            paper_sampling_reservation_token
+        ).strip()
     if submit_quote_source:
         order_annotations["price_source"] = submit_quote_source
     if policy_hash:
@@ -248,6 +327,10 @@ def build_execution_intent_context(
     return ExecutionIntentContext(
         client_order_id=client_order_id,
         decision_trace_id=decision_trace_id,
+        correlation_id=resolved_correlation_id,
+        decision_timestamp=decision_ts,
+        source_timestamp=source_ts,
+        quote_timestamp=quote_ts,
         pretrade_intent=pretrade_intent,
         order_lineage_metadata=order_lineage_metadata,
         order_annotations=order_annotations,

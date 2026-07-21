@@ -9,6 +9,7 @@ from typing import Any, Callable, Collection, Mapping, Sequence
 
 from ai_trading.config.management import get_env
 from ai_trading.config.launch_profiles import resolve_launch_profile
+from ai_trading.core.evidence_lineage import deterministic_opportunity_correlation_id
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
     LiquidityRegime,
@@ -798,6 +799,12 @@ def process_netting_symbol(
     assert approval is not None
     side = approval_result.side
     opening_trade = bool(approval_result.opening_trade)
+    opportunity_correlation_id = deterministic_opportunity_correlation_id(
+        symbol=symbol,
+        source_timestamp=net_target.bar_ts,
+        side=side,
+        sleeves=(proposal.sleeve for proposal in net_target.proposals),
+    )
 
     submit_prelude = processor.prepare_submit_prelude_func(
         state=processor.state,
@@ -816,6 +823,7 @@ def process_netting_symbol(
         slo_derisk_details=dict(processor.slo_derisk_details),
         symbol_snapshot=symbol_snapshot,
         execution_model_lineage=dict(processor.execution_model_lineage),
+        correlation_id=opportunity_correlation_id,
         event_risk_near=event_risk_near,
         opening_trade=bool(opening_trade),
         portfolio_optimizer_enabled=bool(processor.portfolio_optimizer_enabled),
@@ -847,6 +855,7 @@ def process_netting_symbol(
             metrics=submit_prelude.blocked_metrics,
             config_snapshot=symbol_snapshot,
             order_intent=submit_prelude.blocked_order_intent,
+            correlation_id=opportunity_correlation_id,
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
@@ -948,6 +957,7 @@ def process_netting_symbol(
             metrics=submit_result.metrics,
             config_snapshot=symbol_snapshot,
             order_intent=submit_result.order_intent_contract,
+            correlation_id=opportunity_correlation_id,
         )
         return NettingSymbolProcessResult(
             attempted_increment=int(submit_result.attempted_increment),
@@ -966,6 +976,7 @@ def process_netting_symbol(
         tca=submit_result.tca_record,
         decision_trace_id=submit_result.decision_trace_id,
         order_intent=submit_result.order_intent_contract,
+        correlation_id=opportunity_correlation_id,
     )
     return NettingSymbolProcessResult(
         attempted_increment=int(submit_result.attempted_increment),

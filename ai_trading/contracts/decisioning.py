@@ -206,6 +206,7 @@ class OrderIntent:
     strategy_id: str | None = None
     status: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    correlation_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -217,6 +218,7 @@ class OrderIntent:
             "limit_price": self.limit_price,
             "client_order_id": self.client_order_id,
             "decision_trace_id": self.decision_trace_id,
+            "correlation_id": self.correlation_id,
             "strategy_id": self.strategy_id,
             "status": self.status,
             "metadata": dict(self.metadata),
@@ -224,6 +226,7 @@ class OrderIntent:
 
     @classmethod
     def from_pretrade(cls, intent: Any) -> OrderIntent:
+        quote_timestamp = _normalize_timestamp(getattr(intent, "quote_ts", None))
         return cls(
             symbol=str(getattr(intent, "symbol", "") or "").upper(),
             side=_normalize_side(getattr(intent, "side", None)),
@@ -232,12 +235,18 @@ class OrderIntent:
             notional=_safe_float(getattr(intent, "notional", None)),
             limit_price=_safe_float(getattr(intent, "limit_price", None)),
             client_order_id=_safe_text(getattr(intent, "client_order_id", None)),
+            correlation_id=_safe_text(getattr(intent, "correlation_id", None)),
             metadata={
                 "last_price": _safe_float(getattr(intent, "last_price", None)),
                 "mid": _safe_float(getattr(intent, "mid", None)),
                 "bid": _safe_float(getattr(intent, "bid", None)),
                 "ask": _safe_float(getattr(intent, "ask", None)),
                 "spread": _safe_float(getattr(intent, "spread", None)),
+                "quote_ts": (
+                    quote_timestamp.isoformat()
+                    if quote_timestamp is not None
+                    else None
+                ),
                 "quote_age_ms": _safe_float(getattr(intent, "quote_age_ms", None)),
                 "submit_quote_source": _safe_text(getattr(intent, "submit_quote_source", None)),
                 "quote_quality_ok": getattr(intent, "quote_quality_ok", None),
@@ -269,6 +278,7 @@ class OrderIntent:
             limit_price=_safe_float(payload.get("limit_price") or payload.get("price")),
             client_order_id=_safe_text(payload.get("client_order_id") or payload.get("id")),
             decision_trace_id=_safe_text(payload.get("decision_trace_id")),
+            correlation_id=_safe_text(payload.get("correlation_id")),
             strategy_id=_safe_text(payload.get("strategy_id")),
             status=_safe_text(payload.get("status")),
             metadata=metadata,
@@ -291,6 +301,10 @@ class DecisionJournalEntry:
     client_order_id: str | None = None
     reasons: list[str] = field(default_factory=list)
     decision_trace_id: str | None = None
+    correlation_id: str | None = None
+    decision_ts: datetime | None = None
+    source_timestamp: datetime | None = None
+    quote_timestamp: datetime | None = None
     config_snapshot_hash: str | None = None
     policy_hash: str | None = None
     model_id: str | None = None
@@ -315,6 +329,22 @@ class DecisionJournalEntry:
             "data_freshness_sec": self.data_freshness_sec,
             "client_order_id": self.client_order_id,
             "decision_trace_id": self.decision_trace_id,
+            "correlation_id": self.correlation_id,
+            "decision_ts": (
+                self.decision_ts.isoformat()
+                if isinstance(self.decision_ts, datetime)
+                else None
+            ),
+            "source_timestamp": (
+                self.source_timestamp.isoformat()
+                if isinstance(self.source_timestamp, datetime)
+                else None
+            ),
+            "quote_timestamp": (
+                self.quote_timestamp.isoformat()
+                if isinstance(self.quote_timestamp, datetime)
+                else None
+            ),
             "accepted": self.accepted,
             "submitted": self.submitted,
             "fills_count": self.fills_count,
@@ -620,6 +650,12 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         or (order_intent.decision_trace_id if order_intent is not None else None)
         or (order_intent.client_order_id if order_intent is not None else None)
     )
+    correlation_id = (
+        getattr(record, "correlation_id", None)
+        or (order_intent.correlation_id if order_intent is not None else None)
+        or metrics_map.get("correlation_id")
+        or order_map.get("correlation_id")
+    )
     metadata = {
         "legacy_schema_version": str(getattr(record, "schema_version", "") or ""),
         "has_order": order_intent is not None,
@@ -634,6 +670,39 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         else {}
     )
     for target_key, source_keys in {
+        "opportunity_eligible": ("opportunity_eligible",),
+        "reference_price": ("reference_price", "decision_price", "arrival_price"),
+        "quote_age_ms": ("quote_age_ms", "decision_quote_age_ms"),
+        "spread_bps": ("spread_bps", "decision_spread_bps"),
+        "order_type": ("order_type", "submitted_order_type", "type"),
+        "execution_profile": ("execution_profile", "regime_profile"),
+        "evidence_type": ("evidence_type",),
+        "quote_status": ("quote_status",),
+        "quote_source": ("quote_source", "submit_quote_source"),
+        "metadata_quality_status": ("metadata_quality_status",),
+        "liquidity_regime": ("liquidity_regime",),
+    }.items():
+        for source in source_keys:
+            value = (
+                metrics_map.get(source)
+                if metrics_map.get(source) not in (None, "")
+                else tca_map.get(source)
+                if tca_map.get(source) not in (None, "")
+                else order_intent_metadata.get(source)
+                if order_intent_metadata.get(source) not in (None, "")
+                else order_map.get(source)
+            )
+            if value not in (None, ""):
+                metadata[target_key] = value
+                break
+    metadata_missing_reasons = metrics_map.get("metadata_missing_reasons")
+    if isinstance(metadata_missing_reasons, Mapping):
+        metadata["metadata_missing_reasons"] = {
+            str(key): str(value)
+            for key, value in metadata_missing_reasons.items()
+            if str(key).strip() and str(value).strip()
+        }
+    for target_key, source_keys in {
         "session_regime": ("session_regime", "session_bucket"),
         "market_regime": ("market_regime", "current_regime", "regime_profile"),
         "regime_profile": ("regime_profile", "regime_signal_profile"),
@@ -642,7 +711,8 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
     }.items():
         for source in source_keys:
             value = (
-                _safe_text(tca_map.get(source))
+                _safe_text(metrics_map.get(source))
+                or _safe_text(tca_map.get(source))
                 or _safe_text(config_map.get(source))
                 or _safe_text(order_intent_metadata.get(source))
                 or _safe_text(order_map.get(source))
@@ -659,10 +729,33 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
             or _safe_text(tca_map.get(key))
         )
 
+    bar_timestamp = signal.bar_ts or _normalize_timestamp(getattr(record, "bar_ts", None))
+    decision_ts = (
+        _normalize_timestamp(metrics_map.get("decision_ts"))
+        or _normalize_timestamp(getattr(record, "decision_ts", None))
+        or bar_timestamp
+    )
+    source_timestamp = (
+        _normalize_timestamp(metrics_map.get("source_timestamp"))
+        or _normalize_timestamp(metrics_map.get("source_ts"))
+        or (
+            _normalize_timestamp(market_bar.get("ts"))
+            if isinstance(market_bar, Mapping)
+            else None
+        )
+        or bar_timestamp
+    )
+    quote_timestamp = (
+        _normalize_timestamp(metrics_map.get("quote_timestamp"))
+        or _normalize_timestamp(metrics_map.get("quote_ts"))
+        or _normalize_timestamp(order_intent_metadata.get("quote_ts"))
+        or _normalize_timestamp(tca_map.get("quote_timestamp"))
+    )
+
     return DecisionJournalEntry(
         event=_derive_event(record),
         symbol=signal.symbol,
-        bar_ts=signal.bar_ts or _normalize_timestamp(getattr(record, "bar_ts", None)),
+        bar_ts=bar_timestamp,
         provider=provider,
         feed=feed,
         data_freshness_sec=_derive_data_freshness_sec(record),
@@ -682,6 +775,10 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         ),
         reasons=_derive_journal_reasons(signal, risk_decision, record),
         decision_trace_id=_safe_text(decision_trace_id),
+        correlation_id=_safe_text(correlation_id),
+        decision_ts=decision_ts,
+        source_timestamp=source_timestamp,
+        quote_timestamp=quote_timestamp,
         config_snapshot_hash=_safe_text(config_map.get("config_snapshot_hash")),
         policy_hash=_safe_text(config_map.get("effective_policy_hash")),
         model_id=_model_lineage_value("model_id"),

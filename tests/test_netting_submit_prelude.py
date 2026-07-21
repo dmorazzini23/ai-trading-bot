@@ -12,7 +12,14 @@ def _base_kwargs() -> dict[str, Any]:
     return {
         "state": SimpleNamespace(halt_trading=False, halt_reason=""),
         "runtime": SimpleNamespace(),
-        "cfg": SimpleNamespace(seed="seed", execution_require_realtime_nbbo=True),
+        "cfg": SimpleNamespace(
+            seed="seed",
+            execution_require_realtime_nbbo=True,
+            execution_mode="paper",
+            paper_sampling_enabled=True,
+            paper_sampling_passive_only=True,
+            paper_sampling_allowed_symbols=("AAPL", "AMZN", "MSFT"),
+        ),
         "now": datetime(2026, 4, 19, 15, 0, tzinfo=UTC),
         "symbol": "AAPL",
         "side": "buy",
@@ -26,6 +33,7 @@ def _base_kwargs() -> dict[str, Any]:
         "slo_derisk_details": {"rolling_volume": 1000.0},
         "symbol_snapshot": {"effective_policy_hash": "policy"},
         "execution_model_lineage": {"model_id": "m1"},
+        "correlation_id": "opp_aapl_canonical",
         "event_risk_near": False,
         "opening_trade": True,
         "portfolio_optimizer_enabled": False,
@@ -164,6 +172,12 @@ def test_prepare_netting_submit_prelude_blocks_on_pretrade_and_exposes_order_int
     assert result.blocked_metrics == {"pretrade": {"reason": "collar"}}
     assert result.blocked_order_intent is not None
     assert result.blocked_order_intent.symbol == "AAPL"
+    assert result.blocked_order_intent.correlation_id == "opp_aapl_canonical"
+    assert result.blocked_order_intent.metadata["order_type"] == "limit"
+    assert (
+        result.blocked_order_intent.metadata["execution_profile"]
+        == "paper_sampling_passive"
+    )
 
 
 def test_prepare_netting_submit_prelude_builds_final_intent_with_nbbo_quote() -> None:
@@ -175,4 +189,10 @@ def test_prepare_netting_submit_prelude_builds_final_intent_with_nbbo_quote() ->
     assert result.execution_intent_context is not None
     assert result.submit_quote_source == "nbbo"
     assert result.execution_intent_context.pretrade_intent.client_order_id
+    assert result.execution_intent_context.correlation_id == "opp_aapl_canonical"
+    assert result.execution_intent_context.order_lineage_metadata["order_type"] == "limit"
+    assert (
+        result.execution_intent_context.order_lineage_metadata["execution_profile"]
+        == "paper_sampling_passive"
+    )
     assert result.execution_intent_context.order_annotations["quote"]["midpoint"] == 100.0

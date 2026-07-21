@@ -52,10 +52,19 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
         broker_ready=True,
         broker_ready_reason=None,
         broker_cooldown_remaining_sec=None,
+        correlation_id="opp-intent-aapl",
+        decision_timestamp=bar_ts,
+        source_timestamp=bar_ts,
+        order_type="limit",
+        execution_profile="patient_passive",
     )
 
     assert context.client_order_id
     assert context.decision_trace_id == context.client_order_id
+    assert context.correlation_id == "opp-intent-aapl"
+    assert context.source_timestamp == bar_ts
+    assert context.decision_timestamp == bar_ts
+    assert context.quote_timestamp == bar_ts
     assert context.pretrade_intent.symbol == "AAPL"
     assert context.pretrade_intent.qty == 5
     assert context.pretrade_intent.event_type == "earnings"
@@ -71,7 +80,13 @@ def test_build_execution_intent_context_builds_intent_and_annotations() -> None:
     assert context.order_lineage_metadata["regime_profile"] == "trend"
     assert context.order_lineage_metadata["volatility_regime"] == "normal"
     assert context.order_lineage_metadata["trend_regime"] == "up"
+    assert context.order_lineage_metadata["correlation_id"] == "opp-intent-aapl"
+    assert context.order_lineage_metadata["source_timestamp"] == bar_ts.isoformat()
+    assert context.order_lineage_metadata["quote_timestamp"] == bar_ts.isoformat()
+    assert context.order_lineage_metadata["order_type"] == "limit"
+    assert context.order_lineage_metadata["execution_profile"] == "patient_passive"
     assert context.order_annotations["decision_trace_id"] == context.client_order_id
     assert context.order_annotations["session_regime"] == "opening"
     assert context.order_annotations["quote_source"] == "broker_nbbo"
     assert context.order_annotations["quote"]["midpoint"] == 100.0
+    assert context.order_annotations["correlation_id"] == "opp-intent-aapl"

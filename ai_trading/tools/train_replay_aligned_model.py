@@ -72,6 +72,15 @@ REPLAY_ALIGNED_FEATURE_COLUMNS: tuple[str, ...] = (
     "rsi_centered",
 )
 _FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v1"
+_GOVERNED_HISTORICAL_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
+_HISTORICAL_AUTHORITY_REQUIRED: dict[str, Any] = {
+    "research_only": True,
+    "evidence_type": "historical_research",
+    "promotion_eligible": False,
+    "promotion_authority": False,
+    "live_money_authority": False,
+    "runtime_fill_authority": False,
+}
 
 
 @dataclass(frozen=True)
@@ -174,6 +183,204 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validated_historical_authority(
+    payload: Mapping[str, Any],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    authority_raw = payload.get("authority")
+    if not isinstance(authority_raw, Mapping):
+        raise ValueError(f"{source} is missing historical research authority")
+    authority = dict(authority_raw)
+    mismatches = [
+        key
+        for key, expected in _HISTORICAL_AUTHORITY_REQUIRED.items()
+        if authority.get(key) != expected
+    ]
+    if mismatches:
+        raise ValueError(
+            f"{source} has invalid historical research authority fields: "
+            + ",".join(sorted(mismatches))
+        )
+    return authority
+
+
+def _resolve_manifest_path(raw: Any, *, relative_to: Path) -> Path:
+    if raw in (None, ""):
+        raise ValueError("historical acquisition path is missing")
+    path = Path(str(raw or "")).expanduser()
+    return path if path.is_absolute() else (relative_to / path).resolve()
+
+
+def _resolve_training_input(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
+    acquisition_raw = getattr(args, "acquisition_manifest_json", None)
+    symbols_text = str(getattr(args, "symbols", "") or "")
+    requested_symbols = {
+        token.strip().upper()
+        for token in symbols_text.split(",")
+        if token.strip()
+    }
+    if acquisition_raw in (None, ""):
+        data_dir_raw = getattr(args, "data_dir", None)
+        if data_dir_raw in (None, ""):
+            raise ValueError(
+                "one of --data-dir or --acquisition-manifest-json is required"
+            )
+        data_dir = _resolve_input_dir(data_dir_raw)
+        symbol_paths = _resolve_symbol_paths(data_dir, symbols_text)
+        local_identities: list[dict[str, Any]] = [
+            {
+                "symbol": symbol,
+                "content_sha256": _file_sha256(csv_path),
+            }
+            for symbol, csv_path in sorted(symbol_paths.items())
+        ]
+        return data_dir, {
+            "mode": "local_historical_csv",
+            "quality_passed": True,
+            "dataset_hash": _canonical_sha256(local_identities),
+            "symbols": sorted(symbol_paths),
+            "authority": dict(_HISTORICAL_AUTHORITY_REQUIRED),
+        }
+
+    if requested_symbols - _GOVERNED_HISTORICAL_SYMBOLS:
+        invalid = ",".join(sorted(requested_symbols - _GOVERNED_HISTORICAL_SYMBOLS))
+        raise ValueError(f"replay historical training symbols are not governed: {invalid}")
+
+    acquisition_path = _resolve_input_dir(acquisition_raw)
+    try:
+        acquisition_payload = json.loads(acquisition_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"unable to read historical acquisition manifest: {acquisition_path}"
+        ) from exc
+    if not isinstance(acquisition_payload, Mapping):
+        raise ValueError("historical acquisition manifest must contain a JSON object")
+    if acquisition_payload.get("quality_passed") is not True:
+        raise ValueError("historical acquisition failed its completeness quality gate")
+    authority = _validated_historical_authority(
+        acquisition_payload,
+        source="historical acquisition",
+    )
+    data_dir = _resolve_manifest_path(
+        acquisition_payload.get("dataset_dir"),
+        relative_to=acquisition_path.parent,
+    )
+    manifest_path = _resolve_manifest_path(
+        acquisition_payload.get("manifest_path"),
+        relative_to=acquisition_path.parent,
+    )
+    if not data_dir.is_dir():
+        raise ValueError(f"historical acquisition dataset directory is missing: {data_dir}")
+    if manifest_path.resolve().parent != data_dir.resolve():
+        raise ValueError("historical dataset provenance is outside the dataset root")
+    try:
+        dataset_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"unable to read historical dataset provenance: {manifest_path}"
+        ) from exc
+    if not isinstance(dataset_manifest, Mapping):
+        raise ValueError("historical dataset provenance must contain a JSON object")
+    if dataset_manifest.get("quality_passed") is not True:
+        raise ValueError("historical dataset provenance failed its quality gate")
+    _validated_historical_authority(
+        dataset_manifest,
+        source="historical dataset provenance",
+    )
+    cache_key = str(acquisition_payload.get("cache_key") or "").strip()
+    manifest_cache_key = str(dataset_manifest.get("dataset_cache_key") or "").strip()
+    if not cache_key or cache_key != manifest_cache_key:
+        raise ValueError("historical acquisition cache key does not match provenance")
+
+    symbol_rows_raw = acquisition_payload.get("symbols")
+    if not isinstance(symbol_rows_raw, list) or not symbol_rows_raw:
+        raise ValueError("historical acquisition contains no symbol datasets")
+    manifest_symbol_rows_raw = dataset_manifest.get("symbols")
+    if not isinstance(manifest_symbol_rows_raw, list):
+        raise ValueError("historical dataset provenance contains no symbol datasets")
+    manifest_symbol_rows = {
+        str(row.get("symbol") or "").strip().upper(): row
+        for row in manifest_symbol_rows_raw
+        if isinstance(row, Mapping)
+    }
+    acquisition_identities: list[dict[str, Any]] = []
+    completeness: dict[str, Any] = {}
+    acquired_symbols: set[str] = set()
+    resolved_root = data_dir.resolve()
+    for raw_row in symbol_rows_raw:
+        if not isinstance(raw_row, Mapping):
+            raise ValueError("historical acquisition symbol entry is invalid")
+        symbol = str(raw_row.get("symbol") or "").strip().upper()
+        if not symbol or symbol not in _GOVERNED_HISTORICAL_SYMBOLS:
+            raise ValueError(f"historical acquisition contains ungoverned symbol: {symbol}")
+        if symbol in acquired_symbols:
+            raise ValueError(f"historical acquisition contains duplicate symbol: {symbol}")
+        if raw_row.get("quality_passed") is not True:
+            raise ValueError(f"historical acquisition quality failed for {symbol}")
+        csv_path = _resolve_manifest_path(
+            raw_row.get("csv_path"),
+            relative_to=data_dir,
+        ).resolve()
+        if csv_path.parent != resolved_root or not csv_path.is_file():
+            raise ValueError(f"historical acquisition CSV is outside dataset root: {symbol}")
+        expected_hash = str(raw_row.get("content_sha256") or "").strip().lower()
+        actual_hash = _file_sha256(csv_path)
+        if not expected_hash or actual_hash != expected_hash:
+            raise ValueError(f"historical acquisition content hash mismatch for {symbol}")
+        manifest_row = manifest_symbol_rows.get(symbol)
+        if (
+            not isinstance(manifest_row, Mapping)
+            or manifest_row.get("quality_passed") is not True
+            or str(manifest_row.get("content_sha256") or "").strip().lower()
+            != actual_hash
+        ):
+            raise ValueError(
+                f"historical acquisition does not match provenance for {symbol}"
+            )
+        acquired_symbols.add(symbol)
+        completeness[symbol] = dict(raw_row.get("completeness") or {})
+        acquisition_identities.append(
+            {
+                "symbol": symbol,
+                "content_sha256": actual_hash,
+                "row_count": int(raw_row.get("row_count") or 0),
+            }
+        )
+    if requested_symbols and not requested_symbols.issubset(acquired_symbols):
+        missing = ",".join(sorted(requested_symbols - acquired_symbols))
+        raise ValueError(f"requested historical symbols are missing: {missing}")
+    if acquired_symbols != set(manifest_symbol_rows):
+        raise ValueError("historical acquisition symbol set does not match provenance")
+
+    return data_dir, {
+        "mode": "governed_historical_backfill",
+        "output_json": str(acquisition_path),
+        "output_sha256": _file_sha256(acquisition_path),
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": _file_sha256(manifest_path),
+        "dataset_cache_key": cache_key,
+        "dataset_hash": _canonical_sha256(
+            sorted(acquisition_identities, key=lambda row: row["symbol"])
+        ),
+        "quality_passed": True,
+        "symbols": sorted(acquired_symbols),
+        "completeness": completeness,
+        "dataset_identity": dict(dataset_manifest.get("dataset_identity") or {}),
+        "authority": authority,
+    }
 
 
 def _symbol_feature_cache_key(csv_path: Path, *, timestamp_col: str, symbol: str) -> str:
@@ -533,6 +740,9 @@ def _training_authority(dataset: pd.DataFrame) -> dict[str, Any]:
         "promotion_authority": False,
         "live_money_authority": False,
         "research_only": True,
+        "evidence_type": "historical_research",
+        "promotion_eligible": False,
+        "runtime_fill_authority": False,
         "timestamp_authoritative": bool(timestamp_authoritative and bool(reports)),
         "research_synthetic": bool(research_synthetic),
         "source_providers": source_providers,
@@ -1387,7 +1597,7 @@ def _split_train_validation_with_purge(
 
 
 def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
-    data_dir = _resolve_input_dir(args.data_dir)
+    data_dir, acquisition = _resolve_training_input(args)
     output_dir = _resolve_output_dir(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     live_cost_model = _load_live_cost_replay_model(
@@ -1524,6 +1734,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "objective": f"{config.horizon_bars}_bar_{config.label_objective}_binary",
             "config": asdict(config),
             "authority": _training_authority(dataset),
+            "acquisition": acquisition,
+            "dataset_hash": acquisition["dataset_hash"],
             "thresholds_by_regime": edge_thresholds_by_regime,
             "feature_importance": feature_importance[:25],
             "live_cost_model": live_cost_metadata,
@@ -1537,12 +1749,15 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     report = {
         "schema_version": "1.0.0",
         "artifact_type": "replay_aligned_training_report",
+        "status": "complete",
         "generated_at": generated_at.isoformat(),
         "authority": _training_authority(dataset),
+        "acquisition": acquisition,
         "model_path": str(model_path),
         "manifest_path": str(manifest_path),
         "config": asdict(config),
         "dataset": {
+            "dataset_hash": acquisition["dataset_hash"],
             "load_reports": dataset.attrs.get("load_reports", {}),
             "rows": int(len(dataset)),
             "train_rows": int(len(train)),
@@ -1604,7 +1819,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train an offline replay-aligned edge model from local OHLCV bars."
     )
-    parser.add_argument("--data-dir", type=Path, required=True)
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--data-dir", type=Path, default=None)
+    input_group.add_argument(
+        "--acquisition-manifest-json",
+        type=Path,
+        default=None,
+        help=(
+            "Quality-gated JSON result from historical_training_backfill; "
+            "historical evidence remains research-only."
+        ),
+    )
     parser.add_argument("--symbols", type=str, default="")
     parser.add_argument("--timestamp-col", type=str, default="timestamp")
     parser.add_argument("--output-dir", type=Path, required=True)

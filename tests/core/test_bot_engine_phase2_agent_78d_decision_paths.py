@@ -760,6 +760,142 @@ def test_pre_rank_execution_candidates_quality_filter_and_exploration(
     assert runtime._execution_candidate_last_selected_cycle
 
 
+def test_pre_rank_prefers_explicit_underfilled_governed_sampling_strata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_get_env(
+        monkeypatch,
+        {
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N": 3,
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED": False,
+            "AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED": False,
+            "AI_TRADING_ML_SHADOW_ENABLED": False,
+        },
+    )
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "paper_sampling_deficit_snapshot",
+        lambda _cfg: {
+            "active": True,
+            "fairness_enabled": True,
+            "date": "2026-07-20",
+            "session_bucket": "midday",
+            "configured_symbols": ["AAPL", "AMZN", "MSFT"],
+            "priority_symbols": ["AAPL", "AMZN"],
+            "priority_reason": "symbol_deficit",
+        },
+    )
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(),
+        execution_candidate_rank={
+            "MSFT": 0.99,
+            "NVDA": 0.95,
+            "AAPL": 0.80,
+            "AMZN": 0.70,
+        },
+    )
+
+    selected = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "NVDA", "AAPL", "AMZN"],
+        runtime=runtime,
+    )
+
+    assert selected == ["AAPL", "AMZN", "MSFT"]
+
+
+def test_pre_rank_never_reintroduces_quality_rejected_underfilled_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_get_env(
+        monkeypatch,
+        {
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N": 2,
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED": False,
+            "AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED": True,
+            "AI_TRADING_EXEC_OPPORTUNITY_TOP_QUANTILE": 0.75,
+            "AI_TRADING_EXEC_OPPORTUNITY_MIN_KEEP": 2,
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_ENABLED": False,
+            "AI_TRADING_ML_SHADOW_ENABLED": False,
+        },
+    )
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "paper_sampling_deficit_snapshot",
+        lambda _cfg: {
+            "active": True,
+            "fairness_enabled": True,
+            "date": "2026-07-20",
+            "session_bucket": "midday",
+            "configured_symbols": ["AAPL", "AMZN", "MSFT"],
+            "priority_symbols": ["AAPL", "AMZN"],
+            "priority_reason": "symbol_deficit",
+        },
+    )
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(),
+        execution_candidate_rank={
+            "AAPL": 0.99,
+            "AMZN": 0.98,
+            "MSFT": 0.90,
+            "NVDA": 0.80,
+            "TSLA": 0.70,
+        },
+        execution_opportunity_quality_by_symbol={
+            "AAPL": 0.0,
+            "AMZN": 0.1,
+            "MSFT": 0.9,
+            "NVDA": 0.8,
+            "TSLA": 0.7,
+        },
+    )
+
+    selected = bot_engine._pre_rank_execution_candidates(
+        ["AAPL", "AMZN", "MSFT", "NVDA", "TSLA"],
+        runtime=runtime,
+    )
+
+    assert selected == ["MSFT", "NVDA"]
+    assert "AAPL" not in selected
+    assert "AMZN" not in selected
+
+
+def test_pre_rank_non_paper_ordering_does_not_load_sampling_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_get_env(
+        monkeypatch,
+        {
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N": 3,
+            "AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED": False,
+            "AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED": False,
+            "AI_TRADING_ML_SHADOW_ENABLED": False,
+        },
+    )
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: False)
+
+    def _unexpected_snapshot(_cfg: Any) -> dict[str, Any]:
+        raise AssertionError("non-paper ranking must not load sampling state")
+
+    monkeypatch.setattr(
+        bot_engine,
+        "paper_sampling_deficit_snapshot",
+        _unexpected_snapshot,
+    )
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(),
+        execution_candidate_rank={"MSFT": 0.9, "AAPL": 0.8, "AMZN": 0.7},
+    )
+
+    selected = bot_engine._pre_rank_execution_candidates(
+        ["AAPL", "AMZN", "MSFT"],
+        runtime=runtime,
+    )
+
+    assert selected == ["MSFT", "AAPL", "AMZN"]
+
+
 def test_get_latest_price_primary_quote_and_degraded_bid_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

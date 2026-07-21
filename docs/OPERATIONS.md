@@ -182,6 +182,78 @@ timer result for operator visibility; lock contention exits `75`, and
 infrastructure failures exit `1`. Notification delivery failures are logged by
 the wrapper without changing the research run exit code.
 
+### Governed Evidence Collection
+
+Diagnostic order collection is restricted to `AAPL,AMZN,MSFT` and remains
+paper-only. The runtime reserves capacity across those symbols and the opening,
+midday, and closing periods before it applies the existing global, symbol,
+side, session, hourly, notional, quote, risk, and OMS caps. Collection reports
+may observe other symbols, but ungoverned symbols are never actionable routing
+priorities.
+
+Every eligible decision receives a deterministic `correlation_id` before order
+submission. That identifier is carried through the quote snapshot, intent,
+broker order, fill or non-fill outcome, exit, TCA, calibration, and daily
+reports. Treat `metadata_quality.status != complete` or any `ambiguous_*` join
+diagnostic as an evidence-quality incident; do not manually substitute
+time-proximity joins.
+
+Universal opportunity markouts are research-only. The daily evidence path
+records one-, three-, and five-bar outcomes for submitted, non-submitted, and
+controlled-skip opportunities. Each row is explicitly marked
+`evidence_type=shadow_counterfactual`, `fill_based_evidence=false`, and
+`promotion_eligible=false`. Censored session-boundary or missing-bar outcomes
+remain visible instead of being silently dropped.
+
+Bounded passive repricing is opt-in with
+`AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_ENABLED=1`. It applies only to
+locally verified diagnostic entries with a correlation ID and reservation
+token. A stale order may be canceled and replaced at the current best passive
+quote only when quote-age, spread, retry, cooldown, session, near-close,
+notional, risk, and OMS checks pass. The replacement uses a deterministic child
+client-order ID, remains a DAY limit, and never crosses the spread. Live mode,
+ungoverned symbols, missing metadata, stale or locked quotes, exhausted retries,
+and the end-of-day window fail closed to cancellation.
+
+Relevant conservative defaults are documented in `.env.example`:
+
+- `AI_TRADING_PAPER_SAMPLING_STRATIFIED_FAIRNESS_ENABLED=1`
+- `AI_TRADING_PAPER_SAMPLING_RESERVED_{OPENING,MIDDAY,CLOSING}_TRADES_PER_DAY=1`
+- `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_ENABLED=0`
+- `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_TIMEOUT_SEC=45`
+- `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_MAX_RETRIES=2`
+- `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_COOLDOWN_SEC=30`
+- `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_QUOTE_MAX_AGE_MS=2500`
+- `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_MAX_SPREAD_BPS=20`
+
+Historical one-minute backfill is a separate, after-hours research path. It
+accepts only the governed symbols, records Alpaca feed/adjustment/SDK and
+corporate-action provenance, checkpoints bounded session windows, verifies
+content hashes and regular-session completeness, and does not interpolate
+missing bars. Replay-aligned training applies the live cost model and contiguous
+walk-forward folds with an embargo. Historical rows are always tagged
+`evidence_type=historical_research`, `promotion_eligible=false`, and
+`runtime_fill_authority=false`.
+
+The daily report's promotion-eligible sample count is a positive allowlist of
+executed paper/live fill evidence. Historical and shadow counts are reported in
+separate partitions and cannot satisfy fill-count or model-promotion gates,
+even if their input rows contain fill-shaped or realized-PnL fields.
+
+Useful non-mutating checks:
+
+```bash
+./venv/bin/python -m ai_trading.tools.research_automation daily --plan-only
+./venv/bin/python -m ai_trading.tools.opportunity_markout_report --help
+./venv/bin/python -m ai_trading.tools.historical_training_backfill --help
+jq . /var/lib/ai-trading-bot/runtime/paper_sampling_state_latest.json
+jq . /var/lib/ai-trading-bot/runtime/research_reports/latest/daily_readiness_latest.json
+```
+
+Paper fill rates remain conservative diagnostics. Alpaca paper trading does not
+model market impact, latency slippage, or limit-order queue position; see the
+[Alpaca paper-trading specification](https://docs.alpaca.markets/us/docs/paper-trading).
+
 ### Launch Profiles And Live-Readiness
 
 Runtime policy is explicit through `AI_TRADING_LAUNCH_PROFILE`:

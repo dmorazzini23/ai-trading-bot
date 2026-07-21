@@ -2,7 +2,7 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable
 
@@ -59,6 +59,7 @@ def prepare_netting_submit_prelude(
     slo_derisk_details: dict[str, Any],
     symbol_snapshot: dict[str, Any],
     execution_model_lineage: dict[str, Any],
+    correlation_id: str,
     event_risk_near: bool,
     opening_trade: bool,
     portfolio_optimizer_enabled: bool,
@@ -231,6 +232,21 @@ def prepare_netting_submit_prelude(
             submit_mid_at_arrival,
         )
     )
+    sampling_symbols = {
+        str(candidate).strip().upper()
+        for candidate in getattr(cfg, "paper_sampling_allowed_symbols", ())
+        if str(candidate).strip()
+    }
+    paper_sampling_passive = (
+        str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+        == "paper"
+        and bool(getattr(cfg, "paper_sampling_enabled", False))
+        and bool(getattr(cfg, "paper_sampling_passive_only", True))
+        and str(symbol).strip().upper() in sampling_symbols
+    )
+    execution_profile = (
+        "paper_sampling_passive" if paper_sampling_passive else "standard"
+    )
     final_intent_context = build_execution_intent_context(
         now=now,
         salt=str(getattr(cfg, "seed", "seed")),
@@ -259,6 +275,11 @@ def prepare_netting_submit_prelude(
         broker_ready=bool(broker_ready),
         broker_ready_reason=broker_ready_reason,
         broker_cooldown_remaining_sec=broker_cooldown_remaining_sec,
+        correlation_id=correlation_id,
+        decision_timestamp=now,
+        source_timestamp=bar_ts,
+        order_type="limit",
+        execution_profile=execution_profile,
     )
     intent = final_intent_context.pretrade_intent
     allowed, pretrade_reason, pretrade_details = safe_validate_pretrade_func(
@@ -271,6 +292,15 @@ def prepare_netting_submit_prelude(
         if effective_collar_pct is not None:
             pretrade_details.setdefault("price_collar_pct", effective_collar_pct)
         gates_added.append(pretrade_reason)
+        blocked_order_intent = intent.to_contract()
+        blocked_metadata = dict(blocked_order_intent.metadata)
+        blocked_metadata.update(final_intent_context.order_lineage_metadata)
+        blocked_order_intent = replace(
+            blocked_order_intent,
+            decision_trace_id=final_intent_context.decision_trace_id,
+            correlation_id=final_intent_context.correlation_id,
+            metadata=blocked_metadata,
+        )
         return NettingSubmitPreludeResult(
             execution_intent_context=None,
             submit_quote_source=submit_quote_source,
@@ -282,7 +312,7 @@ def prepare_netting_submit_prelude(
             snapshot_updates=snapshot_updates,
             blocked_reason=pretrade_reason,
             blocked_metrics={"pretrade": pretrade_details},
-            blocked_order_intent=intent.to_contract(),
+            blocked_order_intent=blocked_order_intent,
         )
 
     return NettingSubmitPreludeResult(

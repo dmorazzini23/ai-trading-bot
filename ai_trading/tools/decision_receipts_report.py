@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.tools.execution_capture_improvement_report import (
+    is_fill_based_execution_evidence,
+)
 
 
 def _read_jsonl(path: Path | None, *, report_date: str | None = None) -> list[dict[str, Any]]:
@@ -107,6 +110,11 @@ def _decision_id(row: Mapping[str, Any]) -> str:
     return str(
         _value(
             row,
+            "correlation_id",
+            "decision_journal.correlation_id",
+            "metrics.correlation_id",
+            "order.correlation_id",
+            "decision_journal.order_intent.correlation_id",
             "decision_id",
             "decision_trace_id",
             "intent_id",
@@ -160,22 +168,50 @@ def _status(row: Mapping[str, Any]) -> str:
     return ""
 
 
-def _index_by_decision_id(rows: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
-    indexed: dict[str, Mapping[str, Any]] = {}
+def _correlation_id(row: Mapping[str, Any]) -> str | None:
+    value = _value(
+        row,
+        "correlation_id",
+        "decision_journal.correlation_id",
+        "metrics.correlation_id",
+        "order.correlation_id",
+        "decision_journal.order_intent.correlation_id",
+        "tca.correlation_id",
+    )
+    token = str(value or "").strip()
+    return token or None
+
+
+def _index_by_decision_id(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, list[Mapping[str, Any]]]:
+    indexed: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
         for key in _link_keys(row):
-            indexed.setdefault(key, row)
+            bucket = indexed.setdefault(key, [])
+            if not any(candidate is row for candidate in bucket):
+                bucket.append(row)
     return indexed
 
 
 def _link_keys(row: Mapping[str, Any]) -> list[str]:
     keys: list[str] = []
+    correlation_id = _correlation_id(row)
+    if correlation_id:
+        keys.append(f"correlation:{correlation_id}")
     for key in (
         "decision_id",
         "decision_trace_id",
         "intent_id",
         "client_order_id",
         "order_id",
+        "broker_order_id",
+        "fill_id",
+        "execution_id",
+        "order.decision_trace_id",
+        "order.client_order_id",
+        "order.order_id",
+        "order.broker_order_id",
         "decision_journal.decision_trace_id",
         "decision_journal.client_order_id",
         "decision_journal.order_intent.decision_trace_id",
@@ -183,20 +219,81 @@ def _link_keys(row: Mapping[str, Any]) -> list[str]:
         "decision_journal.order_intent.order_id",
     ):
         value = str(_value(row, key) or "").strip()
-        if value and value not in keys:
-            keys.append(value)
+        link_key = f"identity:{value}"
+        if value and link_key not in keys:
+            keys.append(link_key)
+    return keys
+
+
+def _hard_identity_keys(row: Mapping[str, Any]) -> list[str]:
+    keys: list[str] = []
+    for key in (
+        "client_order_id",
+        "order_id",
+        "broker_order_id",
+        "fill_id",
+        "execution_id",
+        "order.client_order_id",
+        "order.order_id",
+        "order.broker_order_id",
+        "decision_journal.client_order_id",
+        "decision_journal.order_intent.client_order_id",
+        "decision_journal.order_intent.order_id",
+    ):
+        value = str(_value(row, key) or "").strip()
+        link_key = f"identity:{value}"
+        if value and link_key not in keys:
+            keys.append(link_key)
     return keys
 
 
 def _first_linked(
-    indexes: Mapping[str, Mapping[str, Any]],
+    indexes: Mapping[str, Sequence[Mapping[str, Any]]],
     row: Mapping[str, Any],
-) -> Mapping[str, Any]:
-    for key in _link_keys(row):
-        linked = indexes.get(key)
-        if linked:
-            return linked
-    return {}
+) -> tuple[Mapping[str, Any], str]:
+    keys = _link_keys(row)
+    correlation_key = next(
+        (key for key in keys if key.startswith("correlation:")),
+        None,
+    )
+    identity_keys = [key for key in keys if key.startswith("identity:")]
+    if correlation_key is not None:
+        correlated = list(indexes.get(correlation_key, ()))
+        matching_identity_keys = _hard_identity_keys(row) or identity_keys
+        if matching_identity_keys:
+            exact = [
+                candidate
+                for candidate in correlated
+                if any(
+                    candidate in indexes.get(key, ())
+                    for key in matching_identity_keys
+                )
+            ]
+            unique_exact = list({id(candidate): candidate for candidate in exact}.values())
+            if len(unique_exact) == 1:
+                return unique_exact[0], "correlation_and_order_id"
+            if len(unique_exact) > 1:
+                return {}, "ambiguous_correlation_and_order_id"
+            return {}, "correlation_order_id_unmatched"
+        if len(correlated) == 1:
+            return correlated[0], "correlation_id"
+        if len(correlated) > 1:
+            return {}, "ambiguous_correlation_id"
+        return {}, "correlation_id_unmatched"
+
+    legacy_candidates = [
+        candidate
+        for key in identity_keys
+        for candidate in indexes.get(key, ())
+    ]
+    unique_legacy = list(
+        {id(candidate): candidate for candidate in legacy_candidates}.values()
+    )
+    if len(unique_legacy) == 1:
+        return unique_legacy[0], "legacy_exact_id"
+    if len(unique_legacy) > 1:
+        return {}, "ambiguous_legacy_exact_id"
+    return {}, "unmatched"
 
 
 def _reasons(row: Mapping[str, Any], gate: Mapping[str, Any]) -> list[str]:
@@ -287,7 +384,8 @@ def build_decision_receipts_report(
     max_receipts: int = 500,
 ) -> dict[str, Any]:
     orders_by_id = _index_by_decision_id(order_intents)
-    fills_by_id = _index_by_decision_id(fills)
+    fill_evidence = [row for row in fills if is_fill_based_execution_evidence(row)]
+    fills_by_id = _index_by_decision_id(fill_evidence)
     gates_by_id = _index_by_decision_id(gate_rows)
     receipts: list[dict[str, Any]] = []
     completeness: Counter[str] = Counter()
@@ -298,9 +396,9 @@ def build_decision_receipts_report(
             receipts.append(aggregate_receipt)
             continue
         decision_id = _decision_id(row)
-        order = _first_linked(orders_by_id, row)
-        fill = _first_linked(fills_by_id, row)
-        gate = _first_linked(gates_by_id, row)
+        order, order_link_method = _first_linked(orders_by_id, row)
+        fill, fill_link_method = _first_linked(fills_by_id, row)
+        gate, gate_link_method = _first_linked(gates_by_id, row)
         status = _status(row)
         accepted = status in {"accept", "accepted", "submit", "submitted", "filled", "new"}
         rejected = status in {"reject", "rejected", "blocked", "skip", "skipped"}
@@ -313,6 +411,7 @@ def build_decision_receipts_report(
         receipts.append(
             {
                 "decision_id": decision_id or None,
+                "correlation_id": _correlation_id(row),
                 "symbol": _symbol(row),
                 "decision_ts": _timestamp(row) or None,
                 "decision_status": status or "unknown",
@@ -332,6 +431,13 @@ def build_decision_receipts_report(
                 "realized_net_edge_bps": _first_float(fill, "realized_net_edge_bps", "net_edge_bps", "markout_bps") if fill else None,
                 "receipt_complete": receipt_complete,
                 "receipt_granularity": "decision",
+                "link_methods": {
+                    "order": order_link_method,
+                    "fill": fill_link_method,
+                    "gate": gate_link_method,
+                },
+                "fill_based_evidence": bool(fill),
+                "promotion_eligible": bool(fill),
             }
         )
     status = "complete" if completeness.get("incomplete", 0) == 0 else "gaps"
@@ -347,6 +453,7 @@ def build_decision_receipts_report(
             "complete": completeness.get("complete", 0),
             "incomplete": completeness.get("incomplete", 0),
             "truncated": len(decisions) > max(1, int(max_receipts)),
+            "non_fill_rows_excluded": len(fills) - len(fill_evidence),
         },
         "receipts": receipts,
         "promotion_authority": False,

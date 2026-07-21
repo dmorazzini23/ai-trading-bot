@@ -90,9 +90,59 @@ def test_metrics_improvement_control_includes_configured_zero_sample_symbols() -
 
     assert report["by_symbol"]["MSFT"]["samples"] == 0
     assert report["by_symbol"]["MSFT"]["action"] == "explore"
-    assert report["by_symbol"]["NVDA"]["samples"] == 0
-    assert report["summary"]["configured_without_samples"] == ["MSFT", "NVDA"]
-    assert report["control_policy"]["configured_symbols"] == ["AAPL", "MSFT", "NVDA"]
+    assert "NVDA" not in report["by_symbol"]
+    assert report["summary"]["configured_without_samples"] == ["MSFT"]
+    assert report["summary"]["invalid_configured_symbols"] == ["NVDA"]
+    assert report["control_policy"]["configured_symbols"] == ["AAPL", "MSFT"]
+
+
+def test_metrics_improvement_control_excludes_observed_googl_from_actionable_routing() -> None:
+    report = build_metrics_improvement_control(
+        report_date="2026-07-20",
+        reports=[
+            {
+                "report_date": "2026-07-20",
+                "execution_capture": {
+                    "by_symbol": {
+                        "AAPL": {"count": 0},
+                        "AMZN": {"count": 0},
+                        "GOOGL": {
+                            "count": 1,
+                            "mean_expected_net_edge_bps": 5.0,
+                            "mean_realized_net_edge_bps": 2.0,
+                        },
+                        "MSFT": {
+                            "count": 4,
+                            "mean_expected_net_edge_bps": 4.0,
+                            "mean_realized_net_edge_bps": -2.0,
+                        },
+                    }
+                },
+            }
+        ],
+        configured_symbols=["AAPL", "AMZN", "MSFT"],
+        min_symbol_samples=5,
+    )
+
+    actionable_lists = [
+        report["routing"]["allowed_symbols"],
+        report["routing"]["downscaled_symbols"],
+        report["routing"]["shadowed_symbols"],
+        report["routing"]["cooldown_symbols"],
+        report["routing"]["exploration_symbols"],
+        report["routing"]["sample_collection_priority"],
+    ]
+    assert all("GOOGL" not in symbols for symbols in actionable_lists)
+    assert report["by_symbol"]["GOOGL"]["actionable"] is False
+    assert report["by_symbol"]["GOOGL"]["action"] == "observe_only"
+    assert report["by_symbol"]["GOOGL"]["qty_scale"] == 0.0
+    assert report["summary"]["ignored_observed_symbols"] == ["GOOGL"]
+    assert report["routing"]["ignored_observed_symbols"] == ["GOOGL"]
+    assert set(report["routing"]["sample_collection_priority"]) <= {
+        "AAPL",
+        "AMZN",
+        "MSFT",
+    }
 
 
 def test_metrics_improvement_control_builds_side_controls_from_calibration() -> None:
@@ -185,6 +235,7 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     assert payload["control_policy"]["unknown_quote_metadata_edge_add_bps"] == 0.0
     assert payload["exploration_budget"]["max_orders_per_window"] == 20
     assert payload["exploration_budget"]["max_orders_per_symbol_per_window"] == 5
-    assert payload["by_symbol"]["NVDA"]["action"] == "explore"
+    assert "NVDA" not in payload["by_symbol"]
+    assert payload["summary"]["invalid_configured_symbols"] == ["NVDA"]
     assert payload["routing"]["sample_collection_priority"]
     assert latest.exists()

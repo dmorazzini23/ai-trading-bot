@@ -19,6 +19,9 @@ from typing import Any, Mapping, Sequence
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
+_GOVERNED_PAPER_SAMPLING_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
+
+
 def _read_json(path: Path | None) -> dict[str, Any]:
     if path is None or not path.exists():
         return {}
@@ -288,7 +291,7 @@ def build_metrics_improvement_control(
     if not has_current_report:
         _accumulate_from_execution_capture(stats, execution_capture or {})
         _accumulate_from_surveillance(stats, post_trade_surveillance or {})
-    configured_symbol_set = (
+    requested_configured_symbols = (
         _symbol_set(configured_symbols)
         if isinstance(configured_symbols, str)
         else {
@@ -296,6 +299,18 @@ def build_metrics_improvement_control(
             for symbol in (configured_symbols or [])
             if str(symbol).strip()
         }
+    )
+    if configured_symbols is None:
+        requested_configured_symbols = set(stats).intersection(
+            _GOVERNED_PAPER_SAMPLING_SYMBOLS
+        )
+    configured_symbol_set = requested_configured_symbols.intersection(
+        _GOVERNED_PAPER_SAMPLING_SYMBOLS
+    )
+    invalid_configured_symbols = sorted(
+        requested_configured_symbols.difference(
+            _GOVERNED_PAPER_SAMPLING_SYMBOLS
+        )
     )
     for symbol in configured_symbol_set:
         stats[symbol]
@@ -367,6 +382,7 @@ def build_metrics_improvement_control(
             totals["side_downscaled"] += 1
     for symbol in sorted(stats):
         row = stats[symbol]
+        actionable = symbol in configured_symbol_set
         samples = int(max(0.0, row["samples"]))
         expected_sum = float(row["expected_sum_bps"])
         realized_sum = float(row["realized_sum_bps"])
@@ -438,19 +454,26 @@ def build_metrics_improvement_control(
             action = "downscale"
             qty_scale = min(float(qty_scale), float(downscale_qty_scale))
             reasons.append("execution_capture_improvement_downscale")
-        if action in {"shadow", "cooldown"}:
-            totals["shadowed_or_blocked_symbols"] += 1
-        elif action == "downscale":
-            totals["downscaled_symbols"] += 1
-        elif action == "explore":
-            totals["exploration_symbols"] += 1
-        totals["samples"] += samples
-        totals["expected_sum_bps"] += expected_sum
-        totals["realized_sum_bps"] += realized_sum
-        totals["adverse_findings"] += adverse_count
-        totals["reject_findings"] += reject_count
+        if not actionable:
+            action = "observe_only"
+            qty_scale = 0.0
+            reasons = ["outside_configured_paper_sampling_universe"]
+            improvement = {}
+        else:
+            if action in {"shadow", "cooldown"}:
+                totals["shadowed_or_blocked_symbols"] += 1
+            elif action == "downscale":
+                totals["downscaled_symbols"] += 1
+            elif action == "explore":
+                totals["exploration_symbols"] += 1
+            totals["samples"] += samples
+            totals["expected_sum_bps"] += expected_sum
+            totals["realized_sum_bps"] += realized_sum
+            totals["adverse_findings"] += adverse_count
+            totals["reject_findings"] += reject_count
         by_symbol[symbol] = {
             "symbol": symbol,
+            "actionable": actionable,
             "samples": samples,
             "mean_expected_edge_bps": mean_expected,
             "mean_realized_edge_bps": mean_realized,
@@ -471,27 +494,32 @@ def build_metrics_improvement_control(
         "allowed_symbols": [
             symbol
             for symbol, row in sorted(by_symbol.items())
-            if str(row.get("action") or "").lower() == "allow"
+            if bool(row.get("actionable"))
+            and str(row.get("action") or "").lower() == "allow"
         ],
         "downscaled_symbols": [
             symbol
             for symbol, row in sorted(by_symbol.items())
-            if str(row.get("action") or "").lower() == "downscale"
+            if bool(row.get("actionable"))
+            and str(row.get("action") or "").lower() == "downscale"
         ],
         "shadowed_symbols": [
             symbol
             for symbol, row in sorted(by_symbol.items())
-            if str(row.get("action") or "").lower() == "shadow"
+            if bool(row.get("actionable"))
+            and str(row.get("action") or "").lower() == "shadow"
         ],
         "cooldown_symbols": [
             symbol
             for symbol, row in sorted(by_symbol.items())
-            if str(row.get("action") or "").lower() == "cooldown"
+            if bool(row.get("actionable"))
+            and str(row.get("action") or "").lower() == "cooldown"
         ],
         "exploration_symbols": [
             symbol
             for symbol, row in sorted(by_symbol.items())
-            if str(row.get("action") or "").lower() == "explore"
+            if bool(row.get("actionable"))
+            and str(row.get("action") or "").lower() == "explore"
         ],
     }
     sample_collection_priority = [
@@ -499,12 +527,13 @@ def build_metrics_improvement_control(
         for symbol in [*routing_groups["allowed_symbols"], *routing_groups["downscaled_symbols"], *routing_groups["exploration_symbols"]]
         if symbol not in set(routing_groups["shadowed_symbols"]) | set(routing_groups["cooldown_symbols"])
     ]
+    ignored_observed_symbols = sorted(set(stats).difference(configured_symbol_set))
     global_capture = (
         float(totals["realized_sum_bps"]) / float(totals["expected_sum_bps"])
         if float(totals["expected_sum_bps"]) > 0.0
         else None
     )
-    if not by_symbol and not by_side:
+    if not configured_symbol_set and not by_side:
         status = "insufficient_samples"
         recommended = "collect_more_diagnostic_paper_samples"
     elif (
@@ -519,7 +548,7 @@ def build_metrics_improvement_control(
         status = "observe"
         recommended = "continue_sampling_with_current_controls"
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "artifact_type": "metrics_improvement_control",
         "report_date": report_date,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -528,7 +557,8 @@ def build_metrics_improvement_control(
         "summary": {
             "sessions": sorted(set(sessions)),
             "session_count": len(set(sessions)),
-            "symbol_count": len(by_symbol),
+            "symbol_count": len(configured_symbol_set),
+            "observed_symbol_count": len(by_symbol),
             "samples": total_samples,
             "global_capture_ratio": global_capture,
             "mean_expected_edge_bps": (
@@ -551,6 +581,8 @@ def build_metrics_improvement_control(
             "side_downscaled": int(totals["side_downscaled"]),
             "configured_symbols": sorted(configured_symbol_set),
             "configured_symbol_count": int(len(configured_symbol_set)),
+            "invalid_configured_symbols": invalid_configured_symbols,
+            "ignored_observed_symbols": ignored_observed_symbols,
             "configured_without_samples": [
                 symbol
                 for symbol in sorted(configured_symbol_set)
@@ -574,6 +606,7 @@ def build_metrics_improvement_control(
             "unknown_quote_metadata_edge_add_bps": float(unknown_quote_metadata_edge_add_bps),
             "authority_increase_allowed": False,
             "configured_symbols": sorted(configured_symbol_set),
+            "invalid_configured_symbols": invalid_configured_symbols,
         },
         "exploration_budget": {
             "window_minutes": int(max(1, exploration_window_minutes)),
@@ -586,6 +619,7 @@ def build_metrics_improvement_control(
         "routing": {
             **routing_groups,
             "sample_collection_priority": sample_collection_priority,
+            "ignored_observed_symbols": ignored_observed_symbols,
             "authority_increase_allowed": False,
             "manual_review_required_before_symbol_expansion": True,
         },

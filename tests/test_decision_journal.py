@@ -132,3 +132,98 @@ def test_decision_journal_uses_market_bar_contract_defaults() -> None:
     assert journal["feed"] == "sip"
     assert journal["bar_ts"] == ts.isoformat()
     assert journal["metadata"]["market_bar"]["close"] == 500.0
+
+
+def test_decision_journal_correlation_is_pre_submit_and_order_independent() -> None:
+    payloads: list[dict[str, object]] = []
+    recorder = DecisionJournalRecorder(
+        path=None,
+        write_impl=lambda record, _path: payloads.append(record.to_dict()),
+    )
+    ts = datetime(2026, 7, 21, 14, 31, tzinfo=UTC)
+
+    recorder.record(
+        symbol="AAPL",
+        bar_ts=ts,
+        signal_side="buy",
+        final_score=0.6,
+        confidence=0.8,
+        strategy_id="day",
+        accepted=False,
+        gates=["METRICS_IMPROVEMENT_CONTROLLED_SKIP"],
+        event="metrics_improvement_controlled_skip",
+        reference_price=100.0,
+    )
+    recorder.record(
+        symbol="AAPL",
+        bar_ts=ts,
+        signal_side="buy",
+        final_score=0.6,
+        confidence=0.8,
+        strategy_id="day",
+        accepted=True,
+        gates=["OK_TRADE"],
+        submitted=True,
+        client_order_id="replacement-child-order",
+        reference_price=100.0,
+    )
+
+    blocked = payloads[0]
+    submitted = payloads[1]
+    correlation_id = blocked["correlation_id"]
+    assert isinstance(correlation_id, str)
+    assert correlation_id.startswith("opp_")
+    assert submitted["correlation_id"] == correlation_id
+    assert blocked["decision_journal"]["correlation_id"] == correlation_id
+    assert submitted["decision_journal"]["order_intent"]["correlation_id"] == correlation_id
+    assert submitted["decision_journal"]["client_order_id"] == "replacement-child-order"
+
+
+def test_decision_journal_preserves_opportunity_snapshot_metadata() -> None:
+    captured: dict[str, object] = {}
+    recorder = DecisionJournalRecorder(
+        path=None,
+        write_impl=lambda record, _path: captured.setdefault("payload", record.to_dict()),
+    )
+    source_ts = datetime(2026, 7, 21, 15, 0, tzinfo=UTC)
+    decision_ts = datetime(2026, 7, 21, 15, 0, 1, tzinfo=UTC)
+    quote_ts = datetime(2026, 7, 21, 15, 0, 0, 750000, tzinfo=UTC)
+
+    recorder.record(
+        symbol="MSFT",
+        bar_ts=source_ts,
+        signal_side="sell",
+        final_score=-0.7,
+        confidence=0.9,
+        strategy_id="intraday",
+        accepted=False,
+        gates=["NET_EDGE_FLOOR_GATE"],
+        decision_ts=decision_ts,
+        source_timestamp=source_ts,
+        quote_timestamp=quote_ts,
+        quote_age_ms=250.0,
+        spread_bps=3.5,
+        order_type="limit",
+        session="midday",
+        market_regime="sideways",
+        volatility_regime="normal",
+        trend_regime="flat",
+        execution_profile="passive",
+        reference_price=410.0,
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    journal = payload["decision_journal"]
+    assert journal["decision_ts"] == decision_ts.isoformat()
+    assert journal["source_timestamp"] == source_ts.isoformat()
+    assert journal["quote_timestamp"] == quote_ts.isoformat()
+    metadata = journal["metadata"]
+    assert metadata["opportunity_eligible"] is True
+    assert metadata["reference_price"] == 410.0
+    assert metadata["quote_age_ms"] == 250.0
+    assert metadata["spread_bps"] == 3.5
+    assert metadata["order_type"] == "limit"
+    assert metadata["session_regime"] == "midday"
+    assert metadata["market_regime"] == "sideways"
+    assert metadata["execution_profile"] == "passive"

@@ -183,6 +183,69 @@ def test_reconcile_pending_tca_with_fill_appends_resolved_row(tmp_path: Path) ->
     assert resolved["client_order_id"] == "cid-2"
 
 
+def test_reconcile_pending_tca_disambiguates_children_with_same_correlation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tca_records.jsonl"
+    submit_ts = datetime(2026, 7, 21, 15, 0, tzinfo=UTC)
+    common = {
+        "ts": submit_ts.isoformat(),
+        "correlation_id": "opp-shared",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 1.0,
+        "pending_event": True,
+        "benchmark": {
+            "mid_at_arrival": 100.0,
+            "submit_ts": submit_ts.isoformat(),
+        },
+    }
+    path.write_text(
+        json.dumps(
+            {
+                **common,
+                "client_order_id": "child-1",
+                "decision_price": 100.0,
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                **common,
+                "client_order_id": "child-2",
+                "decision_price": 200.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    reconciled, reason = reconcile_pending_tca_with_fill(
+        str(path),
+        client_order_id="child-2",
+        correlation_id="opp-shared",
+        fill_price=198.0,
+        fill_qty=1.0,
+        status="filled",
+        fill_ts=submit_ts,
+        allow_symbol_qty_fallback=True,
+        symbol="AAPL",
+        side="buy",
+    )
+
+    assert reconciled is True
+    assert reason == "reconciled"
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows[-1]["client_order_id"] == "child-2"
+    assert rows[-1]["decision_price"] == 200.0
+    assert rows[-1]["correlation_id"] == "opp-shared"
+    assert rows[-1]["fill_based_evidence"] is True
+
+
 def test_reconcile_pending_tca_with_fill_ignores_already_resolved(tmp_path: Path) -> None:
     path = tmp_path / "tca_records.jsonl"
     submit_ts = datetime(2026, 3, 13, 15, 0, tzinfo=UTC)

@@ -10,6 +10,7 @@ from ai_trading.config.runtime import TradingConfig
 from ai_trading.oms.pretrade import OrderIntent, SlidingWindowRateLimiter, safe_validate_pretrade
 from ai_trading.runtime.paper_sampling import (
     evaluate_paper_sampling_order,
+    paper_sampling_deficit_snapshot,
     release_paper_sampling_order,
     reserve_paper_sampling_order,
 )
@@ -20,11 +21,16 @@ def _cfg(**updates):
         "paper_sampling_enabled": True,
         "paper_sampling_allowed_symbols": ("AAPL", "AMZN", "MSFT"),
         "paper_sampling_max_trades_per_day": 1,
+        "paper_sampling_stratified_fairness_enabled": False,
+        "paper_sampling_symbol_fairness_max_lead": 1,
         "paper_sampling_max_trades_per_symbol_per_day": 4,
         "paper_sampling_max_trades_per_side_per_day": 6,
         "paper_sampling_max_opening_trades_per_day": 3,
         "paper_sampling_max_midday_trades_per_day": 4,
         "paper_sampling_max_closing_trades_per_day": 3,
+        "paper_sampling_reserved_opening_trades_per_day": 0,
+        "paper_sampling_reserved_midday_trades_per_day": 0,
+        "paper_sampling_reserved_closing_trades_per_day": 0,
         "paper_sampling_max_notional_per_order": 750.0,
         "paper_sampling_passive_only": True,
         "paper_sampling_relax_edge_gates_enabled": False,
@@ -85,6 +91,11 @@ def test_config_exposes_conservative_paper_sampling_knobs() -> None:
     )
 
     assert cfg.paper_sampling_allowed_symbols == ("AAPL", "AMZN", "MSFT")
+    assert cfg.paper_sampling_stratified_fairness_enabled is True
+    assert cfg.paper_sampling_symbol_fairness_max_lead == 1
+    assert cfg.paper_sampling_reserved_opening_trades_per_day == 1
+    assert cfg.paper_sampling_reserved_midday_trades_per_day == 1
+    assert cfg.paper_sampling_reserved_closing_trades_per_day == 1
     assert cfg.paper_sampling_max_notional_per_order == 750.0
     assert cfg.paper_sampling_passive_only is True
     assert cfg.paper_sampling_relax_edge_gates_enabled is False
@@ -140,6 +151,28 @@ def test_config_rejects_unsafe_paper_sampling_policy(
 
     with pytest.raises(ValueError, match=message):
         TradingConfig.from_env(env)
+
+
+def test_config_rejects_session_reservations_above_daily_capacity() -> None:
+    with pytest.raises(
+        ValueError,
+        match="reserved session slots must not exceed",
+    ):
+        TradingConfig.from_env(
+            {
+                "APP_ENV": "test",
+                "EXECUTION_MODE": "paper",
+                "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+                "AI_TRADING_LAUNCH_PROFILE": "paper_trade",
+                "AI_TRADING_PAPER_SAMPLING_ENABLED": "1",
+                "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS": "AAPL,AMZN,MSFT",
+                "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY": "2",
+                "AI_TRADING_PAPER_SAMPLING_RESERVED_OPENING_TRADES_PER_DAY": "1",
+                "AI_TRADING_PAPER_SAMPLING_RESERVED_MIDDAY_TRADES_PER_DAY": "1",
+                "AI_TRADING_PAPER_SAMPLING_RESERVED_CLOSING_TRADES_PER_DAY": "1",
+                "MAX_DRAWDOWN_THRESHOLD": "0.2",
+            }
+        )
 
 
 def test_paper_sampling_higher_cap_allows_one_share_msft_sample() -> None:
@@ -388,6 +421,262 @@ def test_paper_sampling_symbol_side_and_session_quotas(monkeypatch, tmp_path) ->
     assert side_block.allowed is False
     assert side_block.reason == "PAPER_SAMPLING_SIDE_DAILY_QUOTA_BLOCK"
     assert side_block.details["quota_key"] == "side:buy"
+
+
+def test_paper_sampling_stratified_fairness_prevents_four_msft_entries(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_max_trades_per_day=12,
+        paper_sampling_max_trades_per_symbol_per_day=12,
+        paper_sampling_max_trades_per_side_per_day=12,
+        paper_sampling_max_midday_trades_per_day=12,
+        paper_sampling_stratified_fairness_enabled=True,
+        paper_sampling_symbol_fairness_max_lead=1,
+    )
+    midday = datetime(2026, 7, 20, 17, 0, tzinfo=UTC)
+
+    attempts = [
+        reserve_paper_sampling_order(
+            cfg,
+            symbol="MSFT",
+            side="buy",
+            qty=1,
+            price=500.0,
+            now=midday,
+        )
+        for _ in range(4)
+    ]
+
+    assert [decision.allowed for decision in attempts] == [True, False, False, False]
+    assert {
+        decision.reason for decision in attempts[1:]
+    } == {"PAPER_SAMPLING_SYMBOL_FAIRNESS_BLOCK"}
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["by_symbol"] == {"MSFT": 1}
+    assert payload["symbol_targets"] == {"AAPL": 4, "AMZN": 4, "MSFT": 4}
+    assert payload["symbol_deficits"] == {"AAPL": 4, "AMZN": 4, "MSFT": 3}
+
+    for symbol in ("AAPL", "AMZN", "MSFT"):
+        decision = reserve_paper_sampling_order(
+            cfg,
+            symbol=symbol,
+            side="buy",
+            qty=1,
+            price=100.0,
+            now=midday,
+        )
+        assert decision.allowed is True
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["by_symbol"] == {"AAPL": 1, "AMZN": 1, "MSFT": 2}
+
+
+def test_paper_sampling_scarce_daily_capacity_rotates_deterministically(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_max_trades_per_day=1,
+        paper_sampling_max_trades_per_symbol_per_day=1,
+        paper_sampling_max_trades_per_side_per_day=1,
+        paper_sampling_max_midday_trades_per_day=1,
+        paper_sampling_stratified_fairness_enabled=True,
+    )
+
+    def _allowed_symbol(now: datetime) -> str:
+        for symbol in ("AAPL", "AMZN", "MSFT"):
+            decision = reserve_paper_sampling_order(
+                cfg,
+                symbol=symbol,
+                side="buy",
+                qty=1,
+                price=100.0,
+                now=now,
+            )
+            if decision.allowed:
+                return symbol
+            assert decision.reason == "PAPER_SAMPLING_SYMBOL_RESERVATION_BLOCK"
+        raise AssertionError("one governed symbol must own the rotated daily slot")
+
+    first = _allowed_symbol(datetime(2026, 7, 20, 17, 0, tzinfo=UTC))
+    second = _allowed_symbol(datetime(2026, 7, 21, 17, 0, tzinfo=UTC))
+
+    assert first != second
+
+
+def test_paper_sampling_reserves_capacity_for_future_sessions(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_max_trades_per_day=3,
+        paper_sampling_max_trades_per_symbol_per_day=3,
+        paper_sampling_max_trades_per_side_per_day=3,
+        paper_sampling_max_opening_trades_per_day=3,
+        paper_sampling_reserved_midday_trades_per_day=1,
+        paper_sampling_reserved_closing_trades_per_day=1,
+        paper_sampling_stratified_fairness_enabled=True,
+    )
+    opening = datetime(2026, 7, 20, 14, 0, tzinfo=UTC)
+
+    first = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=opening,
+    )
+    second = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=opening,
+    )
+
+    assert first.allowed is True
+    assert second.allowed is False
+    assert second.reason == "PAPER_SAMPLING_FUTURE_SESSION_RESERVATION_BLOCK"
+    assert second.details["future_reserved_slots"] == 2
+
+
+def test_paper_sampling_release_uses_original_reservation_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(paper_sampling_max_trades_per_day=3)
+    opening = datetime(2026, 7, 20, 14, 59, tzinfo=UTC)
+    midday = datetime(2026, 7, 20, 15, 1, tzinfo=UTC)
+
+    reserved = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=opening,
+    )
+    release_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        now=midday,
+        reservation_token=str(reserved.details["reservation_token"]),
+    )
+
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 0
+    assert payload["by_session"] == {}
+    assert payload["observed_by_session"] == {}
+    assert payload["reservations"] == []
+
+
+def test_paper_sampling_tracks_exit_role_without_consuming_or_blocking(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(paper_sampling_max_trades_per_day=1)
+    midday = datetime(2026, 7, 20, 17, 0, tzinfo=UTC)
+
+    entry = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=midday,
+    )
+    exit_order = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="sell",
+        qty=1,
+        price=101.0,
+        now=midday,
+        consumes_daily_slot=False,
+    )
+
+    assert entry.allowed is True
+    assert exit_order.allowed is True
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 1
+    assert payload["observed_count"] == 2
+    assert payload["observed_by_role"] == {"entry": 1, "exit": 1}
+    assert payload["observed_by_side_role"] == {"buy:entry": 1, "sell:exit": 1}
+    assert payload["observed_by_stratum"] == {
+        "AAPL:buy:entry:midday": 1,
+        "AAPL:sell:exit:midday": 1,
+    }
+
+    release_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="sell",
+        now=midday,
+        consumes_daily_slot=False,
+        reservation_token=str(exit_order.details["reservation_token"]),
+    )
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 1
+    assert payload["observed_count"] == 1
+    assert payload["observed_by_role"] == {"entry": 1}
+
+
+def test_paper_sampling_deficit_snapshot_is_governed_read_only_and_deterministic(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_allowed_symbols=("AAPL", "AMZN", "GOOGL", "MSFT"),
+        paper_sampling_max_trades_per_day=12,
+        paper_sampling_max_trades_per_symbol_per_day=4,
+        paper_sampling_stratified_fairness_enabled=True,
+    )
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    state_path.parent.mkdir(parents=True)
+    payload = {
+        "schema_version": "2.0.0",
+        "artifact_type": "paper_sampling_state",
+        "date": "2026-07-20",
+        "count": 3,
+        "by_symbol": {"AAPL": 1, "AMZN": 1, "GOOGL": 9, "MSFT": 1},
+        "observed_by_symbol_session": {
+            "AAPL:opening": 1,
+            "GOOGL:opening": 9,
+        },
+    }
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    before = state_path.read_text(encoding="utf-8")
+    opening = datetime(2026, 7, 20, 14, 0, tzinfo=UTC)
+    midday = datetime(2026, 7, 20, 17, 0, tzinfo=UTC)
+
+    first = paper_sampling_deficit_snapshot(cfg, now=opening)
+    repeated = paper_sampling_deficit_snapshot(cfg, now=opening)
+    later_session = paper_sampling_deficit_snapshot(cfg, now=midday)
+
+    assert first == repeated
+    assert first["configured_symbols"] == ["MSFT", "AAPL", "AMZN"]
+    assert set(first["counts"]) == {"AAPL", "AMZN", "MSFT"}
+    assert first["counts"] == {"AAPL": 1, "AMZN": 1, "MSFT": 1}
+    assert first["deficits"] == {"AAPL": 3, "AMZN": 3, "MSFT": 3}
+    assert first["priority_reason"] == "session_deficit"
+    assert first["priority_symbols"] == ["MSFT", "AMZN"]
+    assert later_session["priority_reason"] == "balanced"
+    assert later_session["priority_symbols"] == []
+    assert state_path.read_text(encoding="utf-8") == before
 
 
 def test_paper_sampling_does_not_bypass_oms_order_size_block() -> None:

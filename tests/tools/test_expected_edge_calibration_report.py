@@ -124,6 +124,7 @@ def test_expected_edge_calibration_enriches_exact_tca_metadata_without_changing_
     assert payload["sample_gate"] == {
         "min_samples": 2,
         "realized_samples": 1,
+        "non_fill_rows_excluded": 0,
         "sufficient": False,
     }
     row = payload["normalized_rows"][0]
@@ -139,6 +140,62 @@ def test_expected_edge_calibration_enriches_exact_tca_metadata_without_changing_
     assert payload["bucketed_by_execution_profile"]["patient_passive"]["count"] == 1
     assert payload["metadata_quality"]["status"] == "complete"
     assert payload["metadata_quality"]["join_method_counts"] == {"exact_id": 1}
+
+
+def test_expected_edge_calibration_excludes_shadow_counterfactual_rows() -> None:
+    fill = _rows(1, expected=8.0, realized=6.0)[0]
+    shadow = {
+        **fill,
+        "correlation_id": "opp-shadow",
+        "evidence_type": "shadow_counterfactual",
+        "evidence_partition": "shadow",
+        "fill_based_evidence": False,
+        "executed": False,
+    }
+
+    payload = report_tool.build_expected_edge_calibration_report(
+        report_date="2026-05-05",
+        fills=[fill, shadow],
+        min_samples=2,
+    )
+
+    assert payload["sample_gate"]["realized_samples"] == 1
+    assert payload["sample_gate"]["non_fill_rows_excluded"] == 1
+
+
+def test_explicit_research_and_shadow_rows_cannot_inflate_calibration_gate() -> None:
+    non_fill_types = (
+        "historical_research",
+        "decision_opportunity",
+        "execution_intent",
+        "order_execution",
+        "shadow_counterfactual",
+        "hypothetical",
+    )
+    excluded = [
+        {
+            **_rows(1, expected=100.0, realized=100.0)[0],
+            "evidence_type": non_fill_types[index % len(non_fill_types)],
+        }
+        for index in range(10_000)
+    ]
+    real_fill = {
+        **_rows(1, expected=8.0, realized=6.0)[0],
+        "evidence_type": "fill_execution",
+    }
+
+    payload = report_tool.build_expected_edge_calibration_report(
+        report_date="2026-05-05",
+        fills=[*excluded, real_fill],
+        min_samples=2,
+    )
+
+    assert payload["sample_gate"]["realized_samples"] == 1
+    assert payload["sample_gate"]["non_fill_rows_excluded"] == 10_000
+    assert payload["sample_gate"]["sufficient"] is False
+    assert len(payload["normalized_rows"]) == 1
+    assert payload["normalized_rows"][0]["realized_net_edge_bps"] == 6.0
+    assert payload["promotion_authority"] is False
 
 
 def test_expected_edge_calibration_cli_writes_latest(tmp_path: Path) -> None:

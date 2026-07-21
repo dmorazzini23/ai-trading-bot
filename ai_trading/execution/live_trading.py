@@ -45,6 +45,10 @@ from ai_trading.execution.guards import (
     quote_fresh_enough,
     shadow_active as guard_shadow_active,
 )
+from ai_trading.execution.passive_reprice import (
+    deterministic_passive_reprice_id,
+    validate_passive_reprice_quote,
+)
 from ai_trading.governance.entry_control import (
     REPLAY_LIVE_ENTRY_CONTROL_ATTR,
     REPLAY_LIVE_PARITY_GATE_FAILED,
@@ -3109,6 +3113,587 @@ class ExecutionEngine:
             "replace_max_per_cycle": int(replace_max_per_cycle),
         }
 
+    def _paper_sampling_passive_reprice_config(self) -> dict[str, Any]:
+        """Return fail-closed controls for diagnostic paper-order repricing."""
+
+        cfg = _runtime_trading_config()
+        execution_mode = str(
+            getattr(cfg, "execution_mode", None)
+            or getattr(self, "execution_mode", None)
+            or EXECUTION_MODE
+            or "sim"
+        ).strip().lower()
+        paper_mode = bool(getattr(cfg, "paper", execution_mode == "paper"))
+        sampling_enabled = bool(getattr(cfg, "paper_sampling_enabled", False))
+        enabled = bool(
+            getattr(cfg, "paper_sampling_passive_reprice_enabled", False)
+        )
+        passive_only = bool(getattr(cfg, "paper_sampling_passive_only", True))
+        relax_edge = bool(
+            getattr(cfg, "paper_sampling_relax_edge_gates_enabled", False)
+        )
+        governed_symbols = {
+            str(symbol).strip().upper()
+            for symbol in getattr(
+                cfg,
+                "paper_sampling_allowed_symbols",
+                ("AAPL", "AMZN", "MSFT"),
+            )
+            if str(symbol).strip().upper() in {"AAPL", "AMZN", "MSFT"}
+        }
+        runtime_valid = bool(
+            execution_mode == "paper"
+            and paper_mode
+            and sampling_enabled
+            and passive_only
+            and not relax_edge
+            and governed_symbols
+        )
+        if enabled and not runtime_valid:
+            logger.error(
+                "PAPER_SAMPLING_PASSIVE_REPRICE_CONFIG_BLOCK",
+                extra={
+                    "execution_mode": execution_mode,
+                    "paper": paper_mode,
+                    "paper_sampling_enabled": sampling_enabled,
+                    "passive_only": passive_only,
+                    "relax_edge_gates_enabled": relax_edge,
+                    "governed_symbols": sorted(governed_symbols),
+                },
+            )
+        return {
+            "enabled": bool(enabled and runtime_valid),
+            "configured_enabled": enabled,
+            "runtime_valid": runtime_valid,
+            "execution_mode": execution_mode,
+            "governed_symbols": governed_symbols,
+            "timeout_s": max(
+                8.0,
+                min(
+                    float(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_timeout_sec",
+                            45.0,
+                        )
+                    ),
+                    3600.0,
+                ),
+            ),
+            "max_retries": max(
+                0,
+                min(
+                    int(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_max_retries",
+                            2,
+                        )
+                    ),
+                    8,
+                ),
+            ),
+            "cooldown_s": max(
+                0.0,
+                min(
+                    float(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_cooldown_sec",
+                            30.0,
+                        )
+                    ),
+                    1800.0,
+                ),
+            ),
+            "quote_max_age_ms": max(
+                0.0,
+                min(
+                    float(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_quote_max_age_ms",
+                            2500.0,
+                        )
+                    ),
+                    60000.0,
+                ),
+            ),
+            "max_spread_bps": max(
+                0.0,
+                min(
+                    float(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_max_spread_bps",
+                            20.0,
+                        )
+                    ),
+                    1000.0,
+                ),
+            ),
+            "max_actions": max(
+                0,
+                min(
+                    int(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_max_actions_per_cycle",
+                            2,
+                        )
+                    ),
+                    20,
+                ),
+            ),
+            "hard_cancel_before_close_s": max(
+                0,
+                min(
+                    int(
+                        getattr(
+                            cfg,
+                            "paper_sampling_passive_reprice_hard_cancel_before_close_sec",
+                            300,
+                        )
+                    ),
+                    3600,
+                ),
+            ),
+            "max_notional": min(
+                max(
+                    float(
+                        getattr(
+                            cfg,
+                            "paper_sampling_max_notional_per_order",
+                            750.0,
+                        )
+                    ),
+                    0.01,
+                ),
+                750.0,
+            ),
+        }
+
+    def _paper_sampling_pending_context(self, order: Any) -> dict[str, Any] | None:
+        """Return locally verified sampling metadata for a broker-open order."""
+
+        order_id = str(_extract_value(order, "id", "order_id") or "").strip()
+        client_order_id = str(_extract_value(order, "client_order_id") or "").strip()
+        store = getattr(self, "_pending_orders", None)
+        if not isinstance(store, Mapping):
+            store = {}
+        candidates: list[Mapping[str, Any]] = []
+        for reference in (order_id, client_order_id):
+            if reference and isinstance(store.get(reference), Mapping):
+                candidates.append(cast(Mapping[str, Any], store[reference]))
+        for entry in store.values():
+            if not isinstance(entry, Mapping) or entry in candidates:
+                continue
+            entry_order_id = str(entry.get("order_id") or "").strip()
+            entry_client_id = str(entry.get("client_order_id") or "").strip()
+            if {order_id, client_order_id} & {entry_order_id, entry_client_id} - {""}:
+                candidates.append(entry)
+        if not candidates:
+            durable = self._load_pending_candidates_from_runtime_order_events()
+            for reference in (order_id, client_order_id):
+                if reference and isinstance(durable.get(reference), Mapping):
+                    candidates.append(cast(Mapping[str, Any], durable[reference]))
+            if candidates:
+                mutable_store = dict(store)
+                for entry in candidates:
+                    reference = str(entry.get("order_id") or order_id or client_order_id)
+                    if reference:
+                        mutable_store[reference] = dict(entry)
+                self._pending_orders = mutable_store
+        sampling_entry = next(
+            (entry for entry in candidates if _safe_bool(entry.get("paper_sampling"))),
+            None,
+        )
+        if sampling_entry is None:
+            return None
+        symbol = str(
+            sampling_entry.get("symbol") or _extract_value(order, "symbol") or ""
+        ).strip().upper()
+        policy = str(sampling_entry.get("paper_sampling_policy") or "").strip().lower()
+        consumes_slot = _safe_bool(
+            sampling_entry.get("paper_sampling_consumes_daily_slot")
+        )
+        reservation_token = str(
+            sampling_entry.get("paper_sampling_reservation_token") or ""
+        ).strip()
+        correlation_id = str(sampling_entry.get("correlation_id") or "").strip()
+        root_client_order_id = str(
+            sampling_entry.get("root_client_order_id")
+            or client_order_id
+            or sampling_entry.get("client_order_id")
+            or correlation_id
+        ).strip()
+        generation = max(
+            _safe_int(sampling_entry.get("paper_sampling_reprice_generation"), 0),
+            0,
+        )
+        verified = bool(
+            symbol in {"AAPL", "AMZN", "MSFT"}
+            and policy == "passive_only"
+            and consumes_slot
+            and reservation_token
+            and correlation_id
+            and root_client_order_id
+        )
+        return {
+            **dict(sampling_entry),
+            "verified": verified,
+            "symbol": symbol,
+            "paper_sampling_policy": policy,
+            "paper_sampling_consumes_daily_slot": consumes_slot,
+            "paper_sampling_reservation_token": reservation_token or None,
+            "correlation_id": correlation_id or None,
+            "root_client_order_id": root_client_order_id or None,
+            "paper_sampling_reprice_generation": generation,
+            "broker_order_id": order_id or None,
+            "client_order_id": client_order_id or None,
+        }
+
+    @staticmethod
+    def _paper_sampling_reprice_session_status(
+        *,
+        now_utc: datetime,
+        hard_cancel_before_close_s: int,
+    ) -> tuple[bool, str, float | None]:
+        """Return whether a passive replacement is safe in the current session."""
+
+        if not _market_is_open_now(now_utc):
+            return False, "market_closed", None
+        eod_active, _ = _eod_flatten_window_active(
+            now_utc.astimezone(ZoneInfo("America/New_York"))
+        )
+        if eod_active:
+            return False, "eod_flatten_window", None
+        try:
+            from ai_trading.utils.market_calendar import session_info
+
+            close_utc = session_info(now_utc.date()).end_utc.astimezone(UTC)
+            remaining_s = max((close_utc - now_utc).total_seconds(), 0.0)
+        except LIVE_TRADING_FALLBACK_EXC:
+            logger.debug("PAPER_SAMPLING_REPRICE_SESSION_LOOKUP_FAILED", exc_info=True)
+            return False, "session_close_unknown", None
+        if remaining_s <= float(max(hard_cancel_before_close_s, 0)):
+            return False, "hard_cancel_before_close", remaining_s
+        return True, "ok", remaining_s
+
+    def _replace_paper_sampling_limit_passively(
+        self,
+        *,
+        order: Any,
+        context: Mapping[str, Any],
+        config: Mapping[str, Any],
+        generation: int,
+        now_dt: datetime,
+    ) -> dict[str, Any]:
+        """Cancel one stale sample and submit one deterministic best-quote child."""
+
+        order_id = str(_extract_value(order, "id", "order_id") or "").strip()
+        client_order_id = str(_extract_value(order, "client_order_id") or "").strip()
+        symbol = str(context.get("symbol") or _extract_value(order, "symbol") or "").upper()
+        side = self._normalized_order_side(_extract_value(order, "side"))
+        requested_qty = max(
+            _safe_int(_extract_value(order, "qty", "quantity", "remaining_qty"), 0),
+            0,
+        )
+        root_client_order_id = str(context.get("root_client_order_id") or "").strip()
+        child_client_order_id = deterministic_passive_reprice_id(
+            root_client_order_id,
+            generation=generation,
+        )
+        recovered = self._lookup_order_by_client_order_id(
+            child_client_order_id,
+            symbol=symbol,
+            max_wait_seconds=0.0,
+        )
+        if recovered is not None:
+            try:
+                self._cancel_order_alpaca(order_id)
+            except LIVE_TRADING_FALLBACK_EXC as exc:
+                logger.warning(
+                    "PAPER_SAMPLING_PASSIVE_REPRICE_RECOVERY_CANCEL_FAILED",
+                    extra={
+                        "symbol": symbol,
+                        "order_id": order_id,
+                        "child_client_order_id": child_client_order_id,
+                        "error": str(exc),
+                    },
+                )
+                return {
+                    "action_taken": False,
+                    "replaced": False,
+                    "action": "none",
+                    "reason": "deterministic_child_exists_parent_cancel_failed",
+                }
+            replacement_order_id = str(
+                _extract_value(recovered, "id", "order_id")
+                or child_client_order_id
+            )
+            pending_entry = dict(context)
+            pending_entry.update(
+                {
+                    "status": _normalize_status(_extract_value(recovered, "status"))
+                    or "submitted",
+                    "order_id": replacement_order_id,
+                    "client_order_id": child_client_order_id,
+                    "root_client_order_id": root_client_order_id,
+                    "paper_sampling_reprice_generation": generation,
+                    "paper_sampling_reservation_root": root_client_order_id,
+                    "paper_sampling_generation": generation,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            store = getattr(self, "_pending_orders", None)
+            mutable_store = dict(store) if isinstance(store, Mapping) else {}
+            mutable_store.pop(order_id, None)
+            mutable_store.pop(client_order_id, None)
+            mutable_store[replacement_order_id] = pending_entry
+            self._pending_orders = mutable_store
+            return {
+                "action_taken": True,
+                "replaced": True,
+                "action": "passive_reprice_recovered",
+                "reason": "deterministic_child_exists",
+                "replacement": _normalize_order_payload(recovered, requested_qty),
+                "child_client_order_id": child_client_order_id,
+            }
+        try:
+            self._cancel_order_alpaca(order_id)
+        except LIVE_TRADING_FALLBACK_EXC as exc:
+            logger.warning(
+                "PAPER_SAMPLING_PASSIVE_REPRICE_CANCEL_FAILED",
+                extra={"symbol": symbol, "order_id": order_id, "error": str(exc)},
+            )
+            return {
+                "action_taken": False,
+                "replaced": False,
+                "action": "none",
+                "reason": "cancel_failed",
+            }
+        status_info: Any | None = None
+        status_text = ""
+        deadline = monotonic_time() + 5.0
+        terminal_statuses = {"canceled", "cancelled", "filled", "expired", "rejected"}
+        while monotonic_time() <= deadline:
+            try:
+                status_info = self._get_order_status_alpaca(order_id)
+            except LIVE_TRADING_FALLBACK_EXC as exc:
+                logger.warning(
+                    "PAPER_SAMPLING_PASSIVE_REPRICE_CANCEL_STATUS_FAILED",
+                    extra={"symbol": symbol, "order_id": order_id, "error": str(exc)},
+                )
+                return {
+                    "action_taken": True,
+                    "replaced": False,
+                    "action": "cancel",
+                    "reason": "cancel_status_unknown",
+                }
+            status_text = str(_extract_value(status_info, "status") or "").strip().lower()
+            if status_text in terminal_statuses:
+                break
+            time.sleep(0.25)
+        if status_text not in terminal_statuses:
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": "cancel_not_final",
+            }
+        filled_qty = max(
+            _safe_int(_extract_value(status_info, "filled_qty", "filled_quantity"), 0),
+            0,
+        )
+        remaining_qty = max(requested_qty - filled_qty, 0)
+        if remaining_qty <= 0:
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "filled_during_cancel",
+                "reason": "no_remaining_quantity",
+            }
+        try:
+            from ai_trading.core.bot_engine import _resolve_order_quote_basis
+
+            quote_source, bid, ask, _, _, quote_ts = _resolve_order_quote_basis(
+                self.ctx,
+                symbol=symbol,
+                side=side or "buy",
+                fallback_price=None,
+            )
+        except LIVE_TRADING_FALLBACK_EXC as exc:
+            logger.warning(
+                "PAPER_SAMPLING_PASSIVE_REPRICE_QUOTE_FAILED",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": "quote_lookup_failed",
+            }
+        if str(quote_source).strip().lower() != "broker_nbbo":
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": "quote_source_not_broker_nbbo",
+            }
+        quote_decision = validate_passive_reprice_quote(
+            side=side or "",
+            bid=bid,
+            ask=ask,
+            quote_ts=quote_ts,
+            now=(now_dt if _pytest_mode_active() else datetime.now(UTC)),
+            tick_size=float(get_tick_size(symbol)),
+            max_quote_age_ms=float(config.get("quote_max_age_ms") or 0.0),
+            max_spread_bps=float(config.get("max_spread_bps") or 0.0),
+        )
+        if not quote_decision.allowed or quote_decision.limit_price is None:
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": quote_decision.reason,
+                "quote_age_ms": quote_decision.quote_age_ms,
+                "spread_bps": quote_decision.spread_bps,
+            }
+        notional = float(quote_decision.limit_price) * float(remaining_qty)
+        if notional > float(config.get("max_notional") or 0.0):
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": "notional_above_sampling_cap",
+            }
+        replacement_payload: dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "quantity": remaining_qty,
+            "type": "limit",
+            "limit_price": float(quote_decision.limit_price),
+            "time_in_force": "day",
+            "extended_hours": False,
+            "client_order_id": child_client_order_id,
+        }
+        if not self._pre_execution_order_checks(replacement_payload):
+            failure = getattr(self, "_last_pre_execution_order_check_failure", {})
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": "replacement_precheck_failed",
+                "precheck": dict(failure) if isinstance(failure, Mapping) else None,
+            }
+        event_payload = {
+            "event": "paper_sampling_passive_reprice_planned",
+            "symbol": symbol,
+            "side": side,
+            "quantity": remaining_qty,
+            "order_id": order_id,
+            "client_order_id": client_order_id or None,
+            "replacement_client_order_id": child_client_order_id,
+            "root_client_order_id": root_client_order_id,
+            "correlation_id": context.get("correlation_id"),
+            "paper_sampling": True,
+            "paper_sampling_policy": "passive_only",
+            "paper_sampling_reservation_token": context.get(
+                "paper_sampling_reservation_token"
+            ),
+            "paper_sampling_reprice_generation": generation,
+            "paper_sampling_reservation_root": root_client_order_id,
+            "paper_sampling_generation": generation,
+            "order_type": "limit",
+            "time_in_force": "day",
+            "decision_bid": bid,
+            "decision_ask": ask,
+            "decision_quote_age_ms": quote_decision.quote_age_ms,
+            "decision_spread_bps": quote_decision.spread_bps,
+            "limit_price": quote_decision.limit_price,
+        }
+        self._record_runtime_order_event(event_payload)
+        try:
+            replacement = self._submit_order_to_alpaca(replacement_payload)
+        except LIVE_TRADING_FALLBACK_EXC as exc:
+            recovered = self._lookup_order_by_client_order_id(
+                child_client_order_id,
+                symbol=symbol,
+                max_wait_seconds=1.0,
+            )
+            if recovered is None:
+                logger.error(
+                    "PAPER_SAMPLING_PASSIVE_REPRICE_SUBMIT_FAILED",
+                    extra={**event_payload, "error": str(exc)},
+                )
+                return {
+                    "action_taken": True,
+                    "replaced": False,
+                    "action": "cancel",
+                    "reason": "replacement_submit_failed",
+                }
+            replacement = recovered
+        replacement_status = _normalize_status(_extract_value(replacement, "status"))
+        if replacement_status in {"skipped", "rejected"}:
+            return {
+                "action_taken": True,
+                "replaced": False,
+                "action": "cancel",
+                "reason": f"replacement_{replacement_status}",
+            }
+        replacement_order_id = str(
+            _extract_value(replacement, "id", "order_id") or child_client_order_id
+        )
+        pending_entry = dict(context)
+        pending_entry.update(
+            {
+                "status": replacement_status or "submitted",
+                "order_id": replacement_order_id,
+                "client_order_id": child_client_order_id,
+                "root_client_order_id": root_client_order_id,
+                "paper_sampling_reprice_generation": generation,
+                "paper_sampling_reservation_root": root_client_order_id,
+                "paper_sampling_generation": generation,
+                "order_type": "limit",
+                "time_in_force": "day",
+                "qty": remaining_qty,
+                "expected_price": float(quote_decision.limit_price),
+                "decision_bid": bid,
+                "decision_ask": ask,
+                "decision_mid": (float(bid) + float(ask)) / 2.0,
+                "decision_quote_age_ms": quote_decision.quote_age_ms,
+                "decision_spread_bps": quote_decision.spread_bps,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        store = getattr(self, "_pending_orders", None)
+        mutable_store = dict(store) if isinstance(store, Mapping) else {}
+        mutable_store.pop(order_id, None)
+        mutable_store.pop(client_order_id, None)
+        mutable_store[replacement_order_id] = pending_entry
+        self._pending_orders = mutable_store
+        completed_payload = dict(event_payload)
+        completed_payload.update(
+            {
+                "event": "paper_sampling_passive_reprice_submitted",
+                "order_id": replacement_order_id,
+                "client_order_id": child_client_order_id,
+                "status": replacement_status or "submitted",
+            }
+        )
+        self._record_runtime_order_event(completed_payload)
+        return {
+            "action_taken": True,
+            "replaced": True,
+            "action": "passive_reprice",
+            "reason": "ok",
+            "replacement": _normalize_order_payload(replacement, remaining_qty),
+            "child_client_order_id": child_client_order_id,
+            "quote_age_ms": quote_decision.quote_age_ms,
+            "spread_bps": quote_decision.spread_bps,
+        }
+
     def _apply_pending_new_timeout_policy(self) -> bool:
         """Apply pending-new timeout actions for stale broker-open orders."""
 
@@ -3149,7 +3734,16 @@ class ExecutionEngine:
             base_replace_min_interval_s=base_replace_min_interval_s,
             base_replace_max_per_cycle=base_replace_max_per_cycle,
         )
-        if policy == "off" or max_actions <= 0:
+        paper_sampling_reprice_cfg = self._paper_sampling_passive_reprice_config()
+        paper_sampling_reprice_enabled = bool(
+            paper_sampling_reprice_cfg.get("enabled", False)
+        )
+        if paper_sampling_reprice_enabled:
+            max_actions = max(
+                max_actions,
+                int(paper_sampling_reprice_cfg.get("max_actions") or 0),
+            )
+        if (policy == "off" and not paper_sampling_reprice_enabled) or max_actions <= 0:
             return False
         open_orders = self._list_open_orders_snapshot()
         if not open_orders:
@@ -3181,8 +3775,22 @@ class ExecutionEngine:
             status = _normalize_status(_extract_value(order, "status")) or ""
             if status not in stale_statuses:
                 continue
+            paper_sampling_context = self._paper_sampling_pending_context(order)
+            sampling_marker = paper_sampling_context is not None
+            sampling_reprice_allowed = bool(
+                paper_sampling_reprice_enabled
+                and paper_sampling_context is not None
+                and paper_sampling_context.get("verified", False)
+            )
+            if policy == "off" and not sampling_reprice_allowed:
+                continue
             age_s = self._order_age_seconds(order, now_dt)
-            if age_s is None or age_s < timeout_s:
+            order_timeout_s = (
+                float(paper_sampling_reprice_cfg.get("timeout_s") or timeout_s)
+                if sampling_reprice_allowed
+                else timeout_s
+            )
+            if age_s is None or age_s < order_timeout_s:
                 continue
             stale_detected += 1
 
@@ -3192,14 +3800,179 @@ class ExecutionEngine:
             quantity = _safe_int(_extract_value(order, "qty", "quantity", "remaining_qty"), 0)
             client_order_id = _extract_value(order, "client_order_id")
             attempt_key = (
-                str(client_order_id or "").strip()
+                str(
+                    (
+                        paper_sampling_context.get("root_client_order_id")
+                        if paper_sampling_context is not None
+                        else None
+                    )
+                    or client_order_id
+                    or ""
+                ).strip()
                 or str(order_id or "").strip()
                 or f"{symbol}:{side}"
             )
             open_attempt_keys.add(attempt_key)
-            attempts = int(max(_safe_int(replacement_attempts.get(attempt_key), 0) or 0, 0))
+            persisted_generation = (
+                _safe_int(
+                    paper_sampling_context.get("paper_sampling_reprice_generation"),
+                    0,
+                )
+                if paper_sampling_context is not None
+                else 0
+            )
+            attempts = int(
+                max(
+                    _safe_int(replacement_attempts.get(attempt_key), 0) or 0,
+                    persisted_generation,
+                    0,
+                )
+            )
             hard_timeout_reached = bool(age_s is not None and age_s >= hard_timeout_s)
             if not order_id:
+                continue
+
+            if sampling_marker:
+                action = "cancel"
+                action_success = False
+                action_reason = "sampling_reprice_not_enabled"
+                max_sampling_retries = int(
+                    paper_sampling_reprice_cfg.get("max_retries") or 0
+                )
+                sampling_order_type = _canonical_order_type(
+                    _extract_value(order, "type", "order_type")
+                    or paper_sampling_context.get("order_type")
+                    or "limit"
+                )
+                sampling_side_allowed = side == "buy"
+                sampling_symbol_allowed = symbol in set(
+                    paper_sampling_reprice_cfg.get("governed_symbols") or ()
+                )
+                sampling_reprice_allowed = bool(
+                    sampling_reprice_allowed
+                    and sampling_order_type == "limit"
+                    and sampling_side_allowed
+                    and sampling_symbol_allowed
+                    and quantity > 0
+                )
+                cooldown_s = float(
+                    paper_sampling_reprice_cfg.get("cooldown_s") or 0.0
+                )
+                last_replace_mono = _safe_float(
+                    replacement_last.get(attempt_key)
+                ) or 0.0
+                if (
+                    sampling_reprice_allowed
+                    and cooldown_s > 0.0
+                    and last_replace_mono > 0.0
+                    and max(now_mono - last_replace_mono, 0.0) < cooldown_s
+                ):
+                    logger.info(
+                        "PAPER_SAMPLING_PASSIVE_REPRICE_GUARD_BLOCK",
+                        extra={
+                            "reason": "cooldown",
+                            "symbol": symbol,
+                            "order_id": str(order_id),
+                            "root_client_order_id": attempt_key,
+                            "attempts": attempts,
+                            "cooldown_s": cooldown_s,
+                        },
+                    )
+                    continue
+                session_allowed, session_reason, remaining_session_s = (
+                    self._paper_sampling_reprice_session_status(
+                        now_utc=now_dt,
+                        hard_cancel_before_close_s=int(
+                            paper_sampling_reprice_cfg.get(
+                                "hard_cancel_before_close_s"
+                            )
+                            or 0
+                        ),
+                    )
+                )
+                if not sampling_reprice_allowed:
+                    if paper_sampling_reprice_enabled:
+                        if not bool(paper_sampling_context.get("verified", False)):
+                            action_reason = "sampling_metadata_unverified"
+                        elif sampling_order_type != "limit":
+                            action_reason = "sampling_order_not_limit"
+                        elif not sampling_side_allowed:
+                            action_reason = "sampling_side_not_supported"
+                        elif not sampling_symbol_allowed:
+                            action_reason = "sampling_symbol_not_governed"
+                        elif quantity <= 0:
+                            action_reason = "sampling_quantity_invalid"
+                elif attempts >= max_sampling_retries:
+                    action_reason = "sampling_reprice_retry_limit"
+                elif not session_allowed:
+                    action_reason = session_reason
+                else:
+                    outcome = self._replace_paper_sampling_limit_passively(
+                        order=order,
+                        context=paper_sampling_context,
+                        config=paper_sampling_reprice_cfg,
+                        generation=attempts + 1,
+                        now_dt=now_dt,
+                    )
+                    action_success = bool(outcome.get("action_taken", False))
+                    action = str(outcome.get("action") or "cancel")
+                    action_reason = str(outcome.get("reason") or "unknown")
+                    if bool(outcome.get("replaced", False)):
+                        replacement_attempts[attempt_key] = attempts + 1
+                        replacement_last[attempt_key] = now_mono
+                        replacements_this_cycle += 1
+                    elif action_success:
+                        replacement_attempts.pop(attempt_key, None)
+                        replacement_last.pop(attempt_key, None)
+                if not action_success:
+                    try:
+                        self._cancel_order_alpaca(str(order_id))
+                    except LIVE_TRADING_FALLBACK_EXC:
+                        logger.warning(
+                            "PAPER_SAMPLING_PASSIVE_REPRICE_ACTION_FAILED",
+                            extra={
+                                "action": "cancel",
+                                "reason": action_reason,
+                                "symbol": symbol,
+                                "order_id": str(order_id),
+                            },
+                            exc_info=True,
+                        )
+                        continue
+                    action = "cancel"
+                    action_success = True
+                    replacement_attempts.pop(attempt_key, None)
+                    replacement_last.pop(attempt_key, None)
+                actions_taken += 1
+                self._pending_new_actions_this_cycle += 1
+                self._cycle_maintenance_actions = int(
+                    getattr(self, "_cycle_maintenance_actions", 0)
+                ) + 1
+                logger.warning(
+                    "PAPER_SAMPLING_PASSIVE_REPRICE_ACTION",
+                    extra={
+                        "action": action,
+                        "reason": action_reason,
+                        "symbol": symbol,
+                        "order_id": str(order_id),
+                        "client_order_id": (
+                            str(client_order_id)
+                            if client_order_id not in (None, "")
+                            else None
+                        ),
+                        "root_client_order_id": attempt_key,
+                        "correlation_id": paper_sampling_context.get(
+                            "correlation_id"
+                        ),
+                        "age_s": round(age_s, 3) if age_s is not None else None,
+                        "timeout_s": order_timeout_s,
+                        "attempts": attempts,
+                        "max_retries": max_sampling_retries,
+                        "session_remaining_s": remaining_session_s,
+                        "actions_taken": actions_taken,
+                        "max_actions": max_actions,
+                    },
+                )
                 continue
 
             action = "cancel"
@@ -16783,7 +17556,58 @@ class ExecutionEngine:
             "fee_bps": float(fee_bps) if fee_bps > 0 else None,
             "status": order_status,
             "client_order_id": client_order_id,
+            "evidence_type": "fill_execution",
+            "fill_based_evidence": True,
+            "promotion_eligible": True,
         }
+        lineage_sources: list[Mapping[str, Any]] = []
+        if runtime_payload is not None:
+            lineage_sources.append(runtime_payload)
+            for container_key in ("metadata", "annotations"):
+                nested_lineage = runtime_payload.get(container_key)
+                if isinstance(nested_lineage, Mapping):
+                    lineage_sources.append(nested_lineage)
+        pending_store = getattr(self, "_pending_orders", None)
+        if isinstance(pending_store, Mapping):
+            for reference in (order_id, client_order_id):
+                if reference in (None, ""):
+                    continue
+                pending_lineage = pending_store.get(str(reference))
+                if isinstance(pending_lineage, Mapping):
+                    lineage_sources.append(pending_lineage)
+        lineage_aliases: dict[str, tuple[str, ...]] = {
+            "correlation_id": ("correlation_id", "opportunity_correlation_id"),
+            "source_timestamp": ("source_timestamp", "source_ts"),
+            "decision_ts": ("decision_ts", "decision_timestamp"),
+            "quote_timestamp": ("quote_timestamp", "quote_ts"),
+            "order_role": ("order_role",),
+            "session": ("session", "session_regime"),
+            "session_regime": ("session_regime", "session"),
+            "paper_sampling_reservation_token": (
+                "paper_sampling_reservation_token",
+            ),
+            "paper_sampling_reservation_root": (
+                "paper_sampling_reservation_root",
+                "root_client_order_id",
+            ),
+            "paper_sampling_generation": (
+                "paper_sampling_generation",
+                "paper_sampling_reprice_generation",
+            ),
+        }
+        for destination, aliases in lineage_aliases.items():
+            for source_mapping in lineage_sources:
+                value = next(
+                    (
+                        source_mapping.get(alias)
+                        for alias in aliases
+                        if source_mapping.get(alias) not in (None, "")
+                    ),
+                    None,
+                )
+                if value not in (None, ""):
+                    fill_record[destination] = value
+                    break
         if runtime_payload is not None:
             for text_key, candidates in {
                 "order_type": ("order_type", "submitted_order_type", "type"),
@@ -16951,6 +17775,9 @@ class ExecutionEngine:
             order_status=order_status,
             fee_amount=fee_amount,
             source=runtime_source,
+            correlation_id=(
+                str(fill_record.get("correlation_id") or "").strip() or None
+            ),
         )
 
     def _reconcile_pending_tca_from_fill(
@@ -16966,6 +17793,7 @@ class ExecutionEngine:
         order_status: str | None,
         fee_amount: float | None,
         source: str | None,
+        correlation_id: str | None = None,
     ) -> None:
         """Resolve pending TCA entries for a newly observed fill."""
 
@@ -16988,6 +17816,11 @@ class ExecutionEngine:
         status_token = _normalize_status(order_status) or "filled"
         resolved, reason = reconcile_pending_tca_with_fill(
             str(tca_path),
+            correlation_id=(
+                str(correlation_id).strip()
+                if correlation_id not in (None, "")
+                else None
+            ),
             client_order_id=(
                 str(client_order_id)
                 if client_order_id not in (None, "")
@@ -17016,6 +17849,7 @@ class ExecutionEngine:
                     "fill_qty": float(fill_qty),
                     "fill_price": float(fill_price),
                     "source": source,
+                    "correlation_id": correlation_id,
                 },
             )
             return
@@ -17030,6 +17864,7 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "order_id": order_id,
                 "reason": reason,
+                "correlation_id": correlation_id,
             },
         )
 
@@ -17164,6 +17999,7 @@ class ExecutionEngine:
             source_token = (
                 str(source).strip() if source not in (None, "") else "backfill_fill_events"
             )
+            correlation_id = str(row.get("correlation_id") or "").strip() or None
             fallback_ids: list[str] = []
             for key in (
                 "broker_order_id",
@@ -17178,6 +18014,7 @@ class ExecutionEngine:
                 fallback_ids.append(str(value))
             resolved, _reason = reconcile_pending_tca_with_fill(
                 str(tca_path),
+                correlation_id=correlation_id,
                 client_order_id=(
                     str(client_order_id)
                     if client_order_id not in (None, "")
@@ -17193,7 +18030,7 @@ class ExecutionEngine:
                 fill_ts=fill_ts,
                 fee_amount=fee_amount,
                 source=source_token,
-                allow_symbol_qty_fallback=True,
+                allow_symbol_qty_fallback=correlation_id is None,
                 fallback_window_seconds=float(
                     _config_float("AI_TRADING_TCA_BACKFILL_SYMBOL_FALLBACK_WINDOW_SEC", 12.0 * 3600.0)
                     or (12.0 * 3600.0)
@@ -23414,6 +24251,61 @@ class ExecutionEngine:
                 value = metadata_raw.get(key)
                 if value not in (None, ""):
                     submission_context[key] = str(value).strip().lower()
+        for key in (
+            "correlation_id",
+            "source_timestamp",
+            "decision_ts",
+            "decision_timestamp",
+            "quote_timestamp",
+            "order_role",
+            "session",
+            "paper_sampling",
+            "paper_sampling_policy",
+            "paper_sampling_consumes_daily_slot",
+            "paper_sampling_reservation_token",
+            "paper_sampling_order_type",
+            "paper_sampling_time_in_force",
+            "paper_sampling_quote_source",
+            "root_client_order_id",
+            "paper_sampling_reprice_generation",
+        ):
+            value = kwargs.get(key)
+            if value in (None, "") and isinstance(annotations, Mapping):
+                value = annotations.get(key)
+            if value in (None, "") and isinstance(metadata_raw, Mapping):
+                value = metadata_raw.get(key)
+            if value not in (None, ""):
+                submission_context[key] = value
+        if _safe_bool(submission_context.get("paper_sampling")):
+            submission_context["paper_sampling"] = True
+            submission_context.setdefault(
+                "root_client_order_id",
+                str(client_order_id or order_id_display or "").strip() or None,
+            )
+            submission_context.setdefault("paper_sampling_reprice_generation", 0)
+            submission_context.setdefault(
+                "paper_sampling_reservation_root",
+                submission_context.get("root_client_order_id"),
+            )
+            submission_context.setdefault(
+                "paper_sampling_generation",
+                submission_context.get("paper_sampling_reprice_generation", 0),
+            )
+        if submission_context.get("decision_quote_age_ms") is not None:
+            submission_context.setdefault(
+                "quote_age_ms",
+                submission_context["decision_quote_age_ms"],
+            )
+        if submission_context.get("decision_spread_bps") is not None:
+            submission_context.setdefault(
+                "spread_bps",
+                submission_context["decision_spread_bps"],
+            )
+        if submission_context.get("session_regime") not in (None, ""):
+            submission_context.setdefault(
+                "session",
+                submission_context["session_regime"],
+            )
         final_payload = {
             "symbol": symbol,
             "order_id": str(order_id_display) if order_id_display is not None else None,
@@ -33706,6 +34598,26 @@ class ExecutionEngine:
                 "market_regime",
                 "volatility_regime",
                 "trend_regime",
+                "correlation_id",
+                "source_timestamp",
+                "decision_ts",
+                "decision_timestamp",
+                "quote_timestamp",
+                "order_role",
+                "session",
+                "paper_sampling",
+                "paper_sampling_policy",
+                "paper_sampling_consumes_daily_slot",
+                "paper_sampling_reservation_token",
+                "paper_sampling_order_type",
+                "paper_sampling_time_in_force",
+                "paper_sampling_quote_source",
+                "root_client_order_id",
+                "paper_sampling_reprice_generation",
+                "paper_sampling_reservation_root",
+                "paper_sampling_generation",
+                "quote_age_ms",
+                "spread_bps",
             ):
                 if metadata.get(key) not in (None, ""):
                     candidate[key] = metadata.get(key)
@@ -33813,6 +34725,26 @@ class ExecutionEngine:
                 "market_regime",
                 "volatility_regime",
                 "trend_regime",
+                "correlation_id",
+                "source_timestamp",
+                "decision_ts",
+                "decision_timestamp",
+                "quote_timestamp",
+                "order_role",
+                "session",
+                "paper_sampling",
+                "paper_sampling_policy",
+                "paper_sampling_consumes_daily_slot",
+                "paper_sampling_reservation_token",
+                "paper_sampling_order_type",
+                "paper_sampling_time_in_force",
+                "paper_sampling_quote_source",
+                "root_client_order_id",
+                "paper_sampling_reprice_generation",
+                "paper_sampling_reservation_root",
+                "paper_sampling_generation",
+                "quote_age_ms",
+                "spread_bps",
             ):
                 if row.get(key) not in (None, ""):
                     candidate[key] = row.get(key)
@@ -33847,6 +34779,26 @@ class ExecutionEngine:
                     "market_regime",
                     "volatility_regime",
                     "trend_regime",
+                    "correlation_id",
+                    "source_timestamp",
+                    "decision_ts",
+                    "decision_timestamp",
+                    "quote_timestamp",
+                    "order_role",
+                    "session",
+                    "paper_sampling",
+                    "paper_sampling_policy",
+                    "paper_sampling_consumes_daily_slot",
+                    "paper_sampling_reservation_token",
+                    "paper_sampling_order_type",
+                    "paper_sampling_time_in_force",
+                    "paper_sampling_quote_source",
+                    "root_client_order_id",
+                    "paper_sampling_reprice_generation",
+                    "paper_sampling_reservation_root",
+                    "paper_sampling_generation",
+                    "quote_age_ms",
+                    "spread_bps",
                 ):
                     if artifact_candidate.get(key) not in (None, ""):
                         candidate[key] = artifact_candidate.get(key)

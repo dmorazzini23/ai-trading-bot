@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.tools.execution_capture_improvement_report import (
+    is_fill_based_execution_evidence,
+)
 
 
 _REPLAY_LIVE_PARITY_GATE_FAILED = "REPLAY_LIVE_PARITY_GATE_FAILED"
@@ -185,6 +188,12 @@ def _parity_shadow_candidate(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "qty": quantity,
         "limit_price": limit_price,
         "client_order_id": str(order_intent.get("client_order_id") or "").strip(),
+        "correlation_id": str(
+            row.get("correlation_id")
+            or decision_journal.get("correlation_id")
+            or order_intent.get("correlation_id")
+            or ""
+        ).strip(),
         "decision_trace_id": str(
             order_intent.get("decision_trace_id")
             or decision_journal.get("decision_trace_id")
@@ -196,6 +205,9 @@ def _parity_shadow_candidate(row: Mapping[str, Any]) -> dict[str, Any] | None:
 
 def _intent_identities(intent: Mapping[str, Any]) -> set[tuple[Any, ...]]:
     identities: set[tuple[Any, ...]] = set()
+    correlation_id = str(intent.get("correlation_id") or "").strip()
+    if correlation_id:
+        identities.add(("correlation_id", correlation_id))
     for key in ("client_order_id", "decision_trace_id"):
         identifier = str(intent.get(key) or "").strip()
         if identifier:
@@ -336,7 +348,10 @@ def build_trading_day_report(
     decisions: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     intents = [row for row in order_intents if _date_match(row, report_date)]
-    fill_rows = [row for row in fills if _date_match(row, report_date)]
+    dated_fill_rows = [row for row in fills if _date_match(row, report_date)]
+    fill_rows = [
+        row for row in dated_fill_rows if is_fill_based_execution_evidence(row)
+    ]
     shadows = [row for row in shadow_rows if _date_match(row, report_date)]
     gates = [row for row in gate_rows if _date_match(row, report_date)]
     decision_rows = [row for row in decisions if _date_match(row, report_date)]
@@ -483,6 +498,9 @@ def build_trading_day_report(
             ),
         },
         "realized_fills": {"count": fill_count},
+        "non_fill_evidence": {
+            "excluded_from_realized_fills": len(dated_fill_rows) - len(fill_rows),
+        },
         "slippage_spread_cost": {
             "live_cost_status": live_cost_model.get("status", {}),
             "summary": live_cost_model.get("summary", {}),

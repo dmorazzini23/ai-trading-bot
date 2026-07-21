@@ -5,8 +5,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from ai_trading.core import bot_engine
+from ai_trading.core import submit_runtime
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
-from ai_trading.runtime.paper_sampling import reserve_paper_sampling_order
+from ai_trading.runtime.paper_sampling import (
+    PaperSamplingDecision,
+    reserve_paper_sampling_order,
+)
 
 
 class _DummyExecEngine:
@@ -295,6 +299,107 @@ def test_submit_order_releases_paper_sampling_slot_when_broker_rejects(
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["count"] == 1
     assert payload["by_symbol"] == {"AMZN": 1}
+
+
+def test_submit_order_releases_exact_sampling_reservation_token(monkeypatch) -> None:
+    class _RejectedExecEngine(_DummyExecEngine):
+        def execute_order(
+            self,
+            symbol: str,
+            side: object,
+            qty: int,
+            *,
+            price: float | None = None,
+            **kwargs: object,
+        ) -> object:
+            self.calls.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": price,
+                    "kwargs": dict(kwargs),
+                }
+            )
+            return SimpleNamespace(id="broker-rejected", status="rejected")
+
+    engine = _RejectedExecEngine()
+    released: list[dict[str, object]] = []
+    quote_ts = datetime.now(UTC)
+    cfg = _base_cfg(
+        paper_sampling_enabled=True,
+        paper_sampling_allowed_symbols=("AAPL", "AMZN", "MSFT"),
+        paper_sampling_max_trades_per_day=12,
+        paper_sampling_max_notional_per_order=750.0,
+        execution_mode="paper",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        launch_profile="paper_trade",
+    )
+    reservation = PaperSamplingDecision(
+        enabled=True,
+        allowed=True,
+        qty=1,
+        reason="OK",
+        details={"reservation_token": "reservation-exact-1"},
+    )
+
+    _reset_submit_state(monkeypatch)
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            99.9,
+            100.1,
+            100.0,
+            100.0,
+            quote_ts,
+        ),
+    )
+    monkeypatch.setattr(
+        submit_runtime,
+        "reserve_paper_sampling_order",
+        lambda *_args, **_kwargs: reservation,
+    )
+    monkeypatch.setattr(
+        submit_runtime,
+        "release_paper_sampling_order",
+        lambda *_args, **kwargs: released.append(dict(kwargs)),
+    )
+
+    order = bot_engine.submit_order(
+        SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: [])),
+        "AAPL",
+        1,
+        "buy",
+        price=100.0,
+        correlation_id="opp-submit-aapl",
+        source_timestamp=quote_ts - timedelta(minutes=1),
+        decision_ts=quote_ts - timedelta(seconds=30),
+        metadata={"session_regime": "opening", "market_regime": "sideways"},
+    )
+
+    assert order is None
+    assert released == [
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "consumes_daily_slot": True,
+            "reservation_token": "reservation-exact-1",
+        }
+    ]
+    engine_kwargs = engine.calls[0]["kwargs"]
+    assert engine_kwargs["correlation_id"] == "opp-submit-aapl"
+    assert engine_kwargs["paper_sampling_reservation_token"] == "reservation-exact-1"
+    assert engine_kwargs["metadata"]["paper_sampling_reservation_token"] == (
+        "reservation-exact-1"
+    )
+    assert engine_kwargs["metadata"]["session_regime"] == "opening"
 
 
 def test_submit_order_forces_opening_paper_sample_to_passive_day_limit(

@@ -1,7 +1,7 @@
 """Netting and proposal logic for multi-horizon sleeves."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from functools import lru_cache
 import math
@@ -12,6 +12,10 @@ from ai_trading.contracts import (
     RiskDecision,
     Signal,
     build_decision_journal,
+)
+from ai_trading.core.evidence_lineage import (
+    deterministic_opportunity_correlation_id,
+    normalize_opportunity_side,
 )
 
 
@@ -63,6 +67,67 @@ class NettedTarget:
     blocked: bool = False
 
 
+def _record_correlation_id(
+    *,
+    symbol: str,
+    bar_ts: datetime,
+    net_target: NettedTarget,
+    sleeves: Iterable[SleeveProposal],
+    order: dict[str, Any] | None,
+    order_intent: CanonicalOrderIntent | None,
+    metrics: dict[str, Any],
+) -> str:
+    sleeve_rows = list(sleeves)
+    order_side = order.get("side") if isinstance(order, dict) else None
+    side = (
+        order_side
+        or (order_intent.side if order_intent is not None else None)
+        or (
+            "buy"
+            if float(net_target.target_shares) > 0.0
+            else "sell"
+            if float(net_target.target_shares) < 0.0
+            else None
+        )
+    )
+    if normalize_opportunity_side(side) == "hold" and sleeve_rows:
+        primary = max(
+            sleeve_rows,
+            key=lambda sleeve: (
+                abs(float(sleeve.target_dollars)),
+                abs(float(sleeve.score)),
+                str(sleeve.sleeve),
+            ),
+        )
+        side = "buy" if float(primary.score) > 0.0 else "sell" if float(primary.score) < 0.0 else "hold"
+    return deterministic_opportunity_correlation_id(
+        symbol=symbol,
+        source_timestamp=metrics.get("source_timestamp") or metrics.get("source_ts") or bar_ts,
+        side=side,
+        strategy_id=metrics.get("strategy_id") or metrics.get("strategy"),
+        sleeves=(sleeve.sleeve for sleeve in sleeve_rows),
+        opportunity_key=metrics.get("opportunity_key"),
+    )
+
+
+def _with_canonical_correlation_id(
+    intent: CanonicalOrderIntent | None,
+    correlation_id: str | None,
+) -> CanonicalOrderIntent | None:
+    if intent is None:
+        return None
+    resolved_correlation_id = str(correlation_id or "").strip()
+    if not resolved_correlation_id:
+        return intent
+    metadata = dict(intent.metadata)
+    metadata["correlation_id"] = resolved_correlation_id
+    return replace(
+        intent,
+        correlation_id=resolved_correlation_id,
+        metadata=metadata,
+    )
+
+
 @dataclass
 class DecisionRecord:
     symbol: str
@@ -80,6 +145,26 @@ class DecisionRecord:
     risk_decision: RiskDecision | None = None
     order_intent: CanonicalOrderIntent | None = None
     decision_trace_id: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not str(self.correlation_id or "").strip():
+            self.correlation_id = _record_correlation_id(
+                symbol=self.symbol,
+                bar_ts=self.bar_ts,
+                net_target=self.net_target,
+                sleeves=self.sleeves,
+                order=self.order,
+                order_intent=self.order_intent,
+                metrics=self.metrics,
+            )
+        if self.order is not None:
+            self.order["correlation_id"] = self.correlation_id
+        self.metrics["correlation_id"] = self.correlation_id
+        self.order_intent = _with_canonical_correlation_id(
+            self.order_intent,
+            self.correlation_id,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         sleeves = [asdict(s) for s in self.sleeves]
@@ -93,6 +178,7 @@ class DecisionRecord:
         decision_journal = build_decision_journal(self).to_dict()
         return {
             "schema_version": str(self.schema_version or DECISION_RECORD_SCHEMA_VERSION),
+            "correlation_id": self.correlation_id,
             "symbol": self.symbol,
             "bar_ts": self.bar_ts.isoformat(),
             "sleeves": sleeves,
@@ -121,6 +207,7 @@ def build_decision_record(
     tca: dict[str, Any] | None = None,
     schema_version: str = DECISION_RECORD_SCHEMA_VERSION,
     decision_trace_id: str | None = None,
+    correlation_id: str | None = None,
     order_intent: CanonicalOrderIntent | None = None,
     signal: Signal | None = None,
     risk_decision: RiskDecision | None = None,
@@ -141,6 +228,7 @@ def build_decision_record(
         tca=dict(tca) if isinstance(tca, dict) else tca,
         schema_version=schema_version,
         decision_trace_id=decision_trace_id,
+        correlation_id=correlation_id,
         signal=signal,
         risk_decision=risk_decision,
         order_intent=order_intent,
@@ -153,6 +241,11 @@ def build_decision_record(
     if record.order_intent is None:
         record.order_intent = decision_journal.order_intent
     record.decision_trace_id = decision_journal.decision_trace_id
+    record.correlation_id = decision_journal.correlation_id or record.correlation_id
+    record.order_intent = _with_canonical_correlation_id(
+        record.order_intent,
+        record.correlation_id,
+    )
     return record
 
 

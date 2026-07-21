@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -45,6 +46,68 @@ def _write_cycle_bars(csv_path: Path, *, periods: int = 260, phase: float = 0.0)
             "volume": volume,
         }
     ).to_csv(csv_path, index=False)
+
+
+def _write_governed_acquisition(tmp_path: Path) -> Path:
+    data_dir = tmp_path / "governed-bars"
+    data_dir.mkdir()
+    _write_cycle_bars(data_dir / "AAPL.csv", phase=0.0)
+    _write_cycle_bars(data_dir / "MSFT.csv", phase=1.7)
+    authority = {
+        "research_only": True,
+        "evidence_type": "historical_research",
+        "promotion_eligible": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "runtime_fill_authority": False,
+    }
+    symbol_rows = []
+    for symbol in ("AAPL", "MSFT"):
+        csv_path = data_dir / f"{symbol}.csv"
+        symbol_rows.append(
+            {
+                "symbol": symbol,
+                "csv_path": str(csv_path),
+                "row_count": 260,
+                "content_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
+                "quality_passed": True,
+                "completeness": {"missing_ratio": 0.0, "quality_passed": True},
+            }
+        )
+    manifest_path = data_dir / "dataset.provenance.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset_cache_key": "cache-key",
+                "dataset_dir": str(data_dir),
+                "dataset_identity": {
+                    "provider": "alpaca",
+                    "feed": "iex",
+                    "adjustment": "raw",
+                    "timeframe": "1Min",
+                },
+                "symbols": symbol_rows,
+                "quality_passed": True,
+                "authority": authority,
+            }
+        ),
+        encoding="utf-8",
+    )
+    acquisition_path = tmp_path / "historical_backfill.json"
+    acquisition_path.write_text(
+        json.dumps(
+            {
+                "dataset_dir": str(data_dir),
+                "manifest_path": str(manifest_path),
+                "cache_key": "cache-key",
+                "symbols": symbol_rows,
+                "quality_passed": True,
+                "authority": authority,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return acquisition_path
 
 
 def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -> None:
@@ -429,6 +492,97 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert policy["promotion_authority"] is False
     assert set(policy["allowed_regimes"]).isdisjoint(policy["abstained_regimes"])
     assert manifest_payload["metadata"]["market_regime_policy"] == policy
+
+
+def test_train_replay_aligned_model_persists_governed_acquisition_lineage(
+    tmp_path: Path,
+) -> None:
+    acquisition_path = _write_governed_acquisition(tmp_path)
+    output_dir = tmp_path / "out"
+    args = argparse.Namespace(
+        data_dir=None,
+        acquisition_manifest_json=acquisition_path,
+        symbols="AAPL,MSFT",
+        timestamp_col="timestamp",
+        output_dir=output_dir,
+        model_name="governed_historical",
+        model_type="logistic",
+        horizon_bars=1,
+        label_objective="risk_adjusted",
+        fee_bps=1.0,
+        slippage_bps=2.0,
+        min_net_edge_bps=0.0,
+        train_fraction=0.65,
+        edge_global_threshold=0.66,
+        random_state=7,
+        training_cache=True,
+        training_cache_dir=tmp_path / "cache",
+    )
+
+    report = train_replay_aligned_model(args)
+    persisted = cast(
+        dict[str, Any],
+        json.loads(Path(cast(str, report["report_path"])).read_text(encoding="utf-8")),
+    )
+    manifest = json.loads(
+        Path(cast(str, report["manifest_path"])).read_text(encoding="utf-8")
+    )
+
+    assert persisted["status"] == "complete"
+    assert persisted["authority"]["evidence_type"] == "historical_research"
+    assert persisted["authority"]["promotion_eligible"] is False
+    assert persisted["authority"]["runtime_fill_authority"] is False
+    assert persisted["acquisition"]["mode"] == "governed_historical_backfill"
+    assert persisted["acquisition"]["quality_passed"] is True
+    assert persisted["acquisition"]["symbols"] == ["AAPL", "MSFT"]
+    assert persisted["acquisition"]["completeness"]["AAPL"]["missing_ratio"] == 0.0
+    assert persisted["dataset"]["dataset_hash"] == persisted["acquisition"]["dataset_hash"]
+    assert persisted["dataset"]["mean_round_trip_cost_bps"] > 0.0
+    assert persisted["dataset"]["split_purge"]["folds"]
+    assert all(
+        fold["embargo_bars"] >= 1
+        for fold in persisted["dataset"]["split_purge"]["folds"]
+    )
+    assert manifest["metadata"]["acquisition"]["dataset_hash"] == persisted[
+        "dataset"
+    ]["dataset_hash"]
+    assert manifest["metadata"]["promotion_authority"] is False
+
+
+def test_governed_acquisition_rejects_failed_quality_before_training(
+    tmp_path: Path,
+) -> None:
+    acquisition_path = _write_governed_acquisition(tmp_path)
+    payload = json.loads(acquisition_path.read_text(encoding="utf-8"))
+    payload["quality_passed"] = False
+    acquisition_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="completeness quality gate"):
+        trainer._resolve_training_input(
+            argparse.Namespace(
+                data_dir=None,
+                acquisition_manifest_json=acquisition_path,
+                symbols="AAPL,MSFT",
+            )
+        )
+
+
+def test_governed_acquisition_rejects_content_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    acquisition_path = _write_governed_acquisition(tmp_path)
+    payload = json.loads(acquisition_path.read_text(encoding="utf-8"))
+    payload["symbols"][0]["content_sha256"] = "0" * 64
+    acquisition_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="content hash mismatch for AAPL"):
+        trainer._resolve_training_input(
+            argparse.Namespace(
+                data_dir=None,
+                acquisition_manifest_json=acquisition_path,
+                symbols="AAPL,MSFT",
+            )
+        )
 
 
 def test_train_replay_aligned_model_records_requested_but_unusable_live_cost(

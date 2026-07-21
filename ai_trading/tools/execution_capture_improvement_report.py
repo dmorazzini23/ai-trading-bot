@@ -35,6 +35,8 @@ _EDGE_BUCKETS: tuple[tuple[str, float, float], ...] = (
 
 _FALLBACK_JOIN_WINDOW_SECONDS = 300.0
 _ENRICHMENT_FIELDS: tuple[str, ...] = (
+    "correlation_id",
+    "decision_trace_id",
     "expected_net_edge_bps",
     "expected_edge_bps",
     "predicted_net_edge_bps",
@@ -137,6 +139,62 @@ def _identifiers(row: Mapping[str, Any], *keys: str) -> set[str]:
     }
 
 
+def _correlation_id(row: Mapping[str, Any]) -> str | None:
+    return _identifier(row, "correlation_id", "opportunity_correlation_id")
+
+
+def _hard_child_identifiers(row: Mapping[str, Any]) -> set[str]:
+    return _identifiers(
+        row,
+        "client_order_id",
+        "order_id",
+        "broker_order_id",
+        "alpaca_order_id",
+        "fill_id",
+        "execution_id",
+    )
+
+
+def _child_identifiers(row: Mapping[str, Any]) -> set[str]:
+    return _hard_child_identifiers(row) | _identifiers(row, "decision_trace_id")
+
+
+def is_fill_based_execution_evidence(row: Mapping[str, Any]) -> bool:
+    """Return false for explicit shadow, counterfactual, or no-order evidence."""
+
+    evidence_type = str(row.get("evidence_type") or "").strip().lower()
+    evidence_partition = str(row.get("evidence_partition") or "").strip().lower()
+    allowed_fill_types = {
+        "fill_execution",
+        "paper_fill",
+        "live_fill",
+        "broker_fill",
+        "runtime_fill",
+    }
+    explicit_fill_type = evidence_type in allowed_fill_types or (
+        evidence_type.startswith("executed_") and evidence_type.endswith("_fill")
+    )
+    if evidence_partition == "shadow" or (
+        evidence_type and not explicit_fill_type
+    ):
+        return False
+    if row.get("fill_based_evidence") is False or row.get("executed") is False:
+        return False
+    if bool(row.get("controlled_skip")):
+        fill_qty = _safe_float(
+            row.get("resolved_fill_qty")
+            or row.get("filled_qty")
+            or row.get("fill_qty")
+        )
+        status = str(row.get("status") or row.get("order_status") or "").lower()
+        if (fill_qty or 0.0) <= 0.0 and status not in {
+            "filled",
+            "partially_filled",
+        }:
+            return False
+    return True
+
+
 def _event_timestamp(row: Mapping[str, Any]) -> datetime | None:
     for key in (
         "filled_at",
@@ -167,8 +225,57 @@ def _metadata_join(
 ) -> tuple[Mapping[str, Any] | None, str]:
     if not tca_rows:
         return None, "tca_unavailable"
+    correlation_id = _correlation_id(fill)
+    hard_child_ids = _hard_child_identifiers(fill)
+    child_ids = hard_child_ids or _identifiers(fill, "decision_trace_id")
+    if correlation_id is not None:
+        correlated = [
+            tca for tca in tca_rows if _correlation_id(tca) == correlation_id
+        ]
+        if child_ids:
+            exact_correlated = [
+                tca
+                for tca in correlated
+                if child_ids
+                & (
+                    _hard_child_identifiers(tca)
+                    if hard_child_ids
+                    else _identifiers(tca, "decision_trace_id")
+                )
+            ]
+            if len(exact_correlated) == 1:
+                return exact_correlated[0], "correlation_and_order_id"
+            if len(exact_correlated) > 1:
+                return None, "ambiguous_correlation_and_order_id"
+            legacy_exact = [
+                tca
+                for tca in tca_rows
+                if _correlation_id(tca) is None
+                and child_ids
+                & (
+                    _hard_child_identifiers(tca)
+                    if hard_child_ids
+                    else _identifiers(tca, "decision_trace_id")
+                )
+            ]
+            if len(legacy_exact) == 1:
+                return legacy_exact[0], "correlation_with_legacy_exact_id"
+            if len(legacy_exact) > 1:
+                return None, "ambiguous_legacy_exact_id"
+            return None, "correlation_order_id_unmatched"
+        if len(correlated) == 1:
+            return correlated[0], "correlation_id"
+        if len(correlated) > 1:
+            return None, "ambiguous_correlation_id"
+        return None, "correlation_id_unmatched"
+
     client_ids = _identifiers(fill, "client_order_id")
-    order_ids = _identifiers(fill, "order_id", "broker_order_id", "alpaca_order_id")
+    order_ids = _identifiers(
+        fill,
+        "order_id",
+        "broker_order_id",
+        "alpaca_order_id",
+    )
     exact: list[Mapping[str, Any]] = []
     for tca in tca_rows:
         client_match = bool(client_ids & _identifiers(tca, "client_order_id"))
@@ -369,6 +476,13 @@ def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if field in _REQUIRED_METADATA_FIELDS and unknown > known:
             predominantly_unknown.append(field)
     join_methods = Counter(str(row.get("metadata_join_method") or "unknown") for row in rows)
+    missing_reason_counts: Counter[str] = Counter()
+    for row in rows:
+        reasons = row.get("metadata_missing_reasons")
+        if not isinstance(reasons, Mapping):
+            continue
+        for field, reason in reasons.items():
+            missing_reason_counts[f"{field}:{reason}"] += 1
     if not rows:
         status = "no_samples"
     elif predominantly_unknown:
@@ -382,6 +496,7 @@ def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "fields": diagnostics,
         "predominantly_unknown_fields": predominantly_unknown,
         "join_method_counts": dict(sorted(join_methods.items())),
+        "missing_reason_counts": dict(sorted(missing_reason_counts.items())),
         "warnings": ["metadata_incomplete"] if status == "metadata_incomplete" else [],
     }
 
@@ -390,7 +505,42 @@ def normalize_execution_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
     spread, spread_source = _decision_spread(row)
     quote_age = _first_float(row, "quote_age_ms", "quote_fresh_ms", "decision_quote_age_ms")
     market_regime = _token(row, "market_regime", "regime", "volatility_regime")
+    metadata_sources = {
+        "order_type": _field_source(row, "order_type", "submitted_order_type"),
+        "session": _field_source(
+            row,
+            "session_bucket",
+            "session_regime",
+            "session",
+            "venue_session",
+        ),
+        "quote_age_ms": _field_source(
+            row,
+            "quote_age_ms",
+            "quote_fresh_ms",
+            "decision_quote_age_ms",
+        ),
+        "spread_bps": spread_source,
+        "market_regime": _field_source(
+            row,
+            "market_regime",
+            "regime",
+            "volatility_regime",
+        ),
+        "execution_profile": _field_source(
+            row,
+            "execution_profile",
+            "regime_profile",
+        ),
+    }
+    join_method = str(row.get("metadata_join_method") or "unavailable")
+    missing_reasons = {
+        field: f"field_not_recorded_after_{join_method}"
+        for field, source in metadata_sources.items()
+        if source == "unknown"
+    }
     return {
+        "correlation_id": _correlation_id(row),
         "client_order_id": _identifier(row, "client_order_id"),
         "order_id": _identifier(row, "order_id", "broker_order_id", "alpaca_order_id"),
         "session": _token(row, "session_bucket", "session_regime", "session", "venue_session"),
@@ -402,31 +552,9 @@ def normalize_execution_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
         "market_regime": market_regime,
         "regime": market_regime,
         "execution_profile": _token(row, "execution_profile", "regime_profile"),
-        "metadata_join_method": str(row.get("metadata_join_method") or "unavailable"),
-        "metadata_sources": {
-            "order_type": _field_source(row, "order_type", "submitted_order_type"),
-            "session": _field_source(
-                row,
-                "session_bucket",
-                "session_regime",
-                "session",
-                "venue_session",
-            ),
-            "quote_age_ms": _field_source(
-                row,
-                "quote_age_ms",
-                "quote_fresh_ms",
-                "decision_quote_age_ms",
-            ),
-            "spread_bps": spread_source,
-            "market_regime": _field_source(
-                row,
-                "market_regime",
-                "regime",
-                "volatility_regime",
-            ),
-            "execution_profile": _field_source(row, "execution_profile", "regime_profile"),
-        },
+        "metadata_join_method": join_method,
+        "metadata_sources": metadata_sources,
+        "metadata_missing_reasons": missing_reasons,
     }
 
 
@@ -609,20 +737,30 @@ def build_execution_capture_improvement_report(
     min_capture_ratio: float = 0.35,
 ) -> dict[str, Any]:
     normalized: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    enriched_fills = enrich_fills_with_tca(fills, tca_rows)
+    seen: set[tuple[str, str, str, str]] = set()
+    fill_evidence = [row for row in fills if is_fill_based_execution_evidence(row)]
+    enriched_fills = enrich_fills_with_tca(fill_evidence, tca_rows)
     for row in enriched_fills:
         normalized_row = _normalize_row(row)
         if normalized_row is None:
             continue
+        child_identity = _identifier(
+            row,
+            "client_order_id",
+            "order_id",
+            "broker_order_id",
+            "fill_id",
+            "execution_id",
+        )
         identity = (
-            str(row.get("client_order_id") or ""),
+            str(_correlation_id(row) or child_identity or ""),
+            str(child_identity or ""),
             str(row.get("symbol") or ""),
             str(row.get("ts") or row.get("timestamp") or row.get("pending_resolved_ts") or ""),
         )
         # Only de-duplicate broker/order keyed rows. Fixture, legacy, or TCA rows can
         # legitimately share symbol/timestamp without representing the same event.
-        if identity[0]:
+        if identity[0] and identity[1]:
             if identity in seen:
                 continue
             seen.add(identity)
@@ -695,6 +833,7 @@ def build_execution_capture_improvement_report(
         "sample_gate": {
             "min_bucket_samples": int(min_bucket_samples),
             "samples": len(normalized),
+            "non_fill_rows_excluded": len(fills) - len(fill_evidence),
             "sufficient": len(normalized) >= int(min_bucket_samples),
         },
         "summary": {

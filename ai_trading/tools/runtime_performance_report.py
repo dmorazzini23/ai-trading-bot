@@ -45,6 +45,20 @@ _DEFAULT_POLICY_ABLATION_STATE_PATH = "runtime/policy_ablation_state.json"
 _DEFAULT_POLICY_RUNTIME_TOGGLES_PATH = "runtime/policy_runtime_toggles.json"
 _DEFAULT_UNCERTAINTY_CAPITAL_STATE_PATH = "runtime/uncertainty_capital_state.json"
 _DEFAULT_COUNTERFACTUAL_STATE_PATH = "runtime/counterfactual_learning_state.json"
+_PROMOTION_EXECUTION_EVIDENCE_TYPES = frozenset(
+    {
+        "paper_fill",
+        "live_fill",
+        "executed_paper_fill",
+        "executed_live_fill",
+        "broker_fill",
+        "runtime_fill",
+        "fill_execution",
+    }
+)
+_PROMOTION_EXCLUDED_EVIDENCE_TYPES = frozenset(
+    {"historical_research", "shadow_counterfactual"}
+)
 _NON_BLOCKING_REJECTION_GATES = frozenset(
     {
         "OK_TRADE",
@@ -1639,6 +1653,150 @@ def _filter_rows_by_symbol(
     ]
 
 
+def _evidence_token(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _explicit_evidence_type(row: Mapping[str, Any]) -> str:
+    direct = _evidence_token(row.get("evidence_type"))
+    if direct:
+        return direct
+    for container_name in ("evidence", "authority", "metadata"):
+        container = row.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        nested = _evidence_token(container.get("evidence_type"))
+        if nested:
+            return nested
+    return ""
+
+
+def _has_realized_pnl(row: Mapping[str, Any]) -> bool:
+    return any(
+        _as_float(row.get(key)) is not None
+        for key in ("pnl", "net_pnl", "realized_pnl", "reward")
+    )
+
+
+def _has_executed_fill_shape(row: dict[str, Any]) -> bool:
+    if not str(row.get("symbol") or "").strip():
+        return False
+    if _normalise_side(row.get("side")) is None:
+        return False
+    if _resolve_qty(row) is None:
+        return False
+    if _resolve_price(
+        row,
+        "entry_price",
+        "price",
+        "fill_price",
+        "filled_avg_price",
+        "average_price",
+    ) is None:
+        return False
+    status = _normalise_status_token(row.get("status"))
+    if status:
+        return status in {"filled", "partially_filled"}
+    if any(
+        row.get(key) not in (None, "")
+        for key in ("fill_id", "trade_id", "execution_id", "filled_at", "executed_at")
+    ):
+        return True
+    if row.get("entry_time") not in (None, ""):
+        return True
+    if row.get("order_id") not in (None, "") and any(
+        row.get(key) not in (None, "") for key in ("timestamp", "ts", "updated_at")
+    ):
+        return True
+    return any(row.get(key) not in (None, "") for key in ("timestamp", "ts"))
+
+
+def _promotion_evidence_diagnosis(
+    row: dict[str, Any],
+) -> tuple[bool, str, str]:
+    evidence_type = _explicit_evidence_type(row)
+    if evidence_type in _PROMOTION_EXCLUDED_EVIDENCE_TYPES:
+        return False, "explicit_non_execution_evidence", evidence_type
+    has_execution = _has_realized_pnl(row) or _has_executed_fill_shape(row)
+    if evidence_type:
+        if evidence_type not in _PROMOTION_EXECUTION_EVIDENCE_TYPES:
+            return False, "evidence_type_not_allowlisted", evidence_type
+        if not has_execution:
+            return False, "allowlisted_type_without_execution", evidence_type
+        return True, "allowlisted_executed_fill", evidence_type
+    if _has_realized_pnl(row):
+        return True, "legacy_realized_pnl_row", "legacy_unspecified"
+    if _has_executed_fill_shape(row):
+        return True, "legacy_fill_event_shape", "legacy_unspecified"
+    return False, "missing_executed_fill_evidence", "unspecified"
+
+
+def _partition_promotion_execution_rows(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    eligible: list[dict[str, Any]] = []
+    eligible_by_reason: dict[str, int] = defaultdict(int)
+    excluded_by_reason: dict[str, int] = defaultdict(int)
+    excluded_by_evidence_type: dict[str, int] = defaultdict(int)
+    for row in rows:
+        allowed, reason, evidence_type = _promotion_evidence_diagnosis(row)
+        if allowed:
+            eligible.append(row)
+            eligible_by_reason[reason] += 1
+        else:
+            excluded_by_reason[reason] += 1
+            excluded_by_evidence_type[evidence_type] += 1
+    legacy_count = sum(
+        eligible_by_reason.get(reason, 0)
+        for reason in ("legacy_realized_pnl_row", "legacy_fill_event_shape")
+    )
+    return eligible, {
+        "policy_version": "executed_fill_positive_allowlist_v1",
+        "input_records": int(len(rows)),
+        "eligible_records": int(len(eligible)),
+        "excluded_records": int(len(rows) - len(eligible)),
+        "eligible_by_reason": dict(sorted(eligible_by_reason.items())),
+        "excluded_by_reason": dict(sorted(excluded_by_reason.items())),
+        "excluded_by_evidence_type": dict(
+            sorted(excluded_by_evidence_type.items())
+        ),
+        "legacy_compatibility_count": int(legacy_count),
+    }
+
+
+def _merge_promotion_evidence_diagnostics(
+    *diagnostics: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {
+        "policy_version": "executed_fill_positive_allowlist_v1",
+        "input_records": 0,
+        "eligible_records": 0,
+        "excluded_records": 0,
+        "legacy_compatibility_count": 0,
+    }
+    for key in (
+        "input_records",
+        "eligible_records",
+        "excluded_records",
+        "legacy_compatibility_count",
+    ):
+        merged[key] = sum(max(0, _as_int(item.get(key)) or 0) for item in diagnostics)
+    for bucket_name in (
+        "eligible_by_reason",
+        "excluded_by_reason",
+        "excluded_by_evidence_type",
+    ):
+        bucket: dict[str, int] = defaultdict(int)
+        for item in diagnostics:
+            values = item.get(bucket_name)
+            if not isinstance(values, Mapping):
+                continue
+            for key, value in values.items():
+                bucket[str(key)] += max(0, _as_int(value) or 0)
+        merged[bucket_name] = dict(sorted(bucket.items()))
+    return merged
+
+
 def _aggregate_trade_metric_rows(
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -3176,7 +3334,17 @@ def summarize_trade_history(
         summary["symbol_scope"] = sorted(symbol_scope)
         summary["records_unfiltered"] = int(records_unfiltered)
         summary["records_filtered_out"] = int(records_unfiltered - len(records))
-    summary["records"] = len(records)
+    summary["records_loaded"] = int(len(records))
+    input_record_count = len(records)
+    records, trade_evidence_diagnostics = _partition_promotion_execution_rows(
+        records
+    )
+    summary["promotion_evidence"] = {
+        **_merge_promotion_evidence_diagnostics(trade_evidence_diagnostics),
+        "trade_history": trade_evidence_diagnostics,
+    }
+    summary["records"] = input_record_count
+    summary["promotion_eligible_records"] = len(records)
     if not records:
         summary["pnl_available"] = False
         return summary
@@ -3207,6 +3375,19 @@ def summarize_trade_history(
             summary["fill_events_records_filtered_out"] = int(
                 fill_records_unfiltered - len(fill_records)
             )
+        summary["fill_events_records_loaded"] = int(len(fill_records))
+        fill_records, fill_evidence_diagnostics = (
+            _partition_promotion_execution_rows(fill_records)
+        )
+        combined_evidence = _merge_promotion_evidence_diagnostics(
+            trade_evidence_diagnostics,
+            fill_evidence_diagnostics,
+        )
+        summary["promotion_evidence"] = {
+            **combined_evidence,
+            "trade_history": trade_evidence_diagnostics,
+            "fill_events": fill_evidence_diagnostics,
+        }
         summary["fill_events_records"] = int(len(fill_records))
         if fill_records:
             fill_events = _extract_fill_events(
@@ -3225,6 +3406,16 @@ def summarize_trade_history(
                 ) = _reconstruct_closed_trades(fill_events)
     else:
         summary["fill_events_records"] = 0
+        summary["fill_events_records_loaded"] = 0
+        empty_fill_diagnostics = _partition_promotion_execution_rows([])[1]
+        summary["promotion_evidence"] = {
+            **_merge_promotion_evidence_diagnostics(
+                trade_evidence_diagnostics,
+                empty_fill_diagnostics,
+            ),
+            "trade_history": trade_evidence_diagnostics,
+            "fill_events": empty_fill_diagnostics,
+        }
     trade_events = _extract_fill_events(records, order_source_lookup=order_source_lookup)
     trade_closed_reconstructed: list[dict[str, Any]] = []
     trade_open_positions: dict[str, float] = {}
@@ -3262,7 +3453,7 @@ def summarize_trade_history(
             )
     if direct_trades:
         aggregated = _aggregate_closed_trades(
-            records_count=len(records),
+            records_count=input_record_count,
             source="direct_pnl_rows",
             closed_trades=direct_trades,
             open_positions=trade_open_positions,
@@ -3303,7 +3494,7 @@ def summarize_trade_history(
         summary["pnl_available"] = False
         return summary
     aggregated = _aggregate_closed_trades(
-            records_count=len(records),
+            records_count=input_record_count,
             source="fifo_reconstructed_from_fills",
             closed_trades=trade_closed_reconstructed,
             open_positions=trade_open_positions,

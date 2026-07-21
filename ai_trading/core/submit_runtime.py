@@ -15,6 +15,7 @@ from ai_trading.core.execution_intent import (
     ExecutionIntentContext,
     build_execution_intent_context,
 )
+from ai_trading.core.evidence_lineage import normalize_evidence_timestamp
 from ai_trading.oms.ledger import LedgerEntry, OrderLedger
 from ai_trading.oms.pretrade import safe_validate_pretrade
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
@@ -95,6 +96,20 @@ def _quote_spread_bps(
     return max((spread / float(reference_price)) * 10_000.0, 0.0)
 
 
+def _first_execution_value(exec_kwargs: Mapping[str, Any], *keys: str) -> Any:
+    sources = (
+        exec_kwargs,
+        _mapping_dict(exec_kwargs.get("metadata")),
+        _mapping_dict(exec_kwargs.get("annotations")),
+    )
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
 def _resolve_execution_lineage(exec_kwargs: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     execution_model_lineage = {
         "model_id": exec_kwargs.get("model_id"),
@@ -107,6 +122,20 @@ def _resolve_execution_lineage(exec_kwargs: Mapping[str, Any]) -> tuple[dict[str
         "config_snapshot_hash": exec_kwargs.get("config_snapshot_hash"),
         "effective_policy_hash": exec_kwargs.get("policy_hash"),
     }
+    for key in (
+        "strategy_id",
+        "opportunity_key",
+        "session_regime",
+        "session_bucket",
+        "market_regime",
+        "regime_profile",
+        "volatility_regime",
+        "trend_regime",
+        "execution_profile",
+    ):
+        value = _first_execution_value(exec_kwargs, key)
+        if value not in (None, ""):
+            config_snapshot[key] = value
     return execution_model_lineage, config_snapshot
 
 
@@ -185,6 +214,21 @@ def _attach_order_identity(order: Any, *, client_order_id: str) -> None:
         setattr(order, "client_order_id", client_order_id)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
+
+
+def _attach_order_evidence(order: Any, evidence: Mapping[str, Any]) -> None:
+    for key, value in evidence.items():
+        if value in (None, ""):
+            continue
+        if isinstance(order, dict):
+            order.setdefault(key, value)
+            continue
+        try:
+            current = getattr(order, key, None)
+            if current in (None, ""):
+                setattr(order, key, value)
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            continue
 
 
 def _order_field(order: Any, name: str) -> Any:
@@ -283,6 +327,28 @@ def _resolve_execution_intent_context(
     explicit_decision_trace_id = (
         str(exec_kwargs.get("decision_trace_id") or "").strip() or None
     )
+    explicit_correlation_id = str(
+        _first_execution_value(exec_kwargs, "correlation_id") or ""
+    ).strip() or None
+    source_timestamp = normalize_evidence_timestamp(
+        _first_execution_value(
+            exec_kwargs,
+            "source_timestamp",
+            "source_ts",
+            "bar_ts",
+        )
+    ) or now
+    decision_timestamp = normalize_evidence_timestamp(
+        _first_execution_value(exec_kwargs, "decision_ts", "decision_timestamp")
+    ) or source_timestamp
+    resolved_order_type = str(
+        _first_execution_value(exec_kwargs, "order_type", "submitted_order_type")
+        or ""
+    ).strip().lower() or None
+    execution_profile = str(
+        _first_execution_value(exec_kwargs, "execution_profile", "regime_profile")
+        or ""
+    ).strip() or None
     intent_side = _canonical_intent_side(side_norm)
     if intent_side is None:
         raise ValueError(f"invalid order side: {side_norm!r}")
@@ -326,7 +392,7 @@ def _resolve_execution_intent_context(
         side=intent_side,
         delta_shares=int(delta_shares),
         price=float(price),
-        bar_ts=now,
+        bar_ts=source_timestamp,
         spread_bps=float(spread_bps),
         liquidity_bucket="NORMAL",
         quote_quality_ok=quote_quality_ok,
@@ -347,6 +413,11 @@ def _resolve_execution_intent_context(
         broker_ready=bool(broker_ready),
         broker_ready_reason=broker_ready_reason,
         broker_cooldown_remaining_sec=broker_cooldown_remaining_sec,
+        correlation_id=explicit_correlation_id,
+        decision_timestamp=decision_timestamp,
+        source_timestamp=source_timestamp,
+        order_type=resolved_order_type,
+        execution_profile=execution_profile,
     )
     resolved_client_order_id = explicit_client_order_id or intent_context.client_order_id
     resolved_decision_trace_id = (
@@ -365,10 +436,16 @@ def _resolve_execution_intent_context(
         order_annotations["decision_trace_id"] = resolved_decision_trace_id
     if resolved_client_order_id:
         order_annotations.setdefault("client_order_id", resolved_client_order_id)
+    order_lineage_metadata["correlation_id"] = intent_context.correlation_id
+    order_annotations["correlation_id"] = intent_context.correlation_id
     return (
         ExecutionIntentContext(
             client_order_id=resolved_client_order_id,
             decision_trace_id=resolved_decision_trace_id,
+            correlation_id=intent_context.correlation_id,
+            decision_timestamp=intent_context.decision_timestamp,
+            source_timestamp=intent_context.source_timestamp,
+            quote_timestamp=intent_context.quote_timestamp,
             pretrade_intent=pretrade_intent,
             order_lineage_metadata=order_lineage_metadata,
             order_annotations=order_annotations,
@@ -796,6 +873,12 @@ def submit_order_runtime(
             context=sampling_reservation.details,
         )
         return None
+    sampling_reservation_token = str(
+        sampling_reservation.details.get("reservation_token") or ""
+    ).strip() or None
+    if sampling_reservation_token is not None:
+        annotations["paper_sampling_reservation_token"] = sampling_reservation_token
+        metadata["paper_sampling_reservation_token"] = sampling_reservation_token
 
     merged_annotations = dict(intent_context.order_annotations)
     merged_annotations.update(annotations)
@@ -804,6 +887,11 @@ def submit_order_runtime(
 
     merged_metadata = dict(intent_context.order_lineage_metadata)
     merged_metadata.update(metadata)
+    merged_metadata["correlation_id"] = intent_context.correlation_id
+    merged_annotations["correlation_id"] = intent_context.correlation_id
+    if passive_sampling_limit is not None:
+        merged_metadata["order_type"] = "limit"
+        merged_annotations["order_type"] = "limit"
 
     engine_kwargs = dict(exec_kwargs)
     engine_kwargs["annotations"] = merged_annotations
@@ -813,6 +901,22 @@ def submit_order_runtime(
         engine_kwargs.pop("metadata", None)
     engine_kwargs.setdefault("client_order_id", intent_context.client_order_id)
     engine_kwargs.setdefault("decision_trace_id", intent_context.decision_trace_id)
+    engine_kwargs.setdefault("correlation_id", intent_context.correlation_id)
+    engine_kwargs.setdefault(
+        "source_timestamp",
+        intent_context.source_timestamp.isoformat(),
+    )
+    engine_kwargs.setdefault(
+        "decision_ts",
+        intent_context.decision_timestamp.isoformat(),
+    )
+    if intent_context.quote_timestamp is not None:
+        engine_kwargs.setdefault(
+            "quote_timestamp",
+            intent_context.quote_timestamp.isoformat(),
+        )
+    if sampling_reservation_token is not None:
+        engine_kwargs["paper_sampling_reservation_token"] = sampling_reservation_token
     engine_kwargs.setdefault(
         "price_hint",
         float(submit_snapshot.get("submit_arrival_price") or price),
@@ -852,6 +956,7 @@ def submit_order_runtime(
             symbol=symbol,
             side=side_norm,
             consumes_daily_slot=consumes_sampling_slot,
+            reservation_token=sampling_reservation_token,
         )
         submit_none_reason = be._resolve_submit_none_reason(runtime_like)
         be._record_auth_forbidden_cooldown(
@@ -872,6 +977,7 @@ def submit_order_runtime(
             symbol=symbol,
             side=side_norm,
             consumes_daily_slot=consumes_sampling_slot,
+            reservation_token=sampling_reservation_token,
         )
         reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
         be._record_auth_forbidden_cooldown(
@@ -888,6 +994,14 @@ def submit_order_runtime(
         return None
 
     _attach_order_identity(order, client_order_id=intent_context.client_order_id)
+    _attach_order_evidence(
+        order,
+        {
+            **merged_metadata,
+            "decision_trace_id": intent_context.decision_trace_id,
+            "paper_sampling_reservation_token": sampling_reservation_token,
+        },
+    )
     _record_order_ledger_submission(
         ledger,
         intent_context=intent_context,

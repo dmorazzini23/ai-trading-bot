@@ -150,7 +150,12 @@ def test_build_order_metrics_returns_without_tca_when_disabled(monkeypatch: pyte
         logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
     )
 
-    assert metrics == {"is_bps": 3.0}
+    assert metrics == {
+        "is_bps": 3.0,
+        "evidence_type": "fill_execution",
+        "fill_based_evidence": True,
+        "promotion_eligible": True,
+    }
     assert tca_record is None
 
 
@@ -229,6 +234,11 @@ def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.Monke
             "market_regime": "sideways",
             "volatility_regime": "low",
             "trend_regime": "flat",
+            "correlation_id": "opp-msft-pending",
+            "decision_trace_id": "trace-msft-pending",
+            "source_timestamp": (now - timedelta(minutes=1)).isoformat(),
+            "quote_timestamp": (now - timedelta(seconds=1)).isoformat(),
+            "paper_sampling_reservation_token": "sampling-token-1",
         },
     )
 
@@ -258,6 +268,11 @@ def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.Monke
     assert tca_record["market_regime"] == "sideways"
     assert tca_record["volatility_regime"] == "low"
     assert tca_record["trend_regime"] == "flat"
+    assert tca_record["correlation_id"] == "opp-msft-pending"
+    assert tca_record["decision_trace_id"] == "trace-msft-pending"
+    assert tca_record["paper_sampling_reservation_token"] == "sampling-token-1"
+    assert tca_record["fill_based_evidence"] is False
+    assert tca_record["promotion_eligible"] is False
     assert metrics["tca"] == {
         "is_bps": None,
         "spread_paid_bps": None,

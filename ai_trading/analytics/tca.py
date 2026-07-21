@@ -194,6 +194,14 @@ def build_tca_record(
     volatility_regime: str | None = None,
     trend_regime: str | None = None,
     execution_profile: str | None = None,
+    correlation_id: str | None = None,
+    decision_trace_id: str | None = None,
+    source_timestamp: datetime | str | None = None,
+    quote_timestamp: datetime | str | None = None,
+    paper_sampling_reservation_token: str | None = None,
+    evidence_type: str | None = None,
+    fill_based_evidence: bool | None = None,
+    promotion_eligible: bool | None = None,
 ) -> dict[str, Any]:
     side_token = _normalize_order_side(side) or str(side or "").strip().lower()
     arrival = float(benchmark.arrival_price)
@@ -213,8 +221,11 @@ def build_tca_record(
     if benchmark.submit_ts is not None and benchmark.first_fill_ts is not None:
         latency = fill_latency_ms(benchmark.submit_ts, benchmark.first_fill_ts)
 
+    has_fill_evidence = fill.fill_vwap is not None and float(fill.total_qty) > 0.0
     record = {
         "ts": (generated_ts if generated_ts is not None else datetime.now(UTC)).isoformat(),
+        "correlation_id": str(correlation_id or "").strip() or None,
+        "decision_trace_id": str(decision_trace_id or "").strip() or None,
         "client_order_id": client_order_id,
         "order_id": broker_order_id,
         "broker_order_id": broker_order_id,
@@ -241,6 +252,33 @@ def build_tca_record(
         "quote_age_ms": decision_quote_age_ms,
         "decision_spread_bps": decision_spread_bps,
         "spread_bps": decision_spread_bps,
+        "source_timestamp": (
+            parsed_source.isoformat()
+            if (parsed_source := _coerce_utc_datetime(source_timestamp)) is not None
+            else None
+        ),
+        "quote_timestamp": (
+            parsed_quote.isoformat()
+            if (parsed_quote := _coerce_utc_datetime(quote_timestamp)) is not None
+            else None
+        ),
+        "paper_sampling_reservation_token": (
+            str(paper_sampling_reservation_token).strip()
+            if paper_sampling_reservation_token not in (None, "")
+            else None
+        ),
+        "evidence_type": str(evidence_type or "").strip()
+        or ("fill_execution" if has_fill_evidence else "order_execution"),
+        "fill_based_evidence": (
+            bool(fill_based_evidence)
+            if fill_based_evidence is not None
+            else has_fill_evidence
+        ),
+        "promotion_eligible": (
+            bool(promotion_eligible)
+            if promotion_eligible is not None
+            else has_fill_evidence
+        ),
         "decision_price": arrival,
         "submit_price_reference": (
             float(benchmark.mid_at_arrival) if benchmark.mid_at_arrival is not None else arrival
@@ -370,6 +408,9 @@ def resolve_pending_tca_from_fill(
             "pending_event": False,
             "pending_resolved": True,
             "pending_resolved_ts": fill_timestamp.isoformat(),
+            "evidence_type": "fill_execution",
+            "fill_based_evidence": True,
+            "promotion_eligible": True,
         }
     )
     if source not in (None, ""):
@@ -399,6 +440,7 @@ def reconcile_pending_tca_with_fill(
     allow_symbol_qty_fallback: bool = False,
     fallback_window_seconds: float = 8.0 * 3600.0,
     qty_tolerance_ratio: float = 0.05,
+    correlation_id: str | None = None,
 ) -> tuple[bool, str]:
     """Append a resolved TCA row for a previously pending TCA order when available."""
 
@@ -414,6 +456,7 @@ def reconcile_pending_tca_with_fill(
             token = str(value).strip()
             if token:
                 identifiers.add(token)
+    correlation_token = str(correlation_id or "").strip()
 
     fill_qty_value = _safe_float(fill_qty)
     if (_safe_float(fill_price) or 0.0) <= 0.0 or (fill_qty_value or 0.0) <= 0.0:
@@ -421,8 +464,14 @@ def reconcile_pending_tca_with_fill(
 
     symbol_token = str(symbol or "").strip().upper()
     side_token = _normalize_order_side(side)
-    fallback_enabled = bool(allow_symbol_qty_fallback and symbol_token and side_token and fill_qty_value)
-    if not identifiers and not fallback_enabled:
+    fallback_enabled = bool(
+        not correlation_token
+        and allow_symbol_qty_fallback
+        and symbol_token
+        and side_token
+        and fill_qty_value
+    )
+    if not identifiers and not correlation_token and not fallback_enabled:
         return False, "missing_identifiers"
 
     fill_ts_utc = _coerce_utc_datetime(fill_ts)
@@ -462,7 +511,13 @@ def reconcile_pending_tca_with_fill(
                     continue
 
                 row_identifiers = _collect_row_identifiers(row)
-                id_matched = bool(identifiers and identifiers.intersection(row_identifiers))
+                row_correlation = str(row.get("correlation_id") or "").strip()
+                if correlation_token and row_correlation != correlation_token:
+                    continue
+                id_matched = bool(
+                    (identifiers and identifiers.intersection(row_identifiers))
+                    or (correlation_token and not identifiers)
+                )
                 fallback_matched = False
                 if not id_matched and fallback_enabled:
                     row_symbol = str(row.get("symbol") or "").strip().upper()

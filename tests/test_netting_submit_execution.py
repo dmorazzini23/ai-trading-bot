@@ -51,7 +51,12 @@ def _base_kwargs() -> dict[str, Any]:
         "model_artifact_hash_for_order": "artifact",
         "policy_hash_for_order": "policy",
         "order_annotations": {"price_source": "nbbo"},
-        "order_lineage_metadata": {"decision_trace_id": "trace-1"},
+        "order_lineage_metadata": {
+            "decision_trace_id": "trace-1",
+            "correlation_id": "opp-netting-1",
+            "source_timestamp": "2026-04-19T15:29:00+00:00",
+            "session_regime": "midday",
+        },
         "submit_arrival_price": 100.0,
         "submit_bid_at_arrival": 99.5,
         "submit_ask_at_arrival": 100.5,
@@ -121,9 +126,12 @@ def test_execute_netting_submission_returns_success_payload() -> None:
     assert result.submitted_increment == 1
     assert result.order_payload is not None
     assert result.order_payload["client_order_id"] == "cid-1"
+    assert result.order_payload["correlation_id"] == "opp-netting-1"
+    assert result.order_payload["decision_trace_id"] == "trace-1"
     assert result.metrics == {"pnl": 1.0}
     assert result.tca_record == {"tca": True}
     assert tca_kwargs["order_lineage_metadata"]["decision_trace_id"] == "trace-1"
+    assert tca_kwargs["order_lineage_metadata"]["correlation_id"] == "opp-netting-1"
     assert tca_kwargs["order_lineage_metadata"]["expected_net_edge_bps"] == pytest.approx(12.5)
 
 

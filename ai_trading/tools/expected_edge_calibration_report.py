@@ -15,6 +15,7 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.execution_capture_improvement_report import (
     build_metadata_quality,
     enrich_fills_with_tca,
+    is_fill_based_execution_evidence,
     normalize_execution_metadata,
 )
 
@@ -389,7 +390,8 @@ def build_expected_edge_calibration_report(
     min_samples: int = 25,
 ) -> dict[str, Any]:
     realized_rows: list[dict[str, Any]] = []
-    for row in enrich_fills_with_tca(fills, tca_rows):
+    fill_evidence = [row for row in fills if is_fill_based_execution_evidence(row)]
+    for row in enrich_fills_with_tca(fill_evidence, tca_rows):
         expected = _first_float(row, "expected_net_edge_bps", "expected_edge_bps", "predicted_net_edge_bps")
         realized = _first_float(row, "realized_net_edge_bps", "net_edge_bps", "markout_bps")
         if expected is None or realized is None:
@@ -410,18 +412,32 @@ def build_expected_edge_calibration_report(
         realized_rows.append(normalized)
 
     rejected_rows: list[dict[str, Any]] = []
-    for row in list(candidates) + list(gate_rows):
-        status = str(row.get("status") or row.get("action") or row.get("decision") or "").lower()
+    for candidate_row in list(candidates) + list(gate_rows):
+        status = str(
+            candidate_row.get("status")
+            or candidate_row.get("action")
+            or candidate_row.get("decision")
+            or ""
+        ).lower()
         if status not in {"reject", "rejected", "blocked", "skip", "skipped"}:
             continue
-        expected = _first_float(row, "expected_net_edge_bps", "expected_edge_bps", "predicted_net_edge_bps")
+        expected = _first_float(
+            candidate_row,
+            "expected_net_edge_bps",
+            "expected_edge_bps",
+            "predicted_net_edge_bps",
+        )
         rejected_rows.append(
             {
-                "symbol": _symbol(row),
-                "side": _side(row),
-                "session_bucket": _session(row),
+                "symbol": _symbol(candidate_row),
+                "side": _side(candidate_row),
+                "session_bucket": _session(candidate_row),
                 "expected_edge_bucket": _edge_bucket(expected),
-                "reason": str(row.get("reason") or row.get("gate") or "unknown"),
+                "reason": str(
+                    candidate_row.get("reason")
+                    or candidate_row.get("gate")
+                    or "unknown"
+                ),
             }
         )
 
@@ -464,6 +480,7 @@ def build_expected_edge_calibration_report(
         "sample_gate": {
             "min_samples": int(min_samples),
             "realized_samples": len(realized_rows),
+            "non_fill_rows_excluded": len(fills) - len(fill_evidence),
             "sufficient": len(realized_rows) >= int(min_samples),
         },
         "summary": {

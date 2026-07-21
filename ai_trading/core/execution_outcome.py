@@ -187,6 +187,39 @@ def build_order_metrics_and_tca(
         fill_price = None
         persistable_fill = False
 
+    lineage = dict(order_lineage_metadata or {})
+    for key in (
+        "correlation_id",
+        "decision_trace_id",
+        "source_timestamp",
+        "decision_ts",
+        "quote_timestamp",
+        "client_order_id",
+        "broker_order_id",
+        "order_id",
+        "order_type",
+        "time_in_force",
+        "session",
+        "session_regime",
+        "decision_quote_age_ms",
+        "quote_age_ms",
+        "decision_spread_bps",
+        "spread_bps",
+        "market_regime",
+        "volatility_regime",
+        "trend_regime",
+        "execution_profile",
+        "paper_sampling_reservation_token",
+    ):
+        value = lineage.get(key)
+        if value not in (None, ""):
+            metrics.setdefault(key, value)
+    metrics["evidence_type"] = (
+        "fill_execution" if persistable_fill else "order_execution"
+    )
+    metrics["fill_based_evidence"] = bool(persistable_fill)
+    metrics["promotion_eligible"] = bool(persistable_fill)
+
     if not bool(get_env("AI_TRADING_TCA_ENABLED", False, cast=bool)):
         return metrics, None
 
@@ -234,7 +267,6 @@ def build_order_metrics_and_tca(
     )
     from ai_trading.analytics.tca import build_tca_record
 
-    lineage = dict(order_lineage_metadata or {})
     for key in ("model_id", "model_version", "config_snapshot_hash"):
         if lineage.get(key) in (None, ""):
             value = getattr(order, key, None)
@@ -338,6 +370,27 @@ def build_order_metrics_and_tca(
         ),
         trend_regime=str(lineage.get("trend_regime") or "").strip().lower() or None,
         execution_profile=execution_profile,
+        correlation_id=str(lineage.get("correlation_id") or "").strip() or None,
+        decision_trace_id=(
+            str(lineage.get("decision_trace_id") or "").strip() or None
+        ),
+        source_timestamp=(
+            lineage.get("source_timestamp")
+            or lineage.get("source_ts")
+            or net_target.bar_ts
+        ),
+        quote_timestamp=(
+            lineage.get("quote_timestamp") or lineage.get("quote_ts")
+        ),
+        paper_sampling_reservation_token=(
+            str(lineage.get("paper_sampling_reservation_token") or "").strip()
+            or None
+        ),
+        evidence_type=(
+            "fill_execution" if persistable_fill else "order_execution"
+        ),
+        fill_based_evidence=bool(persistable_fill),
+        promotion_eligible=bool(persistable_fill),
     )
     session_regime_token = session_token or session_bucket_from_ts_func(now)
     spread_paid_for_role = safe_float(tca_record.get("spread_paid_bps"))

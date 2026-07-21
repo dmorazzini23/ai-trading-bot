@@ -31,6 +31,8 @@ def test_agent_validate_changed_script_keeps_runtime_smoke_checks() -> None:
 
     assert "http://127.0.0.1:9001/healthz" in text
     assert "tool_runtime_incident_snapshot" in text
+    assert "isinstance(payload.get('should_alert'), bool)" in text
+    assert "payload.get('should_alert') is False" not in text
     assert "--skip-runtime-smoke" in text
 
 

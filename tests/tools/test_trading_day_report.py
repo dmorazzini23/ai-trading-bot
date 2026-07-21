@@ -243,6 +243,37 @@ def test_trading_day_report_metrics_control_only_is_info_severity():
     )
 
 
+def test_trading_day_report_excludes_shadow_outcomes_from_realized_fills():
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-07-21",
+        order_intents=[],
+        fills=[
+            {
+                "ts": "2026-07-21T15:00:00Z",
+                "symbol": "AAPL",
+                "status": "filled",
+                "fill_based_evidence": True,
+            },
+            {
+                "ts": "2026-07-21T15:00:00Z",
+                "symbol": "AAPL",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "fill_based_evidence": False,
+                "executed": False,
+            },
+        ],
+        shadow_rows=[],
+        gate_rows=[],
+        live_cost_model={},
+        symbol_scorecard={},
+    )
+
+    assert report["realized_fills"]["count"] == 1
+    assert report["non_fill_evidence"]["excluded_from_realized_fills"] == 1
+    assert report["symbol_trade_flow"]["AAPL"]["fills"] == 1
+
+
 def test_trading_day_report_counts_only_canonical_parity_shadow_candidates():
     valid = _parity_shadow_decision()
     ordinary = _parity_shadow_decision(client_order_id="ordinary")

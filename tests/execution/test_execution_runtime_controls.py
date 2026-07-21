@@ -796,6 +796,367 @@ def test_pending_new_timeout_policy_returns_false_without_stale_orders(monkeypat
     assert canceled == []
 
 
+def _paper_sampling_reprice_config(**overrides: Any) -> SimpleNamespace:
+    values: dict[str, Any] = {
+        "execution_mode": "paper",
+        "paper": True,
+        "paper_sampling_enabled": True,
+        "paper_sampling_passive_only": True,
+        "paper_sampling_relax_edge_gates_enabled": False,
+        "paper_sampling_allowed_symbols": ("AAPL", "AMZN", "MSFT"),
+        "paper_sampling_max_notional_per_order": 750.0,
+        "paper_sampling_passive_reprice_enabled": True,
+        "paper_sampling_passive_reprice_timeout_sec": 45.0,
+        "paper_sampling_passive_reprice_max_retries": 2,
+        "paper_sampling_passive_reprice_cooldown_sec": 0.0,
+        "paper_sampling_passive_reprice_quote_max_age_ms": 500.0,
+        "paper_sampling_passive_reprice_max_spread_bps": 10.0,
+        "paper_sampling_passive_reprice_max_actions_per_cycle": 2,
+        "paper_sampling_passive_reprice_hard_cancel_before_close_sec": 300,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _verified_sampling_pending_entry() -> dict[str, Any]:
+    return {
+        "status": "pending_new",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 2,
+        "order_id": "sampling-order-1",
+        "client_order_id": "sampling-client-1",
+        "root_client_order_id": "sampling-client-1",
+        "order_type": "limit",
+        "paper_sampling": True,
+        "paper_sampling_policy": "passive_only",
+        "paper_sampling_consumes_daily_slot": True,
+        "paper_sampling_reservation_token": "reservation-1",
+        "correlation_id": "correlation-1",
+        "paper_sampling_reprice_generation": 0,
+    }
+
+
+def test_pending_policy_routes_verified_sample_to_passive_reprice_only(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="sampling-order-1",
+        client_order_id="sampling-client-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+        limit_price="100.00",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine._pending_orders = {
+        "sampling-order-1": _verified_sampling_pending_entry()
+    }
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    passive_calls: list[dict[str, Any]] = []
+    engine._replace_paper_sampling_limit_passively = lambda **kwargs: (
+        passive_calls.append(dict(kwargs))
+        or {
+            "action_taken": True,
+            "replaced": True,
+            "action": "passive_reprice",
+            "reason": "ok",
+        }
+    )
+    engine._replace_limit_order_with_marketable = lambda **_: pytest.fail(
+        "sampling order reached generic marketable replacement"
+    )
+    engine._cancel_order_alpaca = lambda *_: pytest.fail(
+        "successful passive replacement should not be canceled again"
+    )
+    engine._engine_cycle_index = 1
+
+    monkeypatch.setattr(
+        lt,
+        "_runtime_trading_config",
+        lambda: _paper_sampling_reprice_config(),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_paper_sampling_reprice_session_status",
+        lambda **_: (True, "ok", 1800.0),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "off")
+
+    assert engine._apply_pending_new_timeout_policy() is True
+    assert len(passive_calls) == 1
+    assert passive_calls[0]["generation"] == 1
+    assert passive_calls[0]["context"]["correlation_id"] == "correlation-1"
+    assert engine._pending_new_ladder_replacements["sampling-client-1"] == 1
+
+
+@pytest.mark.parametrize(
+    ("config_overrides", "entry_overrides", "expected_reason"),
+    [
+        ({"execution_mode": "live", "paper": False}, {}, "sampling_reprice_not_enabled"),
+        ({}, {"correlation_id": None}, "sampling_metadata_unverified"),
+        ({"paper_sampling_passive_reprice_max_retries": 1}, {"paper_sampling_reprice_generation": 1}, "sampling_reprice_retry_limit"),
+    ],
+)
+def test_pending_policy_cancels_sampling_order_when_reprice_is_not_safe(
+    monkeypatch,
+    caplog,
+    config_overrides: dict[str, Any],
+    entry_overrides: dict[str, Any],
+    expected_reason: str,
+):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="sampling-order-1",
+        client_order_id="sampling-client-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+        limit_price="100.00",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    entry = _verified_sampling_pending_entry()
+    entry.update(entry_overrides)
+    engine._pending_orders = {"sampling-order-1": entry}
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._replace_paper_sampling_limit_passively = lambda **_: pytest.fail(
+        "unsafe sample must not be replaced"
+    )
+    engine._replace_limit_order_with_marketable = lambda **_: pytest.fail(
+        "sampling order reached generic marketable replacement"
+    )
+    engine._engine_cycle_index = 1
+
+    monkeypatch.setattr(
+        lt,
+        "_runtime_trading_config",
+        lambda: _paper_sampling_reprice_config(**config_overrides),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_paper_sampling_reprice_session_status",
+        lambda **_: (True, "ok", 1800.0),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "2")
+    caplog.set_level(logging.WARNING)
+
+    assert engine._apply_pending_new_timeout_policy() is True
+    assert canceled == ["sampling-order-1"]
+    action_records = [
+        record
+        for record in caplog.records
+        if record.message == "PAPER_SAMPLING_PASSIVE_REPRICE_ACTION"
+    ]
+    assert action_records
+    assert action_records[-1].reason == expected_reason
+
+
+def test_passive_sampling_reprice_submits_current_bid_with_lineage(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace()
+    now_dt = datetime(2026, 7, 21, 15, 0, tzinfo=UTC)
+    order = SimpleNamespace(
+        id="sampling-order-1",
+        client_order_id="sampling-client-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+        limit_price="99.99",
+    )
+    context = _verified_sampling_pending_entry()
+    engine._pending_orders = {"sampling-order-1": dict(context)}
+    canceled: list[str] = []
+    submitted: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    engine._lookup_order_by_client_order_id = lambda *_, **__: None
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._get_order_status_alpaca = lambda order_id: {
+        "id": order_id,
+        "status": "canceled",
+        "filled_qty": "0",
+    }
+    engine._pre_execution_order_checks = lambda payload: True
+    engine._record_runtime_order_event = lambda payload: events.append(dict(payload))
+
+    def _submit(payload: dict[str, Any]) -> dict[str, Any]:
+        submitted.append(dict(payload))
+        return {
+            "id": "sampling-order-pr1",
+            "client_order_id": payload["client_order_id"],
+            "status": "accepted",
+            "symbol": payload["symbol"],
+            "side": payload["side"],
+            "qty": payload["quantity"],
+            "limit_price": payload["limit_price"],
+        }
+
+    engine._submit_order_to_alpaca = _submit
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_, **__: (
+            "broker_nbbo",
+            100.01,
+            100.03,
+            100.02,
+            100.03,
+            now_dt - timedelta(milliseconds=100),
+        ),
+    )
+
+    outcome = engine._replace_paper_sampling_limit_passively(
+        order=order,
+        context=context,
+        config={
+            "quote_max_age_ms": 500.0,
+            "max_spread_bps": 10.0,
+            "max_notional": 750.0,
+        },
+        generation=1,
+        now_dt=now_dt,
+    )
+
+    assert outcome["replaced"] is True
+    assert canceled == ["sampling-order-1"]
+    assert submitted == [
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 2,
+            "type": "limit",
+            "limit_price": 100.01,
+            "time_in_force": "day",
+            "extended_hours": False,
+            "client_order_id": "sampling-client-1-pr1",
+        }
+    ]
+    pending = engine._pending_orders["sampling-order-pr1"]
+    assert pending["correlation_id"] == "correlation-1"
+    assert pending["paper_sampling_reservation_token"] == "reservation-1"
+    assert pending["paper_sampling_reprice_generation"] == 1
+    assert [event["event"] for event in events] == [
+        "paper_sampling_passive_reprice_planned",
+        "paper_sampling_passive_reprice_submitted",
+    ]
+
+
+def test_passive_sampling_reprice_recovers_existing_child_and_cancels_parent():
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace()
+    order = SimpleNamespace(
+        id="sampling-order-1",
+        client_order_id="sampling-client-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+    )
+    recovered = {
+        "id": "sampling-order-pr1",
+        "client_order_id": "sampling-client-1-pr1",
+        "status": "accepted",
+        "symbol": "AAPL",
+        "side": "buy",
+        "qty": 2,
+    }
+    engine._pending_orders = {
+        "sampling-order-1": _verified_sampling_pending_entry()
+    }
+    engine._lookup_order_by_client_order_id = lambda *_, **__: recovered
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+
+    outcome = engine._replace_paper_sampling_limit_passively(
+        order=order,
+        context=_verified_sampling_pending_entry(),
+        config={},
+        generation=1,
+        now_dt=datetime(2026, 7, 21, 15, 0, tzinfo=UTC),
+    )
+
+    assert outcome["action"] == "passive_reprice_recovered"
+    assert outcome["replaced"] is True
+    assert canceled == ["sampling-order-1"]
+    assert "sampling-order-1" not in engine._pending_orders
+    assert engine._pending_orders["sampling-order-pr1"][
+        "paper_sampling_reprice_generation"
+    ] == 1
+
+
+def test_passive_sampling_reprice_cancels_without_submit_on_stale_quote(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace()
+    now_dt = datetime(2026, 7, 21, 15, 0, tzinfo=UTC)
+    order = SimpleNamespace(
+        id="sampling-order-1",
+        client_order_id="sampling-client-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+    )
+    engine._lookup_order_by_client_order_id = lambda *_, **__: None
+    engine._cancel_order_alpaca = lambda *_: True
+    engine._get_order_status_alpaca = lambda order_id: {
+        "id": order_id,
+        "status": "canceled",
+        "filled_qty": "0",
+    }
+    engine._submit_order_to_alpaca = lambda payload: pytest.fail(
+        "stale quote must not submit"
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_, **__: (
+            "broker_nbbo",
+            100.01,
+            100.03,
+            100.02,
+            100.03,
+            now_dt - timedelta(milliseconds=501),
+        ),
+    )
+
+    outcome = engine._replace_paper_sampling_limit_passively(
+        order=order,
+        context=_verified_sampling_pending_entry(),
+        config={
+            "quote_max_age_ms": 500.0,
+            "max_spread_bps": 10.0,
+            "max_notional": 750.0,
+        },
+        generation=1,
+        now_dt=now_dt,
+    )
+
+    assert outcome == {
+        "action_taken": True,
+        "replaced": False,
+        "action": "cancel",
+        "reason": "quote_age_above_max",
+        "quote_age_ms": pytest.approx(501.0),
+        "spread_bps": pytest.approx(1.9996000799843442),
+    }
+
+
 def test_retry_capacity_precheck_with_fresh_account_enables_submit(monkeypatch):
     engine = _engine_stub()
     original_account = SimpleNamespace(tag="orig")
@@ -4557,7 +4918,7 @@ def test_persist_fill_derived_trade_record_preserves_sell_short_side(monkeypatch
     fill_records: list[dict[str, Any]] = []
     fill_events: list[dict[str, Any]] = []
     reentry_sides: list[str] = []
-    tca_sides: list[str] = []
+    tca_calls: list[dict[str, Any]] = []
 
     monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
     monkeypatch.setattr(lt, "record_trade_fill", lambda payload: fill_records.append(dict(payload)))
@@ -4571,7 +4932,7 @@ def test_persist_fill_derived_trade_record_preserves_sell_short_side(monkeypatch
     monkeypatch.setattr(
         engine,
         "_reconcile_pending_tca_from_fill",
-        lambda **kwargs: tca_sides.append(str(kwargs["side"])),
+        lambda **kwargs: tca_calls.append(dict(kwargs)),
     )
 
     engine._persist_fill_derived_trade_record(
@@ -4586,12 +4947,27 @@ def test_persist_fill_derived_trade_record_preserves_sell_short_side(monkeypatch
         signal=None,
         timestamp=datetime(2026, 4, 26, tzinfo=UTC),
         closing_position=False,
+        runtime_payload={
+            "correlation_id": "correlation-short-1",
+            "source_timestamp": "2026-04-26T13:30:00+00:00",
+            "decision_ts": "2026-04-26T13:30:01+00:00",
+            "quote_timestamp": "2026-04-26T13:30:00.900000+00:00",
+            "paper_sampling_reservation_token": "reservation-short-1",
+        },
     )
 
     assert fill_records[-1]["side"] == "sell_short"
     assert fill_events[-1]["side"] == "sell_short"
     assert reentry_sides == ["sell_short"]
-    assert tca_sides == ["sell_short"]
+    assert fill_records[-1]["correlation_id"] == "correlation-short-1"
+    assert fill_records[-1]["evidence_type"] == "fill_execution"
+    assert fill_records[-1]["fill_based_evidence"] is True
+    assert fill_records[-1]["promotion_eligible"] is True
+    assert fill_records[-1]["paper_sampling_reservation_token"] == (
+        "reservation-short-1"
+    )
+    assert tca_calls[-1]["side"] == "sell_short"
+    assert tca_calls[-1]["correlation_id"] == "correlation-short-1"
 
 
 def test_live_side_normalizer_preserves_short_open_vocabulary():

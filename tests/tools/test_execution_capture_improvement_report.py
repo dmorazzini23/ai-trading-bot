@@ -6,6 +6,7 @@ import pytest
 
 from ai_trading.tools.execution_capture_improvement_report import (
     build_execution_capture_improvement_report,
+    is_fill_based_execution_evidence,
     main,
 )
 
@@ -87,6 +88,9 @@ def test_execution_capture_enriches_unique_bounded_fallback_and_derives_spread()
     assert row["metadata_sources"]["spread_bps"] == "derived_bid_ask_mid"
     assert row["quote_age_ms"] is None
     assert row["quote_age_bucket"] == "quote_age_unknown"
+    assert row["metadata_missing_reasons"]["quote_age_ms"] == (
+        "field_not_recorded_after_unique_symbol_side_time"
+    )
     assert row["market_regime"] == "sideways"
     assert row["execution_profile"] == "passive"
     assert report["metadata_quality"]["join_method_counts"] == {
@@ -184,6 +188,93 @@ def test_execution_capture_keeps_ambiguous_and_unmatched_metadata_unknown() -> N
     outside_row = outside_window["normalized_rows"][0]
     assert outside_row["metadata_join_method"] == "no_match"
     assert outside_row["order_type"] == "unknown"
+
+
+def test_execution_capture_disambiguates_same_second_children_and_excludes_shadow() -> None:
+    common_fill = {
+        "ts": "2026-07-01T15:30:30Z",
+        "correlation_id": "opp-shared",
+        "decision_trace_id": "trace-shared",
+        "symbol": "AAPL",
+        "side": "buy",
+        "realized_net_edge_bps": 2.0,
+        "qty": 1,
+    }
+    common_tca = {
+        "ts": "2026-07-01T15:30:00Z",
+        "correlation_id": "opp-shared",
+        "decision_trace_id": "trace-shared",
+        "symbol": "AAPL",
+        "side": "buy",
+        "expected_net_edge_bps": 4.0,
+        "session": "midday",
+        "market_regime": "sideways",
+        "decision_spread_bps": 2.0,
+    }
+    report = build_execution_capture_improvement_report(
+        report_date="2026-07-01",
+        fills=[
+            {**common_fill, "client_order_id": "child-1"},
+            {**common_fill, "client_order_id": "child-2"},
+            {
+                **common_fill,
+                "client_order_id": "shadow-child",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "fill_based_evidence": False,
+                "executed": False,
+            },
+        ],
+        tca_rows=[
+            {
+                **common_tca,
+                "client_order_id": "child-1",
+                "order_type": "limit",
+                "decision_quote_age_ms": 100.0,
+            },
+            {
+                **common_tca,
+                "client_order_id": "child-2",
+                "order_type": "market",
+                "decision_quote_age_ms": 900.0,
+            },
+        ],
+        min_bucket_samples=1,
+    )
+
+    assert report["sample_gate"]["samples"] == 2
+    assert report["sample_gate"]["non_fill_rows_excluded"] == 1
+    rows = {
+        row["client_order_id"]: row for row in report["normalized_rows"]
+    }
+    assert rows["child-1"]["metadata_join_method"] == "correlation_and_order_id"
+    assert rows["child-1"]["order_type"] == "limit"
+    assert rows["child-1"]["quote_age_ms"] == 100.0
+    assert rows["child-2"]["metadata_join_method"] == "correlation_and_order_id"
+    assert rows["child-2"]["order_type"] == "market"
+    assert rows["child-2"]["quote_age_ms"] == 900.0
+
+
+def test_fill_evidence_classifier_uses_explicit_real_fill_allowlist() -> None:
+    for evidence_type in (
+        "fill_execution",
+        "paper_fill",
+        "live_fill",
+        "executed_passive_fill",
+        "broker_fill",
+        "runtime_fill",
+    ):
+        assert is_fill_based_execution_evidence({"evidence_type": evidence_type})
+    for evidence_type in (
+        "historical_research",
+        "decision_opportunity",
+        "execution_intent",
+        "order_execution",
+        "shadow_counterfactual",
+        "hypothetical",
+    ):
+        assert not is_fill_based_execution_evidence({"evidence_type": evidence_type})
+    assert is_fill_based_execution_evidence({"symbol": "AAPL"})
 
 
 def test_execution_capture_improvement_cli_writes_latest(tmp_path) -> None:

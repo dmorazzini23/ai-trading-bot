@@ -13,7 +13,7 @@ import json
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, Iterable, Mapping, Sequence
@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.utils.base import is_market_open
 
 logger = get_logger(__name__)
 
@@ -100,6 +101,30 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     except ValueError:
         return max(minimum, int(default))
     return max(minimum, value)
+
+
+def _env_float(
+    name: str,
+    default: float,
+    *,
+    minimum: float = 0.0,
+    maximum: float | None = None,
+) -> float:
+    raw = _env_text(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float(default)
+    value = max(float(minimum), value)
+    return min(value, float(maximum)) if maximum is not None else value
+
+
+def _historical_backfill_enabled() -> bool:
+    return _truthy(_env_text("AI_TRADING_HISTORICAL_BACKFILL_ENABLED", "0"))
+
+
+def _historical_backfill_after_hours() -> bool:
+    return not bool(is_market_open(_now()))
 
 
 def _is_weekend_cadence(cadence: str) -> bool:
@@ -293,6 +318,12 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     metrics_control = config.run_dir / "metrics_improvement_control.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_lightweight"
     training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
+    historical_backfill = config.run_dir / "historical_training_backfill.json"
+    opportunity_markouts = config.run_dir / "opportunity_markouts.json"
+    historical_training_dir = config.run_dir / "historical_replay_aligned"
+    historical_training = (
+        historical_training_dir / "historical_replay_aligned_training_report.json"
+    )
     steps = [
         ResearchStep(
             name="refresh_runtime_reports",
@@ -1249,6 +1280,12 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 hf_cache,
                 "--training-accelerator-json",
                 training_accelerator,
+                "--opportunity-markouts-json",
+                opportunity_markouts,
+                "--historical-backfill-json",
+                historical_backfill,
+                "--historical-training-json",
+                historical_training,
                 "--expected-edge-calibration-json",
                 expected_edge_calibration,
                 "--evidence-starvation-json",
@@ -1314,6 +1351,192 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"live_money_authority": False, "manual_approval_required": True},
         ),
     ]
+    if _historical_backfill_enabled() and _historical_backfill_after_hours():
+        try:
+            end_date = date.fromisoformat(config.report_date)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid research report date: {config.report_date}"
+            ) from exc
+        lookback_days = _env_int(
+            "AI_TRADING_HISTORICAL_BACKFILL_LOOKBACK_DAYS",
+            365,
+        )
+        start_date = end_date - timedelta(days=lookback_days)
+        cache_root = Path(
+            _env_text(
+                "AI_TRADING_HISTORICAL_BACKFILL_CACHE_ROOT",
+                str(
+                    config.report_root
+                    / "latest"
+                    / "historical_training_cache"
+                ),
+            )
+        ).expanduser()
+        daily_research_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if step.name == "daily_research_pipeline"
+            ),
+            len(steps),
+        )
+        steps[daily_research_index:daily_research_index] = [
+            ResearchStep(
+                name="historical_training_backfill",
+                command=_python_module(
+                    "ai_trading.tools.historical_training_backfill",
+                    "--symbols",
+                    "AAPL,AMZN,MSFT",
+                    "--start",
+                    start_date.isoformat(),
+                    "--end",
+                    end_date.isoformat(),
+                    "--output-dir",
+                    cache_root,
+                    "--feed",
+                    _env_text("AI_TRADING_HISTORICAL_BACKFILL_FEED", "iex"),
+                    "--adjustment",
+                    _env_text(
+                        "AI_TRADING_HISTORICAL_BACKFILL_ADJUSTMENT",
+                        "raw",
+                    ),
+                    "--window-sessions",
+                    str(
+                        min(
+                            20,
+                            _env_int(
+                                "AI_TRADING_HISTORICAL_BACKFILL_WINDOW_SESSIONS",
+                                10,
+                            ),
+                        )
+                    ),
+                    "--request-limit",
+                    str(
+                        min(
+                            10_000,
+                            _env_int(
+                                "AI_TRADING_HISTORICAL_BACKFILL_REQUEST_LIMIT",
+                                10_000,
+                            ),
+                        )
+                    ),
+                    "--max-missing-ratio",
+                    str(
+                        _env_float(
+                            "AI_TRADING_HISTORICAL_BACKFILL_MAX_MISSING_RATIO",
+                            0.02,
+                            minimum=0.0,
+                            maximum=1.0,
+                        )
+                    ),
+                    "--output-json",
+                    historical_backfill,
+                ),
+                purpose=(
+                    "Materialize cached, quality-gated Alpaca one-minute bars "
+                    "after hours for research only."
+                ),
+                output_path=historical_backfill,
+                metadata={
+                    "research_only": True,
+                    "evidence_type": "historical_research",
+                    "promotion_eligible": False,
+                    "promotion_authority": False,
+                    "live_money_authority": False,
+                    "after_hours_only": True,
+                    "governed_symbols": ["AAPL", "AMZN", "MSFT"],
+                },
+            ),
+            ResearchStep(
+                name="opportunity_markouts",
+                command=_python_module(
+                    "ai_trading.tools.opportunity_markout_report",
+                    "--report-date",
+                    config.report_date,
+                    "--decisions-jsonl",
+                    _runtime_input_path("runtime/decision_records.jsonl"),
+                    "--historical-backfill-json",
+                    historical_backfill,
+                    "--symbols",
+                    "AAPL,AMZN,MSFT",
+                    "--fee-bps",
+                    str(_env_float("AI_TRADING_MARKOUT_FEE_BPS", 0.0, minimum=0.0)),
+                    "--slippage-bps",
+                    str(
+                        _env_float(
+                            "AI_TRADING_MARKOUT_SLIPPAGE_BPS",
+                            0.0,
+                            minimum=0.0,
+                        )
+                    ),
+                    "--output-json",
+                    opportunity_markouts,
+                    "--latest-json",
+                    config.report_root / "latest" / "opportunity_markouts_latest.json",
+                ),
+                purpose=(
+                    "Resolve 1/3/5-bar counterfactual outcomes for every governed "
+                    "eligible opportunity without treating them as fill evidence."
+                ),
+                output_path=opportunity_markouts,
+                skip_if_missing=(
+                    historical_backfill,
+                    _runtime_input_path("runtime/decision_records.jsonl"),
+                ),
+                metadata={
+                    "research_only": True,
+                    "evidence_type": "shadow_counterfactual",
+                    "promotion_eligible": False,
+                    "promotion_authority": False,
+                    "runtime_authority": False,
+                    "live_money_authority": False,
+                    "horizons_bars": [1, 3, 5],
+                    "governed_symbols": ["AAPL", "AMZN", "MSFT"],
+                },
+            ),
+            ResearchStep(
+                name="historical_replay_aligned_training",
+                command=_python_module(
+                    "ai_trading.tools.train_replay_aligned_model",
+                    "--acquisition-manifest-json",
+                    historical_backfill,
+                    "--symbols",
+                    "AAPL,AMZN,MSFT",
+                    "--output-dir",
+                    historical_training_dir,
+                    "--model-name",
+                    "historical_replay_aligned",
+                    "--horizon-bars",
+                    "1",
+                    "--label-objective",
+                    "risk_adjusted",
+                    "--live-cost-model-json",
+                    live_cost,
+                    "--use-live-cost-model",
+                    "--training-cache-dir",
+                    config.report_root
+                    / "latest"
+                    / "training_cache"
+                    / "historical_replay_aligned",
+                ),
+                purpose=(
+                    "Train a cost-adjusted replay model only from quality-passed "
+                    "historical research data."
+                ),
+                output_path=historical_training,
+                skip_if_missing=(historical_backfill,),
+                metadata={
+                    "research_only": True,
+                    "evidence_type": "historical_research",
+                    "promotion_eligible": False,
+                    "promotion_authority": False,
+                    "live_money_authority": False,
+                    "walk_forward": "contiguous_with_embargo",
+                },
+            ),
+        ]
+
     if config.data_dir is not None:
         daily_research_index = next(
             (
@@ -3073,6 +3296,26 @@ def _copy_authority_artifacts(
                         for_write=True,
                     ),
                 ]
+            )
+        elif name == "historical_training_backfill":
+            targets.append(latest_dir / "historical_training_backfill_latest.json")
+        elif name == "opportunity_markouts":
+            targets.extend(
+                [
+                    latest_dir / "opportunity_markouts_latest.json",
+                    resolve_runtime_artifact_path(
+                        "runtime/research_reports/latest/opportunity_markouts_latest.json",
+                        default_relative=(
+                            "runtime/research_reports/latest/"
+                            "opportunity_markouts_latest.json"
+                        ),
+                        for_write=True,
+                    ),
+                ]
+            )
+        elif name == "historical_replay_aligned_training":
+            targets.append(
+                latest_dir / "historical_replay_aligned_training_latest.json"
             )
         elif name in {
             "training_accelerator_weekend_broad",

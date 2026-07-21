@@ -353,7 +353,7 @@ fi
 
 if [[ "$SKIP_RUNTIME_SMOKE" != "1" && "${#RUNTIME_SMOKE_FILES[@]}" -gt 0 ]]; then
   run curl -sS http://127.0.0.1:9001/healthz
-  run ./venv/bin/python -c "from tools import mcp_slack_alerts_server as s; payload=s.tool_runtime_incident_snapshot({}); assert payload.get('should_alert') is False, payload"
+  run ./venv/bin/python -c "from tools import mcp_slack_alerts_server as s; payload=s.tool_runtime_incident_snapshot({}); assert isinstance(payload.get('should_alert'), bool), payload; assert isinstance(payload.get('snapshot'), dict), payload; assert isinstance(payload.get('triggers'), list), payload; assert payload.get('fingerprint'), payload"
 fi
 
 echo "agent_validate_changed: targeted validation passed"

@@ -67,6 +67,13 @@ def _status(payload: Mapping[str, Any], default: str = "missing") -> str:
     return str(raw or default)
 
 
+def _nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _promotion_ok(payload: Mapping[str, Any]) -> bool:
     return bool(payload.get("promotion_ready") or payload.get("status") == "ready_for_approval")
 
@@ -243,6 +250,9 @@ def build_daily_research_report(
     portfolio_edge: Mapping[str, Any] | None = None,
     decision_receipts: Mapping[str, Any] | None = None,
     training_accelerator: Mapping[str, Any] | None = None,
+    opportunity_markouts: Mapping[str, Any] | None = None,
+    historical_backfill: Mapping[str, Any] | None = None,
+    historical_training: Mapping[str, Any] | None = None,
     expected_edge_calibration: Mapping[str, Any] | None = None,
     evidence_starvation: Mapping[str, Any] | None = None,
     paper_sampling_state: Mapping[str, Any] | None = None,
@@ -282,6 +292,9 @@ def build_daily_research_report(
     portfolio_edge = portfolio_edge or {}
     decision_receipts = decision_receipts or {}
     training_accelerator = training_accelerator or {}
+    opportunity_markouts = opportunity_markouts or {}
+    historical_backfill = historical_backfill or {}
+    historical_training = historical_training or {}
     expected_edge_calibration = expected_edge_calibration or {}
     evidence_starvation = evidence_starvation or {}
     paper_sampling_state = paper_sampling_state or {}
@@ -305,6 +318,24 @@ def build_daily_research_report(
     huggingface_discovery = huggingface_discovery or {}
     huggingface_candidate_intake = huggingface_candidate_intake or {}
     huggingface_cache_materialization = huggingface_cache_materialization or {}
+    historical_symbol_rows = historical_backfill.get("symbols")
+    historical_rows = sum(
+        _nonnegative_int(row.get("row_count"))
+        for row in historical_symbol_rows
+        if isinstance(row, Mapping)
+    ) if isinstance(historical_symbol_rows, list) else 0
+    model_shadow_rows = _nonnegative_int(
+        shadow_report.get("filtered_rows", shadow_report.get("raw_rows", 0))
+    )
+    opportunity_markout_rows = _nonnegative_int(
+        opportunity_markouts.get("outcomes_emitted")
+    )
+    shadow_rows = (
+        opportunity_markout_rows if opportunity_markouts else model_shadow_rows
+    )
+    paper_fill_rows = _nonnegative_int(
+        _nested(execution_capture, "sample_gate").get("samples")
+    )
     huggingface_research = _hf_summary(
         huggingface_discovery,
         huggingface_candidate_intake,
@@ -335,6 +366,32 @@ def build_daily_research_report(
             "status": _status(_nested(shadow_report, "sample_gate")),
             "decision_summary": _nested(shadow_report, "decision_summary"),
             "sample_gate": _nested(shadow_report, "sample_gate"),
+        },
+        "opportunity_markouts": {
+            "available": bool(opportunity_markouts),
+            "eligible_opportunities": _nonnegative_int(
+                opportunity_markouts.get("eligible_opportunities")
+            ),
+            "outcomes_emitted": opportunity_markout_rows,
+            "horizons_bars": opportunity_markouts.get("horizons_bars", []),
+            "label_status_counts": _nested(
+                opportunity_markouts,
+                "label_status_counts",
+            ),
+            "label_reason_counts": _nested(
+                opportunity_markouts,
+                "label_reason_counts",
+            ),
+            "bars_provenance": _nested(
+                opportunity_markouts,
+                "bars_provenance",
+            ),
+            "model_shadow_telemetry_samples": model_shadow_rows,
+            "evidence_type": "shadow_counterfactual",
+            "promotion_eligible": False,
+            "promotion_authority": False,
+            "runtime_authority": False,
+            "live_money_authority": False,
         },
         "replay_status": _replay_status(replay_governance),
         "promotion_status": {
@@ -460,6 +517,65 @@ def build_daily_research_report(
             "timing": _nested(training_accelerator, "timing"),
             "ranked_candidate_count": training_accelerator.get("ranked_candidate_count"),
             "lead_candidate_count": training_accelerator.get("lead_candidate_count"),
+        },
+        "evidence_collection": {
+            "promotion_policy": "executed_paper_or_live_fill_evidence_only",
+            "promotion_eligible_sample_count": paper_fill_rows,
+            "sources": {
+                "historical_research": {
+                    "samples": historical_rows,
+                    "available": bool(historical_backfill),
+                    "quality_passed": bool(
+                        historical_backfill.get("quality_passed", False)
+                    ),
+                    "evidence_type": "historical_research",
+                    "promotion_eligible": False,
+                    "promotion_exclusion_reason": (
+                        "historical_research_is_not_execution_evidence"
+                    ),
+                },
+                "shadow_counterfactual": {
+                    "samples": shadow_rows,
+                    "available": bool(opportunity_markouts or shadow_report),
+                    "source": (
+                        "universal_opportunity_markouts"
+                        if opportunity_markouts
+                        else "model_shadow_telemetry"
+                    ),
+                    "evidence_type": "shadow_counterfactual",
+                    "promotion_eligible": False,
+                    "promotion_exclusion_reason": (
+                        "shadow_counterfactual_is_not_fill_evidence"
+                    ),
+                },
+                "paper_fill": {
+                    "samples": paper_fill_rows,
+                    "available": bool(execution_capture),
+                    "evidence_type": "paper_fill",
+                    "promotion_eligible": True,
+                    "eligibility_scope": "sample_threshold_evidence_only",
+                },
+            },
+            "excluded_from_promotion": {
+                "historical_research": historical_rows,
+                "shadow_counterfactual": shadow_rows,
+            },
+        },
+        "historical_training": {
+            "available": bool(historical_training),
+            "status": historical_training.get(
+                "status",
+                "ready" if historical_training else "missing",
+            ),
+            "dataset_hash": (
+                _nested(historical_training, "acquisition").get("dataset_hash")
+                or _nested(historical_training, "dataset").get("dataset_hash")
+            ),
+            "walk_forward": _nested(historical_training, "walk_forward"),
+            "authority": _nested(historical_training, "authority"),
+            "promotion_eligible": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
         },
         "expected_edge_calibration": {
             "available": bool(expected_edge_calibration),
@@ -913,6 +1029,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--portfolio-edge-json", type=Path, default=None)
     parser.add_argument("--decision-receipts-json", type=Path, default=None)
     parser.add_argument("--training-accelerator-json", type=Path, default=None)
+    parser.add_argument("--opportunity-markouts-json", type=Path, default=None)
+    parser.add_argument("--historical-backfill-json", type=Path, default=None)
+    parser.add_argument("--historical-training-json", type=Path, default=None)
     parser.add_argument("--expected-edge-calibration-json", type=Path, default=None)
     parser.add_argument("--evidence-starvation-json", type=Path, default=None)
     parser.add_argument("--paper-sampling-state-json", type=Path, default=None)
@@ -1007,6 +1126,26 @@ def main(argv: list[str] | None = None) -> int:
         training_accelerator=_read_json(
             args.training_accelerator_json
             or _default_path("runtime/training_accelerator_daily_latest.json")
+        ),
+        opportunity_markouts=_read_json(
+            args.opportunity_markouts_json
+            or _default_path(
+                "runtime/research_reports/latest/opportunity_markouts_latest.json"
+            )
+        ),
+        historical_backfill=_read_json(
+            args.historical_backfill_json
+            or _default_path(
+                "runtime/research_reports/latest/"
+                "historical_training_backfill_latest.json"
+            )
+        ),
+        historical_training=_read_json(
+            args.historical_training_json
+            or _default_path(
+                "runtime/research_reports/latest/"
+                "historical_replay_aligned_training_latest.json"
+            )
         ),
         expected_edge_calibration=_read_json(
             args.expected_edge_calibration_json

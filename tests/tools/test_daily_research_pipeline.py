@@ -71,6 +71,68 @@ def test_daily_research_report_exposes_shadow_when_champion_is_blocked(
     assert report["model_registry"]["manual_approval_required"] is True
 
 
+def test_daily_research_report_separates_promotion_evidence_sources(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+
+    report = daily_research_pipeline.build_daily_research_report(
+        report_date="2026-07-20",
+        shadow_report={"filtered_rows": 10_000},
+        opportunity_markouts={
+            "eligible_opportunities": 10,
+            "outcomes_emitted": 30,
+            "horizons_bars": [1, 3, 5],
+            "label_status_counts": {"resolved": 30},
+            "bars_provenance": {"quality_passed": True},
+            "promotion_eligible": False,
+            "runtime_authority": False,
+        },
+        execution_capture={"sample_gate": {"samples": 7}},
+        historical_backfill={
+            "quality_passed": True,
+            "symbols": [
+                {"symbol": "AAPL", "row_count": 6_000},
+                {"symbol": "AMZN", "row_count": 3_000},
+                {"symbol": "MSFT", "row_count": 1_000},
+            ],
+        },
+        historical_training={
+            "status": "complete",
+            "acquisition": {"dataset_hash": "dataset-sha"},
+            "authority": {
+                "research_only": True,
+                "evidence_type": "historical_research",
+                "promotion_eligible": False,
+            },
+            "walk_forward": {"evaluation_type": "contiguous"},
+        },
+    )
+
+    evidence = report["evidence_collection"]
+    assert evidence["promotion_eligible_sample_count"] == 7
+    assert evidence["sources"]["historical_research"]["samples"] == 10_000
+    assert evidence["sources"]["historical_research"]["promotion_eligible"] is False
+    assert evidence["sources"]["shadow_counterfactual"]["samples"] == 30
+    assert evidence["sources"]["shadow_counterfactual"]["promotion_eligible"] is False
+    assert evidence["sources"]["shadow_counterfactual"]["source"] == (
+        "universal_opportunity_markouts"
+    )
+    assert evidence["sources"]["paper_fill"]["samples"] == 7
+    assert evidence["sources"]["paper_fill"]["promotion_eligible"] is True
+    assert evidence["excluded_from_promotion"] == {
+        "historical_research": 10_000,
+        "shadow_counterfactual": 30,
+    }
+    assert report["opportunity_markouts"]["outcomes_emitted"] == 30
+    assert report["opportunity_markouts"]["model_shadow_telemetry_samples"] == 10_000
+    assert report["opportunity_markouts"]["promotion_authority"] is False
+    assert report["opportunity_markouts"]["runtime_authority"] is False
+    assert report["historical_training"]["dataset_hash"] == "dataset-sha"
+    assert report["historical_training"]["promotion_authority"] is False
+    assert report["historical_training"]["live_money_authority"] is False
+
+
 def test_daily_research_report_blocks_on_critical_memory(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
 

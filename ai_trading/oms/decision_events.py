@@ -37,6 +37,12 @@ def _idempotency_key(payload: Mapping[str, Any]) -> str:
     net_target_payload = _as_mapping(payload.get("net_target"))
     material = {
         "schema_version": str(payload.get("schema_version") or ""),
+        "correlation_id": str(
+            payload.get("correlation_id")
+            or metrics_payload.get("correlation_id")
+            or order_payload.get("correlation_id")
+            or ""
+        ).strip(),
         "symbol": str(payload.get("symbol") or "").strip().upper(),
         "bar_ts": str(payload.get("bar_ts") or ""),
         "gates": list(payload.get("gates") or []),
@@ -189,6 +195,9 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     snapshot_payload = _as_mapping(payload.get("config_snapshot"))
     order_payload = _as_mapping(payload.get("order"))
     tca_payload = _as_mapping(payload.get("tca"))
+    journal_payload = _as_mapping(payload.get("decision_journal"))
+    journal_metadata = _as_mapping(journal_payload.get("metadata"))
+    journal_intent = _as_mapping(journal_payload.get("order_intent"))
 
     policy_hash = (
         _lineage_text(snapshot_payload.get("effective_policy_hash"))
@@ -235,6 +244,8 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     decision_trace_id = (
         _lineage_text(payload.get("decision_trace_id"))
         or _lineage_text(order_payload.get("decision_trace_id"))
+        or _lineage_text(journal_payload.get("decision_trace_id"))
+        or _lineage_text(journal_intent.get("decision_trace_id"))
     )
     if decision_trace_id is None:
         symbol = str(payload.get("symbol") or "").strip().upper()
@@ -271,6 +282,49 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         lineage["model_artifact_hash"] = model_artifact_hash
     if decision_trace_id is not None:
         lineage["decision_trace_id"] = decision_trace_id
+    correlation_id = (
+        _lineage_text(payload.get("correlation_id"))
+        or _lineage_text(journal_payload.get("correlation_id"))
+        or _lineage_text(metrics_payload.get("correlation_id"))
+        or _lineage_text(order_payload.get("correlation_id"))
+        or _lineage_text(journal_intent.get("correlation_id"))
+        or _lineage_text(tca_payload.get("correlation_id"))
+    )
+    if correlation_id is not None:
+        lineage["correlation_id"] = correlation_id
+    for key in (
+        "source_timestamp",
+        "decision_ts",
+        "quote_timestamp",
+        "order_type",
+        "session_regime",
+        "market_regime",
+        "volatility_regime",
+        "trend_regime",
+        "execution_profile",
+        "quote_age_ms",
+        "decision_quote_age_ms",
+        "spread_bps",
+        "decision_spread_bps",
+        "paper_sampling_reservation_token",
+    ):
+        value = next(
+            (
+                source.get(key)
+                for source in (
+                    metrics_payload,
+                    order_payload,
+                    journal_payload,
+                    journal_metadata,
+                    journal_intent,
+                    tca_payload,
+                )
+                if source.get(key) not in (None, "")
+            ),
+            None,
+        )
+        if value not in (None, ""):
+            lineage[key] = value
     return lineage
 
 
@@ -310,11 +364,15 @@ def _context(payload: Mapping[str, Any]) -> dict[str, Any]:
         "order_side": order_payload.get("side"),
         "order": {
             "id": order_payload.get("id"),
+            "broker_order_id": order_payload.get("broker_order_id"),
             "client_order_id": order_payload.get("client_order_id"),
+            "correlation_id": order_payload.get("correlation_id"),
+            "decision_trace_id": order_payload.get("decision_trace_id"),
             "side": order_payload.get("side"),
             "qty": order_payload.get("qty"),
             "quantity": order_payload.get("quantity"),
             "price": order_payload.get("price"),
+            "order_type": order_payload.get("order_type"),
         },
         "net_target": {
             "target_dollars": net_target_payload.get("target_dollars"),

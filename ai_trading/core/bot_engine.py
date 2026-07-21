@@ -156,6 +156,7 @@ from ai_trading.runtime.quarantine import (
     save_quarantine_state,
 )
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.runtime.paper_sampling import paper_sampling_deficit_snapshot
 from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import (
     enforce_artifact_verification,
@@ -2587,6 +2588,70 @@ def _pre_rank_execution_candidates(
     else:
         ranked = list(deduped)
 
+    sampling_priority_symbols: list[str] = []
+    sampling_priority_reason = "inactive"
+    sampling_snapshot: Mapping[str, Any] = {}
+    if runtime is not None and _paper_sampling_runtime_active():
+        try:
+            sampling_cfg = getattr(runtime, "cfg", None) or _get_trading_config()
+            sampling_snapshot = paper_sampling_deficit_snapshot(sampling_cfg)
+        except BOT_ENGINE_FALLBACK_EXC as exc:
+            logger.warning(
+                "PAPER_SAMPLING_PRERANK_SNAPSHOT_FAILED",
+                extra={"error": str(exc)},
+            )
+            sampling_snapshot = {}
+        if bool(sampling_snapshot.get("active")) and bool(
+            sampling_snapshot.get("fairness_enabled")
+        ):
+            configured_raw = sampling_snapshot.get("configured_symbols")
+            configured_symbols = {
+                str(symbol).strip().upper()
+                for symbol in configured_raw
+                if str(symbol).strip()
+            } if isinstance(configured_raw, Sequence) and not isinstance(
+                configured_raw,
+                (str, bytes),
+            ) else set()
+            priority_raw = sampling_snapshot.get("priority_symbols")
+            priority_candidates = [
+                str(symbol).strip().upper()
+                for symbol in priority_raw
+                if str(symbol).strip()
+            ] if isinstance(priority_raw, Sequence) and not isinstance(
+                priority_raw,
+                (str, bytes),
+            ) else []
+            ranked_set = set(ranked)
+            sampling_priority_symbols = [
+                symbol
+                for symbol in priority_candidates
+                if symbol in configured_symbols and symbol in ranked_set
+            ]
+            sampling_priority_reason = str(
+                sampling_snapshot.get("priority_reason") or "balanced"
+            )
+            if sampling_priority_symbols:
+                # Existing quality/rank ordering remains intact within each
+                # partition. Only an explicit canonical reserved-stratum
+                # deficit may move already-eligible symbols ahead of peers.
+                original_rank = {
+                    symbol: index for index, symbol in enumerate(ranked)
+                }
+                priority_rank = {
+                    symbol: index
+                    for index, symbol in enumerate(sampling_priority_symbols)
+                }
+                ranked = sorted(
+                    ranked,
+                    key=lambda symbol: (
+                        0 if symbol in priority_rank else 1,
+                        priority_rank.get(symbol, original_rank[symbol]),
+                        original_rank[symbol],
+                    ),
+                )
+                rank_source = f"{rank_source}+paper_sampling_deficit"
+
     exploration_enabled = False
     exploration_slots = 0
     exploration_symbols: list[str] = []
@@ -2700,6 +2765,12 @@ def _pre_rank_execution_candidates(
             "adaptive_submit_cap": adaptive_submit_cap,
             "adaptive_submit_cap_source": adaptive_submit_cap_source,
             "rank_source": rank_source,
+            "paper_sampling_priority_reason": sampling_priority_reason,
+            "paper_sampling_priority_symbols": sampling_priority_symbols,
+            "paper_sampling_snapshot_date": sampling_snapshot.get("date"),
+            "paper_sampling_snapshot_session": sampling_snapshot.get(
+                "session_bucket"
+            ),
             "prerank_cycle": int(prerank_cycle),
             "exploration_enabled": bool(exploration_enabled),
             "exploration_slots": int(exploration_slots),
@@ -41618,6 +41689,30 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     market_open_now = governance_snapshot.market_open_now
     decision_path = getattr(cfg, "decision_log_path", None)
     write_decision_record_impl = cast(Any, globals().get("_write_decision_record"))
+    sampling_symbols = {
+        str(symbol).strip().upper()
+        for symbol in getattr(cfg, "paper_sampling_allowed_symbols", ())
+        if str(symbol).strip()
+    }
+
+    def _decision_quote_snapshot(symbol: str) -> dict[str, Any]:
+        payload = dict(_ml_shadow_quote_snapshot(symbol=symbol))
+        normalized_symbol = str(symbol).strip().upper()
+        paper_sampling_passive = (
+            str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+            == "paper"
+            and bool(getattr(cfg, "paper_sampling_enabled", False))
+            and bool(getattr(cfg, "paper_sampling_passive_only", True))
+            and normalized_symbol in sampling_symbols
+        )
+        payload["execution_profile"] = (
+            "paper_sampling_passive" if paper_sampling_passive else "standard"
+        )
+        payload["market_regime"] = _normalize_regime_name(
+            getattr(state, "current_regime", "")
+        )
+        return payload
+
     decision_recorder = DecisionRecorder(
         runtime=runtime,
         path=decision_path,
@@ -41625,6 +41720,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         dedupe_gate_root_causes=_dedupe_gate_root_causes,
         session_bucket_from_ts=_session_bucket_from_ts,
         safe_float=_safe_float,
+        quote_snapshot_func=_decision_quote_snapshot,
     )
 
     def _make_decision_record(**kwargs: Any) -> Any:

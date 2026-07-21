@@ -428,6 +428,48 @@ def test_decision_journal_uses_explicit_event_and_freshness_metrics() -> None:
     assert journal["data_freshness_sec"] == 17.5
 
 
+def test_blocked_decision_record_has_stable_top_level_correlation() -> None:
+    bar_ts = datetime(2026, 7, 21, 14, 30, tzinfo=UTC)
+    target = NettedTarget(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        target_dollars=0.0,
+        target_shares=0.0,
+        proposals=[
+            SleeveProposal(
+                symbol="AAPL",
+                sleeve="day",
+                bar_ts=bar_ts,
+                target_dollars=500.0,
+                expected_edge_bps=8.0,
+                expected_cost_bps=4.0,
+                score=0.6,
+                confidence=0.8,
+            )
+        ],
+    )
+
+    first = build_decision_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=target,
+        gates=["NET_EDGE_FLOOR_GATE"],
+        metrics={"source_timestamp": bar_ts.isoformat()},
+    ).to_dict()
+    second = build_decision_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=target,
+        gates=["METRICS_IMPROVEMENT_CONTROLLED_SKIP"],
+        metrics={"source_timestamp": bar_ts.isoformat()},
+    ).to_dict()
+
+    assert first["correlation_id"].startswith("opp_")
+    assert second["correlation_id"] == first["correlation_id"]
+    assert first["decision_journal"]["correlation_id"] == first["correlation_id"]
+    assert first["decision_journal"]["submitted"] is False
+
+
 def test_market_and_execution_contracts_serialize() -> None:
     ts = datetime.now(UTC)
     bar = Bar.from_mapping(

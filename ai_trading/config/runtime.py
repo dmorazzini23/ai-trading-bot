@@ -998,8 +998,23 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_max_trades_per_day",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY",),
         cast="int",
-        default=2,
+        default=12,
         description="Maximum diagnostic paper-sampling orders allowed per UTC day.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="paper_sampling_stratified_fairness_enabled",
+        env=("AI_TRADING_PAPER_SAMPLING_STRATIFIED_FAIRNESS_ENABLED",),
+        cast="bool",
+        default=True,
+        description="Reserve diagnostic entry capacity fairly across governed symbols and market sessions.",
+    ),
+    ConfigSpec(
+        field="paper_sampling_symbol_fairness_max_lead",
+        env=("AI_TRADING_PAPER_SAMPLING_SYMBOL_FAIRNESS_MAX_LEAD",),
+        cast="int",
+        default=1,
+        description="Largest allowed entry-count lead over an underfilled governed symbol.",
         min_value=1,
     ),
     ConfigSpec(
@@ -1014,7 +1029,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_max_trades_per_side_per_day",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SIDE_PER_DAY",),
         cast="int",
-        default=6,
+        default=12,
         description="Maximum diagnostic paper-sampling opening orders allowed per side per UTC day.",
         min_value=0,
     ),
@@ -1022,7 +1037,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_max_opening_trades_per_day",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_OPENING_TRADES_PER_DAY",),
         cast="int",
-        default=3,
+        default=4,
         description="Maximum diagnostic paper-sampling opening-session orders allowed per UTC day.",
         min_value=0,
     ),
@@ -1030,7 +1045,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_max_midday_trades_per_day",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_MIDDAY_TRADES_PER_DAY",),
         cast="int",
-        default=4,
+        default=8,
         description="Maximum diagnostic paper-sampling midday-session orders allowed per UTC day.",
         min_value=0,
     ),
@@ -1038,8 +1053,32 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="paper_sampling_max_closing_trades_per_day",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_CLOSING_TRADES_PER_DAY",),
         cast="int",
-        default=3,
+        default=4,
         description="Maximum diagnostic paper-sampling closing-session orders allowed per UTC day.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_reserved_opening_trades_per_day",
+        env=("AI_TRADING_PAPER_SAMPLING_RESERVED_OPENING_TRADES_PER_DAY",),
+        cast="int",
+        default=1,
+        description="Minimum daily capacity reserved for opening-session diagnostic entries.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_reserved_midday_trades_per_day",
+        env=("AI_TRADING_PAPER_SAMPLING_RESERVED_MIDDAY_TRADES_PER_DAY",),
+        cast="int",
+        default=1,
+        description="Minimum daily capacity reserved for midday-session diagnostic entries.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_reserved_closing_trades_per_day",
+        env=("AI_TRADING_PAPER_SAMPLING_RESERVED_CLOSING_TRADES_PER_DAY",),
+        cast="int",
+        default=1,
+        description="Minimum daily capacity reserved for closing-session diagnostic entries.",
         min_value=0,
     ),
     ConfigSpec(
@@ -1056,6 +1095,72 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="bool",
         default=True,
         description="Require opening paper samples to use non-marketable DAY limit orders at the accepted quote.",
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_enabled",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_ENABLED",),
+        cast="bool",
+        default=False,
+        description="Enable bounded cancel-and-reprice for passive paper-sampling orders only.",
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_timeout_sec",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_TIMEOUT_SEC",),
+        cast="float",
+        default=45.0,
+        description="Seconds a passive paper-sampling order may rest before repricing.",
+        min_value=8.0,
+        max_value=3600.0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_max_retries",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_MAX_RETRIES",),
+        cast="int",
+        default=2,
+        description="Maximum cancel-and-reprice generations for one paper-sampling order.",
+        min_value=0,
+        max_value=8,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_cooldown_sec",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_COOLDOWN_SEC",),
+        cast="float",
+        default=30.0,
+        description="Minimum seconds between passive reprice actions for one order.",
+        min_value=0.0,
+        max_value=1800.0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_quote_max_age_ms",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_QUOTE_MAX_AGE_MS",),
+        cast="float",
+        default=2500.0,
+        description="Maximum quote age accepted for a passive replacement price.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_max_spread_bps",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_MAX_SPREAD_BPS",),
+        cast="float",
+        default=20.0,
+        description="Maximum spread accepted for a passive replacement price.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_max_actions_per_cycle",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_MAX_ACTIONS_PER_CYCLE",),
+        cast="int",
+        default=2,
+        description="Maximum passive cancel-and-reprice actions in one runtime cycle.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="paper_sampling_passive_reprice_hard_cancel_before_close_sec",
+        env=("AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_HARD_CANCEL_BEFORE_CLOSE_SEC",),
+        cast="float",
+        default=300.0,
+        description="Seconds before the close when managed passive orders must only cancel.",
+        min_value=0.0,
     ),
     ConfigSpec(
         field="paper_sampling_relax_edge_gates_enabled",
@@ -2962,6 +3067,8 @@ class TradingConfig:
         values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
         values.setdefault("paper", _infer_paper_mode(values))
         values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
+        if not bool(values.get("paper_sampling_enabled")):
+            values["paper_sampling_passive_reprice_enabled"] = False
         _validate_paper_sampling_config(values, env_map)
 
         return cls(
@@ -3212,7 +3319,8 @@ def _apply_live_execution_quote_defaults(
 
 
 def _validate_paper_sampling_config(values: Mapping[str, Any], env_map: Mapping[str, Any]) -> None:
-    if not bool(values.get("paper_sampling_enabled")):
+    sampling_enabled = bool(values.get("paper_sampling_enabled"))
+    if not sampling_enabled:
         return
     execution_mode = str(values.get("execution_mode") or "sim").strip().lower()
     paper_mode = bool(values.get("paper"))
@@ -3242,6 +3350,41 @@ def _validate_paper_sampling_config(values: Mapping[str, Any], env_map: Mapping[
             "AI_TRADING_PAPER_SAMPLING_ALLOWED_SYMBOLS must be limited to "
             "AAPL,AMZN,MSFT."
         )
+    reserved_by_session = {
+        "opening": int(
+            values.get("paper_sampling_reserved_opening_trades_per_day") or 0
+        ),
+        "midday": int(
+            values.get("paper_sampling_reserved_midday_trades_per_day") or 0
+        ),
+        "closing": int(
+            values.get("paper_sampling_reserved_closing_trades_per_day") or 0
+        ),
+    }
+    session_caps = {
+        "opening": int(
+            values.get("paper_sampling_max_opening_trades_per_day") or 0
+        ),
+        "midday": int(
+            values.get("paper_sampling_max_midday_trades_per_day") or 0
+        ),
+        "closing": int(
+            values.get("paper_sampling_max_closing_trades_per_day") or 0
+        ),
+    }
+    max_trades = int(values.get("paper_sampling_max_trades_per_day") or 0)
+    if sum(reserved_by_session.values()) > max_trades:
+        raise ValueError(
+            "Paper-sampling reserved session slots must not exceed "
+            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY."
+        )
+    for session, reserved in reserved_by_session.items():
+        session_cap = session_caps[session]
+        if session_cap > 0 and reserved > session_cap:
+            raise ValueError(
+                f"Paper-sampling reserved {session} slots must not exceed "
+                f"the {session} session cap."
+            )
     if float(values.get("paper_sampling_max_notional_per_order") or 0.0) > 750.0:
         raise ValueError(
             "AI_TRADING_PAPER_SAMPLING_MAX_NOTIONAL_PER_ORDER must be <= 750."

@@ -81,3 +81,88 @@ def test_decision_receipts_complete_aggregate_gate_summary_rows() -> None:
     assert receipt["receipt_granularity"] == "aggregate_gate_summary"
     assert receipt["records_total"] == 2
     assert receipt["rejected_records"] == 2
+
+
+def test_decision_receipts_disambiguate_children_with_same_correlation() -> None:
+    decisions = [
+        {
+            "correlation_id": "opp-shared",
+            "decision_trace_id": "trace-shared",
+            "symbol": "AAPL",
+            "status": "accepted",
+            "order": {"client_order_id": child, "correlation_id": "opp-shared"},
+        }
+        for child in ("child-1", "child-2")
+    ]
+    payload = report_tool.build_decision_receipts_report(
+        report_date="2026-07-21",
+        decisions=decisions,
+        order_intents=[
+            {
+                "correlation_id": "opp-shared",
+                "decision_trace_id": "trace-shared",
+                "client_order_id": child,
+                "status": "submitted",
+            }
+            for child in ("child-1", "child-2")
+        ],
+        fills=[
+            {
+                "correlation_id": "opp-shared",
+                "decision_trace_id": "trace-shared",
+                "client_order_id": "child-1",
+                "status": "filled",
+                "realized_net_edge_bps": 1.0,
+            },
+            {
+                "correlation_id": "opp-shared",
+                "decision_trace_id": "trace-shared",
+                "client_order_id": "child-2",
+                "status": "filled",
+                "realized_net_edge_bps": 2.0,
+            },
+        ],
+    )
+
+    assert payload["status"] == "complete"
+    receipts = {
+        receipt["realized_net_edge_bps"]: receipt
+        for receipt in payload["receipts"]
+    }
+    assert set(receipts) == {1.0, 2.0}
+    assert all(
+        receipt["link_methods"]["fill"] == "correlation_and_order_id"
+        for receipt in receipts.values()
+    )
+
+
+def test_decision_receipts_keep_controlled_skip_joinable_without_fill_evidence() -> None:
+    payload = report_tool.build_decision_receipts_report(
+        report_date="2026-07-21",
+        decisions=[
+            {
+                "correlation_id": "opp-controlled-skip",
+                "symbol": "MSFT",
+                "status": "skipped",
+                "reasons": ["METRICS_IMPROVEMENT_CONTROLLED_SKIP"],
+            }
+        ],
+        fills=[
+            {
+                "correlation_id": "opp-controlled-skip",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "fill_based_evidence": False,
+                "executed": False,
+                "realized_net_edge_bps": 5.0,
+            }
+        ],
+    )
+
+    receipt = payload["receipts"][0]
+    assert receipt["receipt_complete"] is True
+    assert receipt["correlation_id"] == "opp-controlled-skip"
+    assert receipt["fill_present"] is False
+    assert receipt["fill_based_evidence"] is False
+    assert receipt["promotion_eligible"] is False
+    assert payload["summary"]["non_fill_rows_excluded"] == 1

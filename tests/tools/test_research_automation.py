@@ -243,6 +243,126 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(tmp_path: Path) -> N
     assert "--upward-trajectory-json" in daily_research["command"]
 
 
+def test_daily_plan_adds_governed_historical_workflow_after_hours(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    report_root = tmp_path / "reports"
+    cache_root = tmp_path / "historical-cache"
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_LOOKBACK_DAYS", "30")
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_FEED", "sip")
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_ADJUSTMENT", "all")
+    monkeypatch.setenv(
+        "AI_TRADING_HISTORICAL_BACKFILL_CACHE_ROOT",
+        str(cache_root),
+    )
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_MAX_MISSING_RATIO", "0.01")
+    monkeypatch.setattr(research_automation, "is_market_open", lambda _now: False)
+
+    assert research_automation.main(
+        [
+            "daily",
+            "--report-root",
+            str(report_root),
+            "--run-id",
+            "historical-test",
+            "--report-date",
+            "2026-07-20",
+            "--symbols",
+            "GOOGL",
+            "--plan-only",
+        ]
+    ) == 0
+
+    payload = _read(
+        report_root
+        / "daily"
+        / "historical-test"
+        / "research_automation_report.json"
+    )
+    steps = payload["steps"]
+    names = [str(step["name"]) for step in steps]
+    assert (
+        names.index("historical_training_backfill")
+        < names.index("opportunity_markouts")
+        < names.index("historical_replay_aligned_training")
+        < names.index("daily_research_pipeline")
+    )
+    backfill = next(
+        step for step in steps if step["name"] == "historical_training_backfill"
+    )
+    backfill_command = [str(token) for token in backfill["command"]]
+    assert backfill_command[backfill_command.index("--symbols") + 1] == (
+        "AAPL,AMZN,MSFT"
+    )
+    assert backfill_command[backfill_command.index("--start") + 1] == "2026-06-20"
+    assert backfill_command[backfill_command.index("--end") + 1] == "2026-07-20"
+    assert backfill_command[backfill_command.index("--output-dir") + 1] == str(
+        cache_root
+    )
+    assert backfill_command[backfill_command.index("--feed") + 1] == "sip"
+    assert backfill_command[backfill_command.index("--adjustment") + 1] == "all"
+    assert backfill_command[backfill_command.index("--max-missing-ratio") + 1] == (
+        "0.01"
+    )
+    assert backfill["metadata"]["promotion_eligible"] is False
+    assert backfill["metadata"]["after_hours_only"] is True
+
+    markouts = next(step for step in steps if step["name"] == "opportunity_markouts")
+    markout_command = [str(token) for token in markouts["command"]]
+    assert "--historical-backfill-json" in markout_command
+    assert markout_command[markout_command.index("--symbols") + 1] == (
+        "AAPL,AMZN,MSFT"
+    )
+    assert markouts["metadata"]["horizons_bars"] == [1, 3, 5]
+    assert markouts["metadata"]["promotion_eligible"] is False
+    assert markouts["metadata"]["runtime_authority"] is False
+
+    training = next(
+        step
+        for step in steps
+        if step["name"] == "historical_replay_aligned_training"
+    )
+    training_command = [str(token) for token in training["command"]]
+    assert "--acquisition-manifest-json" in training_command
+    assert "--data-dir" not in training_command
+    daily = next(step for step in steps if step["name"] == "daily_research_pipeline")
+    assert "--opportunity-markouts-json" in daily["command"]
+    assert "--historical-backfill-json" in daily["command"]
+    assert "--historical-training-json" in daily["command"]
+
+
+def test_daily_plan_does_not_backfill_during_market_hours(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_ENABLED", "1")
+    monkeypatch.setattr(research_automation, "is_market_open", lambda _now: True)
+    report_root = tmp_path / "reports"
+
+    assert research_automation.main(
+        [
+            "daily",
+            "--report-root",
+            str(report_root),
+            "--run-id",
+            "market-hours-test",
+            "--plan-only",
+        ]
+    ) == 0
+
+    payload = _read(
+        report_root
+        / "daily"
+        / "market-hours-test"
+        / "research_automation_report.json"
+    )
+    names = {str(step["name"]) for step in payload["steps"]}
+    assert "historical_training_backfill" not in names
+    assert "historical_replay_aligned_training" not in names
+
+
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     tmp_path: Path,
 ) -> None:

@@ -220,6 +220,187 @@ def test_build_report_treats_reward_as_realized_pnl(tmp_path: Path) -> None:
     assert trade["closed_trades"] == 2
 
 
+def test_promotion_counts_exclude_ten_thousand_historical_and_shadow_rows(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    historical_rows = [
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 1,
+            "fill_price": 100.0,
+            "timestamp": f"2026-07-20T14:{index % 60:02d}:00+00:00",
+            "evidence_type": "historical_research",
+        }
+        for index in range(5_000)
+    ]
+    shadow_rows = [
+        {
+            "symbol": "MSFT",
+            "side": "buy",
+            "reward": 100.0,
+            "evidence_type": "shadow_counterfactual",
+        }
+        for _index in range(5_000)
+    ]
+    paper_rows = [
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "pnl": 2.0,
+            "evidence_type": "paper_fill",
+        },
+        {
+            "symbol": "MSFT",
+            "side": "buy",
+            "pnl": -1.0,
+            "evidence_type": "paper_fill",
+        },
+    ]
+    trade_history_path.write_text(
+        json.dumps([*historical_rows, *shadow_rows, *paper_rows]),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 0,
+                "total_accepted_records": 0,
+                "total_rejected_records": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    trade = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )["trade_history"]
+
+    assert trade["closed_trades"] == 2
+    assert trade["pnl_sum"] == pytest.approx(1.0)
+    assert trade["records_loaded"] == 10_002
+    assert trade["records"] == 10_002
+    assert trade["promotion_eligible_records"] == 2
+    evidence = trade["promotion_evidence"]
+    assert evidence["eligible_records"] == 2
+    assert evidence["excluded_records"] == 10_000
+    assert evidence["excluded_by_evidence_type"] == {
+        "historical_research": 5_000,
+        "shadow_counterfactual": 5_000,
+    }
+
+
+def test_fill_execution_counts_but_order_execution_without_fill_does_not(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "reward": 1.25,
+                    "evidence_type": "fill_execution",
+                },
+                {
+                    "symbol": "MSFT",
+                    "side": "buy",
+                    "qty": 1,
+                    "price": 100.0,
+                    "timestamp": "2026-07-20T15:00:00+00:00",
+                    "status": "submitted",
+                    "evidence_type": "order_execution",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text("{}", encoding="utf-8")
+
+    trade = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )["trade_history"]
+
+    assert trade["closed_trades"] == 1
+    assert trade["pnl_sum"] == pytest.approx(1.25)
+    evidence = trade["promotion_evidence"]
+    assert evidence["eligible_records"] == 1
+    assert evidence["excluded_records"] == 1
+    assert evidence["excluded_by_evidence_type"] == {"order_execution": 1}
+
+
+def test_fill_event_pairs_exclude_historical_and_shadow_evidence(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "pnl": 1.0,
+                    "evidence_type": "paper_fill",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fill_rows = []
+    for evidence_type, symbol in (
+        ("historical_research", "AAPL"),
+        ("shadow_counterfactual", "MSFT"),
+        ("fill_execution", "AMZN"),
+    ):
+        fill_rows.extend(
+            [
+                {
+                    "symbol": symbol,
+                    "side": "buy",
+                    "qty": 1,
+                    "fill_price": 100.0,
+                    "timestamp": "2026-07-20T14:30:00+00:00",
+                    "status": "filled",
+                    "evidence_type": evidence_type,
+                },
+                {
+                    "symbol": symbol,
+                    "side": "sell",
+                    "qty": 1,
+                    "fill_price": 101.0,
+                    "timestamp": "2026-07-20T14:31:00+00:00",
+                    "status": "filled",
+                    "evidence_type": evidence_type,
+                },
+            ]
+        )
+    fill_events_path.write_text(
+        "\n".join(json.dumps(row) for row in fill_rows) + "\n",
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text("{}", encoding="utf-8")
+
+    trade = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        fill_events_path=fill_events_path,
+    )["trade_history"]
+
+    assert trade["fill_events_records_loaded"] == 6
+    assert trade["fill_events_records"] == 2
+    assert trade["promotion_evidence"]["fill_events"]["excluded_records"] == 4
+    same_day = trade["same_day_fill_pair_stats"]["daily_trade_stats"]
+    assert sum(int(row["trades"]) for row in same_day) == 1
+
+
 def test_build_report_uses_blocked_gate_counts_for_rejection_concentration(
     tmp_path: Path,
 ) -> None:

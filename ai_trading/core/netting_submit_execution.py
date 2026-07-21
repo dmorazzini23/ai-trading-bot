@@ -2,7 +2,7 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
@@ -49,6 +49,35 @@ def _is_long_reducing_sell(side: str, delta_shares: int, net_target: Any) -> boo
         return int(target_shares) >= 0
     except (TypeError, ValueError):
         return True
+
+
+def _intent_contract(
+    intent: Any,
+    lineage: Mapping[str, Any],
+    *,
+    decision_trace_id: str | None,
+) -> Any:
+    contract = intent.to_contract()
+    if isinstance(contract, Mapping):
+        return contract
+    metadata = dict(getattr(contract, "metadata", {}) or {})
+    for key, value in lineage.items():
+        if value not in (None, ""):
+            metadata.setdefault(key, value)
+    return replace(
+        contract,
+        decision_trace_id=(
+            str(decision_trace_id).strip()
+            if decision_trace_id not in (None, "")
+            else getattr(contract, "decision_trace_id", None)
+        ),
+        correlation_id=(
+            str(lineage.get("correlation_id")).strip()
+            if lineage.get("correlation_id") not in (None, "")
+            else getattr(contract, "correlation_id", None)
+        ),
+        metadata=metadata,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +195,11 @@ def execute_netting_submission(
                 / float(spread_mid)
                 * 10_000.0
             )
+    intent_contract = _intent_contract(
+        intent,
+        submit_metadata,
+        decision_trace_id=decision_trace_id_for_order,
+    )
     try:
         order = submit_order_func(
             runtime,
@@ -261,7 +295,7 @@ def execute_netting_submission(
             tca_record=None,
             order_payload=None,
             decision_trace_id=None,
-            order_intent_contract=intent.to_contract(),
+            order_intent_contract=intent_contract,
         )
 
     if order is None:
@@ -283,7 +317,7 @@ def execute_netting_submission(
             tca_record=None,
             order_payload=None,
             decision_trace_id=None,
-            order_intent_contract=intent.to_contract(),
+            order_intent_contract=intent_contract,
         )
 
     order_state = normalize_submitted_order_func(
@@ -310,6 +344,11 @@ def execute_netting_submission(
     if broker_order_id not in (None, ""):
         execution_metadata["broker_order_id"] = str(broker_order_id)
         execution_metadata["order_id"] = str(broker_order_id)
+    intent_contract = _intent_contract(
+        intent,
+        execution_metadata,
+        decision_trace_id=decision_trace_id_for_order,
+    )
     for destination_key, source_keys in (
         ("order_type", ("type", "order_type")),
         ("time_in_force", ("time_in_force", "tif")),
@@ -366,13 +405,18 @@ def execute_netting_submission(
             tca_record=tca_record,
             order_payload={
                 "client_order_id": client_order_id,
+                "broker_order_id": execution_metadata.get("broker_order_id"),
+                "correlation_id": execution_metadata.get("correlation_id"),
+                "decision_trace_id": decision_trace_id_for_order,
                 "side": side,
                 "qty": abs(delta_shares),
                 "price": price,
+                "order_type": execution_metadata.get("order_type"),
+                "session_regime": execution_metadata.get("session_regime"),
                 "status": getattr(order_state, "status_text", status_token) or status_token,
             },
             decision_trace_id=decision_trace_id_for_order,
-            order_intent_contract=intent.to_contract(),
+            order_intent_contract=intent_contract,
         )
     breakers.record_success("broker_submit")
     record_successful_submission_func(
@@ -424,11 +468,16 @@ def execute_netting_submission(
         tca_record=tca_record,
         order_payload={
             "client_order_id": client_order_id,
+            "broker_order_id": execution_metadata.get("broker_order_id"),
+            "correlation_id": execution_metadata.get("correlation_id"),
+            "decision_trace_id": decision_trace_id_for_order,
             "side": side,
             "qty": abs(delta_shares),
             "price": price,
+            "order_type": execution_metadata.get("order_type"),
+            "session_regime": execution_metadata.get("session_regime"),
             "status": order_state.status_text if order_state.status_text else None,
         },
         decision_trace_id=decision_trace_id_for_order,
-        order_intent_contract=intent.to_contract(),
+        order_intent_contract=intent_contract,
     )
