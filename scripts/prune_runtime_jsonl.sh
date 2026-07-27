@@ -13,16 +13,27 @@ prune_jsonl_file() {
   [[ "$keep_lines" -gt 0 ]] || return 0
   [[ "$max_bytes" -gt 0 ]] || return 0
 
-  local size
+  local size before_identity after_identity
   size="$(stat -c '%s' "$path" 2>/dev/null || echo 0)"
   [[ "${size:-0}" -gt "$max_bytes" ]] || return 0
+  before_identity="$(stat -c '%i:%s:%Y' "$path")"
 
   local ts backup tmp
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   backup="${path}.bak.${ts}"
   tmp="${path}.tmp.${ts}"
 
-  tail -n "$keep_lines" "$path" > "$tmp"
+  local target_bytes
+  target_bytes="$((max_bytes * 8 / 10))"
+  tail -c "$target_bytes" "$path" \
+    | { IFS= read -r _partial_line || true; cat; } \
+    | tail -n "$keep_lines" > "$tmp"
+  after_identity="$(stat -c '%i:%s:%Y' "$path")"
+  if [[ "$after_identity" != "$before_identity" ]]; then
+    rm -f "$tmp"
+    echo "retention deferred for ${path}: source changed during snapshot" >&2
+    return 0
+  fi
   mv "$path" "$backup"
   mv "$tmp" "$path"
 

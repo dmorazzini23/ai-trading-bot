@@ -177,7 +177,130 @@ def build_opportunity_markout_report(
     )
     report["report_date"] = str(report_date)
     report["decision_rows_scanned"] = len(decisions)
-    report["bars_provenance"] = dict(bars_provenance or {})
+    bar_source_raw = report.get("bar_source")
+    bar_source = bar_source_raw if isinstance(bar_source_raw, Mapping) else {}
+    max_timestamp = str(bar_source.get("max_timestamp") or "").strip()
+    available_symbols_raw = bar_source.get("symbols_available")
+    available_symbols = (
+        {
+            str(symbol).strip().upper()
+            for symbol in available_symbols_raw
+            if str(symbol).strip()
+        }
+        if isinstance(available_symbols_raw, Sequence)
+        and not isinstance(available_symbols_raw, (str, bytes))
+        else set()
+    )
+    governed = {
+        str(symbol).strip().upper()
+        for symbol in governed_symbols
+        if str(symbol).strip()
+    }
+    outcome_rows = report.get("outcomes")
+    required_symbols = (
+        {
+            str(row.get("symbol") or "").strip().upper()
+            for row in outcome_rows
+            if isinstance(row, Mapping) and str(row.get("symbol") or "").strip()
+        }
+        if isinstance(outcome_rows, list)
+        else set()
+    )
+    symbol_source_raw = bar_source.get("by_symbol")
+    symbol_source = (
+        symbol_source_raw if isinstance(symbol_source_raw, Mapping) else {}
+    )
+    current_session_symbols = {
+        symbol
+        for symbol in available_symbols
+        if str(
+            (
+                symbol_source.get(symbol)
+                if isinstance(symbol_source.get(symbol), Mapping)
+                else {}
+            ).get("max_timestamp")
+            or ""
+        ).startswith(str(report_date))
+    }
+    one_minute_symbols = {
+        symbol
+        for symbol in available_symbols
+        if (
+            symbol_source.get(symbol)
+            if isinstance(symbol_source.get(symbol), Mapping)
+            else {}
+        ).get("one_minute_cadence")
+        is True
+    }
+    freshness_scope = required_symbols or available_symbols
+    source_available = bool(bar_source.get("available"))
+    source_fresh = bool(
+        source_available
+        and freshness_scope
+        and freshness_scope.issubset(current_session_symbols)
+        and freshness_scope.issubset(one_minute_symbols)
+    )
+    source_reason = (
+        "current_session_one_minute_bars_available"
+        if source_fresh
+        else "bars_missing"
+        if not source_available
+        else "required_symbol_bars_missing"
+        if freshness_scope.difference(available_symbols)
+        else "source_date_mismatch"
+        if freshness_scope.difference(current_session_symbols)
+        else "one_minute_cadence_not_verified"
+    )
+    source_freshness = {
+        "available": source_available,
+        "fresh": source_fresh,
+        "reason": source_reason,
+        "report_date": str(report_date),
+        "max_timestamp": max_timestamp or None,
+        "available_symbols": sorted(available_symbols),
+        "missing_governed_symbols": sorted(governed.difference(available_symbols)),
+        "required_symbols": sorted(required_symbols),
+        "current_session_symbols": sorted(current_session_symbols),
+        "one_minute_symbols": sorted(one_minute_symbols),
+        "missing_required_symbols": sorted(
+            required_symbols.difference(available_symbols)
+        ),
+    }
+    provenance = dict(bars_provenance or {})
+    provenance.update(
+        {
+            "research_only": True,
+            "promotion_eligible": False,
+            "runtime_authority": False,
+            "runtime_fill_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "schema_verified": source_available,
+            "one_minute_cadence_verified": bool(
+                freshness_scope
+                and freshness_scope.issubset(one_minute_symbols)
+            ),
+            "source_freshness": source_freshness,
+        }
+    )
+    report["bars_provenance"] = provenance
+    report["source_freshness"] = source_freshness
+    research_replay_raw = report.get("research_replay")
+    research_replay = (
+        dict(research_replay_raw)
+        if isinstance(research_replay_raw, Mapping)
+        else {}
+    )
+    research_replay["source_fresh"] = source_fresh
+    research_replay["source_freshness_reason"] = source_reason
+    research_replay["source_max_timestamp"] = max_timestamp or None
+    if not source_available:
+        research_replay["status"] = "unavailable"
+        research_replay["reason"] = "bars_missing"
+    elif not source_fresh:
+        research_replay["status"] = "source_stale"
+        research_replay["reason"] = source_reason
+    report["research_replay"] = research_replay
     return report
 
 
@@ -244,6 +367,9 @@ def main(argv: list[str] | None = None) -> int:
             "research_only": True,
             "promotion_eligible": False,
             "runtime_authority": False,
+            "runtime_fill_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
         }
     bars = load_governed_bars(
         bars_dir,

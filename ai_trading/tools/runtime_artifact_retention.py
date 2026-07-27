@@ -50,8 +50,14 @@ def _bytes_to_mb(value: int | float | None) -> float | None:
     return round(float(value) / (1024.0 * 1024.0), 3)
 
 
-def _tail_lines_to_file(src: Path, dst: Path, *, keep_lines: int) -> int:
-    if keep_lines <= 0:
+def _tail_lines_to_file(
+    src: Path,
+    dst: Path,
+    *,
+    keep_lines: int,
+    max_bytes: int,
+) -> int:
+    if keep_lines <= 0 or max_bytes <= 0:
         dst.write_text("", encoding="utf-8")
         return 0
     # Read from the end in bounded chunks so large JSONL files are not loaded all at once.
@@ -61,7 +67,11 @@ def _tail_lines_to_file(src: Path, dst: Path, *, keep_lines: int) -> int:
     with src.open("rb") as handle:
         handle.seek(0, os.SEEK_END)
         position = handle.tell()
-        while position > 0 and newline_count <= keep_lines:
+        while (
+            position > 0
+            and newline_count <= keep_lines
+            and sum(len(chunk) for chunk in chunks) <= max_bytes
+        ):
             read_size = min(block_size, position)
             position -= read_size
             handle.seek(position)
@@ -70,7 +80,15 @@ def _tail_lines_to_file(src: Path, dst: Path, *, keep_lines: int) -> int:
             newline_count += chunk.count(b"\n")
     data = b"".join(reversed(chunks))
     lines = data.splitlines()
+    if position > 0 and lines:
+        lines = lines[1:]
     kept = lines[-keep_lines:]
+    kept_bytes = sum(len(line) + 1 for line in kept)
+    first = 0
+    while first < len(kept) and kept_bytes > max_bytes:
+        kept_bytes -= len(kept[first]) + 1
+        first += 1
+    kept = kept[first:]
     with dst.open("wb") as handle:
         for line in kept:
             handle.write(line)
@@ -90,14 +108,33 @@ def _gzip_backup(path: Path) -> Path | None:
 
 
 def _apply_rule(path: Path, rule: RetentionRule) -> dict[str, Any]:
-    before_size = path.stat().st_size
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    before_stat = path.stat()
+    before_size = before_stat.st_size
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     backup = path.with_name(f"{path.name}.bak.{timestamp}")
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
-        kept_lines = _tail_lines_to_file(path, tmp_path, keep_lines=rule.keep_lines)
+        kept_lines = _tail_lines_to_file(
+            path,
+            tmp_path,
+            keep_lines=rule.keep_lines,
+            max_bytes=max(1, int(rule.max_bytes * 0.8)),
+        )
+        after_tail_stat = path.stat()
+        if (
+            after_tail_stat.st_size != before_stat.st_size
+            or after_tail_stat.st_mtime_ns != before_stat.st_mtime_ns
+            or after_tail_stat.st_ino != before_stat.st_ino
+        ):
+            tmp_path.unlink(missing_ok=True)
+            return {
+                "status": "deferred_concurrent_write",
+                "reason": "source_changed_during_snapshot",
+                "before_size_mb": _bytes_to_mb(before_size),
+                "current_size_mb": _bytes_to_mb(after_tail_stat.st_size),
+            }
         os.replace(path, backup)
         os.replace(tmp_path, path)
         try:
@@ -165,8 +202,13 @@ def evaluate_runtime_artifact_retention(
             action.update(_apply_rule(path, rule))
         actions.append(action)
     status = "applied" if apply else "planned"
+    if any(action.get("status") == "error" for action in actions):
+        status = "error"
+    elif any(action.get("status") == "deferred_concurrent_write" for action in actions):
+        status = "deferred"
     if not any(action.get("status") in {"would_compact", "compacted", "error"} for action in actions):
-        status = "ok"
+        if status not in {"deferred", "error"}:
+            status = "ok"
     return {
         "schema_version": "1.0.0",
         "artifact_type": "runtime_artifact_retention",

@@ -103,6 +103,8 @@ class ReplayAlignedTrainingConfig:
     walk_forward_folds: int = 5
     walk_forward_embargo_bars: int = 1
     walk_forward_embargo_percent: float = 0.0
+    edge_weight_max: float = 5.0
+    edge_weight_quantile: float = 0.90
 
 
 def _resolve_symbol_paths(data_dir: Path, symbols: str) -> dict[str, Path]:
@@ -785,6 +787,75 @@ def _make_model(model_type: str, *, random_state: int) -> Any:
     raise ValueError(f"Unsupported model type: {model_type}")
 
 
+def _edge_magnitude_sample_weights(
+    dataset: pd.DataFrame,
+    *,
+    min_net_edge_bps: float,
+    max_weight: float,
+    scaling_quantile: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Return bounded weights derived only from the supplied fit partition."""
+
+    bounded_max = max(1.0, float(max_weight))
+    bounded_quantile = float(np.clip(float(scaling_quantile), 0.50, 1.0))
+    edge = pd.to_numeric(dataset["label_score_bps"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    distance = np.abs(edge - float(min_net_edge_bps))
+    finite = np.isfinite(distance)
+    finite_distance = distance[finite]
+    scale_bps = (
+        float(np.quantile(finite_distance, bounded_quantile))
+        if finite_distance.size
+        else 0.0
+    )
+    if not np.isfinite(scale_bps) or scale_bps <= 0.0:
+        weights = np.ones(len(dataset), dtype=float)
+    else:
+        normalized = np.clip(
+            np.nan_to_num(distance / scale_bps, nan=0.0, posinf=1.0, neginf=0.0),
+            0.0,
+            1.0,
+        )
+        weights = 1.0 + ((bounded_max - 1.0) * normalized)
+    weights = np.clip(weights, 1.0, bounded_max).astype(float)
+    return weights, {
+        "objective": "bounded_post_cost_edge_weighted_binary",
+        "source": "abs_label_score_bps_minus_min_net_edge_bps",
+        "partition_local": True,
+        "rows": int(len(dataset)),
+        "min_net_edge_bps": float(min_net_edge_bps),
+        "scaling_quantile": bounded_quantile,
+        "scale_bps": scale_bps,
+        "min_weight": float(np.min(weights)) if weights.size else 1.0,
+        "mean_weight": float(np.mean(weights)) if weights.size else 1.0,
+        "max_weight": float(np.max(weights)) if weights.size else 1.0,
+        "configured_max_weight": bounded_max,
+    }
+
+
+def _fit_weighted_binary_model(
+    model: Any,
+    features: pd.DataFrame,
+    target: pd.Series,
+    *,
+    sample_weight: np.ndarray,
+) -> None:
+    """Fit supported binary estimators without changing their serving contract."""
+
+    if isinstance(model, Pipeline):
+        final_step = model.steps[-1][0] if model.steps else ""
+        if not final_step:
+            raise ValueError("Replay-aligned pipeline has no final estimator")
+        model.fit(
+            features,
+            target,
+            **{f"{final_step}__sample_weight": np.asarray(sample_weight, dtype=float)},
+        )
+        return
+    model.fit(features, target, sample_weight=np.asarray(sample_weight, dtype=float))
+
+
 def _feature_importance(model: Any) -> list[dict[str, Any]]:
     """Return lightweight feature attribution for candidate triage artifacts."""
     estimator = model
@@ -1398,6 +1469,20 @@ def _run_fold_local_walk_forward(
     fold_reports: list[dict[str, Any]] = []
     oos_frames: list[pd.DataFrame] = []
     last_bundle: tuple[Any, pd.DataFrame, pd.DataFrame, np.ndarray] | None = None
+    edge_weight_max = max(
+        1.0,
+        float(getattr(args, "edge_weight_max", 5.0) or 5.0),
+    )
+    edge_weight_quantile = float(
+        np.clip(
+            float(getattr(args, "edge_weight_quantile", 0.90) or 0.90),
+            0.50,
+            1.0,
+        )
+    )
+    min_net_edge_bps = float(
+        getattr(args, "min_net_edge_bps", 0.0) or 0.0
+    )
     for fold, train, test in splits:
         if train["target"].nunique() < 2:
             continue
@@ -1407,7 +1492,18 @@ def _run_fold_local_walk_forward(
         )
         train_features = train[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
         test_features = test[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
-        model.fit(train_features, train["target"].astype(int))
+        train_weights, weight_report = _edge_magnitude_sample_weights(
+            train,
+            min_net_edge_bps=min_net_edge_bps,
+            max_weight=edge_weight_max,
+            scaling_quantile=edge_weight_quantile,
+        )
+        _fit_weighted_binary_model(
+            model,
+            train_features,
+            train["target"].astype(int),
+            sample_weight=train_weights,
+        )
         positive_index = _positive_class_index(model)
         train_probabilities = np.asarray(
             model.predict_proba(train_features), dtype=float
@@ -1476,6 +1572,8 @@ def _run_fold_local_walk_forward(
             "label_purge_ok": bool(fold.label_purge_ok),
             "fit_scope": "fold_train_only",
             "threshold_scope": "fold_train_only",
+            "fit_objective": "bounded_post_cost_edge_weighted_binary",
+            "sample_weight": weight_report,
             "cost_model": dict(cost_model_identity),
             "validation": _evaluate_probabilities(test["target"], test_probabilities),
             "regime_source": regime_source,
@@ -1550,7 +1648,36 @@ def _run_fold_local_walk_forward(
         "live_money_authority": False,
         "offline_replay_required": True,
     }
-    model, final_train, final_test, final_probabilities = last_bundle
+    _, _, final_test, final_probabilities = last_bundle
+    model = _make_model(
+        str(args.model_type),
+        random_state=int(args.random_state),
+    )
+    final_train = dataset.copy()
+    final_train_features = final_train[
+        list(REPLAY_ALIGNED_FEATURE_COLUMNS)
+    ].astype(float)
+    final_weights, final_weight_report = _edge_magnitude_sample_weights(
+        final_train,
+        min_net_edge_bps=min_net_edge_bps,
+        max_weight=edge_weight_max,
+        scaling_quantile=edge_weight_quantile,
+    )
+    _fit_weighted_binary_model(
+        model,
+        final_train_features,
+        final_train["target"].astype(int),
+        sample_weight=final_weights,
+    )
+    walk_forward_report["final_fit"] = {
+        "scope": "full_governed_dataset_after_oos_evaluation",
+        "rows": int(len(final_train)),
+        "threshold_scope": "walk_forward_oos_only",
+        "fit_objective": "bounded_post_cost_edge_weighted_binary",
+        "sample_weight": final_weight_report,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
     return (
         walk_forward_report,
         model,
@@ -1657,13 +1784,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         edge_global_threshold=edge_global_threshold,
         cost_model_identity=cost_model_identity,
     )
-    final_train_features = train[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
-    positive_index = _positive_class_index(model)
-    final_train_probabilities = np.asarray(
-        model.predict_proba(final_train_features), dtype=float
-    )[:, positive_index]
     training_threshold_report_by_regime = _threshold_report_by_regime(
-        train, final_train_probabilities
+        oos_frame, oos_probabilities
     )
     edge_thresholds_by_regime = _best_thresholds_by_regime(
         training_threshold_report_by_regime
@@ -1720,6 +1842,17 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             0.0,
             float(getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0),
         ),
+        edge_weight_max=max(
+            1.0,
+            float(getattr(args, "edge_weight_max", 5.0) or 5.0),
+        ),
+        edge_weight_quantile=float(
+            np.clip(
+                float(getattr(args, "edge_weight_quantile", 0.90) or 0.90),
+                0.50,
+                1.0,
+            )
+        ),
     )
     manifest_path = write_artifact_manifest(
         model_path=model_path,
@@ -1737,6 +1870,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "acquisition": acquisition,
             "dataset_hash": acquisition["dataset_hash"],
             "thresholds_by_regime": edge_thresholds_by_regime,
+            "threshold_scope": "walk_forward_oos_only",
             "feature_importance": feature_importance[:25],
             "live_cost_model": live_cost_metadata,
             "walk_forward": walk_forward_report,
@@ -1793,6 +1927,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         "threshold_sweep": threshold_report,
         "threshold_sweep_by_regime": threshold_report_by_regime,
         "thresholds_by_regime": edge_thresholds_by_regime,
+        "threshold_scope": "walk_forward_oos_only",
         "walk_forward": walk_forward_report,
         "market_regime_policy": market_regime_policy,
         "governance_status": "shadow",
@@ -1875,6 +2010,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--walk-forward-min-mean-net-edge-bps", type=float, default=0.0)
     parser.add_argument(
         "--walk-forward-min-ranking-separation-bps", type=float, default=0.0
+    )
+    parser.add_argument(
+        "--edge-weight-max",
+        type=float,
+        default=5.0,
+        help="Maximum bounded sample weight for post-cost edge magnitude.",
+    )
+    parser.add_argument(
+        "--edge-weight-quantile",
+        type=float,
+        default=0.90,
+        help="Fit-partition quantile used to scale post-cost edge weights.",
     )
     parser.add_argument(
         "--edge-global-threshold",

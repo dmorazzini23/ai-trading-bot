@@ -15,6 +15,7 @@ from ai_trading.models.artifacts import verify_artifact
 from ai_trading.models.contracts import infer_day_sleeve_regimes
 from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
+    _edge_magnitude_sample_weights,
     _symbol_feature_cache_key,
     build_training_dataset,
     _best_thresholds_by_regime,
@@ -226,6 +227,30 @@ def test_best_thresholds_ignore_zero_candidate_rows() -> None:
     assert _best_thresholds_by_regime(reports) == {"regular": 0.58}
 
 
+def test_edge_magnitude_weights_are_bounded_and_use_post_cost_distance() -> None:
+    dataset = pd.DataFrame(
+        {
+            "label_score_bps": [-20.0, -2.0, 0.0, 3.0, 30.0],
+        }
+    )
+
+    weights, report = _edge_magnitude_sample_weights(
+        dataset,
+        min_net_edge_bps=0.0,
+        max_weight=4.0,
+        scaling_quantile=0.80,
+    )
+
+    assert weights.tolist()[2] == pytest.approx(1.0)
+    assert weights[0] > weights[1] > weights[2]
+    assert weights[4] == pytest.approx(4.0)
+    assert float(weights.min()) >= 1.0
+    assert float(weights.max()) <= 4.0
+    assert report["objective"] == "bounded_post_cost_edge_weighted_binary"
+    assert report["partition_local"] is True
+    assert report["rows"] == len(dataset)
+
+
 def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path: Path) -> None:
     _write_cycle_bars(tmp_path / "AAPL.csv", periods=120)
 
@@ -430,8 +455,11 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert persisted["dataset"]["load_reports"]["AAPL"]["timestamp_authoritative"] is True
     assert persisted["config"]["edge_global_threshold"] == 0.66
     assert persisted["config"]["label_objective"] == "mae_mfe"
+    assert persisted["config"]["edge_weight_max"] == pytest.approx(5.0)
+    assert persisted["config"]["edge_weight_quantile"] == pytest.approx(0.90)
     assert persisted["dataset"]["mean_label_score_bps"] != persisted["dataset"]["mean_round_trip_cost_bps"]
     assert persisted["thresholds_by_regime"]
+    assert persisted["threshold_scope"] == "walk_forward_oos_only"
     assert persisted["threshold_sweep_by_regime"]
     assert persisted["dataset"]["symbols"] == 2
     assert persisted["dataset"]["train_rows"] > 0
@@ -450,6 +478,11 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     for fold in walk_forward["folds"]:
         assert fold["fit_scope"] == "fold_train_only"
         assert fold["threshold_scope"] == "fold_train_only"
+        assert fold["fit_objective"] == "bounded_post_cost_edge_weighted_binary"
+        assert fold["sample_weight"]["rows"] == fold["train_rows"]
+        assert fold["sample_weight"]["partition_local"] is True
+        assert 1.0 <= fold["sample_weight"]["min_weight"]
+        assert fold["sample_weight"]["max_weight"] <= 5.0
         assert fold["chronological_non_overlap"] is True
         assert fold["label_purge_ok"] is True
         assert fold["embargo_bars"] >= 1
@@ -460,6 +493,11 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
         assert "hit_rate" in fold
         assert "ranking_separation" in fold
         assert fold["by_market_regime"]
+    assert walk_forward["final_fit"]["scope"] == (
+        "full_governed_dataset_after_oos_evaluation"
+    )
+    assert walk_forward["final_fit"]["rows"] == persisted["dataset"]["rows"]
+    assert walk_forward["final_fit"]["threshold_scope"] == "walk_forward_oos_only"
     aggregate = walk_forward["aggregate"]
     assert aggregate["governance_status"] == "shadow"
     assert aggregate["promotion_authority"] is False
@@ -693,6 +731,9 @@ def test_fold_local_walk_forward_never_fits_on_oos_rows(monkeypatch) -> None:
             "close": np.linspace(100.0, 104.0, len(timestamps)),
             "target": [idx % 2 for idx in range(len(timestamps))],
             "net_long_bps": [2.0 if idx % 2 else -1.0 for idx in range(len(timestamps))],
+            "label_score_bps": [
+                2.0 if idx % 2 else -1.0 for idx in range(len(timestamps))
+            ],
             "session_regime": ["midday"] * len(timestamps),
         }
     )
@@ -703,10 +744,18 @@ def test_fold_local_walk_forward_never_fits_on_oos_rows(monkeypatch) -> None:
 
         def __init__(self) -> None:
             self.fit_index: list[int] = []
+            self.fit_weights: np.ndarray | None = None
             self.predict_indexes: list[list[int]] = []
 
-        def fit(self, features: pd.DataFrame, _target: pd.Series) -> "_TrackingModel":
+        def fit(
+            self,
+            features: pd.DataFrame,
+            _target: pd.Series,
+            *,
+            sample_weight: np.ndarray,
+        ) -> "_TrackingModel":
             self.fit_index = [int(value) for value in features.index]
+            self.fit_weights = np.asarray(sample_weight, dtype=float)
             return self
 
         def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
@@ -740,13 +789,24 @@ def test_fold_local_walk_forward_never_fits_on_oos_rows(monkeypatch) -> None:
         cost_model_identity={"version": "test_cost_v1"},
     )
 
-    assert len(trackers) == 5
+    assert len(trackers) == 6
     assert len(report["folds"]) == 5
-    for tracker in trackers:
+    for fold, tracker in zip(report["folds"], trackers[:5], strict=True):
         assert len(tracker.predict_indexes) == 2
         test_index = tracker.predict_indexes[1]
         assert set(tracker.fit_index).isdisjoint(test_index)
         assert max(tracker.fit_index) < min(test_index)
+        assert tracker.fit_weights is not None
+        assert len(tracker.fit_weights) == len(tracker.fit_index)
+        assert fold["sample_weight"]["rows"] == len(tracker.fit_index)
+        assert fold["sample_weight"]["partition_local"] is True
+    final_model = trackers[-1]
+    assert final_model.fit_index == list(dataset.index)
+    assert final_model.predict_indexes == []
+    assert report["final_fit"]["scope"] == "full_governed_dataset_after_oos_evaluation"
+    assert report["final_fit"]["rows"] == len(dataset)
+    assert report["final_fit"]["threshold_scope"] == "walk_forward_oos_only"
+    assert report["final_fit"]["promotion_authority"] is False
 
 
 def test_wfa_market_regimes_use_canonical_per_symbol_history_with_constant_atr() -> None:

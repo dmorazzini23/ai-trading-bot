@@ -451,7 +451,7 @@ def evaluate_paper_sampling_order(
         return PaperSamplingDecision(True, False, 0, "PAPER_SAMPLING_MAX_NOTIONAL_BLOCK", details)
 
     max_qty = int(math.floor(max_notional / price_value))
-    adjusted_qty = min(requested_qty, max_qty)
+    adjusted_qty = min(requested_qty, max_qty, 1)
     details.update(
         {
             "requested_qty": requested_qty,

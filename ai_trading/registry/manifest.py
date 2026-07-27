@@ -255,8 +255,6 @@ def derive_market_regime_policy(
             field=f"walk_forward.by_market_regime.{regime}",
         )
         reasons: list[str] = []
-        if not candidate_qualified:
-            reasons.append("candidate_evidence_unqualified")
         if not metrics["evidence_qualified"]:
             reasons.append("regime_evidence_unqualified")
         if int(metrics["support"]) < min_support:
@@ -441,8 +439,7 @@ def validate_market_regime_policy(payload: Mapping[str, Any]) -> dict[str, Any]:
             field=f"market_regime_policy.regimes.{regime}.evidence_qualified",
         )
         qualified = (
-            candidate_qualified
-            and regime_qualified
+            regime_qualified
             and support >= min_support
             and edge is not None
             and edge > min_edge_bps

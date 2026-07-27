@@ -6,7 +6,7 @@ import argparse
 import json
 import math
 import sys
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -48,7 +48,7 @@ def _read_jsonl(
 ) -> list[dict[str, Any]]:
     if path is None or not path.exists():
         return []
-    rows: list[dict[str, Any]] = []
+    rows: deque[dict[str, Any]] = deque(maxlen=max(1, int(max_rows)))
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -61,9 +61,7 @@ def _read_jsonl(
                 if report_date and not _date_match(parsed, report_date):
                     continue
                 rows.append(parsed)
-                if len(rows) >= max(1, int(max_rows)):
-                    rows.pop(0)
-    return rows
+    return list(rows)
 
 
 def _date_match(row: Mapping[str, Any], report_date: str) -> bool:
@@ -313,6 +311,320 @@ def _controlled_skip_category(row: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _nested_mapping(row: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = row.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _funnel_correlation_id(row: Mapping[str, Any]) -> str:
+    journal = _nested_mapping(row, "decision_journal")
+    metrics = _nested_mapping(row, "metrics")
+    order = _nested_mapping(row, "order")
+    order_intent = _nested_mapping(journal, "order_intent")
+    return str(
+        row.get("correlation_id")
+        or journal.get("correlation_id")
+        or metrics.get("correlation_id")
+        or order.get("correlation_id")
+        or order_intent.get("correlation_id")
+        or ""
+    ).strip()
+
+
+def _funnel_identity(
+    row: Mapping[str, Any],
+    *,
+    source: str,
+    index: int,
+) -> tuple[str, bool]:
+    correlation_id = _funnel_correlation_id(row)
+    if correlation_id:
+        return f"correlation:{correlation_id}", True
+    journal = _nested_mapping(row, "decision_journal")
+    order = _nested_mapping(row, "order")
+    order_intent = _nested_mapping(journal, "order_intent")
+    for key in ("client_order_id", "decision_trace_id", "order_id", "id"):
+        identifier = str(
+            row.get(key)
+            or journal.get(key)
+            or order.get(key)
+            or order_intent.get(key)
+            or ""
+        ).strip()
+        if identifier:
+            return f"{key}:{identifier}", False
+    return f"uncorrelated:{source}:{index}", False
+
+
+def _funnel_symbol(row: Mapping[str, Any]) -> str:
+    journal = _nested_mapping(row, "decision_journal")
+    signal = _nested_mapping(journal, "signal")
+    order = _nested_mapping(row, "order")
+    order_intent = _nested_mapping(journal, "order_intent")
+    return str(
+        row.get("symbol")
+        or journal.get("symbol")
+        or order.get("symbol")
+        or order_intent.get("symbol")
+        or signal.get("symbol")
+        or "UNKNOWN"
+    ).strip().upper() or "UNKNOWN"
+
+
+def _funnel_reasons(row: Mapping[str, Any]) -> list[str]:
+    journal = _nested_mapping(row, "decision_journal")
+    risk = _nested_mapping(journal, "risk_decision")
+    context = _nested_mapping(row, "context")
+    reasons: list[str] = []
+    for payload in (row, context, journal, risk):
+        for key in (
+            "reason",
+            "gate",
+            "detail",
+            "last_error",
+            "error",
+            "block_reason",
+            "veto_gate",
+        ):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                reasons.append(value)
+        for key in ("reasons", "gates"):
+            values = payload.get(key)
+            if isinstance(values, Sequence) and not isinstance(
+                values,
+                (str, bytes, bytearray),
+            ):
+                reasons.extend(str(value).strip() for value in values if str(value).strip())
+    return list(dict.fromkeys(reasons))
+
+
+def _funnel_opportunity_eligible(row: Mapping[str, Any]) -> bool:
+    journal = _nested_mapping(row, "decision_journal")
+    metadata = _nested_mapping(journal, "metadata")
+    metrics = _nested_mapping(row, "metrics")
+    for payload in (metrics, metadata, row):
+        value = payload.get("opportunity_eligible")
+        if isinstance(value, bool):
+            return value
+    return False
+
+
+def _funnel_nonzero_target(row: Mapping[str, Any]) -> bool:
+    net_target = _nested_mapping(row, "net_target")
+    journal = _nested_mapping(row, "decision_journal")
+    values = (
+        net_target.get("target_shares"),
+        net_target.get("target_dollars"),
+        journal.get("target_delta_shares"),
+    )
+    for value in values:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(parsed) and parsed != 0.0:
+            return True
+    return False
+
+
+def _funnel_precheck_candidate(row: Mapping[str, Any]) -> bool:
+    journal = _nested_mapping(row, "decision_journal")
+    risk = _nested_mapping(journal, "risk_decision")
+    return bool(
+        _nested_mapping(row, "order")
+        or _nested_mapping(journal, "order_intent")
+        or journal.get("accepted") is True
+        or risk.get("accepted") is True
+    )
+
+
+def _funnel_submitted(row: Mapping[str, Any]) -> bool:
+    journal = _nested_mapping(row, "decision_journal")
+    broker_result = _nested_mapping(journal, "broker_result")
+    status = str(
+        row.get("status")
+        or journal.get("status")
+        or broker_result.get("status")
+        or ""
+    ).strip().lower()
+    return bool(
+        row.get("submitted") is True
+        or journal.get("submitted") is True
+        or broker_result.get("submitted") is True
+        or status in {"submitted", "accepted", "new", "partially_filled", "filled"}
+    )
+
+
+def _build_execution_funnel(
+    *,
+    decisions: Sequence[Mapping[str, Any]],
+    intents: Sequence[Mapping[str, Any]],
+    gates: Sequence[Mapping[str, Any]],
+    fills: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    entities: dict[str, dict[str, Any]] = {}
+    missing_correlation: Counter[str] = Counter()
+
+    def entity_for(
+        row: Mapping[str, Any],
+        *,
+        source: str,
+        index: int,
+    ) -> dict[str, Any]:
+        identity, correlated = _funnel_identity(row, source=source, index=index)
+        if not correlated:
+            missing_correlation[source] += 1
+        entity = entities.setdefault(
+            identity,
+            {
+                "symbol": _funnel_symbol(row),
+                "reasons": [],
+                "evaluated": False,
+                "eligible": False,
+                "nonzero_target": False,
+                "precheck_candidate": False,
+                "controlled_skip": False,
+                "rejected": False,
+                "submitted": False,
+                "filled": False,
+            },
+        )
+        if entity["symbol"] == "UNKNOWN":
+            entity["symbol"] = _funnel_symbol(row)
+        entity["reasons"] = list(
+            dict.fromkeys([*entity["reasons"], *_funnel_reasons(row)])
+        )
+        return entity
+
+    for index, row in enumerate(decisions):
+        entity = entity_for(row, source="decisions", index=index)
+        entity["evaluated"] = True
+        entity["eligible"] = bool(
+            entity["eligible"] or _funnel_opportunity_eligible(row)
+        )
+        entity["nonzero_target"] = bool(
+            entity["nonzero_target"] or _funnel_nonzero_target(row)
+        )
+        entity["precheck_candidate"] = bool(
+            entity["precheck_candidate"] or _funnel_precheck_candidate(row)
+        )
+        controlled = _controlled_skip_category(row) is not None
+        entity["controlled_skip"] = bool(entity["controlled_skip"] or controlled)
+        journal = _nested_mapping(row, "decision_journal")
+        rejected = bool(
+            not controlled
+            and (
+                journal.get("accepted") is False
+                or str(row.get("status") or "").strip().lower()
+                in {"reject", "rejected", "blocked"}
+            )
+            and entity["reasons"]
+        )
+        entity["rejected"] = bool(entity["rejected"] or rejected)
+        entity["submitted"] = bool(entity["submitted"] or _funnel_submitted(row))
+
+    for index, row in enumerate(intents):
+        entity = entity_for(row, source="intents", index=index)
+        entity["precheck_candidate"] = True
+        controlled = _controlled_skip_category(row) is not None
+        entity["controlled_skip"] = bool(entity["controlled_skip"] or controlled)
+        status = str(row.get("status") or "").strip().lower()
+        entity["rejected"] = bool(
+            entity["rejected"]
+            or (not controlled and status in {"reject", "rejected", "blocked"})
+        )
+        entity["submitted"] = bool(entity["submitted"] or _funnel_submitted(row))
+
+    for index, row in enumerate(gates):
+        entity = entity_for(row, source="gates", index=index)
+        controlled = _controlled_skip_category(row) is not None
+        entity["controlled_skip"] = bool(entity["controlled_skip"] or controlled)
+        status = str(row.get("action") or row.get("status") or "").strip().lower()
+        entity["rejected"] = bool(
+            entity["rejected"]
+            or (not controlled and status in {"reject", "rejected", "blocked"})
+        )
+
+    for index, row in enumerate(fills):
+        entity = entity_for(row, source="fills", index=index)
+        entity["filled"] = True
+        entity["submitted"] = True
+
+    stage_names = (
+        "evaluated",
+        "eligible",
+        "nonzero_target",
+        "precheck_candidate",
+        "controlled_skip",
+        "rejected",
+        "submitted",
+        "filled",
+    )
+    stages: dict[str, dict[str, Any]] = {}
+    for stage in stage_names:
+        by_symbol = Counter(
+            str(entity["symbol"])
+            for entity in entities.values()
+            if bool(entity[stage])
+        )
+        stages[stage] = {
+            "count": int(sum(by_symbol.values())),
+            "by_symbol": dict(sorted(by_symbol.items())),
+        }
+    blocked_by_symbol = Counter(
+        str(entity["symbol"])
+        for entity in entities.values()
+        if bool(entity["controlled_skip"] or entity["rejected"])
+    )
+    stages["blocked_before_submission"] = {
+        "count": int(sum(blocked_by_symbol.values())),
+        "by_symbol": dict(sorted(blocked_by_symbol.items())),
+    }
+
+    transitions = (
+        ("evaluated", "eligible", "not_opportunity_eligible"),
+        ("eligible", "nonzero_target", "zero_or_missing_target"),
+        ("nonzero_target", "precheck_candidate", "no_precheck_candidate"),
+        ("precheck_candidate", "submitted", "not_submitted"),
+        ("submitted", "filled", "not_filled"),
+    )
+    dropoffs: dict[str, dict[str, Any]] = {}
+    for source_stage, target_stage, default_reason in transitions:
+        dropped = [
+            entity
+            for entity in entities.values()
+            if bool(entity[source_stage]) and not bool(entity[target_stage])
+        ]
+        reasons = Counter(
+            str(entity["reasons"][0] if entity["reasons"] else default_reason)
+            for entity in dropped
+        )
+        by_symbol = Counter(str(entity["symbol"]) for entity in dropped)
+        dropoffs[f"{source_stage}_to_{target_stage}"] = {
+            "count": len(dropped),
+            "reasons": dict(sorted(reasons.items())),
+            "by_symbol": dict(sorted(by_symbol.items())),
+        }
+
+    return {
+        "schema_version": "1.0.0",
+        "identity": {
+            "primary_key": "correlation_id",
+            "legacy_fallbacks": [
+                "client_order_id",
+                "decision_trace_id",
+                "order_id",
+                "source_row",
+            ],
+            "unique_entities": len(entities),
+            "missing_correlation_by_source": dict(sorted(missing_correlation.items())),
+        },
+        "stages": stages,
+        "dropoffs": dropoffs,
+    }
+
+
 def build_trading_day_report(
     *,
     report_date: str,
@@ -355,6 +667,12 @@ def build_trading_day_report(
     shadows = [row for row in shadow_rows if _date_match(row, report_date)]
     gates = [row for row in gate_rows if _date_match(row, report_date)]
     decision_rows = [row for row in decisions if _date_match(row, report_date)]
+    execution_funnel = _build_execution_funnel(
+        decisions=decision_rows,
+        intents=intents,
+        gates=gates,
+        fills=fill_rows,
+    )
     shadow_candidates = _deduplicated_parity_shadow_candidates(
         decision_rows,
         existing_intents=intents,
@@ -477,7 +795,13 @@ def build_trading_day_report(
         "artifact_type": "trading_day_report",
         "report_date": report_date,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "desired_trades": {"count": desired_count},
+        "desired_trades": {
+            "count": desired_count,
+            "compatibility_alias": True,
+            "definition": "order_intents_plus_parity_shadow_candidates",
+            "preferred_replacement": "execution_funnel.stages.precheck_candidate",
+        },
+        "execution_funnel": execution_funnel,
         "submitted_trades": {"count": submitted_count},
         "rejected_trades": {
             "count": rejected_count,
@@ -627,6 +951,11 @@ def build_trading_day_report(
         "top_controlled_skip_reasons": dict(controlled_skip_reasons.most_common(5)),
         "shadow_candidates": len(shadow_candidates),
         "symbols_with_activity": sorted(report["symbol_trade_flow"]),
+        "execution_funnel": {
+            stage: int(payload.get("count", 0))
+            for stage, payload in execution_funnel.get("stages", {}).items()
+            if isinstance(payload, Mapping)
+        },
     }
     report["openclaw_summary"] = {
         "service": "ai-trading-research",
@@ -672,6 +1001,10 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"# Trading Day {report.get('report_date')}",
             "",
             f"- Desired trades: `{report.get('desired_trades', {}).get('count', 0)}`",
+            f"- Evaluated decisions: `{report.get('execution_funnel', {}).get('stages', {}).get('evaluated', {}).get('count', 0)}`",
+            f"- Eligible opportunities: `{report.get('execution_funnel', {}).get('stages', {}).get('eligible', {}).get('count', 0)}`",
+            f"- Nonzero targets: `{report.get('execution_funnel', {}).get('stages', {}).get('nonzero_target', {}).get('count', 0)}`",
+            f"- Precheck candidates: `{report.get('execution_funnel', {}).get('stages', {}).get('precheck_candidate', {}).get('count', 0)}`",
             f"- Submitted trades: `{report.get('submitted_trades', {}).get('count', 0)}`",
             f"- Rejected trades: `{report.get('rejected_trades', {}).get('count', 0)}`",
             f"- Controlled skips: `{report.get('controlled_skips', {}).get('count', 0)}`",

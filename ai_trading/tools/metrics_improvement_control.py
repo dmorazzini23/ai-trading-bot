@@ -20,6 +20,7 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
 _GOVERNED_PAPER_SAMPLING_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
+_PAPER_SAMPLING_QUOTA_AUTHORITY = "ai_trading.runtime.paper_sampling"
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -260,6 +261,9 @@ def build_metrics_improvement_control(
     exploration_window_minutes: int = 390,
     max_exploration_orders: int = 3,
     max_exploration_orders_per_symbol: int = 1,
+    exploration_max_quote_age_ms: float = 2500.0,
+    exploration_max_spread_bps: float = 20.0,
+    exploration_min_expected_net_edge_bps: float = 0.0,
     cooldown_seconds: int = 1800,
     configured_symbols: Sequence[str] | str | None = None,
 ) -> dict[str, Any]:
@@ -332,6 +336,21 @@ def build_metrics_improvement_control(
     downscale_qty_scale = max(0.05, min(float(downscale_qty_scale), 1.0))
     weak_bucket_qty_scale = max(0.0, min(float(weak_bucket_qty_scale), 1.0))
     exploration_qty_scale = max(0.05, min(float(exploration_qty_scale), 1.0))
+    parsed_quote_age_bound = _safe_float(exploration_max_quote_age_ms)
+    parsed_spread_bound = _safe_float(exploration_max_spread_bps)
+    parsed_edge_floor = _safe_float(exploration_min_expected_net_edge_bps)
+    exploration_max_quote_age_ms = max(
+        0.0,
+        parsed_quote_age_bound if parsed_quote_age_bound is not None else 2500.0,
+    )
+    exploration_max_spread_bps = max(
+        0.0,
+        parsed_spread_bound if parsed_spread_bound is not None else 20.0,
+    )
+    exploration_min_expected_net_edge_bps = max(
+        0.0,
+        parsed_edge_floor if parsed_edge_floor is not None else 0.0,
+    )
     base_required_edge = max(0.0, float(base_min_edge_bps)) + (
         max(0.0, float(live_p90)) * max(0.0, float(cost_p90_multiplier))
     )
@@ -548,7 +567,7 @@ def build_metrics_improvement_control(
         status = "observe"
         recommended = "continue_sampling_with_current_controls"
     return {
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "artifact_type": "metrics_improvement_control",
         "report_date": report_date,
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -613,6 +632,39 @@ def build_metrics_improvement_control(
             "max_orders_per_window": int(max(0, max_exploration_orders)),
             "max_orders_per_symbol_per_window": int(max(0, max_exploration_orders_per_symbol)),
             "qty_scale": float(exploration_qty_scale),
+            "quota_authority": _PAPER_SAMPLING_QUOTA_AUTHORITY,
+            "quota_authority_durable": True,
+            "advisory_window_only": True,
+        },
+        "exploration_contract": {
+            "contract_version": "1.0.0",
+            "governed_universe": sorted(_GOVERNED_PAPER_SAMPLING_SYMBOLS),
+            "actionable_symbols": sorted(configured_symbol_set),
+            "paper_only": True,
+            "live_money_allowed": False,
+            "passive_only": True,
+            "opening_probe_max_qty": 1,
+            "require_finite_expected_net_edge": True,
+            "min_expected_net_edge_bps": float(
+                exploration_min_expected_net_edge_bps
+            ),
+            "missing_expected_net_edge_action": "block",
+            "negative_expected_net_edge_action": "block",
+            "require_quote_age": True,
+            "max_quote_age_ms": float(exploration_max_quote_age_ms),
+            "require_spread": True,
+            "max_spread_bps": float(exploration_max_spread_bps),
+            "unknown_symbol_action": "block",
+            "non_governed_symbol_action": "block",
+            "quota_authority": _PAPER_SAMPLING_QUOTA_AUTHORITY,
+            "quota_authority_durable": True,
+            "quota_dimensions": [
+                "trading_day",
+                "symbol",
+                "side",
+                "session",
+            ],
+            "reservation_required": True,
         },
         "by_symbol": by_symbol,
         "by_side": by_side,
@@ -685,6 +737,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--exploration-window-minutes", type=int, default=390)
     parser.add_argument("--max-exploration-orders", type=int, default=3)
     parser.add_argument("--max-exploration-orders-per-symbol", type=int, default=1)
+    parser.add_argument("--exploration-max-quote-age-ms", type=float, default=2500.0)
+    parser.add_argument("--exploration-max-spread-bps", type=float, default=20.0)
+    parser.add_argument(
+        "--exploration-min-expected-net-edge-bps",
+        type=float,
+        default=0.0,
+    )
     parser.add_argument("--unknown-quote-metadata-edge-add-bps", type=float, default=1.0)
     parser.add_argument("--configured-symbols", default="")
     parser.add_argument("--output-json", type=Path, default=None)
@@ -725,6 +784,11 @@ def main(argv: list[str] | None = None) -> int:
         exploration_window_minutes=int(args.exploration_window_minutes),
         max_exploration_orders=int(args.max_exploration_orders),
         max_exploration_orders_per_symbol=int(args.max_exploration_orders_per_symbol),
+        exploration_max_quote_age_ms=float(args.exploration_max_quote_age_ms),
+        exploration_max_spread_bps=float(args.exploration_max_spread_bps),
+        exploration_min_expected_net_edge_bps=float(
+            args.exploration_min_expected_net_edge_bps
+        ),
         unknown_quote_metadata_edge_add_bps=float(args.unknown_quote_metadata_edge_add_bps),
         configured_symbols=str(args.configured_symbols),
     )

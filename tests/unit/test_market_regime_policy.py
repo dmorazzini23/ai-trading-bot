@@ -99,7 +99,7 @@ def test_policy_derivation_observes_only_supported_positive_stable_regime() -> N
     ).allowed
 
 
-def test_unqualified_candidate_derives_valid_explicit_all_abstain_policy() -> None:
+def test_unqualified_aggregate_can_observe_independently_qualified_shadow_regime() -> None:
     now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
     walk_forward = _walk_forward(candidate_qualified=False)
     zero_support = walk_forward["by_market_regime"]["volatile"]
@@ -111,14 +111,58 @@ def test_unqualified_candidate_derives_valid_explicit_all_abstain_policy() -> No
         generated_at=now,
     )
 
-    assert policy["allowed_regimes"] == []
-    assert policy["abstained_regimes"] == ["downtrend", "sideways", "volatile"]
+    assert policy["allowed_regimes"] == ["sideways"]
+    assert policy["abstained_regimes"] == ["downtrend", "volatile"]
+    assert policy["evidence"]["candidate_evidence_qualified"] is False
+    assert policy["governance_status"] == "shadow"
+    assert policy["promotion_authority"] is False
     assert validate_market_regime_policy(policy) == policy
-    assert not evaluate_market_regime_policy(
+    assert evaluate_market_regime_policy(
         policy,
         market_regime="sideways",
         now=now,
     ).allowed
+
+
+def test_unqualified_regime_still_abstains_when_aggregate_is_unqualified() -> None:
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    walk_forward = _walk_forward(candidate_qualified=False)
+    walk_forward["by_market_regime"]["sideways"]["evidence_qualified"] = False
+
+    policy = derive_market_regime_policy(walk_forward, generated_at=now)
+
+    assert policy["allowed_regimes"] == []
+    assert policy["abstained_regimes"] == ["downtrend", "sideways", "volatile"]
+    decision = evaluate_market_regime_policy(
+        policy,
+        market_regime="sideways",
+        now=now,
+    )
+    assert (decision.allowed, decision.reason) == (False, "regime_abstain")
+
+
+def test_regime_policy_cannot_gain_production_or_promotion_authority() -> None:
+    now = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+    policy = derive_market_regime_policy(
+        _walk_forward(candidate_qualified=False),
+        generated_at=now,
+    )
+
+    production = deepcopy(policy)
+    production["governance_status"] = "production"
+    promotion = deepcopy(policy)
+    promotion["promotion_authority"] = True
+
+    assert evaluate_market_regime_policy(
+        production,
+        market_regime="sideways",
+        now=now,
+    ).reason == "policy_invalid"
+    assert evaluate_market_regime_policy(
+        promotion,
+        market_regime="sideways",
+        now=now,
+    ).reason == "policy_invalid"
 
 
 def test_policy_derivation_rejects_classifier_mismatch() -> None:

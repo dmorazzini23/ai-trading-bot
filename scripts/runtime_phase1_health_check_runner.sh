@@ -12,15 +12,24 @@ if [[ ! -x "${CHECK_SCRIPT}" ]]; then
   exit 2
 fi
 
+rc=0
 if output="$("${CHECK_SCRIPT}" 2>&1)"; then
   printf '%s\n' "${output}"
   logger -t "${LOG_TAG}" "RUNTIME_HEALTHCHECK_PASS"
   exit 0
+else
+  rc=$?
 fi
 
-rc=$?
 printf '%s\n' "${output}" >&2
 logger -p user.err -t "${LOG_TAG}" "RUNTIME_HEALTHCHECK_FAIL rc=${rc}"
+if grep -q '^RESTART_BURST status=failed ' <<<"${output}"; then
+  restart_event="$(
+    grep '^RESTART_BURST status=failed ' <<<"${output}" \
+      | tail -n 1
+  )"
+  logger -p user.crit -t "${LOG_TAG}" "RUNTIME_RESTART_BURST_DETECTED ${restart_event}"
+fi
 
 if [[ -n "${ALERT_WEBHOOK}" ]]; then
   payload=$(

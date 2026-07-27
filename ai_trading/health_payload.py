@@ -121,6 +121,12 @@ def _build_runtime_attention_flags(
         flags.append("provider_backup_active")
     if bool(provider_state.get("safe_mode")):
         flags.append("provider_safe_mode")
+    if broker_state.get("fresh") is False:
+        flags.append("broker_snapshot_stale")
+    if broker_state.get("open_orders_fresh") is False:
+        flags.append("broker_open_orders_unknown")
+    if broker_state.get("positions_fresh") is False:
+        flags.append("broker_positions_unknown")
     if service_status_normalized in {"degraded", "failed", "error", "halted", "stopped"}:
         flags.append("service_degraded")
     if service_status_normalized in {"halted", "stopped"} or any(
@@ -1228,11 +1234,54 @@ def build_runtime_health_payload(
         broker_connected = None
     else:
         broker_connected = bool(broker_connected_raw)
+    broker_fresh_raw = broker_state.get("fresh")
+    broker_fresh = (
+        bool(broker_fresh_raw)
+        if broker_fresh_raw is not None
+        else bool(
+            broker_connected
+            and broker_status_normalized in {"reachable", "ready", "connected"}
+        )
+    )
+    if not broker_fresh:
+        broker_connected = False
+    open_orders_fresh_raw = broker_state.get("open_orders_fresh")
+    open_orders_fresh = (
+        bool(open_orders_fresh_raw)
+        if open_orders_fresh_raw is not None
+        else broker_fresh
+    )
+    positions_fresh_raw = broker_state.get("positions_fresh")
+    positions_fresh = (
+        bool(positions_fresh_raw)
+        if positions_fresh_raw is not None
+        else broker_fresh
+    )
+    failed_components_raw = broker_state.get("failed_components")
+    if isinstance(failed_components_raw, (list, tuple, set)):
+        failed_components = [
+            str(component)
+            for component in failed_components_raw
+            if str(component).strip()
+        ]
+    elif failed_components_raw in (None, ""):
+        failed_components = []
+    else:
+        failed_components = [str(failed_components_raw)]
     broker_payload = {
         "status": broker_status,
         "connected": broker_connected,
+        "fresh": broker_fresh,
+        "open_orders_fresh": open_orders_fresh,
+        "positions_fresh": positions_fresh,
         "latency_ms": broker_state.get("latency_ms"),
         "last_error": broker_state.get("last_error"),
+        "last_success_at": broker_state.get("last_success_at"),
+        "failed_components": failed_components,
+        "consecutive_failures": _safe_nonnegative_int(
+            broker_state.get("consecutive_failures")
+        ),
+        "stale_age_s": broker_state.get("stale_age_s"),
         "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
         "open_orders_count": broker_state.get("open_orders_count"),
         "positions_count": broker_state.get("positions_count"),
@@ -1262,7 +1311,12 @@ def build_runtime_health_payload(
     provider_disabled = provider_status_normalized in {"down", "disabled", "failed", "unreachable"}
     provider_unknown = provider_status_normalized in {"", "unknown"}
     broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
-    broker_degraded = broker_status_normalized in {"degraded"}
+    broker_degraded = bool(
+        broker_status_normalized in {"degraded"}
+        or not broker_fresh
+        or not open_orders_fresh
+        or not positions_fresh
+    )
     broker_unknown = broker_status_normalized in {"", "unknown"}
     data_degraded = data_status_normalized in {"empty", "degraded"}
     service_degraded = service_status_normalized in {
@@ -1293,14 +1347,24 @@ def build_runtime_health_payload(
         degraded = True
 
     provider_healthy = provider_status_normalized in {"healthy", "ready"} and not data_degraded
-    broker_healthy = broker_status_normalized in {"reachable", "ready", "connected"}
+    broker_healthy = bool(
+        broker_status_normalized in {"reachable", "ready", "connected"}
+        and broker_fresh
+        and open_orders_fresh
+        and positions_fresh
+    )
     overall_ok = provider_healthy and broker_healthy
     if str(ok_mode).strip().lower() == "connectivity":
         provider_connectivity_ok = (
             provider_status_normalized in {"healthy", "ready", "degraded"}
             and not data_degraded
         )
-        broker_connectivity_ok = broker_status_normalized in {"reachable", "ready", "connected"}
+        broker_connectivity_ok = bool(
+            broker_status_normalized in {"reachable", "ready", "connected"}
+            and broker_fresh
+            and open_orders_fresh
+            and positions_fresh
+        )
         overall_ok = provider_connectivity_ok and broker_connectivity_ok
     offhours_market_closed_ready = (
         market_closed_mode
@@ -1549,6 +1613,11 @@ def build_runtime_health_payload(
         payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
     if broker_unknown and not payload.get("reason"):
         payload["reason"] = "broker_status_unknown"
+    if broker_degraded and not broker_unknown and not payload.get("reason"):
+        payload["reason"] = (
+            broker_state.get("last_error")
+            or "broker_snapshot_stale"
+        )
     if service_degraded_for_health and not payload.get("reason"):
         payload["reason"] = "service_degraded"
     if require_database_ready and not database_ok and not payload.get("reason"):

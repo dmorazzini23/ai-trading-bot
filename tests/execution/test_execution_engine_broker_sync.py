@@ -4,6 +4,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
+from requests.exceptions import HTTPError
 
 from ai_trading.execution.engine import ExecutionEngine
 from ai_trading.execution.live_trading import LiveTradingExecutionEngine
@@ -11,6 +13,22 @@ from ai_trading.oms.event_store import EventStore
 from ai_trading.oms.intent_store import IntentStore
 
 pytest.importorskip("sqlalchemy")
+
+
+def _native_alpaca_error(status_code: int) -> NativeAlpacaAPIError:
+    response = SimpleNamespace(status_code=status_code)
+    http_error = HTTPError(f"http_{status_code}", response=response)
+    return NativeAlpacaAPIError(
+        json.dumps({"code": status_code * 1000, "message": f"http_{status_code}"}),
+        http_error,
+    )
+
+
+def _disable_broker_read_delay(monkeypatch, *, attempts: int = 3) -> None:
+    monkeypatch.setenv("AI_TRADING_BROKER_READ_MAX_ATTEMPTS", str(attempts))
+    monkeypatch.setenv("AI_TRADING_BROKER_READ_BASE_DELAY_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_BROKER_READ_MAX_TOTAL_SEC", "3")
+    monkeypatch.setattr("ai_trading.execution.live_trading.time.sleep", lambda _delay: None)
 
 
 def test_update_broker_snapshot_tracks_open_quantities() -> None:
@@ -178,10 +196,195 @@ def test_live_engine_broker_sync_fail_closes_on_open_order_fetch_failure(
 
     snapshot = engine.synchronize_broker_state()
 
-    assert snapshot is preserved
+    assert snapshot.open_orders == preserved.open_orders
+    assert snapshot.positions == preserved.positions
+    assert snapshot.fresh is False
+    assert snapshot.open_orders_fresh is False
+    assert snapshot.positions_fresh is True
     assert reconcile_calls == []
     assert pending_calls == []
     assert engine.open_order_totals("AAPL") == (2, 0)
+
+
+def test_live_engine_marks_cached_snapshot_stale_when_component_unknown(
+    monkeypatch,
+) -> None:
+    """A retained snapshot must expose freshness loss without dropping counts."""
+
+    _disable_broker_read_delay(monkeypatch, attempts=1)
+
+    class _OpenOrderFailureClient:
+        def get_orders(self, **_kwargs):
+            raise _native_alpaca_error(500)
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AAPL", qty=3)]
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine._update_broker_snapshot(
+        [SimpleNamespace(symbol="AAPL", side="buy", qty=2)],
+        [SimpleNamespace(symbol="AAPL", qty=3)],
+    )
+    engine.trading_client = _OpenOrderFailureClient()
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.fresh is False
+    assert snapshot.open_orders_fresh is False
+    assert snapshot.positions_fresh is True
+    assert snapshot.failed_components == ("open_orders",)
+    assert snapshot.consecutive_failures == 1
+    assert len(snapshot.open_orders) == 1
+    assert len(snapshot.positions) == 1
+
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 503])
+def test_live_engine_retries_native_alpaca_transient_read_and_recovers(
+    monkeypatch,
+    caplog,
+    status_code: int,
+) -> None:
+    """Native Alpaca transient read errors must retry without escaping."""
+
+    caplog.set_level("INFO")
+    _disable_broker_read_delay(monkeypatch)
+
+    class _TransientClient:
+        def __init__(self) -> None:
+            self.order_attempts = 0
+
+        def get_orders(self, *, filter):
+            self.order_attempts += 1
+            if self.order_attempts == 1:
+                raise _native_alpaca_error(status_code)
+            return [SimpleNamespace(symbol="AMD", side="buy", qty=1)]
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AMD", qty=1)]
+
+    client = _TransientClient()
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = client
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert client.order_attempts == 2
+    assert len(snapshot.open_orders) == 1
+    assert len(snapshot.positions) == 1
+    assert "BROKER_READ_RETRY_SCHEDULED" in caplog.text
+    assert "BROKER_READ_RECOVERED" in caplog.text
+
+
+def test_live_engine_does_not_retry_native_alpaca_401_and_preserves_cache(
+    monkeypatch,
+    caplog,
+) -> None:
+    """Authentication failures are permanent and retain last-known state."""
+
+    _disable_broker_read_delay(monkeypatch)
+
+    class _UnauthorizedClient:
+        def __init__(self) -> None:
+            self.order_attempts = 0
+
+        def get_orders(self, *, filter):
+            self.order_attempts += 1
+            raise _native_alpaca_error(401)
+
+        def get_all_positions(self):
+            return []
+
+    client = _UnauthorizedClient()
+    engine = LiveTradingExecutionEngine(ctx=None)
+    preserved = engine._update_broker_snapshot(
+        [SimpleNamespace(symbol="AAPL", side="buy", qty=2)],
+        [SimpleNamespace(symbol="AAPL", qty=2)],
+    )
+    engine.trading_client = client
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.open_orders == preserved.open_orders
+    assert snapshot.positions == preserved.positions
+    assert snapshot.fresh is False
+    assert snapshot.open_orders_fresh is False
+    assert snapshot.positions_fresh is True
+    assert client.order_attempts == 1
+    assert "BROKER_READ_GAVE_UP" in caplog.text
+
+
+def test_live_engine_retries_timeout_then_recovers(monkeypatch, caplog) -> None:
+    """Timeouts on broker reads should recover inside the bounded retry loop."""
+
+    caplog.set_level("INFO")
+    _disable_broker_read_delay(monkeypatch)
+
+    class _TimeoutClient:
+        def __init__(self) -> None:
+            self.order_attempts = 0
+
+        def get_orders(self, *, filter):
+            self.order_attempts += 1
+            if self.order_attempts < 3:
+                raise TimeoutError("temporary timeout")
+            return []
+
+        def get_all_positions(self):
+            return []
+
+    client = _TimeoutClient()
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = client
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.open_orders == ()
+    assert snapshot.positions == ()
+    assert client.order_attempts == 3
+    assert "BROKER_READ_RECOVERED" in caplog.text
+
+
+def test_live_engine_preserves_cached_positions_when_position_read_gives_up(
+    monkeypatch,
+    caplog,
+) -> None:
+    """Unknown broker positions must never overwrite the cache as false-flat."""
+
+    _disable_broker_read_delay(monkeypatch, attempts=2)
+
+    class _PositionFailureClient:
+        def __init__(self) -> None:
+            self.position_attempts = 0
+
+        def get_orders(self, *, filter):
+            return []
+
+        def get_all_positions(self):
+            self.position_attempts += 1
+            raise _native_alpaca_error(500)
+
+    client = _PositionFailureClient()
+    engine = LiveTradingExecutionEngine(ctx=None)
+    preserved = engine._update_broker_snapshot(
+        [SimpleNamespace(symbol="AAPL", side="sell", qty=1)],
+        [SimpleNamespace(symbol="AAPL", qty=4)],
+    )
+    engine.trading_client = client
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.open_orders == preserved.open_orders
+    assert snapshot.positions == preserved.positions
+    assert snapshot.fresh is False
+    assert snapshot.open_orders_fresh is True
+    assert snapshot.positions_fresh is False
+    assert client.position_attempts == 2
+    assert len(snapshot.positions) == 1
+    assert getattr(snapshot.positions[0], "qty") == 4
+    assert engine.open_order_totals("AAPL") == (0, 1)
+    assert "BROKER_READ_GAVE_UP" in caplog.text
+    assert "BROKER_SYNC_FAIL_CLOSED_STATE_UNKNOWN" in caplog.text
 
 
 def test_live_engine_fetches_native_alpaca_orders_with_filter_request() -> None:

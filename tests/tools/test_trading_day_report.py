@@ -364,8 +364,153 @@ def test_parity_shadow_candidate_deduplicates_against_existing_intent():
     )
 
     assert report["desired_trades"]["count"] == 1
+    assert report["desired_trades"]["compatibility_alias"] is True
+    assert report["desired_trades"]["preferred_replacement"] == (
+        "execution_funnel.stages.precheck_candidate"
+    )
     assert report["shadow_candidates"]["count"] == 0
     assert report["symbol_trade_flow"]["AAPL"]["desired"] == 1
+
+
+def test_execution_funnel_deduplicates_correlations_and_attributes_dropoffs():
+    complete = {
+        "bar_ts": "2026-07-22T14:00:00Z",
+        "correlation_id": "corr-complete",
+        "symbol": "AAPL",
+        "metrics": {"opportunity_eligible": True},
+        "net_target": {"target_shares": 2, "target_dollars": 400.0},
+        "order": {"symbol": "AAPL", "correlation_id": "corr-complete"},
+        "decision_journal": {
+            "accepted": True,
+            "submitted": True,
+            "correlation_id": "corr-complete",
+        },
+    }
+    no_precheck = {
+        "bar_ts": "2026-07-22T14:01:00Z",
+        "correlation_id": "corr-edge",
+        "symbol": "AMZN",
+        "gates": ["EDGE_FLOOR_GATE"],
+        "metrics": {"opportunity_eligible": True},
+        "net_target": {"target_shares": 3},
+        "decision_journal": {
+            "accepted": False,
+            "submitted": False,
+            "correlation_id": "corr-edge",
+            "reasons": ["EDGE_FLOOR_GATE"],
+        },
+    }
+    ineligible = {
+        "bar_ts": "2026-07-22T14:02:00Z",
+        "correlation_id": "corr-ineligible",
+        "symbol": "MSFT",
+        "gates": ["LONG_ONLY_SHORT_SUPPRESSED"],
+        "metrics": {"opportunity_eligible": False},
+        "net_target": {"target_shares": 0},
+        "decision_journal": {
+            "submitted": False,
+            "correlation_id": "corr-ineligible",
+        },
+    }
+    zero_target = {
+        "bar_ts": "2026-07-22T14:03:00Z",
+        "correlation_id": "corr-zero",
+        "symbol": "MSFT",
+        "gates": ["NET_EDGE_FLOOR_GATE"],
+        "metrics": {"opportunity_eligible": True},
+        "net_target": {"target_shares": 0, "target_dollars": 0},
+        "decision_journal": {
+            "submitted": False,
+            "correlation_id": "corr-zero",
+        },
+    }
+    controlled = _parity_shadow_decision(
+        bar_ts="2026-07-22T14:04:00Z",
+        symbol="AAPL",
+        client_order_id="controlled-1",
+    )
+    controlled["correlation_id"] = "corr-controlled"
+    controlled_journal = controlled["decision_journal"]
+    assert isinstance(controlled_journal, dict)
+    controlled_journal["correlation_id"] = "corr-controlled"
+    controlled_metrics = controlled["metrics"]
+    assert isinstance(controlled_metrics, dict)
+    controlled_metrics["opportunity_eligible"] = True
+    controlled["net_target"] = {"target_shares": 1}
+
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-07-22",
+        order_intents=[
+            {
+                "ts": "2026-07-22T14:00:01Z",
+                "correlation_id": "corr-complete",
+                "symbol": "AAPL",
+                "status": "SUBMITTED",
+            }
+        ],
+        fills=[
+            {
+                "ts": "2026-07-22T14:00:02Z",
+                "correlation_id": "corr-complete",
+                "symbol": "AAPL",
+                "fill_based_evidence": True,
+            }
+        ],
+        shadow_rows=[],
+        gate_rows=[
+            {
+                "ts": "2026-07-22T14:01:01Z",
+                "correlation_id": "corr-edge",
+                "symbol": "AMZN",
+                "status": "blocked",
+                "reason": "EDGE_FLOOR_GATE",
+            }
+        ],
+        live_cost_model={},
+        symbol_scorecard={},
+        decisions=[
+            complete,
+            dict(complete),
+            no_precheck,
+            ineligible,
+            zero_target,
+            controlled,
+        ],
+    )
+
+    funnel = report["execution_funnel"]
+    stages = funnel["stages"]
+    assert stages["evaluated"] == {
+        "count": 5,
+        "by_symbol": {"AAPL": 2, "AMZN": 1, "MSFT": 2},
+    }
+    assert stages["eligible"]["count"] == 4
+    assert stages["nonzero_target"]["count"] == 3
+    assert stages["precheck_candidate"]["count"] == 2
+    assert stages["controlled_skip"]["count"] == 1
+    assert stages["rejected"]["count"] == 1
+    assert stages["blocked_before_submission"]["count"] == 2
+    assert stages["submitted"] == {"count": 1, "by_symbol": {"AAPL": 1}}
+    assert stages["filled"] == {"count": 1, "by_symbol": {"AAPL": 1}}
+    assert funnel["dropoffs"]["evaluated_to_eligible"] == {
+        "count": 1,
+        "reasons": {"LONG_ONLY_SHORT_SUPPRESSED": 1},
+        "by_symbol": {"MSFT": 1},
+    }
+    assert funnel["dropoffs"]["eligible_to_nonzero_target"] == {
+        "count": 1,
+        "reasons": {"NET_EDGE_FLOOR_GATE": 1},
+        "by_symbol": {"MSFT": 1},
+    }
+    assert funnel["dropoffs"]["nonzero_target_to_precheck_candidate"] == {
+        "count": 1,
+        "reasons": {"EDGE_FLOOR_GATE": 1},
+        "by_symbol": {"AMZN": 1},
+    }
+    assert funnel["dropoffs"]["precheck_candidate_to_submitted"]["count"] == 1
+    assert funnel["dropoffs"]["submitted_to_filled"]["count"] == 0
+    assert funnel["identity"]["unique_entities"] == 5
+    assert funnel["identity"]["missing_correlation_by_source"] == {}
 
 
 def test_date_match_supports_top_level_and_nested_bar_timestamps_safely():

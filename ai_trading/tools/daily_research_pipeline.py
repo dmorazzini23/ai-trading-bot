@@ -373,7 +373,10 @@ def build_daily_research_report(
                 opportunity_markouts.get("eligible_opportunities")
             ),
             "outcomes_emitted": opportunity_markout_rows,
-            "horizons_bars": opportunity_markouts.get("horizons_bars", []),
+            "horizons_bars": opportunity_markouts.get(
+                "horizons_bars",
+                opportunity_markouts.get("horizons", []),
+            ),
             "label_status_counts": _nested(
                 opportunity_markouts,
                 "label_status_counts",
@@ -386,6 +389,19 @@ def build_daily_research_report(
                 opportunity_markouts,
                 "bars_provenance",
             ),
+            "source_freshness": _nested(
+                opportunity_markouts,
+                "source_freshness",
+            ),
+            "research_replay": {
+                **_nested(opportunity_markouts, "research_replay"),
+                "research_only": True,
+                "fill_based_evidence": False,
+                "promotion_eligible": False,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
             "model_shadow_telemetry_samples": model_shadow_rows,
             "evidence_type": "shadow_counterfactual",
             "promotion_eligible": False,

@@ -21,6 +21,10 @@ def _health_check_script() -> Path:
     return _repo_root() / "scripts" / "runtime_phase1_health_check.sh"
 
 
+def _health_check_runner() -> Path:
+    return _repo_root() / "scripts" / "runtime_phase1_health_check_runner.sh"
+
+
 def _now_utc_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -70,6 +74,7 @@ def _seed_runtime(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, 
             "CYCLE_DUPLICATE_INTENT_MAX_RATE": "0.70",
             "SKIP_HEALTHZ_PROBE": "1",
             "SKIP_SERVICE_LIVENESS": "1",
+            "SKIP_RESTART_BURST_CHECK": "1",
         }
     )
     return decision_file, env
@@ -203,3 +208,97 @@ def test_runtime_health_check_probes_healthz_and_service_liveness(tmp_path: Path
     assert "OK: /healthz probe healthy: http://127.0.0.1:9001/healthz" in proc.stdout
     assert "is-active\n--quiet\nai-trading.service" in systemctl_log.read_text(encoding="utf-8")
     assert "http://127.0.0.1:9001/healthz" in curl_log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("restart_count", "expected_rc", "expected_status"),
+    [(2, 0, "status=ok"), (4, 1, "status=failed")],
+)
+def test_runtime_health_check_observes_restart_bursts(
+    tmp_path: Path,
+    restart_count: int,
+    expected_rc: int,
+    expected_status: str,
+) -> None:
+    _, env = _seed_runtime(
+        tmp_path,
+        _rows_for_gate_rates(total=160, duplicate_rows=20, ok_rows=16),
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    journalctl = bin_dir / "journalctl"
+    journalctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "idx=0\n"
+        "while [[ \"$idx\" -lt \"$RESTART_FIXTURE_COUNT\" ]]; do\n"
+        "  echo 'ai-trading.service: Main process exited, code=exited, status=1/FAILURE'\n"
+        "  idx=$((idx + 1))\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    journalctl.chmod(0o755)
+    env.update(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            "SKIP_RESTART_BURST_CHECK": "0",
+            "HEALTHCHECK_SYSTEMD_UNIT": "ai-trading.service",
+            "RESTART_BURST_LOOKBACK_MINUTES": "30",
+            "RESTART_BURST_MAX_COUNT": "3",
+            "RESTART_FIXTURE_COUNT": str(restart_count),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(_health_check_script())],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == expected_rc, proc.stdout + proc.stderr
+    assert f"RESTART_BURST {expected_status}" in proc.stdout
+    assert f"count={restart_count}" in proc.stdout
+
+
+def test_runtime_health_check_runner_emits_critical_restart_event(tmp_path: Path) -> None:
+    check_script = tmp_path / "failing-check.sh"
+    check_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo 'RESTART_BURST status=failed unit=ai-trading.service count=4 max_count=3 lookback_minutes=30'\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    check_script.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    logger_log = tmp_path / "logger.log"
+    logger = bin_dir / "logger"
+    logger.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$LOGGER_LOG\"\n",
+        encoding="utf-8",
+    )
+    logger.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            "AI_TRADING_RUNTIME_HEALTHCHECK_SCRIPT": str(check_script),
+            "AI_TRADING_RUNTIME_HEALTHCHECK_ALERT_WEBHOOK": "",
+            "LOGGER_LOG": str(logger_log),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", str(_health_check_runner())],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    emitted = logger_log.read_text(encoding="utf-8")
+    assert "RUNTIME_RESTART_BURST_DETECTED" in emitted
+    assert "count=4" in emitted

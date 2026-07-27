@@ -140,6 +140,7 @@ def test_runtime_prune_script_covers_retention_planner_artifacts() -> None:
         "memory_samples.jsonl",
     ):
         assert filename in script
+    assert "source changed during snapshot" in script
 
 
 def test_debug_cli_does_not_seed_dummy_runtime_env() -> None:

@@ -83,6 +83,14 @@ class BrokerSyncResult:
     open_buy_by_symbol: dict[str, float]
     open_sell_by_symbol: dict[str, float]
     timestamp: float
+    fresh: bool = True
+    open_orders_fresh: bool = True
+    positions_fresh: bool = True
+    last_success_timestamp: float | None = None
+    last_error: str | None = None
+    failed_components: tuple[str, ...] = ()
+    consecutive_failures: int = 0
+    stale_age_s: float | None = None
 
 # Lightweight Prometheus counters (no-op if client unavailable)
 ORDERS_SUBMITTED: Any | None = None

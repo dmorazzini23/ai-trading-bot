@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -209,11 +210,108 @@ def _operator_actions(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+_SECTION_SUMMARY_KEYS = (
+    "artifact_type",
+    "schema_version",
+    "generated_at",
+    "date",
+    "status",
+    "state",
+    "ok",
+    "reason",
+    "gate_passed",
+    "failed_checks",
+    "reasons",
+    "summary",
+    "counts",
+    "sample_counts",
+    "metrics",
+    "recommendations",
+)
+_RECURSIVE_SECTION_KEYS = frozenset(
+    {
+        "payload",
+        "operator_control_plane",
+        "previous_operator_control_plane",
+        "weekend_research",
+        "previous_weekend_research",
+    }
+)
+
+
+def _bounded_summary_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    max_depth: int = 4,
+    max_items: int = 30,
+) -> Any:
+    """Return a JSON-safe bounded summary without recursively embedding reports."""
+
+    if depth >= max_depth:
+        if isinstance(value, Mapping):
+            return {"truncated": True, "field_count": len(value)}
+        if isinstance(value, list):
+            return {"truncated": True, "item_count": len(value)}
+    if isinstance(value, Mapping):
+        bounded: dict[str, Any] = {}
+        for key, child in list(value.items())[:max_items]:
+            key_text = str(key)
+            if key_text in _RECURSIVE_SECTION_KEYS:
+                continue
+            bounded[key_text] = _bounded_summary_value(
+                child,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+            )
+        if len(value) > max_items:
+            bounded["_truncated_fields"] = len(value) - max_items
+        return bounded
+    if isinstance(value, list):
+        bounded_items = [
+            _bounded_summary_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+            )
+            for item in value[:max_items]
+        ]
+        if len(value) > max_items:
+            bounded_items.append({"truncated_items": len(value) - max_items})
+        return bounded_items
+    if isinstance(value, str) and len(value) > 2_000:
+        return f"{value[:2_000]}…"
+    return value
+
+
 def _section(payload: Mapping[str, Any], *, label: str) -> dict[str, Any]:
+    summary = {
+        key: _bounded_summary_value(payload[key])
+        for key in _SECTION_SUMMARY_KEYS
+        if key in payload
+    }
+    source_identity = json.dumps(
+        {
+            "artifact_type": payload.get("artifact_type"),
+            "generated_at": payload.get("generated_at"),
+            "status": payload.get("status"),
+            "summary": summary,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
     return {
         "label": label,
         "artifact_status": _artifact_status(payload),
-        "payload": dict(payload),
+        "source": {
+            "identity_sha256": hashlib.sha256(source_identity).hexdigest(),
+            "top_level_field_count": len(payload),
+        },
+        "summary": summary,
+        "payload_embedded": False,
     }
 
 

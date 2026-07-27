@@ -130,6 +130,25 @@ def _engine_stub() -> Any:
     return engine
 
 
+def _exploration_contract(**overrides: Any) -> dict[str, Any]:
+    contract: dict[str, Any] = {
+        "contract_version": "1.0.0",
+        "governed_universe": ["AAPL", "AMZN", "MSFT"],
+        "actionable_symbols": ["AAPL", "AMZN", "MSFT"],
+        "paper_only": True,
+        "passive_only": True,
+        "opening_probe_max_qty": 1,
+        "require_finite_expected_net_edge": True,
+        "min_expected_net_edge_bps": 0.0,
+        "require_quote_age": True,
+        "max_quote_age_ms": 1_750.0,
+        "require_spread": True,
+        "max_spread_bps": 12.5,
+    }
+    contract.update(overrides)
+    return contract
+
+
 def test_order_expected_edge_extracts_raw_metadata_key() -> None:
     engine = _engine_stub()
 
@@ -1722,6 +1741,26 @@ def test_execution_phase_gate_allows_closing_orders(monkeypatch):
 
     assert allowed is True
     assert detail is None
+
+
+def test_broker_sync_unknown_blocks_openings_but_allows_reductions(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    engine._broker_open_orders_unknown = True
+    engine._broker_positions_unknown = False
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+
+    opening_allowed, opening_detail = engine._execution_phase_allows_submits(
+        closing_position=False,
+    )
+    reduction_allowed, reduction_detail = engine._execution_phase_allows_submits(
+        closing_position=True,
+    )
+
+    assert opening_allowed is False
+    assert opening_detail == "broker_sync_unknown components=open_orders"
+    assert reduction_allowed is True
+    assert reduction_detail is None
 
 
 def test_execution_phase_gate_blocks_open_orders_during_eod_flatten_window(monkeypatch):
@@ -7987,7 +8026,7 @@ def test_metrics_improvement_control_allows_budgeted_paper_side_recovery_sample(
         "runtime_safety_control": True,
         "authority_increase_allowed": False,
         "by_symbol": {
-            "QQQ": {
+            "MSFT": {
                 "action": "allow",
                 "qty_scale": 1.0,
                 "required_edge_bps": 0.25,
@@ -8009,10 +8048,18 @@ def test_metrics_improvement_control_allows_budgeted_paper_side_recovery_sample(
             "max_orders_per_symbol_per_window": 1,
             "qty_scale": 0.5,
         },
+        "exploration_contract": _exploration_contract(),
     }
     monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
 
-    order = {"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    order = {
+        "symbol": "MSFT",
+        "side": "buy",
+        "quantity": 2,
+        "expected_edge_bps": 5.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+    }
     allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
 
     assert allowed is True
@@ -8020,7 +8067,7 @@ def test_metrics_improvement_control_allows_budgeted_paper_side_recovery_sample(
     assert context["reason"] == "applied"
     assert context["edge_requirement_relaxed"] is False
     assert order["quantity"] == 1
-    assert order["_metrics_improvement_exploration_pending"]["symbol"] == "QQQ"
+    assert order["_metrics_improvement_exploration_pending"]["symbol"] == "MSFT"
     assert context["control"]["side_recovery_original_action"] == "shadow"
     assert "paper_side_recovery_sample" in context["control"]["reasons"]
 
@@ -8147,7 +8194,7 @@ def test_metrics_improvement_control_caps_paper_side_recovery_budget(monkeypatch
         "runtime_safety_control": True,
         "authority_increase_allowed": False,
         "by_symbol": {
-            "QQQ": {
+            "MSFT": {
                 "action": "allow",
                 "qty_scale": 1.0,
                 "required_edge_bps": 0.25,
@@ -8169,10 +8216,18 @@ def test_metrics_improvement_control_caps_paper_side_recovery_budget(monkeypatch
             "max_orders_per_symbol_per_window": 1,
             "qty_scale": 0.5,
         },
+        "exploration_contract": _exploration_contract(),
     }
     monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
 
-    first_order = {"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+    first_order = {
+        "symbol": "MSFT",
+        "side": "buy",
+        "quantity": 2,
+        "expected_edge_bps": 5.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+    }
     first_allowed, first_context = engine._metrics_improvement_control_allows_opening(
         order=first_order
     )
@@ -8180,15 +8235,22 @@ def test_metrics_improvement_control_caps_paper_side_recovery_budget(monkeypatch
         order=first_order
     )
     second_allowed, second_context = engine._metrics_improvement_control_allows_opening(
-        order={"symbol": "QQQ", "side": "buy", "quantity": 2, "expected_edge_bps": 5.0}
+        order={
+            "symbol": "MSFT",
+            "side": "buy",
+            "quantity": 2,
+            "expected_edge_bps": 5.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+        }
     )
 
     assert first_allowed is True
     assert first_context["action"] == "paper_side_recovery_explore"
     assert recorded is True
     assert record_context["reason"] == "recorded"
-    assert second_allowed is False
-    assert second_context["reason"] == "metrics_control_exploration_budget"
+    assert second_allowed is True
+    assert second_context["exploration_contract"]["reason"] == "applied"
     assert second_context["action"] == "paper_side_recovery_explore"
 
 
@@ -8346,14 +8408,20 @@ def test_metrics_improvement_control_blocks_when_edge_cannot_cover_unknown_quote
     assert context["required_edge_bps"] == pytest.approx(8.0)
 
 
-def test_metrics_improvement_control_caps_exploration_budget(monkeypatch) -> None:
+def test_metrics_improvement_control_treats_memory_budget_as_advisory(monkeypatch) -> None:
     engine = _engine_stub()
     engine.execution_mode = "paper"
     payload = {
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "runtime_safety_control": True,
         "authority_increase_allowed": False,
-        "by_symbol": {},
+        "by_symbol": {
+            "MSFT": {
+                "action": "explore",
+                "qty_scale": 0.5,
+                "required_edge_bps": 1.0,
+            }
+        },
         "exploration_budget": {
             "window_minutes": 390,
             "max_orders_per_window": 1,
@@ -8361,22 +8429,44 @@ def test_metrics_improvement_control_caps_exploration_budget(monkeypatch) -> Non
             "qty_scale": 0.5,
         },
         "control_policy": {"base_min_edge_bps": 1.0},
+        "exploration_contract": _exploration_contract(),
     }
     monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
     monkeypatch.setenv("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE", "0")
 
-    first_order = {"symbol": "MSFT", "side": "buy", "quantity": 2}
+    first_order = {
+        "symbol": "MSFT",
+        "side": "buy",
+        "quantity": 2,
+        "expected_edge_bps": 1.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+    }
     first_allowed, first_context = engine._metrics_improvement_control_allows_opening(
         order=first_order
     )
     peek_allowed, peek_context = engine._metrics_improvement_control_allows_opening(
-        order={"symbol": "MSFT", "side": "buy", "quantity": 2}
+        order={
+            "symbol": "MSFT",
+            "side": "buy",
+            "quantity": 2,
+            "expected_edge_bps": 1.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+        }
     )
     record_allowed, record_context = engine._record_metrics_improvement_exploration_order(
         order=first_order
     )
     second_allowed, second_context = engine._metrics_improvement_control_allows_opening(
-        order={"symbol": "MSFT", "side": "buy", "quantity": 2}
+        order={
+            "symbol": "MSFT",
+            "side": "buy",
+            "quantity": 2,
+            "expected_edge_bps": 1.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+        }
     )
 
     assert first_allowed is True
@@ -8386,8 +8476,9 @@ def test_metrics_improvement_control_caps_exploration_budget(monkeypatch) -> Non
     assert peek_context["action"] == "explore"
     assert record_allowed is True
     assert record_context["reason"] == "recorded"
-    assert second_allowed is False
-    assert second_context["reason"] == "metrics_control_exploration_budget"
+    assert second_allowed is True
+    assert second_context["action"] == "explore"
+    assert second_context["exploration_contract"]["reason"] == "applied"
 
 
 def test_metrics_improvement_control_relaxes_exploration_edge_in_paper(monkeypatch) -> None:
@@ -8411,6 +8502,7 @@ def test_metrics_improvement_control_relaxes_exploration_edge_in_paper(monkeypat
             "max_orders_per_symbol_per_window": 2,
             "qty_scale": 0.5,
         },
+        "exploration_contract": _exploration_contract(),
     }
     monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
     monkeypatch.delenv("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE", raising=False)
@@ -8419,13 +8511,113 @@ def test_metrics_improvement_control_relaxes_exploration_edge_in_paper(monkeypat
         raising=False,
     )
 
-    order = {"symbol": "MSFT", "side": "buy", "quantity": 2, "expected_edge_bps": 0.25}
+    order = {
+        "symbol": "MSFT",
+        "side": "buy",
+        "quantity": 2,
+        "expected_edge_bps": 0.25,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+        "correlation_id": "decision-quote-order-fill-exit-1",
+    }
     allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
 
     assert allowed is True
     assert context["action"] == "explore"
     assert context["edge_requirement_relaxed"] is True
     assert order["quantity"] == 1
+    assert order["qty"] == 1
+    assert order["order_type"] == "limit"
+    assert order["paper_sampling_policy"] == "passive_only"
+    assert order["correlation_id"] == "decision-quote-order-fill-exit-1"
+
+
+@pytest.mark.parametrize(
+    ("order_update", "reason"),
+    [
+        ({"expected_edge_bps": -0.01}, "metrics_control_exploration_expected_edge_floor"),
+        ({"expected_edge_bps": float("nan")}, "metrics_control_exploration_expected_edge_missing"),
+        ({"quote_age_ms": 1_751.0}, "metrics_control_exploration_quote_age_block"),
+        ({"quote_age_ms": None}, "metrics_control_exploration_quote_age_block"),
+        ({"spread_bps": 12.51}, "metrics_control_exploration_spread_block"),
+        ({"spread_bps": None}, "metrics_control_exploration_spread_block"),
+    ],
+)
+def test_metrics_improvement_exploration_contract_blocks_invalid_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    order_update: dict[str, Any],
+    reason: str,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "MSFT": {
+                "action": "explore",
+                "qty_scale": 0.5,
+                "required_edge_bps": 0.0,
+            }
+        },
+        "exploration_budget": {
+            "window_minutes": 390,
+            "max_orders_per_window": 2,
+            "max_orders_per_symbol_per_window": 2,
+        },
+        "exploration_contract": _exploration_contract(),
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+    order = {
+        "symbol": "MSFT",
+        "side": "buy",
+        "quantity": 2,
+        "expected_edge_bps": 1.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+    }
+    order.update(order_update)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
+
+    assert allowed is False
+    assert context["reason"] == reason
+
+
+def test_metrics_improvement_exploration_contract_blocks_non_governed_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "GOOGL": {"action": "explore", "qty_scale": 0.5, "required_edge_bps": 0.0}
+        },
+        "exploration_budget": {},
+        "exploration_contract": _exploration_contract(
+            governed_universe=["AAPL", "AMZN", "MSFT", "GOOGL"],
+            actionable_symbols=["AAPL", "AMZN", "MSFT", "GOOGL"],
+        ),
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={
+            "symbol": "GOOGL",
+            "side": "buy",
+            "quantity": 1,
+            "expected_edge_bps": 1.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+        }
+    )
+
+    assert allowed is False
+    assert context["reason"] == "metrics_control_exploration_symbol_block"
 
 
 def test_metrics_improvement_control_keeps_live_exploration_edge_required(monkeypatch) -> None:
@@ -8449,6 +8641,7 @@ def test_metrics_improvement_control_keeps_live_exploration_edge_required(monkey
             "max_orders_per_symbol_per_window": 2,
             "qty_scale": 0.5,
         },
+        "exploration_contract": _exploration_contract(),
     }
     monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
     monkeypatch.delenv("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE", raising=False)
@@ -8464,6 +8657,42 @@ def test_metrics_improvement_control_keeps_live_exploration_edge_required(monkey
     assert allowed is False
     assert context["reason"] == "metrics_control_expected_edge_floor"
     assert context["action"] == "explore"
+
+
+def test_metrics_improvement_control_blocks_live_exploration_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "runtime_safety_control": True,
+        "authority_increase_allowed": False,
+        "by_symbol": {
+            "MSFT": {
+                "action": "explore",
+                "qty_scale": 0.5,
+                "required_edge_bps": 0.0,
+            }
+        },
+        "exploration_budget": {},
+        "exploration_contract": _exploration_contract(),
+    }
+    monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
+
+    allowed, context = engine._metrics_improvement_control_allows_opening(
+        order={
+            "symbol": "MSFT",
+            "side": "buy",
+            "quantity": 2,
+            "expected_edge_bps": 5.0,
+            "quote_age_ms": 100.0,
+            "spread_bps": 2.0,
+        }
+    )
+
+    assert allowed is False
+    assert context["reason"] == "metrics_control_exploration_paper_only"
 
 
 def test_metrics_improvement_control_allows_budgeted_paper_recovery_sample(
@@ -8490,13 +8719,21 @@ def test_metrics_improvement_control_allows_budgeted_paper_recovery_sample(
             "max_orders_per_symbol_per_window": 2,
             "qty_scale": 0.5,
         },
+        "exploration_contract": _exploration_contract(),
     }
     monkeypatch.setattr(engine, "_load_metrics_improvement_control", lambda: payload)
     monkeypatch.delenv("AI_TRADING_METRICS_IMPROVEMENT_REQUIRE_EXPECTED_EDGE", raising=False)
     monkeypatch.setenv("AI_TRADING_METRICS_IMPROVEMENT_PAPER_RECOVERY_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_METRICS_IMPROVEMENT_PAPER_RECOVERY_MIN_EDGE_BPS", "0.10")
 
-    order = {"symbol": "AAPL", "side": "buy", "quantity": 2, "expected_edge_bps": 1.0}
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 2,
+        "expected_edge_bps": 1.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+    }
     allowed, context = engine._metrics_improvement_control_allows_opening(order=order)
 
     assert allowed is True

@@ -73,6 +73,42 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
     assert report["upward_trajectory"]["runtime_authority"] is False
 
 
+def test_operator_control_plane_sections_are_bounded_and_non_recursive(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    recursive_payload = {
+        "status": "complete",
+        "summary": {
+            "candidate_count": 2,
+            "operator_control_plane": {"payload": {"large": "x" * 100_000}},
+        },
+        "payload": {"previous": "x" * 100_000},
+        "large_unselected_field": "y" * 100_000,
+    }
+
+    report = operator_control_plane.build_operator_control_plane(
+        health=_health_payload(),
+        readiness={"status": "paper_only"},
+        runtime_performance={"available": True},
+        model_registry={"status": "complete"},
+        latest_research=recursive_payload,
+        weekend_research=recursive_payload,
+        drift={"status": "ok"},
+        surveillance={"status": "ok"},
+        risk_verifier={"status": "pass"},
+        paper_sampling={"status": "complete"},
+        huggingface_research={"status": "complete"},
+        upward_trajectory={"status": "complete"},
+    )
+
+    encoded = json.dumps(report)
+    assert len(encoded) < 25_000
+    assert report["latest_research"]["payload_embedded"] is False
+    assert "payload" not in report["latest_research"]
+    assert report["latest_research"]["summary"]["summary"] == {"candidate_count": 2}
+    assert len(report["latest_research"]["source"]["identity_sha256"]) == 64
+    assert report["latest_research"]["source"]["top_level_field_count"] == 4
+
+
 def test_operator_control_plane_derives_runtime_gonogo_and_oms_from_health(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     health = _health_payload()

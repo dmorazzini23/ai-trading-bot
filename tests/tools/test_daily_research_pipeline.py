@@ -82,9 +82,20 @@ def test_daily_research_report_separates_promotion_evidence_sources(
         opportunity_markouts={
             "eligible_opportunities": 10,
             "outcomes_emitted": 30,
-            "horizons_bars": [1, 3, 5],
+            "horizons": [1, 3, 5],
             "label_status_counts": {"resolved": 30},
             "bars_provenance": {"quality_passed": True},
+            "source_freshness": {
+                "fresh": True,
+                "max_timestamp": "2026-07-20T19:59:00+00:00",
+            },
+            "research_replay": {
+                "status": "ready",
+                "resolved_samples": 30,
+                "fill_based_evidence": True,
+                "promotion_eligible": True,
+                "promotion_authority": True,
+            },
             "promotion_eligible": False,
             "runtime_authority": False,
         },
@@ -125,7 +136,22 @@ def test_daily_research_report_separates_promotion_evidence_sources(
         "shadow_counterfactual": 30,
     }
     assert report["opportunity_markouts"]["outcomes_emitted"] == 30
+    assert report["opportunity_markouts"]["horizons_bars"] == [1, 3, 5]
     assert report["opportunity_markouts"]["model_shadow_telemetry_samples"] == 10_000
+    assert report["opportunity_markouts"]["source_freshness"]["fresh"] is True
+    assert report["opportunity_markouts"]["research_replay"]["resolved_samples"] == 30
+    assert (
+        report["opportunity_markouts"]["research_replay"]["fill_based_evidence"]
+        is False
+    )
+    assert (
+        report["opportunity_markouts"]["research_replay"]["promotion_eligible"]
+        is False
+    )
+    assert (
+        report["opportunity_markouts"]["research_replay"]["promotion_authority"]
+        is False
+    )
     assert report["opportunity_markouts"]["promotion_authority"] is False
     assert report["opportunity_markouts"]["runtime_authority"] is False
     assert report["historical_training"]["dataset_hash"] == "dataset-sha"

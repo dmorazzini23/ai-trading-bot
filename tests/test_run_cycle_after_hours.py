@@ -64,6 +64,60 @@ def test_run_cycle_skips_when_market_closed(monkeypatch):
     assert provider_status_updates[-1]["data_status"] == "warming_up"
 
 
+def test_run_cycle_reports_cached_broker_snapshot_degraded(monkeypatch):
+    monkeypatch.setattr(main, "_is_market_open_base", lambda: False)
+    monkeypatch.setenv("ALLOW_AFTER_HOURS", "0")
+    broker_status_updates: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        main.runtime_state,
+        "update_broker_status",
+        lambda **kwargs: broker_status_updates.append(dict(kwargs)),
+    )
+
+    class _StubExecutionEngine:
+        def synchronize_broker_state(self):
+            return types.SimpleNamespace(
+                open_orders=["cached-order"],
+                positions=["cached-position"],
+                fresh=False,
+                open_orders_fresh=False,
+                positions_fresh=True,
+                last_error="http_500",
+                failed_components=("open_orders",),
+                consecutive_failures=2,
+                stale_age_s=60.0,
+            )
+
+    runtime_obj = types.SimpleNamespace(execution_engine=_StubExecutionEngine())
+    stub_bot_engine = cast(Any, types.ModuleType("ai_trading.core.bot_engine"))
+    stub_bot_engine.BotState = type("_StubBotState", (), {})
+    stub_bot_engine.get_ctx = lambda: types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", stub_bot_engine)
+    stub_runtime = cast(Any, types.ModuleType("ai_trading.core.runtime"))
+    stub_runtime.build_runtime = lambda _cfg: runtime_obj
+    stub_runtime.enhance_runtime_with_context = lambda runtime, _ctx: runtime
+    monkeypatch.setitem(sys.modules, "ai_trading.core.runtime", stub_runtime)
+    monkeypatch.setattr(
+        main,
+        "_resolve_cached_context",
+        lambda _cfg, state_cls, runtime_builder: (
+            state_cls(),
+            runtime_builder(_cfg),
+            "test-hash",
+        ),
+    )
+
+    main.run_cycle()
+
+    latest = broker_status_updates[-1]
+    assert latest["connected"] is False
+    assert latest["fresh"] is False
+    assert latest["status"] == "degraded"
+    assert latest["open_orders_count"] == 1
+    assert latest["positions_count"] == 1
+    assert latest["failed_components"] == ("open_orders",)
+
+
 def test_run_cycle_calls_market_close_helper_when_closed(monkeypatch):
     """run_cycle should call market-close helper before returning on closed sessions."""
 

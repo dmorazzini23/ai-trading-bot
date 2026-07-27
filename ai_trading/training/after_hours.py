@@ -34,6 +34,7 @@ from ai_trading.features.indicators import (
     compute_sma,
     compute_vwap,
 )
+from ai_trading.governance.model_drift import evaluate_model_drift_gate
 from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.model_registry import ModelRegistry
@@ -3216,6 +3217,55 @@ def _promotion_policy_name() -> str:
     return "strict"
 
 
+def _model_data_drift_promotion_gate(
+    *,
+    now_utc: datetime,
+) -> dict[str, Any]:
+    required = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_MODEL_DATA_DRIFT",
+            False,
+            cast=bool,
+        )
+    )
+    path = _resolve_after_hours_output_path(
+        str(
+            get_env(
+                "AI_TRADING_MODEL_DATA_DRIFT_MONITOR_PATH",
+                "runtime/model_data_drift_monitor_latest.json",
+                cast=str,
+            )
+            or "runtime/model_data_drift_monitor_latest.json"
+        ),
+        default_relative="runtime/model_data_drift_monitor_latest.json",
+    )
+    payload: Mapping[str, Any] | None = None
+    if path.is_file():
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, Mapping):
+            payload = parsed
+    gate = evaluate_model_drift_gate(
+        payload,
+        required=required,
+        now=now_utc,
+        max_age_hours=max(
+            0.0,
+            float(
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_MODEL_DATA_DRIFT_MAX_AGE_HOURS",
+                    48.0,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    gate["path"] = str(path)
+    return gate
+
+
 def _promotion_score(*, expectancy_bps: float, max_drawdown_bps: float) -> float:
     drawdown_penalty = float(
         get_env("AI_TRADING_AFTER_HOURS_PROMOTION_DRAWDOWN_PENALTY", 0.003, cast=float)
@@ -5526,6 +5576,308 @@ def _build_negative_symbol_penalty_map(model_quality: Mapping[str, Any]) -> dict
     return penalties
 
 
+def _make_edge_model_v2_regressor(
+    *,
+    objective: str,
+    seed: int,
+    oof: bool,
+) -> Any:
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    iterations = 140 if oof else (350 if objective == "mean" else 250)
+    common = {
+        "max_depth": 6,
+        "learning_rate": 0.05,
+        "max_iter": iterations,
+        "min_samples_leaf": 24,
+        "random_state": seed,
+    }
+    if objective == "mean":
+        return HistGradientBoostingRegressor(
+            loss="squared_error",
+            l2_regularization=0.02,
+            **common,
+        )
+    quantile = {"q10": 0.10, "q50": 0.50, "q90": 0.90}.get(objective)
+    if quantile is None:
+        raise ValueError(f"Unsupported edge-model objective: {objective}")
+    return HistGradientBoostingRegressor(
+        loss="quantile",
+        quantile=quantile,
+        **common,
+    )
+
+
+def _evaluate_edge_model_v2_oof(
+    dataset: Any,
+    *,
+    seed: int,
+    sample_weights: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Qualify direct edge regression using purged, embargoed OOF evidence."""
+
+    import pandas as pd
+
+    base_report: dict[str, Any] = {
+        "evaluation_type": "purged_embargoed_walk_forward_oof",
+        "fit_scope": "fold_train_only",
+        "governance_status": "shadow",
+        "research_only": True,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "evidence_qualified": False,
+    }
+    if dataset is None or dataset.empty:
+        return {**base_report, "qualification_reasons": ["dataset_empty"]}
+    X = dataset.loc[:, FEATURE_COLUMNS]
+    edge = dataset["realized_edge_bps"].astype(float).to_numpy()
+    labels = dataset["label"].astype(int)
+    timestamps = pd.to_datetime(dataset["timestamp"], utc=True)
+    label_ts = pd.to_datetime(dataset["label_ts"], utc=True)
+    regimes = dataset["regime"].astype(str).to_numpy()
+    embargo_days = max(
+        0,
+        int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int)),
+    )
+    split_count = int(get_env("AI_TRADING_AFTER_HOURS_CV_SPLITS", 5, cast=int))
+    split_count = max(2, min(split_count, max(2, len(dataset) // 80)))
+    splitter = PurgedGroupTimeSeriesSplit(
+        n_splits=split_count,
+        embargo_pct=float(
+            get_env("AI_TRADING_AFTER_HOURS_EMBARGO_PCT", 0.01, cast=float)
+        ),
+        purge_pct=float(
+            get_env("AI_TRADING_AFTER_HOURS_PURGE_PCT", 0.02, cast=float)
+        ),
+    )
+    split_frame = X.copy()
+    split_frame.index = pd.DatetimeIndex(timestamps)
+    folds = list(splitter.split(split_frame, labels, t1=label_ts))
+    fold_reports: list[dict[str, Any]] = []
+    oof_conservative = np.full(len(dataset), np.nan, dtype=float)
+    selected_all = np.zeros(len(dataset), dtype=bool)
+    min_predicted_edge = float(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_PREDICTED_BPS",
+            0.0,
+            cast=float,
+        )
+    )
+    horizon_bars = max(
+        1,
+        int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
+    )
+    horizon_guard_days = max(1, math.ceil(horizon_bars * 5 / (24 * 60)))
+    for fold_index, (train_idx, test_idx) in enumerate(folds):
+        if len(train_idx) < 60 or len(test_idx) < 20:
+            continue
+        test_labels = label_ts.iloc[test_idx]
+        if test_labels.empty:
+            continue
+        cutoff = test_labels.min() - pd.Timedelta(days=embargo_days)
+        train_mask = label_ts.iloc[train_idx] <= cutoff
+        safe_train_idx = np.asarray(train_idx)[np.asarray(train_mask, dtype=bool)]
+        if len(safe_train_idx) < 60:
+            continue
+        try:
+            run_leakage_guards(
+                feature_timestamps=timestamps.iloc[test_idx],
+                label_timestamps=label_ts.iloc[test_idx],
+                train_label_times=label_ts.iloc[safe_train_idx],
+                test_label_times=label_ts.iloc[test_idx],
+                horizon_days=horizon_guard_days,
+                embargo_days=embargo_days,
+            )
+        except AssertionError as exc:
+            logger.warning(
+                "AFTER_HOURS_EDGE_MODEL_V2_FOLD_SKIPPED_LEAKAGE",
+                extra={"fold_index": fold_index, "error": str(exc)},
+            )
+            continue
+        mean_model = _make_edge_model_v2_regressor(
+            objective="mean",
+            seed=seed + fold_index,
+            oof=True,
+        )
+        q10_model = _make_edge_model_v2_regressor(
+            objective="q10",
+            seed=seed + 100 + fold_index,
+            oof=True,
+        )
+        train_weight = (
+            np.asarray(sample_weights, dtype=float)[safe_train_idx]
+            if sample_weights is not None
+            else None
+        )
+        try:
+            _fit_model_with_optional_sample_weight(
+                mean_model,
+                X.iloc[safe_train_idx],
+                dataset["realized_edge_bps"].iloc[safe_train_idx].astype(float),
+                sample_weight=train_weight,
+            )
+            _fit_model_with_optional_sample_weight(
+                q10_model,
+                X.iloc[safe_train_idx],
+                dataset["realized_edge_bps"].iloc[safe_train_idx].astype(float),
+                sample_weight=train_weight,
+            )
+            mean_prediction = np.asarray(
+                mean_model.predict(X.iloc[test_idx]),
+                dtype=float,
+            )
+            conservative_prediction = np.asarray(
+                q10_model.predict(X.iloc[test_idx]),
+                dtype=float,
+            )
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            continue
+        selected = (
+            np.isfinite(mean_prediction)
+            & np.isfinite(conservative_prediction)
+            & (conservative_prediction >= min_predicted_edge)
+        )
+        safe_test_idx = np.asarray(test_idx, dtype=int)
+        oof_conservative[safe_test_idx] = conservative_prediction
+        selected_all[safe_test_idx] = selected
+        selected_edge = edge[safe_test_idx][selected]
+        fold_reports.append(
+            {
+                "fold_index": int(fold_index),
+                "train_rows": int(len(safe_train_idx)),
+                "test_rows": int(len(safe_test_idx)),
+                "train_max_timestamp": timestamps.iloc[safe_train_idx].max().isoformat(),
+                "test_min_timestamp": timestamps.iloc[safe_test_idx].min().isoformat(),
+                "chronological_non_overlap": bool(
+                    timestamps.iloc[safe_train_idx].max()
+                    < timestamps.iloc[safe_test_idx].min()
+                ),
+                "support": int(selected_edge.size),
+                "mean_net_expectancy_bps": (
+                    float(np.mean(selected_edge)) if selected_edge.size else None
+                ),
+                "total_net_expectancy_bps": float(np.sum(selected_edge)),
+                "hit_rate": (
+                    float(np.mean(selected_edge > 0.0))
+                    if selected_edge.size
+                    else None
+                ),
+            }
+        )
+
+    supported_folds = [
+        fold
+        for fold in fold_reports
+        if int(fold.get("support", 0) or 0) > 0
+        and fold.get("mean_net_expectancy_bps") is not None
+    ]
+    selected_edge = edge[selected_all & np.isfinite(edge)]
+    fold_expectancies = [
+        float(fold["mean_net_expectancy_bps"]) for fold in supported_folds
+    ]
+    profitable_folds = sum(value > 0.0 for value in fold_expectancies)
+    worst_fold = min(fold_expectancies) if fold_expectancies else None
+    regime_metrics = _regime_summary(regimes, selected_all, edge)
+    regime_stability = _regime_stability_summary(regime_metrics)
+
+    min_support = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_SUPPORT",
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT",
+                    80,
+                    cast=int,
+                ),
+                cast=int,
+            )
+        ),
+    )
+    min_folds = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", 4, cast=int)),
+    )
+    min_profitable_folds = max(
+        3,
+        int(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS",
+                3,
+                cast=int,
+            )
+        ),
+    )
+    min_profitable_ratio = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO",
+                0.60,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    min_mean_edge = float(_edge_targets().min_expectancy_bps)
+    min_worst_fold = float(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_MIN_WORST_FOLD_EXPECTANCY_BPS",
+            0.0,
+            cast=float,
+        )
+    )
+    constraint_config = _selection_constraint_config()
+    fold_ratio = (
+        float(profitable_folds / len(fold_reports)) if fold_reports else 0.0
+    )
+    mean_expectancy = (
+        float(np.mean(selected_edge)) if selected_edge.size else None
+    )
+    gates = {
+        "fold_count": len(fold_reports) >= min_folds,
+        "support": int(selected_edge.size) >= min_support,
+        "positive_mean_expectancy": (
+            mean_expectancy is not None and mean_expectancy >= min_mean_edge
+        ),
+        "profitable_folds": profitable_folds >= min_profitable_folds,
+        "profitable_fold_ratio": fold_ratio >= min_profitable_ratio,
+        "worst_fold": (
+            worst_fold is not None and worst_fold >= min_worst_fold
+        ),
+        "supported_regimes": int(
+            regime_stability.get("supported_regime_count", 0) or 0
+        )
+        >= int(constraint_config["min_supported_regimes"]),
+        "regime_stability": float(
+            regime_stability.get("profitable_regime_ratio", 0.0) or 0.0
+        )
+        >= float(constraint_config["min_profitable_regime_ratio"]),
+    }
+    reasons = [name for name, passed in gates.items() if not passed]
+    return {
+        **base_report,
+        "evidence_qualified": not reasons,
+        "qualification_reasons": reasons,
+        "selection_eligible": not reasons,
+        "bundle_attachment_eligible": not reasons,
+        "min_predicted_edge_bps": min_predicted_edge,
+        "fold_count": int(len(fold_reports)),
+        "supported_fold_count": int(len(supported_folds)),
+        "profitable_fold_count": int(profitable_folds),
+        "profitable_fold_ratio": fold_ratio,
+        "support": int(selected_edge.size),
+        "mean_net_expectancy_bps": mean_expectancy,
+        "worst_fold_net_expectancy_bps": worst_fold,
+        "fold_expectancy_bps": fold_expectancies,
+        "max_drawdown_bps": _max_drawdown_bps(selected_edge),
+        "regime_metrics": regime_metrics,
+        "regime_stability_report": regime_stability,
+        "gates": gates,
+        "folds": fold_reports,
+    }
+
+
 def _fit_edge_model_v2_bundle(
     dataset: Any,
     *,
@@ -5541,54 +5893,59 @@ def _fit_edge_model_v2_bundle(
         "enabled": bool(enabled),
         "trained": False,
         "rows": int(len(dataset) if dataset is not None else 0),
+        "governance_status": "shadow",
+        "research_only": True,
+        "promotion_authority": False,
+        "live_money_authority": False,
     }
     if not enabled or dataset is None or len(dataset) < min_rows:
         report["reason"] = "disabled_or_insufficient_rows"
         return {}, report
     try:
-        from sklearn.ensemble import HistGradientBoostingRegressor
+        oof_evaluation = _evaluate_edge_model_v2_oof(
+            dataset,
+            seed=seed,
+            sample_weights=sample_weights,
+        )
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        report["reason"] = "missing_sklearn_regressor"
+        report["reason"] = "oof_evaluation_failed"
         report["error"] = str(exc)
+        return {}, report
+    report["oof_evaluation"] = oof_evaluation
+    report["evidence_qualified"] = bool(
+        oof_evaluation.get("evidence_qualified", False)
+    )
+    report["selection_eligible"] = bool(
+        oof_evaluation.get("selection_eligible", False)
+    )
+    report["bundle_attachment_eligible"] = bool(
+        oof_evaluation.get("bundle_attachment_eligible", False)
+    )
+    if not bool(oof_evaluation.get("evidence_qualified", False)):
+        report["reason"] = "oof_evidence_unqualified"
         return {}, report
 
     X = dataset.loc[:, FEATURE_COLUMNS]
     y = dataset["realized_edge_bps"].astype(float)
-    mean_model = HistGradientBoostingRegressor(
-        loss="squared_error",
-        max_depth=6,
-        learning_rate=0.05,
-        max_iter=350,
-        min_samples_leaf=24,
-        l2_regularization=0.02,
-        random_state=seed,
+    mean_model = _make_edge_model_v2_regressor(
+        objective="mean",
+        seed=seed,
+        oof=False,
     )
-    q10_model = HistGradientBoostingRegressor(
-        loss="quantile",
-        quantile=0.10,
-        max_depth=6,
-        learning_rate=0.05,
-        max_iter=250,
-        min_samples_leaf=24,
-        random_state=seed + 11,
+    q10_model = _make_edge_model_v2_regressor(
+        objective="q10",
+        seed=seed + 11,
+        oof=False,
     )
-    q50_model = HistGradientBoostingRegressor(
-        loss="quantile",
-        quantile=0.50,
-        max_depth=6,
-        learning_rate=0.05,
-        max_iter=250,
-        min_samples_leaf=24,
-        random_state=seed + 17,
+    q50_model = _make_edge_model_v2_regressor(
+        objective="q50",
+        seed=seed + 17,
+        oof=False,
     )
-    q90_model = HistGradientBoostingRegressor(
-        loss="quantile",
-        quantile=0.90,
-        max_depth=6,
-        learning_rate=0.05,
-        max_iter=250,
-        min_samples_leaf=24,
-        random_state=seed + 23,
+    q90_model = _make_edge_model_v2_regressor(
+        objective="q90",
+        seed=seed + 23,
+        oof=False,
     )
     used_weighted_fit = False
     try:
@@ -5623,6 +5980,9 @@ def _fit_edge_model_v2_bundle(
     )
     bundle = {
         "version": "edge_model_v2_qreg",
+        "governance_status": "shadow",
+        "promotion_authority": False,
+        "live_money_authority": False,
         "feature_columns": list(FEATURE_COLUMNS),
         "models": {
             "mean": mean_model,
@@ -5631,6 +5991,7 @@ def _fit_edge_model_v2_bundle(
             "q90": q90_model,
         },
         "training_report": dict(report),
+        "oof_evaluation": dict(oof_evaluation),
     }
     return bundle, report
 
@@ -6727,6 +7088,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         runtime_performance_gate=runtime_performance_gate,
         live_execution_quality_gate=live_execution_quality_gate,
     )
+    model_data_drift_gate = _model_data_drift_promotion_gate(now_utc=now_utc)
     roadmap_additional_gates: dict[str, bool] = {}
     if bool(phase1_week1.get("required_for_promotion", False)):
         roadmap_additional_gates["phase1_week1"] = bool(phase1_week1.get("gate_passed", False))
@@ -6745,6 +7107,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     if bool(promotion_confidence_gate.get("required_for_promotion", False)):
         roadmap_additional_gates["promotion_confidence"] = bool(
             promotion_confidence_gate.get("gate_passed", False)
+        )
+    if bool(model_data_drift_gate.get("required", False)):
+        roadmap_additional_gates["model_data_drift"] = bool(
+            model_data_drift_gate.get("gate_passed", False)
         )
     promotion = _promotion_gate_bundle(
         best=best,
@@ -6815,6 +7181,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "champion_challenger_ab": champion_challenger_ab,
             "promotion_confidence_gate": promotion_confidence_gate,
             "oof_authority_gate": oof_authority_gate,
+            "model_data_drift_gate": model_data_drift_gate,
         },
     )
 
@@ -6878,6 +7245,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     manifest_metadata["negative_symbol_penalties"] = dict(negative_symbol_penalties)
     manifest_metadata["edge_model_v2"] = dict(edge_model_v2_report)
     manifest_metadata["live_cost_buckets"] = dict(live_cost_buckets)
+    manifest_metadata["model_data_drift_gate"] = dict(model_data_drift_gate)
     requested_model_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
         default_relative="models/after_hours",
@@ -6936,6 +7304,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "model_quality": model_quality,
             "label_quality": label_quality,
             "live_cost_buckets": live_cost_buckets,
+            "model_data_drift_gate": model_data_drift_gate,
         },
         dataset_fingerprint=dataset_fp,
         tags=["after_hours", "cost_aware", "purged_walk_forward"],
@@ -6980,12 +7349,14 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "champion_challenger_ab": champion_challenger_ab,
                 "promotion_confidence": promotion_confidence_gate,
                 "oof_authority": oof_authority_gate,
+                "model_data_drift": model_data_drift_gate,
             },
             "runtime_performance_gate": runtime_performance_gate,
             "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
             "promotion_confidence_gate": promotion_confidence_gate,
             "oof_authority_gate": oof_authority_gate,
+            "model_data_drift_gate": model_data_drift_gate,
         },
     )
     require_runtime_promotion_gate = bool(
@@ -6999,6 +7370,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     if require_runtime_promotion_gate and not bool(promotion.get("gate_passed", False)):
         promote_runtime_model = False
         runtime_promotion_reasons.append("promotion_gate_failed")
+    if bool(model_data_drift_gate.get("required", False)) and not bool(
+        model_data_drift_gate.get("gate_passed", False)
+    ):
+        promote_runtime_model = False
+        runtime_promotion_reasons.append("model_data_drift_gate_failed")
     if require_runtime_production and str(status).strip().lower() != "production":
         promote_runtime_model = False
         runtime_promotion_reasons.append("governance_not_production")
@@ -7084,11 +7460,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "live_execution_quality": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
             "promotion_confidence": promotion_confidence_gate,
+            "model_data_drift": model_data_drift_gate,
         },
         "runtime_performance_gate": runtime_performance_gate,
         "live_execution_quality_gate": live_execution_quality_gate,
         "champion_challenger_ab": champion_challenger_ab,
         "promotion_confidence_gate": promotion_confidence_gate,
+        "model_data_drift_gate": model_data_drift_gate,
         "prior_model_metrics": prior_model_metrics,
         "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
@@ -7105,6 +7483,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,
+            "reasons": list(runtime_promotion_reasons),
         },
     }
     model_selection_retune = _maybe_retune_model_selection_weights(
@@ -7164,6 +7543,15 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "promotion_confidence_observed": dict(
                 promotion_confidence_gate.get("observed", {})
             ),
+            "model_data_drift_required": bool(
+                model_data_drift_gate.get("required", False)
+            ),
+            "model_data_drift_gate_passed": bool(
+                model_data_drift_gate.get("gate_passed", False)
+            ),
+            "model_data_drift_reasons": list(
+                model_data_drift_gate.get("reasons", [])
+            ),
             "governance_status": str(status),
             "artifact_sync": dict(artifact_sync),
         },
@@ -7214,15 +7602,18 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "edge_model_v2": edge_model_v2_report,
         "model_quality": model_quality,
         "label_quality": label_quality,
+        "model_data_drift_gate": model_data_drift_gate,
         "model_selection_retune": model_selection_retune,
         "training_data_delta": training_data_delta,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
+        "runtime_promotion_reasons": list(runtime_promotion_reasons),
         "promotion": promotion,
         "roadmap": {
             "phase_1_week_1": phase1_week1,
             "champion_challenger_ab": champion_challenger_ab,
             "promotion_confidence": promotion_confidence_gate,
+            "model_data_drift": model_data_drift_gate,
         },
         "runtime_performance_gate": runtime_performance_gate,
         "champion_challenger_ab": champion_challenger_ab,

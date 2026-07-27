@@ -1339,10 +1339,18 @@ def test_after_hours_training_trains_and_writes_outputs(
 
     trained_model = joblib.load(result["model_path"])
     assert hasattr(trained_model, "hard_negative_weighted_fit_")
-    assert hasattr(trained_model, "edge_model_v2_bundle_")
     assert hasattr(trained_model, "edge_label_quality_")
     assert getattr(trained_model, "required_bar_timeframe_") == "5Min"
-    assert isinstance(getattr(trained_model, "edge_model_v2_bundle_"), dict)
+    edge_v2 = report_payload["edge_model_v2"]
+    assert edge_v2["governance_status"] == "shadow"
+    assert edge_v2["promotion_authority"] is False
+    assert edge_v2["live_money_authority"] is False
+    assert edge_v2["oof_evaluation"]["fit_scope"] == "fold_train_only"
+    if edge_v2["bundle_attachment_eligible"]:
+        assert isinstance(getattr(trained_model, "edge_model_v2_bundle_"), dict)
+    else:
+        assert not hasattr(trained_model, "edge_model_v2_bundle_")
+        assert edge_v2["reason"] == "oof_evidence_unqualified"
 
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
     assert "metadata" in manifest_payload
@@ -1359,6 +1367,199 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert "negative_symbol_penalties" in manifest_payload["metadata"]
     assert "score_orientation" in manifest_payload["metadata"]
     assert "label_quality" in manifest_payload["metadata"]
+    assert manifest_payload["metadata"]["edge_model_v2"]["promotion_authority"] is False
+    assert (
+        manifest_payload["metadata"]["edge_model_v2"]["oof_evaluation"][
+            "fit_scope"
+        ]
+        == "fold_train_only"
+    )
+
+
+def _edge_v2_oof_dataset(*, final_fold_negative: bool) -> pd.DataFrame:
+    rows = 230
+    timestamps = pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC")
+    realized = np.full(rows, 3.0, dtype=float)
+    if final_fold_negative:
+        realized[202:222] = -5.0
+    return pd.DataFrame(
+        {
+            **{
+                feature: np.linspace(-1.0, 1.0, rows)
+                for feature in after_hours.FEATURE_COLUMNS
+            },
+            "timestamp": timestamps,
+            "label_ts": timestamps + pd.Timedelta(minutes=5),
+            "label": np.asarray([index % 2 for index in range(rows)], dtype=int),
+            "realized_edge_bps": realized,
+            "regime": ["sideways"] * rows,
+        }
+    )
+
+
+def test_edge_model_v2_oof_is_fold_local_and_qualified_when_stable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _edge_v2_oof_dataset(final_fold_negative=False)
+    fits: list[set[int]] = []
+    predictions: list[set[int]] = []
+
+    class _Splitter:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def split(self, *_args: object, **_kwargs: object):
+            for train_end, test_start in (
+                (80, 82),
+                (120, 122),
+                (160, 162),
+                (200, 202),
+            ):
+                yield np.arange(0, train_end), np.arange(test_start, test_start + 20)
+
+    class _Regressor:
+        def fit(
+            self,
+            features: pd.DataFrame,
+            _target: pd.Series,
+            sample_weight: np.ndarray | None = None,
+        ) -> "_Regressor":
+            del sample_weight
+            fits.append(set(int(value) for value in features.index))
+            return self
+
+        def predict(self, features: pd.DataFrame) -> np.ndarray:
+            predictions.append(set(int(value) for value in features.index))
+            return np.full(len(features), 2.0, dtype=float)
+
+    monkeypatch.setattr(after_hours, "PurgedGroupTimeSeriesSplit", _Splitter)
+    monkeypatch.setattr(
+        after_hours,
+        "_make_edge_model_v2_regressor",
+        lambda **_kwargs: _Regressor(),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_SUPPORT", "20")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_MIN_SUPPORT", "10")
+
+    report = after_hours._evaluate_edge_model_v2_oof(dataset, seed=7)
+
+    assert report["evidence_qualified"] is True
+    assert report["mean_net_expectancy_bps"] == pytest.approx(3.0)
+    assert report["worst_fold_net_expectancy_bps"] == pytest.approx(3.0)
+    assert report["profitable_fold_count"] == 4
+    assert report["regime_stability_report"]["profitable_regime_ratio"] == 1.0
+    assert report["promotion_authority"] is False
+    assert len(fits) == len(predictions) == 8
+    for fit_index, predict_index in zip(fits, predictions, strict=True):
+        assert fit_index.isdisjoint(predict_index)
+        assert max(fit_index) < min(predict_index)
+
+
+def test_edge_model_v2_negative_worst_fold_remains_unqualified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _edge_v2_oof_dataset(final_fold_negative=True)
+
+    class _Splitter:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def split(self, *_args: object, **_kwargs: object):
+            for train_end, test_start in (
+                (80, 82),
+                (120, 122),
+                (160, 162),
+                (200, 202),
+            ):
+                yield np.arange(0, train_end), np.arange(test_start, test_start + 20)
+
+    class _Regressor:
+        def fit(self, *_args: object, **_kwargs: object) -> "_Regressor":
+            return self
+
+        def predict(self, features: pd.DataFrame) -> np.ndarray:
+            return np.full(len(features), 2.0, dtype=float)
+
+    monkeypatch.setattr(after_hours, "PurgedGroupTimeSeriesSplit", _Splitter)
+    monkeypatch.setattr(
+        after_hours,
+        "_make_edge_model_v2_regressor",
+        lambda **_kwargs: _Regressor(),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_SUPPORT", "20")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_MIN_SUPPORT", "10")
+
+    report = after_hours._evaluate_edge_model_v2_oof(dataset, seed=7)
+
+    assert report["mean_net_expectancy_bps"] == pytest.approx(1.0)
+    assert report["worst_fold_net_expectancy_bps"] == pytest.approx(-5.0)
+    assert report["gates"]["worst_fold"] is False
+    assert report["evidence_qualified"] is False
+    assert report["selection_eligible"] is False
+    assert report["bundle_attachment_eligible"] is False
+    assert "worst_fold" in report["qualification_reasons"]
+
+
+def test_edge_model_v2_bundle_attachment_requires_oof_qualification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _edge_v2_oof_dataset(final_fold_negative=False).iloc[:120].copy()
+
+    class _Regressor:
+        def fit(self, *_args: object, **_kwargs: object) -> "_Regressor":
+            return self
+
+        def predict(self, features: pd.DataFrame) -> np.ndarray:
+            return np.full(len(features), 2.0, dtype=float)
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_MIN_ROWS", "100")
+    monkeypatch.setattr(
+        after_hours,
+        "_make_edge_model_v2_regressor",
+        lambda **_kwargs: _Regressor(),
+    )
+    monkeypatch.setattr(
+        after_hours,
+        "_evaluate_edge_model_v2_oof",
+        lambda *_args, **_kwargs: {
+            "evidence_qualified": False,
+            "selection_eligible": False,
+            "bundle_attachment_eligible": False,
+            "qualification_reasons": ["worst_fold"],
+        },
+    )
+
+    rejected_bundle, rejected_report = after_hours._fit_edge_model_v2_bundle(
+        dataset,
+        seed=7,
+    )
+
+    assert rejected_bundle == {}
+    assert rejected_report["trained"] is False
+    assert rejected_report["reason"] == "oof_evidence_unqualified"
+    assert rejected_report["promotion_authority"] is False
+
+    monkeypatch.setattr(
+        after_hours,
+        "_evaluate_edge_model_v2_oof",
+        lambda *_args, **_kwargs: {
+            "evidence_qualified": True,
+            "selection_eligible": True,
+            "bundle_attachment_eligible": True,
+            "qualification_reasons": [],
+        },
+    )
+    qualified_bundle, qualified_report = after_hours._fit_edge_model_v2_bundle(
+        dataset,
+        seed=7,
+    )
+
+    assert qualified_report["trained"] is True
+    assert qualified_report["selection_eligible"] is True
+    assert qualified_bundle["governance_status"] == "shadow"
+    assert qualified_bundle["promotion_authority"] is False
 
 
 def test_after_hours_training_skips_when_no_new_signal_data(
@@ -2729,6 +2930,109 @@ def test_promotion_gate_bundle_requires_profitable_folds(
 
     assert promotion["strict_gates"]["profitable_folds"] is False
     assert promotion["strict_gates"]["profitable_fold_ratio"] is False
+    assert promotion["gate_passed"] is False
+    assert promotion["status"] == "shadow"
+
+
+def _clean_model_data_drift_report(now: datetime) -> dict[str, object]:
+    coverage = {"complete": True}
+    return {
+        "artifact_type": "model_data_drift_monitor",
+        "generated_at": (now - timedelta(hours=1)).isoformat(),
+        "status": "ok",
+        "reasons": [],
+        "freshness": {
+            "baseline": {"fresh": True},
+            "current": {"fresh": True},
+        },
+        "contract": {
+            "baseline_model_id": "model-1",
+            "current_model_id": "model-1",
+            "baseline_model_hash": "hash-1",
+            "current_model_hash": "hash-1",
+            "baseline_coverage": coverage,
+            "current_coverage": coverage,
+        },
+        "summary": {"drift_categories": [], "drift_count": 0},
+    }
+
+
+def test_after_hours_model_data_drift_gate_is_optional_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "AI_TRADING_MODEL_DATA_DRIFT_MONITOR_PATH",
+        str(tmp_path / "missing.json"),
+    )
+
+    gate = after_hours._model_data_drift_promotion_gate(
+        now_utc=datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+    )
+
+    assert gate["required"] is False
+    assert gate["gate_passed"] is True
+    assert gate["evidence_clean"] is False
+    assert "model_data_drift_missing" in gate["reasons"]
+
+
+def test_required_model_data_drift_gate_blocks_missing_and_passes_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+    drift_path = tmp_path / "model_data_drift.json"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_MODEL_DATA_DRIFT", "1")
+    monkeypatch.setenv("AI_TRADING_MODEL_DATA_DRIFT_MONITOR_PATH", str(drift_path))
+
+    missing = after_hours._model_data_drift_promotion_gate(now_utc=now)
+    drift_path.write_text(
+        json.dumps(_clean_model_data_drift_report(now)),
+        encoding="utf-8",
+    )
+    clean = after_hours._model_data_drift_promotion_gate(now_utc=now)
+
+    assert missing["required"] is True
+    assert missing["gate_passed"] is False
+    assert clean["required"] is True
+    assert clean["gate_passed"] is True
+    assert clean["identity"]["current_model_id"] == "model-1"
+
+
+def test_required_model_data_drift_threads_into_combined_promotion_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="logistic",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=120,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=20.0,
+        turnover_ratio=0.1,
+        mean_hit_rate=0.6,
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "legacy")
+
+    promotion = after_hours._promotion_gate_bundle(
+        best=best,
+        rows=1000,
+        edge_gates={
+            "expectancy": True,
+            "drawdown": True,
+            "turnover": True,
+            "stability": True,
+        },
+        additional_gates={"model_data_drift": False},
+    )
+
+    assert promotion["additional_gates"]["model_data_drift"] is False
+    assert promotion["combined_gates"]["model_data_drift"] is False
     assert promotion["gate_passed"] is False
     assert promotion["status"] == "shadow"
 

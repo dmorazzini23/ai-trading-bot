@@ -47,8 +47,67 @@ def test_retention_apply_keeps_tail_and_writes_backup(tmp_path):
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert report["status"] == "applied"
     assert report["actions"][0]["status"] == "compacted"
-    assert [row["row"] for row in rows] == [15, 16, 17, 18, 19]
+    assert [row["row"] for row in rows] == [19]
+    assert path.stat().st_size <= 16
     assert list(tmp_path.glob("events.jsonl.bak.*.gz"))
+
+
+def test_retention_apply_defers_when_writer_changes_source(monkeypatch, tmp_path):
+    path = tmp_path / "events.jsonl"
+    _write_jsonl(path, 20)
+    original_tail = runtime_artifact_retention._tail_lines_to_file
+
+    def tail_then_append(
+        src: Path,
+        dst: Path,
+        *,
+        keep_lines: int,
+        max_bytes: int,
+    ) -> int:
+        kept = original_tail(
+            src,
+            dst,
+            keep_lines=keep_lines,
+            max_bytes=max_bytes,
+        )
+        with src.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"row": 20}) + "\n")
+        return kept
+
+    monkeypatch.setattr(
+        runtime_artifact_retention,
+        "_tail_lines_to_file",
+        tail_then_append,
+    )
+
+    report = evaluate_runtime_artifact_retention(
+        runtime_dir=tmp_path,
+        apply=True,
+        rules=(RetentionRule("events.jsonl", 20, 5),),
+    )
+
+    assert report["status"] == "deferred"
+    assert report["actions"][0]["status"] == "deferred_concurrent_write"
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1]) == {"row": 20}
+    assert not list(tmp_path.glob("events.jsonl.bak.*"))
+
+
+def test_retention_apply_enforces_byte_limit_when_lines_are_large(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "".join(json.dumps({"row": idx, "payload": "x" * 200}) + "\n" for idx in range(20)),
+        encoding="utf-8",
+    )
+
+    report = evaluate_runtime_artifact_retention(
+        runtime_dir=tmp_path,
+        apply=True,
+        rules=(RetentionRule("events.jsonl", 1_000, 20),),
+    )
+
+    assert report["actions"][0]["status"] == "compacted"
+    assert path.stat().st_size <= 800
+    assert path.read_text(encoding="utf-8").endswith("\n")
 
 
 def test_retention_cli_writes_report(tmp_path):

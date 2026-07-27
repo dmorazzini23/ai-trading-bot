@@ -202,6 +202,8 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertIn("RuntimeMaxSec=infinity", content)
         self.assertNotIn("RuntimeMaxSec=0", content)
         self.assertIn("Restart=always", content, "Should restart on failure")
+        self.assertIn("StartLimitIntervalSec=300", content)
+        self.assertIn("StartLimitBurst=5", content)
 
     def test_systemd_environment_precedence(self):
         """Packaged units should sync repo env into the runtime env on restart."""

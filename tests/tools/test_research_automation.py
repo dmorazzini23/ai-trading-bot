@@ -211,10 +211,15 @@ def test_hf_research_api_requires_second_explicit_toggle(
     assert "--use-hf-api" in hf_step["command"]
 
 
-def test_daily_plan_with_data_adds_upward_trajectory_report(tmp_path: Path) -> None:
+def test_daily_plan_with_data_adds_upward_trajectory_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     data_dir = tmp_path / "bars"
     data_dir.mkdir()
     report_root = tmp_path / "reports"
+    monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_ENABLED", "0")
+    monkeypatch.setattr(research_automation, "is_market_open", lambda _now: False)
 
     exit_code = research_automation.main(
         [
@@ -235,12 +240,28 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(tmp_path: Path) -> N
     assert "upward_trajectory_report" in step_names
     assert step_names.index("regime_champion_models") < step_names.index("upward_trajectory_report")
     assert step_names.index("upward_trajectory_report") < step_names.index("operator_control_plane")
+    assert step_names.index("opportunity_markouts") < step_names.index(
+        "daily_research_pipeline"
+    )
     upward = next(step for step in payload["steps"] if step["name"] == "upward_trajectory_report")  # type: ignore[index]
     assert upward["metadata"]["research_only"] is True
     assert upward["metadata"]["live_money_authority"] is False
     assert "--training-accelerator-json" in upward["command"]
     daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
     assert "--upward-trajectory-json" in daily_research["command"]
+    markouts = next(
+        step for step in payload["steps"] if step["name"] == "opportunity_markouts"
+    )
+    markout_command = [str(token) for token in markouts["command"]]
+    assert markout_command[markout_command.index("--bars-dir") + 1] == str(
+        data_dir
+    )
+    assert markout_command[markout_command.index("--symbols") + 1] == (
+        "AAPL,AMZN,MSFT"
+    )
+    assert markouts["metadata"]["after_hours_only"] is True
+    assert markouts["metadata"]["fill_based_evidence"] is False
+    assert markouts["metadata"]["promotion_eligible"] is False
 
 
 def test_daily_plan_adds_governed_historical_workflow_after_hours(
@@ -340,6 +361,8 @@ def test_daily_plan_does_not_backfill_during_market_hours(
     monkeypatch.setenv("AI_TRADING_HISTORICAL_BACKFILL_ENABLED", "1")
     monkeypatch.setattr(research_automation, "is_market_open", lambda _now: True)
     report_root = tmp_path / "reports"
+    data_dir = tmp_path / "bars"
+    data_dir.mkdir()
 
     assert research_automation.main(
         [
@@ -348,6 +371,8 @@ def test_daily_plan_does_not_backfill_during_market_hours(
             str(report_root),
             "--run-id",
             "market-hours-test",
+            "--data-dir",
+            str(data_dir),
             "--plan-only",
         ]
     ) == 0
@@ -361,6 +386,7 @@ def test_daily_plan_does_not_backfill_during_market_hours(
     names = {str(step["name"]) for step in payload["steps"]}
     assert "historical_training_backfill" not in names
     assert "historical_replay_aligned_training" not in names
+    assert "opportunity_markouts" not in names
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

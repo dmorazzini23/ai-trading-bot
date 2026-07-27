@@ -73,8 +73,15 @@ _DEFAULT_QUOTE_STATE: dict[str, Any] = {
 }
 _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "connected": False,
+    "fresh": False,
+    "open_orders_fresh": False,
+    "positions_fresh": False,
     "latency_ms": None,
     "last_error": None,
+    "last_success_at": None,
+    "failed_components": [],
+    "consecutive_failures": 0,
+    "stale_age_s": None,
     "updated": None,
     "status": "unknown",
     "last_order_ack_ms": None,
@@ -454,8 +461,15 @@ def reset_quote_status() -> None:
 def update_broker_status(
     *,
     connected: bool | None = None,
+    fresh: bool | None = None,
+    open_orders_fresh: bool | None = None,
+    positions_fresh: bool | None = None,
     latency_ms: float | None = None,
     last_error: str | None = None,
+    last_success_at: str | None = None,
+    failed_components: list[str] | tuple[str, ...] | None = None,
+    consecutive_failures: int | None = None,
+    stale_age_s: float | None = None,
     status: str | None = None,
     last_order_ack_ms: float | None = None,
     open_orders_count: int | None = None,
@@ -467,6 +481,23 @@ def update_broker_status(
     status_token: str | None = None
     if connected is not None:
         updates["connected"] = bool(connected)
+    if fresh is not None:
+        updates["fresh"] = bool(fresh)
+        if fresh:
+            updates["last_success_at"] = last_success_at or _now_iso()
+            updates["failed_components"] = []
+            updates["consecutive_failures"] = 0
+            updates["stale_age_s"] = 0.0
+        else:
+            # A cached snapshot is useful for retained counts, but it is not a
+            # successful connectivity observation.
+            updates["connected"] = False
+            if status is None:
+                updates["status"] = "degraded"
+    if open_orders_fresh is not None:
+        updates["open_orders_fresh"] = bool(open_orders_fresh)
+    if positions_fresh is not None:
+        updates["positions_fresh"] = bool(positions_fresh)
     if latency_ms is not None:
         try:
             updates["latency_ms"] = max(0.0, float(latency_ms))
@@ -474,9 +505,50 @@ def update_broker_status(
             pass
     if last_error is not None:
         updates["last_error"] = last_error
+    if last_success_at is not None:
+        updates["last_success_at"] = str(last_success_at)
+    if failed_components is not None:
+        updates["failed_components"] = [
+            str(component)
+            for component in failed_components
+            if str(component).strip()
+        ]
+    if consecutive_failures is not None:
+        try:
+            updates["consecutive_failures"] = max(0, int(consecutive_failures))
+        except (TypeError, ValueError):
+            pass
+    if stale_age_s is not None:
+        try:
+            updates["stale_age_s"] = max(0.0, float(stale_age_s))
+        except (TypeError, ValueError):
+            pass
     if status is not None:
         updates["status"] = status
         status_token = str(status).strip().lower()
+    if fresh is None and (
+        connected is True
+        or status_token in {"reachable", "healthy", "ok", "connected", "ready"}
+    ):
+        # Preserve existing callers: a positive connectivity observation made
+        # before freshness fields existed represents a fresh full snapshot.
+        updates["fresh"] = True
+        updates.setdefault("open_orders_fresh", True)
+        updates.setdefault("positions_fresh", True)
+        updates["last_success_at"] = last_success_at or _now_iso()
+        updates["failed_components"] = []
+        updates["consecutive_failures"] = 0
+        updates["stale_age_s"] = 0.0
+    if updates.get("fresh") is False:
+        updates["connected"] = False
+        if str(updates.get("status") or "").strip().lower() in {
+            "reachable",
+            "healthy",
+            "ok",
+            "connected",
+            "ready",
+        }:
+            updates["status"] = "degraded"
     if last_error is None and (
         connected is True or status_token in {"reachable", "healthy", "ok", "connected"}
     ):

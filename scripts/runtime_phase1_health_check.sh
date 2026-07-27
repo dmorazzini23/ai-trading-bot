@@ -35,6 +35,9 @@ HEALTHCHECK_SYSTEMD_UNIT="${HEALTHCHECK_SYSTEMD_UNIT:-ai-trading.service}"
 HEALTHCHECK_PROBE_TIMEOUT_SECONDS="${HEALTHCHECK_PROBE_TIMEOUT_SECONDS:-3}"
 SKIP_HEALTHZ_PROBE="${SKIP_HEALTHZ_PROBE:-0}"
 SKIP_SERVICE_LIVENESS="${SKIP_SERVICE_LIVENESS:-0}"
+SKIP_RESTART_BURST_CHECK="${SKIP_RESTART_BURST_CHECK:-0}"
+RESTART_BURST_LOOKBACK_MINUTES="${RESTART_BURST_LOOKBACK_MINUTES:-30}"
+RESTART_BURST_MAX_COUNT="${RESTART_BURST_MAX_COUNT:-3}"
 
 failures=0
 
@@ -205,6 +208,47 @@ else
     ok "service active: ${HEALTHCHECK_SYSTEMD_UNIT}"
   else
     fail "service not active: ${HEALTHCHECK_SYSTEMD_UNIT}"
+  fi
+fi
+
+if is_truthy "${SKIP_RESTART_BURST_CHECK}" || [[ -z "${HEALTHCHECK_SYSTEMD_UNIT}" ]]; then
+  echo "INFO: service restart-burst check skipped"
+elif ! command -v journalctl >/dev/null 2>&1; then
+  echo "WARN: journalctl unavailable; cannot inspect service restart bursts"
+else
+  restart_journal=""
+  if restart_journal="$(
+    journalctl \
+      -u "${HEALTHCHECK_SYSTEMD_UNIT}" \
+      --since "${RESTART_BURST_LOOKBACK_MINUTES} minutes ago" \
+      --no-pager \
+      -o cat \
+      2>/dev/null
+  )"; then
+    restart_count="$(
+      printf '%s\n' "${restart_journal}" \
+        | grep -c -E 'Main process exited, code=|Scheduled restart job' \
+        || true
+    )"
+    # Each failed process can emit both messages. Count process exits when they
+    # are available; otherwise retain scheduled-restart events as the fallback.
+    process_exit_count="$(
+      printf '%s\n' "${restart_journal}" \
+        | grep -c -E 'Main process exited, code=' \
+        || true
+    )"
+    if [[ "${process_exit_count}" -gt 0 ]]; then
+      restart_count="${process_exit_count}"
+    fi
+    if [[ "${restart_count}" -gt "${RESTART_BURST_MAX_COUNT}" ]]; then
+      echo "RESTART_BURST status=failed unit=${HEALTHCHECK_SYSTEMD_UNIT} count=${restart_count} max_count=${RESTART_BURST_MAX_COUNT} lookback_minutes=${RESTART_BURST_LOOKBACK_MINUTES}"
+      fail "service restart burst detected: ${HEALTHCHECK_SYSTEMD_UNIT} count=${restart_count} max=${RESTART_BURST_MAX_COUNT} window=${RESTART_BURST_LOOKBACK_MINUTES}m"
+    else
+      echo "RESTART_BURST status=ok unit=${HEALTHCHECK_SYSTEMD_UNIT} count=${restart_count} max_count=${RESTART_BURST_MAX_COUNT} lookback_minutes=${RESTART_BURST_LOOKBACK_MINUTES}"
+      ok "service restart count within threshold: ${HEALTHCHECK_SYSTEMD_UNIT} (${restart_count}/${RESTART_BURST_MAX_COUNT})"
+    fi
+  else
+    echo "WARN: unable to read ${HEALTHCHECK_SYSTEMD_UNIT} journal for restart-burst check"
   fi
 fi
 

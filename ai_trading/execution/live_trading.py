@@ -19,7 +19,7 @@ import statistics
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from email.utils import parsedate_to_datetime
@@ -201,11 +201,15 @@ LIVE_TRADING_FALLBACK_EXC: tuple[type[Exception], ...] = (
     ValueError,
 )
 
-LIVE_TRADING_ORDER_LOOKUP_EXC: tuple[type[Exception], ...] = LIVE_TRADING_FALLBACK_EXC
+BROKER_READ_EXC: tuple[type[Exception], ...] = LIVE_TRADING_FALLBACK_EXC
 if _AlpacaAPIError is not None and issubclass(_AlpacaAPIError, Exception):
-    LIVE_TRADING_ORDER_LOOKUP_EXC = LIVE_TRADING_FALLBACK_EXC + (
+    BROKER_READ_EXC = LIVE_TRADING_FALLBACK_EXC + (
         cast(type[Exception], _AlpacaAPIError),
     )
+
+LIVE_TRADING_ORDER_LOOKUP_EXC: tuple[type[Exception], ...] = LIVE_TRADING_FALLBACK_EXC
+if _AlpacaAPIError is not None and issubclass(_AlpacaAPIError, Exception):
+    LIVE_TRADING_ORDER_LOOKUP_EXC = BROKER_READ_EXC
 
 
 def _required_trading_client_method(client: Any, method_name: str) -> Any:
@@ -2638,6 +2642,9 @@ class ExecutionEngine:
 
         self.trading_client = None
         self._broker_sync: BrokerSyncResult | None = None
+        self._broker_freshness_enforcement_ready = True
+        self._broker_sync_consecutive_failures = 0
+        self._broker_sync_last_success_mono: float | None = None
         self._open_order_qty_index: dict[str, tuple[float, float]] = {}
         runtime_snapshot_enabled = _resolve_bool_env("AI_TRADING_OMS_RUNTIME_SNAPSHOT_ENABLED")
         if runtime_snapshot_enabled is None:
@@ -5495,6 +5502,34 @@ class ExecutionEngine:
     def _execution_phase_allows_submits(self, *, closing_position: bool) -> tuple[bool, str | None]:
         if closing_position:
             return True, None
+        open_orders_unknown = bool(
+            getattr(self, "_broker_open_orders_unknown", False)
+        )
+        positions_unknown = bool(getattr(self, "_broker_positions_unknown", False))
+        broker_snapshot = getattr(self, "_broker_sync", None)
+        snapshot_fresh = bool(getattr(broker_snapshot, "fresh", True))
+        freshness_enforced = bool(
+            getattr(self, "_broker_freshness_enforcement_ready", False)
+        ) or (
+            broker_snapshot is None and (open_orders_unknown or positions_unknown)
+        )
+        if freshness_enforced and (
+            open_orders_unknown or positions_unknown or not snapshot_fresh
+        ):
+            failed_components: list[str] = []
+            if open_orders_unknown or not bool(
+                getattr(broker_snapshot, "open_orders_fresh", True)
+            ):
+                failed_components.append("open_orders")
+            if positions_unknown or not bool(
+                getattr(broker_snapshot, "positions_fresh", True)
+            ):
+                failed_components.append("positions")
+            components = ",".join(failed_components) or "broker_state"
+            return (
+                False,
+                f"broker_sync_unknown components={components}",
+            )
         if not self._execution_phase_gate_enabled():
             return True, None
         phase = self._service_phase()
@@ -28632,15 +28667,172 @@ class ExecutionEngine:
             "max_orders_per_symbol_per_window": int(max_per_symbol),
             "events_in_window": int(len(events)),
             "symbol_events_in_window": int(symbol_events),
+            "advisory_only": True,
         }
         if max_orders <= 0 or len(events) >= int(max_orders):
-            return False, context | {"reason": "exploration_budget_exhausted"}
+            return True, context | {
+                "reason": "exploration_budget_advisory_exhausted",
+                "would_allow": False,
+            }
         if max_per_symbol <= 0 or symbol_events >= int(max_per_symbol):
-            return False, context | {"reason": "symbol_exploration_budget_exhausted"}
+            return True, context | {
+                "reason": "symbol_exploration_budget_advisory_exhausted",
+                "would_allow": False,
+            }
         if record:
             events.append({"ts_mono": float(now_mono), "symbol": symbol})
-            return True, context | {"reason": "recorded", "events_in_window_after": int(len(events))}
-        return True, context | {"reason": "ok", "events_in_window_after": int(len(events) + 1)}
+            return True, context | {
+                "reason": "recorded",
+                "would_allow": True,
+                "events_in_window_after": int(len(events)),
+            }
+        return True, context | {
+            "reason": "ok",
+            "would_allow": True,
+            "events_in_window_after": int(len(events) + 1),
+        }
+
+    def _apply_metrics_improvement_exploration_contract(
+        self,
+        *,
+        order: dict[str, Any],
+        payload: Mapping[str, Any],
+        symbol: str,
+        action: str,
+        execution_mode: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        exploration_actions = {
+            "explore",
+            "paper_recovery_explore",
+            "paper_side_recovery_explore",
+        }
+        if action not in exploration_actions:
+            return True, {"reason": "not_applicable"}
+        contract_raw = payload.get("exploration_contract")
+        if not isinstance(contract_raw, Mapping):
+            return False, {
+                "reason": "metrics_control_exploration_contract_missing",
+                "symbol": symbol,
+                "action": action,
+            }
+        contract = dict(contract_raw)
+        governed = {
+            str(item).strip().upper()
+            for item in contract.get("governed_universe", ())
+            if str(item).strip()
+        } & {"AAPL", "AMZN", "MSFT"}
+        actionable = {
+            str(item).strip().upper()
+            for item in contract.get("actionable_symbols", ())
+            if str(item).strip()
+        }
+        if symbol not in governed or symbol not in actionable:
+            return False, {
+                "reason": "metrics_control_exploration_symbol_block",
+                "symbol": symbol,
+                "action": action,
+                "governed_universe": sorted(governed),
+                "actionable_symbols": sorted(actionable),
+            }
+        if execution_mode not in {
+            "paper",
+            "sim",
+            "simulation",
+        }:
+            return False, {
+                "reason": "metrics_control_exploration_paper_only",
+                "symbol": symbol,
+                "action": action,
+                "execution_mode": execution_mode,
+            }
+
+        expected_edge = self._order_expected_edge_bps(order)
+        minimum_edge = _safe_float(contract.get("min_expected_net_edge_bps"))
+        if minimum_edge is None or not math.isfinite(float(minimum_edge)):
+            minimum_edge = 0.0
+        minimum_edge = max(0.0, float(minimum_edge))
+        if expected_edge is None or not math.isfinite(float(expected_edge)):
+            return False, {
+                "reason": "metrics_control_exploration_expected_edge_missing",
+                "symbol": symbol,
+                "action": action,
+                "min_expected_net_edge_bps": minimum_edge,
+            }
+        if float(expected_edge) < minimum_edge:
+            return False, {
+                "reason": "metrics_control_exploration_expected_edge_floor",
+                "symbol": symbol,
+                "action": action,
+                "expected_net_edge_bps": float(expected_edge),
+                "min_expected_net_edge_bps": minimum_edge,
+            }
+
+        quote_age_ms, _ = self._order_numeric_value(
+            order,
+            keys=("quote_age_ms", "quote_staleness_ms"),
+        )
+        max_quote_age_ms = _safe_float(contract.get("max_quote_age_ms"))
+        if (
+            quote_age_ms is None
+            or not math.isfinite(float(quote_age_ms))
+            or max_quote_age_ms is None
+            or not math.isfinite(float(max_quote_age_ms))
+            or float(quote_age_ms) < 0.0
+            or float(quote_age_ms) > max(0.0, float(max_quote_age_ms))
+        ):
+            return False, {
+                "reason": "metrics_control_exploration_quote_age_block",
+                "symbol": symbol,
+                "action": action,
+                "quote_age_ms": quote_age_ms,
+                "max_quote_age_ms": max_quote_age_ms,
+            }
+
+        spread_bps, _ = self._order_numeric_value(
+            order,
+            keys=(
+                "spread_bps",
+                "quoted_spread_bps",
+                "bid_ask_spread_bps",
+                "quote_spread_bps",
+            ),
+        )
+        max_spread_bps = _safe_float(contract.get("max_spread_bps"))
+        if (
+            spread_bps is None
+            or not math.isfinite(float(spread_bps))
+            or max_spread_bps is None
+            or not math.isfinite(float(max_spread_bps))
+            or float(spread_bps) < 0.0
+            or float(spread_bps) > max(0.0, float(max_spread_bps))
+        ):
+            return False, {
+                "reason": "metrics_control_exploration_spread_block",
+                "symbol": symbol,
+                "action": action,
+                "spread_bps": spread_bps,
+                "max_spread_bps": max_spread_bps,
+            }
+
+        order["quantity"] = 1
+        order["qty"] = 1
+        order["order_type"] = "limit"
+        order["paper_sampling"] = True
+        order["paper_sampling_policy"] = "passive_only"
+        order["paper_sampling_consumes_daily_slot"] = True
+        return True, {
+            "reason": "applied",
+            "symbol": symbol,
+            "action": action,
+            "expected_net_edge_bps": float(expected_edge),
+            "min_expected_net_edge_bps": minimum_edge,
+            "quote_age_ms": float(quote_age_ms),
+            "max_quote_age_ms": float(max_quote_age_ms),
+            "spread_bps": float(spread_bps),
+            "max_spread_bps": float(max_spread_bps),
+            "opening_probe_qty": 1,
+            "passive_only": True,
+        }
 
     def _record_metrics_improvement_exploration_order(
         self,
@@ -28733,6 +28925,13 @@ class ExecutionEngine:
         budget_raw = payload.get("exploration_budget")
         budget = dict(budget_raw) if isinstance(budget_raw, Mapping) else {}
         if not control:
+            if isinstance(payload.get("exploration_contract"), Mapping):
+                return False, {
+                    "enabled": True,
+                    "reason": "metrics_control_unknown_symbol",
+                    "symbol": symbol,
+                    "action": "block",
+                }
             unknown_action = str(
                 _runtime_env(
                     "AI_TRADING_METRICS_IMPROVEMENT_UNKNOWN_SYMBOL_ACTION",
@@ -29071,6 +29270,21 @@ class ExecutionEngine:
                 "budget": budget,
                 "budget_context": budget_context,
             }
+        contract_allowed, contract_context = (
+            self._apply_metrics_improvement_exploration_contract(
+                order=order,
+                payload=payload,
+                symbol=symbol,
+                action=action,
+                execution_mode=execution_mode_raw,
+            )
+        )
+        if not contract_allowed:
+            return False, {
+                "enabled": True,
+                **contract_context,
+                "control": control,
+            }
         quantity_raw = order.get("quantity")
         if quantity_raw in (None, ""):
             quantity_raw = order.get("qty")
@@ -29095,7 +29309,17 @@ class ExecutionEngine:
             order["qty"] = int(quantity_after)
         return True, {
             "enabled": True,
-            "reason": "applied" if quantity_after < quantity_before or action == "explore" else "ok",
+            "reason": (
+                "applied"
+                if quantity_after < quantity_before
+                or action
+                in {
+                    "explore",
+                    "paper_recovery_explore",
+                    "paper_side_recovery_explore",
+                }
+                else "ok"
+            ),
             "symbol": symbol,
             "action": action,
             "quantity_before": int(quantity_before),
@@ -29103,6 +29327,7 @@ class ExecutionEngine:
             "expected_edge_bps": float(expected_edge) if expected_edge is not None else None,
             "required_edge_bps": float(required_edge),
             "edge_requirement_relaxed": bool(edge_requirement_relaxed),
+            "exploration_contract": contract_context,
             "control": control,
         }
 
@@ -34472,7 +34697,7 @@ class ExecutionEngine:
     def synchronize_broker_state(self) -> BrokerSyncResult:
         """Return the last broker snapshot or an empty default."""
 
-        if self._broker_sync is None:
+        if getattr(self, "_broker_sync", None) is None:
             self._broker_sync = BrokerSyncResult((), (), {}, {}, monotonic_time())
         return self._broker_sync
 
@@ -35527,38 +35752,175 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         super().__init__(*args, **kwargs)
         self._ts_mgr = kwargs.get("trailing_stop_manager")
 
+    @staticmethod
+    def _broker_read_status_code(exc: Exception) -> int | None:
+        """Return an HTTP status from native or normalized Alpaca errors."""
+
+        candidates: list[Any] = [
+            getattr(exc, "status_code", None),
+            getattr(getattr(exc, "response", None), "status_code", None),
+            getattr(
+                getattr(getattr(exc, "_http_error", None), "response", None),
+                "status_code",
+                None,
+            ),
+        ]
+        for candidate in candidates:
+            try:
+                if candidate is not None:
+                    return int(candidate)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @classmethod
+    def _broker_read_retry_reason(cls, exc: Exception) -> str | None:
+        """Classify transient, idempotent broker-read failures."""
+
+        status_code = cls._broker_read_status_code(exc)
+        if status_code == 429:
+            return "status_429"
+        if status_code is not None and 500 <= status_code < 600:
+            return f"status_{status_code}"
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+        if isinstance(exc, ConnectionError):
+            return "connection_error"
+        if isinstance(exc, OSError) and exc.__class__.__module__.startswith("requests."):
+            return "network_error"
+        return None
+
+    def _execute_broker_read_with_retry(
+        self,
+        component: str,
+        read: Callable[[], Any],
+    ) -> tuple[bool, Any | None, Exception | None]:
+        """Execute an idempotent broker read with a small bounded retry budget."""
+
+        configured_attempts = _config_int("AI_TRADING_BROKER_READ_MAX_ATTEMPTS", 3)
+        max_attempts = max(1, min(int(configured_attempts or 3), 5))
+        configured_delay = _config_float("AI_TRADING_BROKER_READ_BASE_DELAY_SEC", 0.2)
+        base_delay = max(0.0, min(float(configured_delay or 0.0), 2.0))
+        configured_budget = _config_float("AI_TRADING_BROKER_READ_MAX_TOTAL_SEC", 3.0)
+        max_total_s = max(0.0, min(float(configured_budget or 0.0), 10.0))
+        started = monotonic_time()
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                value = read()
+            except BROKER_READ_EXC as exc:
+                reason = self._broker_read_retry_reason(exc)
+                elapsed_s = max(0.0, monotonic_time() - started)
+                delay_s = min(base_delay * (2 ** (attempt - 1)), 2.0)
+                retry_allowed = bool(
+                    reason is not None
+                    and attempt < max_attempts
+                    and elapsed_s + delay_s <= max_total_s
+                )
+                if not retry_allowed:
+                    logger.warning(
+                        "BROKER_READ_GAVE_UP",
+                        extra={
+                            "component": component,
+                            "attempts": attempt,
+                            "reason": reason or "permanent_error",
+                            "status_code": self._broker_read_status_code(exc),
+                            "error_type": type(exc).__name__,
+                            "elapsed_s": round(elapsed_s, 3),
+                        },
+                    )
+                    return (False, None, exc)
+                jitter_s = random.uniform(0.0, min(delay_s * 0.25, 0.1))
+                sleep_s = delay_s + jitter_s
+                logger.warning(
+                    "BROKER_READ_RETRY_SCHEDULED",
+                    extra={
+                        "component": component,
+                        "attempt": attempt + 1,
+                        "reason": reason,
+                        "status_code": self._broker_read_status_code(exc),
+                        "delay_s": round(sleep_s, 3),
+                    },
+                )
+                time.sleep(sleep_s)
+            else:
+                if attempt > 1:
+                    logger.info(
+                        "BROKER_READ_RECOVERED",
+                        extra={"component": component, "attempts": attempt},
+                    )
+                return (True, value, None)
+        return (False, None, None)
+
     def _fetch_broker_state(self) -> tuple[list[Any], list[Any]]:
         """Return (open_orders, positions) using the active trading client."""
 
         client = getattr(self, "trading_client", None)
         self._broker_open_orders_unknown = False
+        self._broker_positions_unknown = False
+        self._broker_open_orders_error = None
+        self._broker_positions_error = None
         if client is None:
+            self._broker_open_orders_unknown = True
+            self._broker_positions_unknown = True
+            self._broker_open_orders_error = "trading_client_unavailable"
+            self._broker_positions_error = "trading_client_unavailable"
             return ([], [])
 
         open_orders_list: list[Any] = []
         positions_list: list[Any] = []
 
-        try:
-            open_orders_resp: Any | None = list_alpaca_orders(client, status="open")
-            if open_orders_resp is not None:
-                open_orders_list = list(open_orders_resp)
-        except LIVE_TRADING_FALLBACK_EXC as exc:
+        open_orders_ok, open_orders_resp, open_orders_error = (
+            self._execute_broker_read_with_retry(
+                "open_orders",
+                lambda: list_alpaca_orders(client, status="open"),
+            )
+        )
+        if open_orders_ok:
+            open_orders_list = list(open_orders_resp or ())
+        else:
             self._broker_open_orders_unknown = True
+            self._broker_open_orders_error = str(
+                open_orders_error or "broker_read_unavailable"
+            )
             logger.warning(
                 "BROKER_SYNC_OPEN_ORDERS_UNKNOWN",
-                extra={"client_type": type(client).__name__, "error": str(exc)},
-                exc_info=True,
+                extra={
+                    "client_type": type(client).__name__,
+                    "error": self._broker_open_orders_error,
+                },
             )
 
-        try:
-            positions_resp: Any | None = None
-            get_all_positions = getattr(client, "get_all_positions", None)
-            if callable(get_all_positions):
-                positions_resp = get_all_positions()
-            if positions_resp is not None:
-                positions_list = list(positions_resp)
-        except LIVE_TRADING_FALLBACK_EXC:
-            logger.debug("BROKER_SYNC_POSITIONS_FAILED", exc_info=True)
+        get_all_positions = getattr(client, "get_all_positions", None)
+        if not callable(get_all_positions):
+            # Lightweight/custom broker interfaces may not expose positions.
+            # The production Alpaca client always does; failures from that
+            # callable path remain unknown and fail closed below.
+            logger.debug(
+                "BROKER_SYNC_POSITIONS_UNSUPPORTED",
+                extra={"client_type": type(client).__name__},
+            )
+        else:
+            positions_ok, positions_resp, positions_error = (
+                self._execute_broker_read_with_retry(
+                    "positions",
+                    get_all_positions,
+                )
+            )
+            if positions_ok:
+                positions_list = list(positions_resp or ())
+            else:
+                self._broker_positions_unknown = True
+                self._broker_positions_error = str(
+                    positions_error or "broker_read_unavailable"
+                )
+                logger.warning(
+                    "BROKER_SYNC_POSITIONS_UNKNOWN",
+                    extra={
+                        "client_type": type(client).__name__,
+                        "error": self._broker_positions_error,
+                    },
+                )
 
         return (open_orders_list, positions_list)
 
@@ -35575,18 +35937,86 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         if account_snapshot is not None:
             self._cycle_account = account_snapshot
             self._cycle_account_fetched = True
-        if bool(getattr(self, "_broker_open_orders_unknown", False)):
-            logger.warning(
-                "BROKER_SYNC_FAIL_CLOSED_OPEN_ORDERS_UNKNOWN",
-                extra={"positions_count": len(positions)},
+        open_orders_unknown = bool(
+            getattr(self, "_broker_open_orders_unknown", False)
+        )
+        positions_unknown = bool(getattr(self, "_broker_positions_unknown", False))
+        if open_orders_unknown or positions_unknown:
+            failed_components = tuple(
+                component
+                for component, failed in (
+                    ("open_orders", open_orders_unknown),
+                    ("positions", positions_unknown),
+                )
+                if failed
             )
-            return super().synchronize_broker_state()
+            consecutive_failures = (
+                int(getattr(self, "_broker_sync_consecutive_failures", 0) or 0)
+                + 1
+            )
+            self._broker_sync_consecutive_failures = consecutive_failures
+            cached_snapshot_available = getattr(self, "_broker_sync", None) is not None
+            cached_snapshot = super().synchronize_broker_state()
+            last_success_timestamp = (
+                getattr(cached_snapshot, "last_success_timestamp", None)
+                or getattr(self, "_broker_sync_last_success_mono", None)
+                or (
+                    getattr(cached_snapshot, "timestamp", None)
+                    if cached_snapshot_available
+                    else None
+                )
+            )
+            stale_age_s = (
+                max(monotonic_time() - float(last_success_timestamp), 0.0)
+                if last_success_timestamp is not None
+                else None
+            )
+            component_errors = [
+                str(getattr(self, f"_broker_{component}_error", "") or "")
+                for component in failed_components
+            ]
+            last_error = "; ".join(error for error in component_errors if error) or (
+                "broker_sync_unavailable"
+            )
+            stale_snapshot = replace(
+                cached_snapshot,
+                fresh=False,
+                open_orders_fresh=not open_orders_unknown,
+                positions_fresh=not positions_unknown,
+                last_success_timestamp=last_success_timestamp,
+                last_error=last_error,
+                failed_components=failed_components,
+                consecutive_failures=consecutive_failures,
+                stale_age_s=stale_age_s,
+            )
+            logger.warning(
+                "BROKER_SYNC_FAIL_CLOSED_STATE_UNKNOWN",
+                extra={
+                    "open_orders_unknown": open_orders_unknown,
+                    "positions_unknown": positions_unknown,
+                    "cached_snapshot_available": cached_snapshot_available,
+                    "failed_components": list(failed_components),
+                    "consecutive_failures": consecutive_failures,
+                    "stale_age_s": stale_age_s,
+                },
+            )
+            return stale_snapshot
         self._reconcile_durable_intents(open_orders=open_orders)
         try:
             snapshot = self._update_broker_snapshot(open_orders, positions)
         except LIVE_TRADING_FALLBACK_EXC:
             logger.debug("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
             snapshot = super().synchronize_broker_state()
+        snapshot.fresh = True
+        snapshot.open_orders_fresh = True
+        snapshot.positions_fresh = True
+        snapshot.last_success_timestamp = float(snapshot.timestamp)
+        snapshot.last_error = None
+        snapshot.failed_components = ()
+        snapshot.consecutive_failures = 0
+        snapshot.stale_age_s = 0.0
+        self._broker_sync_last_success_mono = float(snapshot.timestamp)
+        self._broker_sync_consecutive_failures = 0
         try:
             self._reconcile_pending_order_runtime_artifacts(
                 open_orders=getattr(snapshot, "open_orders", ()) or (),

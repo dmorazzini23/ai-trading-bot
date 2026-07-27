@@ -22,6 +22,40 @@ def test_update_broker_status_clears_stale_last_error_on_recovery() -> None:
     assert snapshot["last_error"] is None
 
 
+def test_stale_broker_snapshot_retains_counts_without_reporting_connected() -> None:
+    runtime_state.reset_all_states()
+    runtime_state.update_broker_status(
+        connected=True,
+        fresh=True,
+        status="connected",
+        open_orders_count=2,
+        positions_count=1,
+    )
+
+    runtime_state.update_broker_status(
+        connected=True,
+        fresh=False,
+        open_orders_fresh=False,
+        positions_fresh=True,
+        status="connected",
+        last_error="http_500",
+        failed_components=("open_orders",),
+        consecutive_failures=2,
+        stale_age_s=45.0,
+    )
+
+    snapshot = runtime_state.observe_broker_status()
+    assert snapshot["connected"] is False
+    assert snapshot["fresh"] is False
+    assert snapshot["status"] == "degraded"
+    assert snapshot["open_orders_count"] == 2
+    assert snapshot["positions_count"] == 1
+    assert snapshot["failed_components"] == ["open_orders"]
+    assert snapshot["consecutive_failures"] == 2
+    assert snapshot["stale_age_s"] == 45.0
+    assert snapshot["last_success_at"]
+
+
 def test_observe_data_provider_state_returns_deep_copy() -> None:
     runtime_state.reset_all_states()
     runtime_state.update_data_provider_state(

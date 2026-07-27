@@ -1351,7 +1351,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"live_money_authority": False, "manual_approval_required": True},
         ),
     ]
-    if _historical_backfill_enabled() and _historical_backfill_after_hours():
+    historical_workflow_enabled = bool(
+        _historical_backfill_enabled() and _historical_backfill_after_hours()
+    )
+    if historical_workflow_enabled:
         try:
             end_date = date.fromisoformat(config.report_date)
         except ValueError as exc:
@@ -1538,6 +1541,76 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
         ]
 
     if config.data_dir is not None:
+        if _historical_backfill_after_hours() and not historical_workflow_enabled:
+            daily_pipeline_index = next(
+                (
+                    index
+                    for index, step in enumerate(steps)
+                    if step.name == "daily_research_pipeline"
+                ),
+                len(steps),
+            )
+            steps.insert(
+                daily_pipeline_index,
+                ResearchStep(
+                    name="opportunity_markouts",
+                    command=_python_module(
+                        "ai_trading.tools.opportunity_markout_report",
+                        "--report-date",
+                        config.report_date,
+                        "--decisions-jsonl",
+                        _runtime_input_path("runtime/decision_records.jsonl"),
+                        "--bars-dir",
+                        config.data_dir,
+                        "--symbols",
+                        "AAPL,AMZN,MSFT",
+                        "--fee-bps",
+                        str(
+                            _env_float(
+                                "AI_TRADING_MARKOUT_FEE_BPS",
+                                0.0,
+                                minimum=0.0,
+                            )
+                        ),
+                        "--slippage-bps",
+                        str(
+                            _env_float(
+                                "AI_TRADING_MARKOUT_SLIPPAGE_BPS",
+                                0.0,
+                                minimum=0.0,
+                            )
+                        ),
+                        "--output-json",
+                        opportunity_markouts,
+                        "--latest-json",
+                        config.report_root
+                        / "latest"
+                        / "opportunity_markouts_latest.json",
+                    ),
+                    purpose=(
+                        "Resolve current-session 1/3/5-bar shadow markouts after "
+                        "close from available verified one-minute bars."
+                    ),
+                    output_path=opportunity_markouts,
+                    skip_if_missing=(
+                        config.data_dir,
+                        _runtime_input_path("runtime/decision_records.jsonl"),
+                    ),
+                    metadata={
+                        "research_only": True,
+                        "evidence_type": "shadow_counterfactual",
+                        "evidence_partition": "current_session_research",
+                        "promotion_eligible": False,
+                        "promotion_authority": False,
+                        "runtime_authority": False,
+                        "live_money_authority": False,
+                        "fill_based_evidence": False,
+                        "after_hours_only": True,
+                        "horizons_bars": [1, 3, 5],
+                        "governed_symbols": ["AAPL", "AMZN", "MSFT"],
+                    },
+                ),
+            )
         daily_research_index = next(
             (
                 index

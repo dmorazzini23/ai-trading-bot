@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from ai_trading.governance.model_drift import evaluate_model_drift_gate
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
@@ -256,8 +257,10 @@ def build_regime_champion_report(
     candidates: Mapping[str, Any],
     current_registry: Mapping[str, Any] | None = None,
     approval: Mapping[str, Any] | None = None,
+    drift_report: Mapping[str, Any] | None = None,
     min_samples: int = 30,
     min_cost_adjusted_expectancy_bps: float = 0.0,
+    drift_max_age_hours: float = 48.0,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a conservative regime champion decision artifact."""
@@ -305,6 +308,12 @@ def build_regime_champion_report(
             min_samples=min_samples,
         )
         authority_increase = _authority_increase(current_authority, requested_authority)
+        model_data_drift = evaluate_model_drift_gate(
+            drift_report,
+            required=authority_increase,
+            now=generated,
+            max_age_hours=drift_max_age_hours,
+        )
         manual_approval = (
             _approval_for_regime(approval_payload, regime, model_id)
             if authority_increase
@@ -323,6 +332,8 @@ def build_regime_champion_report(
             reasons.append(str(shadow.get("reason") or "shadow_gate_failed"))
         if authority_increase and not bool(manual_approval.get("approved")):
             reasons.append("manual_approval_required_for_authority_increase")
+        if authority_increase and not bool(model_data_drift.get("gate_passed")):
+            reasons.append("model_data_drift_gate_failed")
 
         approved = not reasons
         selected_model_id = model_id if approved else (current_model_id or fallback_model_id)
@@ -341,6 +352,7 @@ def build_regime_champion_report(
                 "authority_increase": authority_increase,
                 "effective_authority": requested_authority if approved else current_authority,
                 "manual_approval": manual_approval,
+                "model_data_drift": model_data_drift,
                 "replay_evidence": replay,
                 "shadow_evidence": shadow,
                 "fallback": {
@@ -367,6 +379,12 @@ def build_regime_champion_report(
             "manual_authority_increases_requested": sum(
                 1 for row in decisions if bool(row["authority_increase"])
             ),
+            "drift_blocked_authority_increases": sum(
+                1
+                for row in decisions
+                if bool(row["authority_increase"])
+                and not bool(row["model_data_drift"]["gate_passed"])
+            ),
         },
         "decisions": decisions,
         "blocked_regimes": [str(row["regime"]) for row in blocked],
@@ -386,9 +404,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidates-json", type=Path, required=True)
     parser.add_argument("--current-registry-json", type=Path, default=None)
     parser.add_argument("--approval-json", type=Path, default=None)
+    parser.add_argument("--drift-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--min-samples", type=int, default=30)
     parser.add_argument("--min-cost-adjusted-expectancy-bps", type=float, default=0.0)
+    parser.add_argument("--drift-max-age-hours", type=float, default=48.0)
     parser.add_argument("--success-on-blocked", action="store_true")
     args = parser.parse_args(argv)
 
@@ -396,8 +416,10 @@ def main(argv: list[str] | None = None) -> int:
         candidates=_read_json_mapping(args.candidates_json),
         current_registry=_read_json_mapping(args.current_registry_json),
         approval=_read_json_mapping(args.approval_json),
+        drift_report=_read_json_mapping(args.drift_json),
         min_samples=max(0, int(args.min_samples)),
         min_cost_adjusted_expectancy_bps=float(args.min_cost_adjusted_expectancy_bps),
+        drift_max_age_hours=max(0.0, float(args.drift_max_age_hours)),
     )
     output = args.output_json or _default_output()
     output.parent.mkdir(parents=True, exist_ok=True)

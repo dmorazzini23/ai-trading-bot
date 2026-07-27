@@ -75,6 +75,56 @@ def _normalized_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized.sort_index().loc[lambda value: ~value.index.duplicated(keep="last")]
 
 
+def _bar_source_summary(
+    frames: Mapping[str, pd.DataFrame],
+) -> dict[str, Any]:
+    by_symbol: dict[str, dict[str, Any]] = {}
+    timestamps: list[pd.Timestamp] = []
+    for symbol, frame in sorted(frames.items()):
+        valid = frame.loc[frame["close"].notna()] if "close" in frame.columns else frame.iloc[0:0]
+        symbol_timestamps = [
+            timestamp
+            for timestamp in valid.index
+            if isinstance(timestamp, pd.Timestamp) and not pd.isna(timestamp)
+        ]
+        if symbol_timestamps:
+            timestamps.extend(symbol_timestamps)
+        intervals = [
+            float((right - left).total_seconds())
+            for left, right in zip(symbol_timestamps, symbol_timestamps[1:])
+            if right > left
+        ]
+        median_interval_seconds = (
+            float(pd.Series(intervals).median()) if intervals else None
+        )
+        by_symbol[symbol] = {
+            "rows": len(valid),
+            "min_timestamp": (
+                min(symbol_timestamps).isoformat() if symbol_timestamps else None
+            ),
+            "max_timestamp": (
+                max(symbol_timestamps).isoformat() if symbol_timestamps else None
+            ),
+            "median_interval_seconds": median_interval_seconds,
+            "one_minute_cadence": bool(
+                median_interval_seconds is not None
+                and math.isclose(median_interval_seconds, 60.0)
+            ),
+        }
+    return {
+        "available": bool(timestamps),
+        "symbols_available": [
+            symbol
+            for symbol, summary in by_symbol.items()
+            if int(summary["rows"]) > 0
+        ],
+        "row_count": sum(int(summary["rows"]) for summary in by_symbol.values()),
+        "min_timestamp": min(timestamps).isoformat() if timestamps else None,
+        "max_timestamp": max(timestamps).isoformat() if timestamps else None,
+        "by_symbol": by_symbol,
+    }
+
+
 def _regular_session(timestamp: datetime) -> tuple[str, bool]:
     eastern = timestamp.astimezone(_EASTERN)
     minute = eastern.hour * 60 + eastern.minute
@@ -523,6 +573,7 @@ def resolve_opportunity_markouts(
         for symbol, frame in bars_by_symbol.items()
         if str(symbol).strip().upper() in symbols
     }
+    bar_source = _bar_source_summary(normalized_frames)
     outcomes: list[dict[str, Any]] = []
     outcome_ids: set[str] = set()
     for context in contexts:
@@ -549,11 +600,12 @@ def resolve_opportunity_markouts(
         and row["net_markout_bps"] is not None
     ]
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "artifact_type": "opportunity_markout_report",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "governed_symbols": sorted(symbols),
         "horizons": parsed_horizons,
+        "horizons_bars": parsed_horizons,
         "eligible_opportunities": len(contexts),
         "expected_outcomes": len(contexts) * len(parsed_horizons),
         "outcomes_emitted": len(outcomes),
@@ -567,6 +619,39 @@ def resolve_opportunity_markouts(
             if resolved_values
             else None
         ),
+        "bar_source": bar_source,
+        "research_replay": {
+            "partition": "shadow_counterfactual_research",
+            "status": (
+                "ready"
+                if resolved_values
+                else "unavailable"
+                if not bar_source["available"]
+                else "no_resolved_outcomes"
+            ),
+            "reason": (
+                "resolved_shadow_markouts"
+                if resolved_values
+                else "bars_missing"
+                if not bar_source["available"]
+                else "labels_unresolved_or_censored"
+            ),
+            "resolved_samples": len(resolved_values),
+            "eligible_opportunities": len(contexts),
+            "horizons_bars": parsed_horizons,
+            "mean_net_edge_bps": (
+                float(sum(resolved_values) / len(resolved_values))
+                if resolved_values
+                else None
+            ),
+            "source_max_timestamp": bar_source["max_timestamp"],
+            "research_only": True,
+            "fill_based_evidence": False,
+            "promotion_eligible": False,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "evidence_type": "shadow_counterfactual",
         "evidence_partition": "shadow",
         "fill_based_evidence": False,

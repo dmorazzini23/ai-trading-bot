@@ -116,7 +116,17 @@ def test_shadow_markouts_cover_every_horizon_once_and_stay_non_promotional() -> 
     assert report["duplicate_decision_rows_discarded"] == 1
     assert report["outcomes_emitted"] == 3
     assert report["outcome_ids_unique"] is True
+    assert report["horizons"] == [1, 3, 5]
+    assert report["horizons_bars"] == [1, 3, 5]
     assert report["label_status_counts"] == {"resolved": 3}
+    assert report["bar_source"]["available"] is True
+    assert report["bar_source"]["max_timestamp"] == (
+        "2026-07-21T14:36:00+00:00"
+    )
+    assert report["research_replay"]["resolved_samples"] == 3
+    assert report["research_replay"]["research_only"] is True
+    assert report["research_replay"]["fill_based_evidence"] is False
+    assert report["research_replay"]["promotion_eligible"] is False
     outcomes = report["outcomes"]
     assert [row["horizon_bars"] for row in outcomes] == [1, 3, 5]
     assert len({row["outcome_id"] for row in outcomes}) == 3
@@ -263,7 +273,72 @@ def test_opportunity_markout_cli_writes_dated_and_latest_artifacts(tmp_path) -> 
     assert payload["report_date"] == "2026-07-21"
     assert payload["decision_rows_scanned"] == 1
     assert payload["outcomes_emitted"] == 3
+    assert payload["horizons_bars"] == [1, 3, 5]
+    assert payload["source_freshness"]["fresh"] is True
+    assert payload["source_freshness"]["max_timestamp"] == (
+        "2026-07-21T14:36:00+00:00"
+    )
+    assert payload["research_replay"]["status"] == "ready"
+    assert payload["research_replay"]["source_fresh"] is True
+    assert payload["research_replay"]["promotion_authority"] is False
     assert payload["promotion_eligible"] is False
+
+
+def test_opportunity_markout_cli_degrades_when_current_session_bars_are_missing(
+    tmp_path,
+) -> None:
+    source_ts = datetime(2026, 7, 21, 14, 30, tzinfo=UTC)
+    decisions_path = tmp_path / "decisions.jsonl"
+    decisions_path.write_text(
+        json.dumps(
+            _decision(
+                correlation_id="opp_missing_bars",
+                symbol="AAPL",
+                source_timestamp=source_ts,
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    bars_dir = tmp_path / "bars"
+    bars_dir.mkdir()
+    output = tmp_path / "markouts.json"
+
+    assert main(
+        [
+            "--report-date",
+            "2026-07-21",
+            "--decisions-jsonl",
+            str(decisions_path),
+            "--bars-dir",
+            str(bars_dir),
+            "--output-json",
+            str(output),
+        ]
+    ) == 0
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["outcomes_emitted"] == 3
+    assert payload["label_status_counts"] == {"unavailable": 3}
+    assert payload["label_reason_counts"] == {"symbol_bars_unavailable": 3}
+    assert payload["source_freshness"] == {
+        "available": False,
+        "fresh": False,
+        "reason": "bars_missing",
+        "report_date": "2026-07-21",
+        "max_timestamp": None,
+        "available_symbols": [],
+        "missing_governed_symbols": ["AAPL", "AMZN", "MSFT"],
+        "required_symbols": ["AAPL"],
+        "current_session_symbols": [],
+        "one_minute_symbols": [],
+        "missing_required_symbols": ["AAPL"],
+    }
+    assert payload["research_replay"]["status"] == "unavailable"
+    assert payload["research_replay"]["reason"] == "bars_missing"
+    assert payload["research_replay"]["resolved_samples"] == 0
+    assert payload["research_replay"]["fill_based_evidence"] is False
+    assert payload["research_replay"]["promotion_eligible"] is False
 
 
 def test_opportunity_markout_cli_verifies_historical_manifest_hash(tmp_path) -> None:

@@ -78,6 +78,48 @@ def test_metrics_improvement_control_marks_low_sample_symbols_as_exploration() -
 
     assert report["by_symbol"]["MSFT"]["action"] == "explore"
     assert report["exploration_budget"]["max_orders_per_symbol_per_window"] == 1
+    assert report["exploration_budget"]["quota_authority"] == (
+        "ai_trading.runtime.paper_sampling"
+    )
+    assert report["exploration_budget"]["advisory_window_only"] is True
+
+
+def test_metrics_improvement_control_emits_fail_closed_exploration_contract() -> None:
+    report = build_metrics_improvement_control(
+        report_date="2026-07-20",
+        reports=[],
+        configured_symbols=["AAPL", "AMZN", "MSFT", "GOOGL"],
+        exploration_max_quote_age_ms=1750.0,
+        exploration_max_spread_bps=12.5,
+        exploration_min_expected_net_edge_bps=-5.0,
+    )
+
+    contract = report["exploration_contract"]
+    assert contract == {
+        "contract_version": "1.0.0",
+        "governed_universe": ["AAPL", "AMZN", "MSFT"],
+        "actionable_symbols": ["AAPL", "AMZN", "MSFT"],
+        "paper_only": True,
+        "live_money_allowed": False,
+        "passive_only": True,
+        "opening_probe_max_qty": 1,
+        "require_finite_expected_net_edge": True,
+        "min_expected_net_edge_bps": 0.0,
+        "missing_expected_net_edge_action": "block",
+        "negative_expected_net_edge_action": "block",
+        "require_quote_age": True,
+        "max_quote_age_ms": 1750.0,
+        "require_spread": True,
+        "max_spread_bps": 12.5,
+        "unknown_symbol_action": "block",
+        "non_governed_symbol_action": "block",
+        "quota_authority": "ai_trading.runtime.paper_sampling",
+        "quota_authority_durable": True,
+        "quota_dimensions": ["trading_day", "symbol", "side", "session"],
+        "reservation_required": True,
+    }
+    assert report["summary"]["invalid_configured_symbols"] == ["GOOGL"]
+    assert "GOOGL" not in contract["actionable_symbols"]
 
 
 def test_metrics_improvement_control_includes_configured_zero_sample_symbols() -> None:
@@ -217,6 +259,12 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
             "20",
             "--max-exploration-orders-per-symbol",
             "5",
+            "--exploration-max-quote-age-ms",
+            "1750",
+            "--exploration-max-spread-bps",
+            "12.5",
+            "--exploration-min-expected-net-edge-bps",
+            "0",
             "--min-side-samples",
             "8",
             "--configured-symbols",
@@ -235,6 +283,9 @@ def test_metrics_improvement_control_cli_writes_latest(tmp_path) -> None:
     assert payload["control_policy"]["unknown_quote_metadata_edge_add_bps"] == 0.0
     assert payload["exploration_budget"]["max_orders_per_window"] == 20
     assert payload["exploration_budget"]["max_orders_per_symbol_per_window"] == 5
+    assert payload["exploration_contract"]["max_quote_age_ms"] == 1750.0
+    assert payload["exploration_contract"]["max_spread_bps"] == 12.5
+    assert payload["exploration_contract"]["min_expected_net_edge_bps"] == 0.0
     assert "NVDA" not in payload["by_symbol"]
     assert payload["summary"]["invalid_configured_symbols"] == ["NVDA"]
     assert payload["routing"]["sample_collection_priority"]

@@ -48,6 +48,32 @@ def test_record_broker_sync_metrics_updates_state(caplog) -> None:
     assert broker_state.get("status") == "connected"
 
 
+def test_record_broker_sync_metrics_reports_cached_snapshot_degraded() -> None:
+    state = bot_engine.BotState()
+    state.execution_metrics = bot_engine.ExecutionCycleMetrics()
+    snapshot = SimpleNamespace(
+        open_orders=(1, 2),
+        positions=("AAPL",),
+        fresh=False,
+        open_orders_fresh=False,
+        positions_fresh=True,
+        last_error="http_500",
+        failed_components=("open_orders",),
+        consecutive_failures=2,
+        stale_age_s=30.0,
+    )
+    runtime_state.reset_broker_status()
+
+    bot_engine._record_broker_sync_metrics(state, cast(Any, snapshot))
+
+    broker_state = runtime_state.observe_broker_status()
+    assert broker_state["connected"] is False
+    assert broker_state["status"] == "degraded"
+    assert broker_state["open_orders_count"] == 2
+    assert broker_state["positions_count"] == 1
+    assert broker_state["failed_components"] == ["open_orders"]
+
+
 def test_log_execution_summary_emits_expected_payload(caplog) -> None:
     """Execution summary helper emits consolidated metrics."""
 

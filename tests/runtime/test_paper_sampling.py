@@ -238,7 +238,7 @@ def test_paper_sampling_symbol_short_size_and_daily_caps(monkeypatch, tmp_path) 
         price=100.0,
     )
     assert capped_decision.allowed is True
-    assert capped_decision.qty == 7
+    assert capped_decision.qty == 1
 
     now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
     first = reserve_paper_sampling_order(

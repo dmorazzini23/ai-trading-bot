@@ -28608,6 +28608,18 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
 
     open_orders_count = 0
     positions_count = 0
+    snapshot_fresh = bool(snapshot is not None and getattr(snapshot, "fresh", True))
+    open_orders_fresh = bool(
+        snapshot is not None
+        and getattr(snapshot, "open_orders_fresh", snapshot_fresh)
+    )
+    positions_fresh = bool(
+        snapshot is not None
+        and getattr(snapshot, "positions_fresh", snapshot_fresh)
+    )
+    failed_components = tuple(
+        getattr(snapshot, "failed_components", ()) or ()
+    ) if snapshot is not None else ("broker_state",)
     if snapshot is not None:
         try:
             open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
@@ -28631,9 +28643,28 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
 
     try:
         runtime_state.update_broker_status(
-            connected=bool(snapshot is not None),
-            last_error=None if snapshot is not None else "broker_sync_unavailable",
-            status="connected" if snapshot is not None else "unknown",
+            connected=snapshot_fresh,
+            fresh=snapshot_fresh,
+            open_orders_fresh=open_orders_fresh,
+            positions_fresh=positions_fresh,
+            last_error=(
+                None
+                if snapshot_fresh
+                else str(
+                    getattr(snapshot, "last_error", None)
+                    or "broker_sync_unavailable"
+                )
+            ),
+            failed_components=failed_components,
+            consecutive_failures=int(
+                getattr(snapshot, "consecutive_failures", 0) or 0
+            ) if snapshot is not None else 1,
+            stale_age_s=(
+                getattr(snapshot, "stale_age_s", None)
+                if snapshot is not None
+                else None
+            ),
+            status="connected" if snapshot_fresh else "degraded",
             open_orders_count=int(open_orders_count),
             positions_count=int(positions_count),
         )
@@ -28642,7 +28673,12 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
 
     logger.info(
         "BROKER_SYNC",
-        extra={"open_orders": open_orders_count, "positions": positions_count},
+        extra={
+            "open_orders": open_orders_count,
+            "positions": positions_count,
+            "fresh": snapshot_fresh,
+            "failed_components": list(failed_components),
+        },
     )
 
 

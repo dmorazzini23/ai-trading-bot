@@ -2113,6 +2113,19 @@ def run_cycle() -> None:
                                     )
                             else:
                                 snapshot = engine_obj.synchronize_broker_state()
+                                snapshot_fresh = bool(
+                                    getattr(snapshot, "fresh", True)
+                                )
+                                open_orders_fresh = bool(
+                                    getattr(snapshot, "open_orders_fresh", snapshot_fresh)
+                                )
+                                positions_fresh = bool(
+                                    getattr(snapshot, "positions_fresh", snapshot_fresh)
+                                )
+                                failed_components = tuple(
+                                    getattr(snapshot, "failed_components", ()) or ()
+                                )
+                                snapshot_error = getattr(snapshot, "last_error", None)
                                 try:
                                     open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
                                 except MAIN_FALLBACK_EXC:
@@ -2123,9 +2136,37 @@ def run_cycle() -> None:
                                     positions_count = 0
                                 try:
                                     runtime_state.update_broker_status(
-                                        connected=bool(snapshot is not None),
-                                        last_error=None if snapshot is not None else "broker_sync_unavailable",
-                                        status="connected" if snapshot is not None else "unknown",
+                                        connected=bool(snapshot is not None and snapshot_fresh),
+                                        fresh=snapshot_fresh,
+                                        open_orders_fresh=open_orders_fresh,
+                                        positions_fresh=positions_fresh,
+                                        last_error=(
+                                            None
+                                            if snapshot_fresh
+                                            else str(
+                                                snapshot_error
+                                                or "broker_sync_unavailable"
+                                            )
+                                        ),
+                                        failed_components=failed_components,
+                                        consecutive_failures=int(
+                                            getattr(
+                                                snapshot,
+                                                "consecutive_failures",
+                                                0,
+                                            )
+                                            or 0
+                                        ),
+                                        stale_age_s=getattr(
+                                            snapshot,
+                                            "stale_age_s",
+                                            None,
+                                        ),
+                                        status=(
+                                            "connected"
+                                            if snapshot_fresh
+                                            else "degraded"
+                                        ),
                                         open_orders_count=int(open_orders_count),
                                         positions_count=int(positions_count),
                                     )
@@ -2139,6 +2180,10 @@ def run_cycle() -> None:
                                     extra={
                                         "open_orders": int(open_orders_count),
                                         "positions": int(positions_count),
+                                        "fresh": snapshot_fresh,
+                                        "failed_components": list(
+                                            failed_components
+                                        ),
                                     },
                                 )
                         except MAIN_FALLBACK_EXC:

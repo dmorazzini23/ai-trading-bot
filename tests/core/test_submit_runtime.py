@@ -444,7 +444,7 @@ def test_submit_order_forces_opening_paper_sample_to_passive_day_limit(
     assert order is not None
     assert len(engine.calls) == 1
     call = engine.calls[0]
-    assert call["qty"] == 3
+    assert call["qty"] == 1
     kwargs = call["kwargs"]
     assert kwargs["order_type"] == "limit"
     assert kwargs["limit_price"] == 99.9

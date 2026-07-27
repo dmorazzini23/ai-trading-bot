@@ -224,6 +224,68 @@ def test_health_connectivity_mode_requires_known_broker_status(monkeypatch):
     assert payload["reason"] == "broker_status_unknown"
 
 
+def test_health_connectivity_mode_rejects_stale_cached_broker_snapshot(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "healthy",
+    }
+    broker_state = {
+        "status": "connected",
+        "connected": True,
+        "fresh": False,
+        "open_orders_fresh": False,
+        "positions_fresh": True,
+        "last_error": "http_500",
+        "failed_components": ("open_orders",),
+        "consecutive_failures": 2,
+        "stale_age_s": 45.0,
+        "open_orders_count": 2,
+        "positions_count": 1,
+    }
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: {"status": "ready"})
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: {"status": "aligned"})
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    response = app.test_client().get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 503
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "http_500"
+    assert payload["broker"]["connected"] is False
+    assert payload["broker"]["fresh"] is False
+    assert payload["broker"]["open_orders_count"] == 2
+    assert payload["broker"]["positions_count"] == 1
+    assert "broker_snapshot_stale" in payload["attention_flags"]
+    assert "broker_open_orders_unknown" in payload["attention_flags"]
+
+
+def test_health_serializes_malformed_failed_components_gracefully(monkeypatch):
+    broker_state = {
+        "status": "degraded",
+        "connected": False,
+        "fresh": False,
+        "open_orders_fresh": False,
+        "positions_fresh": False,
+        "failed_components": 42,
+    }
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    response = app.test_client().get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 503
+    assert payload["broker"]["failed_components"] == ["42"]
+
+
 def test_health_market_closed_offhours_reports_healthy(monkeypatch):
     provider_state = {
         "primary": "alpaca",
