@@ -256,6 +256,41 @@ def _script(path: str | Path, *args: str | Path) -> tuple[str, ...]:
     return ("bash", str(path), *(str(arg) for arg in args))
 
 
+def _research_candidate_registry_step(
+    *,
+    name: str,
+    research_report: Path,
+    registry_dir: Path,
+    output_json: Path,
+) -> ResearchStep:
+    return ResearchStep(
+        name=name,
+        command=_python_module(
+            "ai_trading.tools.research_candidate_registry",
+            "--research-report-json",
+            research_report,
+            "--registry-dir",
+            registry_dir,
+            "--output-json",
+            output_json,
+            "--stale-days",
+            "30",
+        ),
+        purpose=(
+            "Idempotently register tournament artifacts as shadow candidates and "
+            "retire only stale, comparable, strictly dominated shadows."
+        ),
+        output_path=output_json,
+        skip_if_missing=(research_report,),
+        metadata={
+            "promotion_authority": False,
+            "runtime_authority": False,
+            "live_money_authority": False,
+            "manual_production_promotion_required": True,
+        },
+    )
+
+
 def _runtime_path(relative: str) -> Path:
     return resolve_runtime_artifact_path(relative, default_relative=relative, for_write=True)
 
@@ -320,6 +355,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     historical_backfill = config.run_dir / "historical_training_backfill.json"
     opportunity_markouts = config.run_dir / "opportunity_markouts.json"
+    shadow_markout_replay_input = config.run_dir / "shadow_markout_replay_input.jsonl"
+    shadow_markout_replay_manifest = (
+        config.run_dir / "shadow_markout_replay_input_manifest.json"
+    )
     historical_training_dir = config.run_dir / "historical_replay_aligned"
     historical_training = (
         historical_training_dir / "historical_replay_aligned_training_report.json"
@@ -362,6 +401,10 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "780",
                 "--min-samples",
                 "5",
+                "--quote-events-jsonl",
+                _runtime_input_path("runtime/decision_records.jsonl"),
+                "--prior-min-samples",
+                "25",
             ),
             purpose="Aggregate current live execution and quote-cost evidence.",
             required=True,
@@ -1707,6 +1750,108 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 metadata={"promotion_authority": False},
             )
         )
+    markout_step_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if step.name == "opportunity_markouts"
+        ),
+        None,
+    )
+    if markout_step_index is not None:
+        steps.insert(
+            markout_step_index + 1,
+            ResearchStep(
+                name="shadow_markout_replay_input",
+                command=_python_module(
+                    "ai_trading.tools.shadow_markout_replay_input",
+                    "--markout-report-json",
+                    opportunity_markouts,
+                    "--output-jsonl",
+                    shadow_markout_replay_input,
+                    "--latest-jsonl",
+                    config.report_root
+                    / "latest"
+                    / "shadow_markout_replay_input_latest.jsonl",
+                    "--manifest-json",
+                    shadow_markout_replay_manifest,
+                    "--latest-manifest-json",
+                    config.report_root
+                    / "latest"
+                    / "shadow_markout_replay_input_manifest_latest.json",
+                    "--max-rows",
+                    "50000",
+                ),
+                purpose=(
+                    "Export resolved 1/3/5-bar opportunity outcomes as a bounded "
+                    "research-only replay partition."
+                ),
+                output_path=shadow_markout_replay_input,
+                skip_if_missing=(opportunity_markouts,),
+                metadata={
+                    "research_only": True,
+                    "evidence_type": "shadow_counterfactual",
+                    "evidence_partition": "shadow",
+                    "resolved_only": True,
+                    "fill_based_evidence": False,
+                    "promotion_eligible": False,
+                    "promotion_authority": False,
+                    "runtime_authority": False,
+                    "live_money_authority": False,
+                    "horizons_bars": [1, 3, 5],
+                },
+            ),
+        )
+    accelerator_step_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if step.name == "training_accelerator_daily"
+        ),
+        None,
+    )
+    if accelerator_step_index is not None:
+        candidate_registry_report = (
+            config.run_dir / "research_candidate_registry_daily.json"
+        )
+        steps.insert(
+            accelerator_step_index + 1,
+            _research_candidate_registry_step(
+                name="research_candidate_registry_daily",
+                research_report=training_accelerator,
+                registry_dir=model_registry_source.parent,
+                output_json=candidate_registry_report,
+            ),
+        )
+        steps.insert(
+            accelerator_step_index + 2,
+            ResearchStep(
+                name="model_registry_post_training_evaluation",
+                command=_python_module(
+                    "ai_trading.tools.model_registry",
+                    "evaluate",
+                    "--registry-json",
+                    model_registry_source,
+                    "--output-json",
+                    model_registry,
+                    "--latest-json",
+                    config.report_root
+                    / "latest"
+                    / "model_registry_evaluation_latest.json",
+                ),
+                purpose=(
+                    "Refresh the governed registry report after shadow tournament "
+                    "artifacts are registered."
+                ),
+                output_path=model_registry,
+                skip_if_missing=(model_registry_source,),
+                blocked_returncodes=(2,),
+                metadata={
+                    "promotion_authority": False,
+                    "manual_approval_required": True,
+                },
+            ),
+        )
     return steps
 
 
@@ -1721,7 +1866,15 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
     steps = [
         ResearchStep(
             name="live_cost_model",
-            command=_python_module("ai_trading.tools.live_cost_model", "--output-json", live_cost),
+            command=_python_module(
+                "ai_trading.tools.live_cost_model",
+                "--output-json",
+                live_cost,
+                "--quote-events-jsonl",
+                _runtime_input_path("runtime/decision_records.jsonl"),
+                "--prior-min-samples",
+                "25",
+            ),
             purpose="Pin the current observed cost model for weekly research.",
             output_path=live_cost,
         ),
@@ -1872,6 +2025,31 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 metadata={"enforcement_authority": False},
             )
         )
+    if config.data_dir is not None:
+        steps.extend(
+            (
+                _research_candidate_registry_step(
+                    name="research_candidate_registry_weekly_accelerator",
+                    research_report=training_accelerator,
+                    registry_dir=_runtime_input_path("models"),
+                    output_json=(
+                        config.run_dir
+                        / "research_candidate_registry_weekly_accelerator.json"
+                    ),
+                ),
+                _research_candidate_registry_step(
+                    name="research_candidate_registry_weekly_tournament",
+                    research_report=(
+                        multi_horizon_dir / "multi_horizon_research_report.json"
+                    ),
+                    registry_dir=_runtime_input_path("models"),
+                    output_json=(
+                        config.run_dir
+                        / "research_candidate_registry_weekly_tournament.json"
+                    ),
+                ),
+            )
+        )
     return steps
 
 
@@ -2014,7 +2192,15 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
     steps = [
         ResearchStep(
             name="live_cost_model",
-            command=_python_module("ai_trading.tools.live_cost_model", "--output-json", live_cost),
+            command=_python_module(
+                "ai_trading.tools.live_cost_model",
+                "--output-json",
+                live_cost,
+                "--quote-events-jsonl",
+                _runtime_input_path("runtime/decision_records.jsonl"),
+                "--prior-min-samples",
+                "25",
+            ),
             purpose="Pin observed live costs before broad weekend research.",
             output_path=live_cost,
         ),
@@ -2321,6 +2507,30 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 },
             )
         )
+        steps.extend(
+            (
+                _research_candidate_registry_step(
+                    name="research_candidate_registry_weekend_accelerator",
+                    research_report=training_accelerator,
+                    registry_dir=model_registry_source.parent,
+                    output_json=(
+                        config.run_dir
+                        / "research_candidate_registry_weekend_accelerator.json"
+                    ),
+                ),
+                _research_candidate_registry_step(
+                    name="research_candidate_registry_weekend_tournament",
+                    research_report=(
+                        multi_horizon_dir / "multi_horizon_research_report.json"
+                    ),
+                    registry_dir=model_registry_source.parent,
+                    output_json=(
+                        config.run_dir
+                        / "research_candidate_registry_weekend_tournament.json"
+                    ),
+                ),
+            )
+        )
     return steps, []
 
 
@@ -2345,7 +2555,15 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
     steps = [
         ResearchStep(
             name="live_cost_model",
-            command=_python_module("ai_trading.tools.live_cost_model", "--output-json", live_cost),
+            command=_python_module(
+                "ai_trading.tools.live_cost_model",
+                "--output-json",
+                live_cost,
+                "--quote-events-jsonl",
+                _runtime_input_path("runtime/decision_records.jsonl"),
+                "--prior-min-samples",
+                "25",
+            ),
             purpose="Refresh observed costs before Sunday replay/readiness synthesis.",
             output_path=live_cost,
         ),
@@ -2612,6 +2830,11 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
         ),
     ]
     if config.data_dir is not None:
+        validation_accelerator = (
+            config.run_dir
+            / "training_accelerator_validation"
+            / "training_accelerator_report.json"
+        )
         steps.append(
             ResearchStep(
                 name="training_accelerator_weekend_validation",
@@ -2633,15 +2856,24 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
                     str(caps["max_replay_candidates"]),
                 ),
                 purpose="Run bounded Sunday validation refresh for top replay candidates.",
-                output_path=config.run_dir
-                / "training_accelerator_validation"
-                / "training_accelerator_report.json",
+                output_path=validation_accelerator,
                 skip_if_missing=(config.data_dir,),
                 metadata={
                     "promotion_authority": False,
                     "research_only": True,
                     "max_replay_candidates": caps["max_replay_candidates"],
                 },
+            )
+        )
+        steps.append(
+            _research_candidate_registry_step(
+                name="research_candidate_registry_weekend_validation",
+                research_report=validation_accelerator,
+                registry_dir=_runtime_input_path("models"),
+                output_json=(
+                    config.run_dir
+                    / "research_candidate_registry_weekend_validation.json"
+                ),
             )
         )
     return steps, []

@@ -40,9 +40,14 @@ from ai_trading.research.walk_forward import (
     ContiguousWalkForwardConfig,
     contiguous_walk_forward_splits,
 )
+from ai_trading.research.model_selection import (
+    chronological_development_holdout,
+    trailing_nested_selection_split,
+)
 from ai_trading.registry.manifest import (
     MARKET_REGIME_CLASSIFIER_ID,
     derive_market_regime_policy,
+    evaluate_market_regime_policy,
 )
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.offline_replay import (
@@ -105,6 +110,10 @@ class ReplayAlignedTrainingConfig:
     walk_forward_embargo_percent: float = 0.0
     edge_weight_max: float = 5.0
     edge_weight_quantile: float = 0.90
+    evaluation_folds: int | None = None
+    nested_validation_fraction: float = 0.20
+    nested_min_support: int = 25
+    evaluate_holdout: bool = True
 
 
 def _resolve_symbol_paths(data_dir: Path, symbols: str) -> dict[str, Path]:
@@ -1033,6 +1042,82 @@ def _threshold_report(
     return rows
 
 
+def _select_nested_threshold(
+    dataset: pd.DataFrame,
+    probabilities: np.ndarray,
+    *,
+    min_support: int,
+    fixed_confidence_threshold: float | None,
+) -> dict[str, Any] | None:
+    """Choose a feasible post-cost threshold from inner validation only."""
+
+    reports = _threshold_report(dataset, probabilities)
+    feasible = [
+        row
+        for row in reports
+        if int(row.get("candidates", 0) or 0) >= max(1, int(min_support))
+        and row.get("mean_net_markout_bps") is not None
+        and float(row.get("mean_net_markout_bps") or 0.0) > 0.0
+        and (
+            fixed_confidence_threshold is None
+            or abs(
+                float(row.get("confidence_threshold", 0.0))
+                - float(fixed_confidence_threshold)
+            )
+            < 1e-9
+        )
+    ]
+    if not feasible and fixed_confidence_threshold is not None:
+        fixed_rows = [
+            row
+            for row in reports
+            if abs(
+                float(row.get("confidence_threshold", 0.0))
+                - float(fixed_confidence_threshold)
+            )
+            < 1e-9
+        ]
+        if not fixed_rows:
+            # Preserve explicit legacy thresholds that are outside the diagnostic grid.
+            probability = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
+            score = (2.0 * probability) - 1.0
+            net = pd.to_numeric(
+                dataset["net_long_bps"], errors="coerce"
+            ).to_numpy(dtype=float)
+            for entry_threshold in (0.05, 0.10, 0.15, 0.20):
+                mask = (probability >= float(fixed_confidence_threshold)) & (
+                    score >= entry_threshold
+                )
+                selected = net[mask & np.isfinite(net)]
+                row = {
+                    "confidence_threshold": float(fixed_confidence_threshold),
+                    "entry_score_threshold": float(entry_threshold),
+                    "candidates": int(selected.size),
+                    "mean_net_markout_bps": (
+                        float(np.mean(selected)) if selected.size else None
+                    ),
+                    "total_net_markout_bps": float(np.sum(selected)),
+                    "positive_rate": (
+                        float(np.mean(selected > 0.0)) if selected.size else None
+                    ),
+                }
+                if (
+                    selected.size >= max(1, int(min_support))
+                    and float(row["mean_net_markout_bps"] or 0.0) > 0.0
+                ):
+                    feasible.append(row)
+    if not feasible:
+        return None
+    return max(
+        feasible,
+        key=lambda row: (
+            float(row.get("mean_net_markout_bps") or -1e12),
+            float(row.get("positive_rate") or 0.0),
+            int(row.get("candidates", 0) or 0),
+        ),
+    )
+
+
 def _threshold_report_by_regime(
     dataset: pd.DataFrame,
     probabilities: np.ndarray,
@@ -1465,7 +1550,14 @@ def _run_fold_local_walk_forward(
         embargo_bars=embargo_bars,
         embargo_percent=embargo_percent,
     )
-    splits = contiguous_walk_forward_splits(dataset, split_config)
+    all_splits = contiguous_walk_forward_splits(dataset, split_config)
+    evaluation_folds_raw = getattr(args, "evaluation_folds", None)
+    evaluation_folds = (
+        requested_folds
+        if evaluation_folds_raw in (None, 0, "")
+        else max(1, min(requested_folds, int(evaluation_folds_raw)))
+    )
+    splits = all_splits[:evaluation_folds]
     fold_reports: list[dict[str, Any]] = []
     oos_frames: list[pd.DataFrame] = []
     last_bundle: tuple[Any, pd.DataFrame, pd.DataFrame, np.ndarray] | None = None
@@ -1483,9 +1575,71 @@ def _run_fold_local_walk_forward(
     min_net_edge_bps = float(
         getattr(args, "min_net_edge_bps", 0.0) or 0.0
     )
+    nested_validation_fraction = float(
+        getattr(args, "nested_validation_fraction", 0.20) or 0.20
+    )
+    nested_min_support = max(
+        1, int(getattr(args, "nested_min_support", 25) or 25)
+    )
+    selected_thresholds: list[tuple[float, float]] = []
     for fold, train, test in splits:
         if train["target"].nunique() < 2:
             continue
+        try:
+            nested = trailing_nested_selection_split(
+                train,
+                validation_fraction=nested_validation_fraction,
+                embargo_bars=embargo_bars,
+            )
+        except ValueError:
+            continue
+        if nested.fit["target"].nunique() < 2:
+            continue
+        selector_model = _make_model(
+            str(args.model_type),
+            random_state=int(args.random_state) + int(fold.fold_index),
+        )
+        nested_fit_features = nested.fit[
+            list(REPLAY_ALIGNED_FEATURE_COLUMNS)
+        ].astype(float)
+        nested_selection_features = nested.selection[
+            list(REPLAY_ALIGNED_FEATURE_COLUMNS)
+        ].astype(float)
+        selector_weights, selector_weight_report = _edge_magnitude_sample_weights(
+            nested.fit,
+            min_net_edge_bps=min_net_edge_bps,
+            max_weight=edge_weight_max,
+            scaling_quantile=edge_weight_quantile,
+        )
+        _fit_weighted_binary_model(
+            selector_model,
+            nested_fit_features,
+            nested.fit["target"].astype(int),
+            sample_weight=selector_weights,
+        )
+        selector_positive_index = _positive_class_index(selector_model)
+        selection_probabilities = np.asarray(
+            selector_model.predict_proba(nested_selection_features), dtype=float
+        )[:, selector_positive_index]
+        best_nested_threshold = _select_nested_threshold(
+            nested.selection,
+            selection_probabilities,
+            min_support=min(nested_min_support, max(1, len(nested.selection) // 4)),
+            fixed_confidence_threshold=edge_global_threshold,
+        )
+        threshold_feasible = best_nested_threshold is not None
+        confidence_threshold = float(
+            best_nested_threshold.get("confidence_threshold", 1.0)
+            if best_nested_threshold is not None
+            else 1.0
+        )
+        entry_score_threshold = float(
+            best_nested_threshold.get("entry_score_threshold", 1.0)
+            if best_nested_threshold is not None
+            else 1.0
+        )
+        selected_thresholds.append((confidence_threshold, entry_score_threshold))
+
         model = _make_model(
             str(args.model_type),
             random_state=int(args.random_state) + int(fold.fold_index),
@@ -1505,36 +1659,9 @@ def _run_fold_local_walk_forward(
             sample_weight=train_weights,
         )
         positive_index = _positive_class_index(model)
-        train_probabilities = np.asarray(
-            model.predict_proba(train_features), dtype=float
-        )[:, positive_index]
         test_probabilities = np.asarray(
             model.predict_proba(test_features), dtype=float
         )[:, positive_index]
-        train_thresholds = _threshold_report(train, train_probabilities)
-        best_train_threshold = next(
-            (
-                row
-                for row in train_thresholds
-                if int(row.get("candidates", 0) or 0) > 0
-                and row.get("mean_net_markout_bps") is not None
-            ),
-            None,
-        )
-        confidence_threshold = float(
-            edge_global_threshold
-            if edge_global_threshold is not None
-            else (
-                best_train_threshold.get("confidence_threshold", 0.66)
-                if best_train_threshold is not None
-                else 0.66
-            )
-        )
-        entry_score_threshold = float(
-            best_train_threshold.get("entry_score_threshold", 0.05)
-            if best_train_threshold is not None
-            else 0.05
-        )
         metrics, selected = _selected_post_cost_metrics(
             test,
             test_probabilities,
@@ -1571,7 +1698,25 @@ def _run_fold_local_walk_forward(
             "chronological_non_overlap": bool(fold.chronological_non_overlap),
             "label_purge_ok": bool(fold.label_purge_ok),
             "fit_scope": "fold_train_only",
-            "threshold_scope": "fold_train_only",
+            "threshold_scope": "nested_inner_validation_only",
+            "threshold_feasible": bool(threshold_feasible),
+            "threshold_selection": {
+                "scope": "nested_inner_validation_only",
+                "fit_rows": int(len(nested.fit)),
+                "selection_rows": int(len(nested.selection)),
+                "selection_start": str(nested.selection_start),
+                "purged_fit_rows": int(nested.purged_fit_rows),
+                "embargoed_fit_rows": int(nested.embargoed_fit_rows),
+                "embargo_bars": int(nested.embargo_bars),
+                "min_support": int(
+                    min(nested_min_support, max(1, len(nested.selection) // 4))
+                ),
+                "selected": dict(best_nested_threshold or {}),
+                "infeasible_action": (
+                    None if threshold_feasible else "abstain_all_outer_test_rows"
+                ),
+                "sample_weight": selector_weight_report,
+            },
             "fit_objective": "bounded_post_cost_edge_weighted_binary",
             "sample_weight": weight_report,
             "cost_model": dict(cost_model_identity),
@@ -1604,7 +1749,7 @@ def _run_fold_local_walk_forward(
     )
     aggregate = _walk_forward_qualification(
         fold_reports,
-        required_folds=requested_folds,
+        required_folds=evaluation_folds,
         min_trades=min_trades,
         min_mean_net_edge_bps=min_mean_edge,
         min_profitable_fold_ratio=min_profitable_ratio,
@@ -1632,6 +1777,8 @@ def _run_fold_local_walk_forward(
         "label_horizon_purged": True,
         "config": {
             "requested_folds": requested_folds,
+            "evaluation_folds": evaluation_folds,
+            "fixed_fold_schedule_count": len(all_splits),
             "horizon_bars": int(args.horizon_bars),
             "embargo_bars": embargo_bars,
             "embargo_percent": embargo_percent,
@@ -1669,10 +1816,26 @@ def _run_fold_local_walk_forward(
         final_train["target"].astype(int),
         sample_weight=final_weights,
     )
+    final_confidence_threshold = float(
+        np.median([value[0] for value in selected_thresholds])
+        if selected_thresholds
+        else (edge_global_threshold or 1.0)
+    )
+    final_entry_score_threshold = float(
+        np.median([value[1] for value in selected_thresholds])
+        if selected_thresholds
+        else 1.0
+    )
+    walk_forward_report["selected_threshold"] = {
+        "confidence_threshold": final_confidence_threshold,
+        "entry_score_threshold": final_entry_score_threshold,
+        "scope": "aggregate_of_nested_inner_validation_thresholds",
+        "fold_threshold_count": len(selected_thresholds),
+    }
     walk_forward_report["final_fit"] = {
-        "scope": "full_governed_dataset_after_oos_evaluation",
+        "scope": "development_partition_only_after_oos_evaluation",
         "rows": int(len(final_train)),
-        "threshold_scope": "walk_forward_oos_only",
+        "threshold_scope": "nested_inner_validation_only",
         "fit_objective": "bounded_post_cost_edge_weighted_binary",
         "sample_weight": final_weight_report,
         "promotion_authority": False,
@@ -1759,6 +1922,17 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("Replay-aligned target has fewer than two classes")
 
     edge_global_threshold = _optional_threshold(getattr(args, "edge_global_threshold", None))
+    holdout_partition = chronological_development_holdout(
+        dataset,
+        train_fraction=float(getattr(args, "train_fraction", 0.70) or 0.70),
+        embargo_bars=max(
+            1, int(getattr(args, "walk_forward_embargo_bars", 1) or 1)
+        ),
+    )
+    development = holdout_partition.development
+    holdout = holdout_partition.holdout
+    if development["target"].nunique() < 2:
+        raise RuntimeError("Replay-aligned development target has fewer than two classes")
     live_cost_metadata = _live_cost_request_metadata(args, live_cost_model)
     cost_model_identity = {
         "version": (
@@ -1779,17 +1953,33 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         oos_frame,
         oos_probabilities,
     ) = _run_fold_local_walk_forward(
-        dataset,
+        development,
         args=args,
         edge_global_threshold=edge_global_threshold,
         cost_model_identity=cost_model_identity,
     )
-    training_threshold_report_by_regime = _threshold_report_by_regime(
-        oos_frame, oos_probabilities
+    selected_threshold = cast(
+        Mapping[str, Any], walk_forward_report.get("selected_threshold", {})
     )
-    edge_thresholds_by_regime = _best_thresholds_by_regime(
-        training_threshold_report_by_regime
+    selected_confidence_threshold = float(
+        selected_threshold.get(
+            "confidence_threshold",
+            edge_global_threshold if edge_global_threshold is not None else 1.0,
+        )
     )
+    selected_entry_score_threshold = float(
+        selected_threshold.get("entry_score_threshold", 1.0)
+    )
+    observed_session_regimes = sorted(
+        {
+            str(value).strip().lower()
+            for value in oos_frame.get("session_regime", pd.Series(dtype=str)).tolist()
+            if str(value).strip()
+        }
+    )
+    edge_thresholds_by_regime = {
+        regime: selected_confidence_threshold for regime in observed_session_regimes
+    }
     validation_report = _evaluate_probabilities(oos_frame["target"], oos_probabilities)
     threshold_report = _threshold_report(oos_frame, oos_probabilities)
     threshold_report_by_regime = _threshold_report_by_regime(
@@ -1806,6 +1996,72 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         walk_forward_report,
         generated_at=generated_at,
     )
+    evaluate_holdout = bool(getattr(args, "evaluate_holdout", True))
+    holdout_report: dict[str, Any] = {
+        "consumed": False,
+        "rows": int(len(holdout)),
+        "start": str(holdout_partition.holdout_start),
+        "selection_authority": False,
+        "winner_selection_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "reason": "reserved_for_tournament_winner",
+    }
+    if evaluate_holdout:
+        holdout_features = holdout[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
+        holdout_probabilities = np.asarray(
+            model.predict_proba(holdout_features), dtype=float
+        )[:, _positive_class_index(model)]
+        holdout_regime_frame = holdout.copy()
+        holdout_regimes, holdout_regime_definition = _fold_market_regimes(
+            dataset.loc[
+                pd.to_datetime(dataset["timestamp"], errors="coerce", utc=True)
+                <= pd.to_datetime(holdout["timestamp"], errors="coerce", utc=True).max()
+            ].copy(),
+            holdout,
+        )
+        holdout_regime_frame["market_regime"] = holdout_regimes
+        policy_allowed = np.asarray(
+            [
+                evaluate_market_regime_policy(
+                    market_regime_policy,
+                    market_regime=regime,
+                    now=generated_at,
+                ).allowed
+                for regime in holdout_regimes
+            ],
+            dtype=bool,
+        )
+        holdout_metrics, _ = _selected_post_cost_metrics(
+            holdout_regime_frame.loc[policy_allowed].copy(),
+            holdout_probabilities[policy_allowed],
+            confidence_threshold=selected_confidence_threshold,
+            entry_score_threshold=selected_entry_score_threshold,
+        )
+        _, holdout_by_regime = _regime_post_cost_metrics(
+            holdout_regime_frame,
+            holdout_probabilities,
+            confidence_threshold=selected_confidence_threshold,
+            entry_score_threshold=selected_entry_score_threshold,
+        )
+        holdout_report = {
+            "consumed": True,
+            "rows": int(len(holdout)),
+            "start": str(holdout_partition.holdout_start),
+            "selection_authority": False,
+            "winner_selection_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "threshold_scope": "frozen_nested_development_threshold",
+            "confidence_threshold": selected_confidence_threshold,
+            "entry_score_threshold": selected_entry_score_threshold,
+            "metrics": holdout_metrics,
+            "by_market_regime": holdout_by_regime,
+            "regime_definition": holdout_regime_definition,
+            "policy_source": "development_walk_forward_only",
+            "policy_allowed_rows": int(np.sum(policy_allowed)),
+            "policy_abstained_rows": int(np.sum(~policy_allowed)),
+        }
 
     model_name = str(args.model_name or f"replay_aligned_{args.model_type}").strip()
     model_path = output_dir / f"{model_name}.joblib"
@@ -1853,13 +2109,25 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
                 1.0,
             )
         ),
+        evaluation_folds=(
+            int(getattr(args, "evaluation_folds"))
+            if getattr(args, "evaluation_folds", None) not in (None, 0, "")
+            else None
+        ),
+        nested_validation_fraction=float(
+            getattr(args, "nested_validation_fraction", 0.20) or 0.20
+        ),
+        nested_min_support=max(
+            1, int(getattr(args, "nested_min_support", 25) or 25)
+        ),
+        evaluate_holdout=evaluate_holdout,
     )
     manifest_path = write_artifact_manifest(
         model_path=model_path,
         model_version=f"replay_aligned_{args.model_type}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
         training_data_range={
-            "start": str(dataset["timestamp"].min()),
-            "end": str(dataset["timestamp"].max()),
+            "start": str(development["timestamp"].min()),
+            "end": str(development["timestamp"].max()),
         },
         metadata={
             "strategy": "replay_aligned_markout",
@@ -1870,11 +2138,12 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "acquisition": acquisition,
             "dataset_hash": acquisition["dataset_hash"],
             "thresholds_by_regime": edge_thresholds_by_regime,
-            "threshold_scope": "walk_forward_oos_only",
+            "threshold_scope": "nested_inner_validation_only",
             "feature_importance": feature_importance[:25],
             "live_cost_model": live_cost_metadata,
             "walk_forward": walk_forward_report,
             "market_regime_policy": market_regime_policy,
+            "holdout_evaluation": holdout_report,
             "governance_status": "shadow",
             "promotion_authority": False,
             "live_money_authority": False,
@@ -1896,6 +2165,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "rows": int(len(dataset)),
             "train_rows": int(len(train)),
             "validation_rows": int(len(oos_frame)),
+            "development_rows": int(len(development)),
+            "holdout_rows": int(len(holdout)),
             "symbols": int(dataset["symbol"].nunique()),
             "positive_rate": float(dataset["target"].mean()),
             "train_positive_rate": float(train["target"].mean()),
@@ -1920,6 +2191,21 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
                     for fold in walk_forward_report["folds"]
                 ],
             },
+            "development_holdout": {
+                "train_fraction": float(config.train_fraction),
+                "holdout_start": str(holdout_partition.holdout_start),
+                "initial_development_rows": int(
+                    holdout_partition.initial_development_rows
+                ),
+                "purged_development_rows": int(
+                    holdout_partition.purged_development_rows
+                ),
+                "embargoed_development_rows": int(
+                    holdout_partition.embargoed_development_rows
+                ),
+                "embargo_bars": int(holdout_partition.embargo_bars),
+                "unique_timestamp_non_overlap": True,
+            },
         },
         "live_cost_model": live_cost_metadata,
         "feature_importance": feature_importance[:25],
@@ -1927,9 +2213,10 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         "threshold_sweep": threshold_report,
         "threshold_sweep_by_regime": threshold_report_by_regime,
         "thresholds_by_regime": edge_thresholds_by_regime,
-        "threshold_scope": "walk_forward_oos_only",
+        "threshold_scope": "nested_inner_validation_only",
         "walk_forward": walk_forward_report,
         "market_regime_policy": market_regime_policy,
+        "holdout_evaluation": holdout_report,
         "governance_status": "shadow",
         "promotion_authority": False,
         "live_money_authority": False,
@@ -2001,8 +2288,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--walk-forward-folds", type=int, default=5)
+    parser.add_argument(
+        "--evaluation-folds",
+        type=int,
+        default=None,
+        help="Optional fixed-schedule fold budget used by staged research screening.",
+    )
     parser.add_argument("--walk-forward-embargo-bars", type=int, default=1)
     parser.add_argument("--walk-forward-embargo-percent", type=float, default=0.0)
+    parser.add_argument("--nested-validation-fraction", type=float, default=0.20)
+    parser.add_argument("--nested-min-support", type=int, default=25)
+    parser.add_argument(
+        "--evaluate-holdout",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Consume the reserved final holdout; tournaments disable this for non-winners.",
+    )
     parser.add_argument("--walk-forward-min-trades", type=int, default=250)
     parser.add_argument(
         "--walk-forward-min-profitable-fold-ratio", type=float, default=0.60

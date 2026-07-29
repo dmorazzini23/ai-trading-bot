@@ -6,6 +6,10 @@ import pandas as pd
 import pytest
 
 from ai_trading.research.leakage_tests import run_leakage_guards
+from ai_trading.research.model_selection import (
+    chronological_development_holdout,
+    trailing_nested_selection_split,
+)
 from ai_trading.research.walk_forward import (
     ContiguousWalkForwardConfig,
     WalkForwardConfig,
@@ -134,3 +138,61 @@ def test_contiguous_walk_forward_purges_labels_and_embargoes_timestamp_bars() ->
         if previous_test_end is not None:
             assert pd.Timestamp(previous_test_end) < test["timestamp"].min()
         previous_test_end = test["timestamp"].max()
+
+
+def test_development_holdout_keeps_unique_timestamps_and_purges_labels() -> None:
+    timestamps = pd.date_range("2026-01-02 14:30:00+00:00", periods=100, freq="min")
+    data = pd.DataFrame(
+        [
+            {
+                "timestamp": timestamp,
+                "label_end_timestamp": timestamp + pd.Timedelta(minutes=3),
+                "symbol": symbol,
+            }
+            for timestamp in timestamps
+            for symbol in ("AAPL", "MSFT")
+        ]
+    )
+
+    partition = chronological_development_holdout(
+        data,
+        train_fraction=0.70,
+        embargo_bars=2,
+    )
+
+    assert partition.development["timestamp"].max() < partition.holdout_start
+    assert partition.development["label_end_timestamp"].max() < partition.holdout_start
+    assert set(partition.development["timestamp"]).isdisjoint(
+        set(partition.holdout["timestamp"])
+    )
+    assert partition.purged_development_rows == 6
+    assert partition.embargoed_development_rows == 4
+
+
+def test_nested_selection_is_trailing_purged_and_embargoed() -> None:
+    timestamps = pd.date_range("2026-01-02 14:30:00+00:00", periods=80, freq="min")
+    data = pd.DataFrame(
+        [
+            {
+                "timestamp": timestamp,
+                "label_end_timestamp": timestamp + pd.Timedelta(minutes=5),
+                "symbol": symbol,
+            }
+            for timestamp in timestamps
+            for symbol in ("AAPL", "MSFT")
+        ]
+    )
+
+    partition = trailing_nested_selection_split(
+        data,
+        validation_fraction=0.20,
+        embargo_bars=2,
+    )
+
+    assert partition.fit["timestamp"].max() < partition.selection_start
+    assert partition.fit["label_end_timestamp"].max() < partition.selection_start
+    assert set(partition.fit["timestamp"]).isdisjoint(
+        set(partition.selection["timestamp"])
+    )
+    assert partition.purged_fit_rows == 10
+    assert partition.embargoed_fit_rows == 4

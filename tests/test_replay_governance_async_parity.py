@@ -679,6 +679,12 @@ def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
     ]
     assert context["shadow_scanned_records"] == 5
     assert context["shadow_rejected_records"] == 4
+    assert context["shadow_rejection_reasons"] == {
+        "not_explicitly_unsubmitted": 1,
+        "parity_marker_missing": 1,
+        "quantity_or_price_invalid": 1,
+        "symbol_or_side_invalid": 1,
+    }
     assert context["shadow_accepted_records"] == 1
     assert context["shadow_decision_rows"] == 1
     assert context["shadow_source_path"] == str(decision_path)

@@ -39216,17 +39216,33 @@ def _replay_parity_shadow_row(
     cutoff: datetime,
     now: datetime,
 ) -> tuple[str, dict[str, Any]] | None:
+    parsed, _reason = _replay_parity_shadow_row_diagnostic(
+        record,
+        cutoff=cutoff,
+        now=now,
+    )
+    return parsed
+
+
+def _replay_parity_shadow_row_diagnostic(
+    record: Mapping[str, Any],
+    *,
+    cutoff: datetime,
+    now: datetime,
+) -> tuple[tuple[str, dict[str, Any]] | None, str]:
+    """Parse governed parity evidence and return a stable rejection reason."""
+
     journal_raw = record.get("decision_journal")
     if not isinstance(journal_raw, Mapping):
-        return None
+        return None, "decision_journal_missing"
     intent_raw = journal_raw.get("order_intent")
     if not isinstance(intent_raw, Mapping):
-        return None
+        return None, "order_intent_missing"
     if journal_raw.get("submitted") is not False:
-        return None
+        return None, "not_explicitly_unsubmitted"
     broker_result = journal_raw.get("broker_result")
     if isinstance(broker_result, Mapping) and broker_result.get("submitted") is not False:
-        return None
+        return None, "broker_result_submitted"
 
     gates: list[Any] = []
     for container in (record, journal_raw, journal_raw.get("risk_decision")):
@@ -39257,7 +39273,7 @@ def _replay_parity_shadow_row(
                 parity_marked = True
                 break
     if not parity_marked:
-        return None
+        return None, "parity_marker_missing"
 
     status = str(intent_raw.get("status") or "").strip().lower()
     if status in {
@@ -39269,26 +39285,30 @@ def _replay_parity_shadow_row(
         "partially_filled",
         "filled",
     }:
-        return None
+        return None, "intent_status_submitted"
     ts = _parse_iso_timestamp(
         intent_raw.get("bar_ts")
         or journal_raw.get("bar_ts")
         or record.get("bar_ts")
         or record.get("ts")
     )
-    if ts is None or ts < cutoff or ts > now + timedelta(minutes=5):
-        return None
+    if ts is None:
+        return None, "timestamp_missing_or_invalid"
+    if ts < cutoff:
+        return None, "timestamp_before_lookback"
+    if ts > now + timedelta(minutes=5):
+        return None, "timestamp_future_dated"
     symbol = str(intent_raw.get("symbol") or "").strip().upper()
     side = str(intent_raw.get("side") or "").strip().lower()
     if not symbol or side not in {"buy", "sell"}:
-        return None
+        return None, "symbol_or_side_invalid"
     try:
         qty = float(intent_raw.get("qty"))
         price = float(intent_raw.get("limit_price") or intent_raw.get("price"))
     except (TypeError, ValueError):
-        return None
+        return None, "quantity_or_price_invalid"
     if qty <= 0.0 or price <= 0.0 or not math.isfinite(qty) or not math.isfinite(price):
-        return None
+        return None, "quantity_or_price_invalid"
 
     raw_client_order_id = str(intent_raw.get("client_order_id") or "").strip()
     identity_seed = "|".join(
@@ -39305,22 +39325,28 @@ def _replay_parity_shadow_row(
     ).hexdigest()[:24]
     metadata_raw = record.get("metrics")
     metadata = metadata_raw if isinstance(metadata_raw, Mapping) else {}
-    return raw_client_order_id or identity_seed, {
-        "symbol": symbol,
-        "ts": ts.isoformat(),
-        "close": float(price),
-        "side": side,
-        "qty": float(qty),
-        "order_type": str(intent_raw.get("order_type") or "limit").strip().lower(),
-        "client_order_id": client_order_id,
-        "timeframe": str(intent_raw.get("timeframe") or "5Min").strip() or "5Min",
-        "source_kind": "decision_journal_parity_shadow",
-        "regime_profile": str(
-            metadata.get("regime_profile")
-            or metadata.get("market_regime")
-            or "unknown"
-        ).strip().lower(),
-    }
+    return (
+        (
+            raw_client_order_id or identity_seed,
+            {
+                "symbol": symbol,
+                "ts": ts.isoformat(),
+                "close": float(price),
+                "side": side,
+                "qty": float(qty),
+                "order_type": str(intent_raw.get("order_type") or "limit").strip().lower(),
+                "client_order_id": client_order_id,
+                "timeframe": str(intent_raw.get("timeframe") or "5Min").strip() or "5Min",
+                "source_kind": "decision_journal_parity_shadow",
+                "regime_profile": str(
+                    metadata.get("regime_profile")
+                    or metadata.get("market_regime")
+                    or "unknown"
+                ).strip().lower(),
+            },
+        ),
+        "accepted",
+    )
 
 
 def _refresh_replay_dataset_from_tca(
@@ -39387,12 +39413,20 @@ def _refresh_replay_dataset_from_tca(
     shadow_scanned = 0
     shadow_rejected = 0
     shadow_accepted = 0
+    shadow_rejection_reasons: dict[str, int] = {}
     if shadow_enabled and decision_path.exists():
         for record in _read_jsonl_records(str(decision_path), max_records=max_records):
             shadow_scanned += 1
-            parsed = _replay_parity_shadow_row(record, cutoff=cutoff, now=now)
+            parsed, rejection_reason = _replay_parity_shadow_row_diagnostic(
+                record,
+                cutoff=cutoff,
+                now=now,
+            )
             if parsed is None:
                 shadow_rejected += 1
+                shadow_rejection_reasons[rejection_reason] = (
+                    shadow_rejection_reasons.get(rejection_reason, 0) + 1
+                )
                 continue
             dedupe_key, row = parsed
             deduplicated[dedupe_key] = row
@@ -39495,6 +39529,7 @@ def _refresh_replay_dataset_from_tca(
             "shadow_source_available": bool(decision_path.exists()),
             "shadow_scanned_records": int(shadow_scanned),
             "shadow_rejected_records": int(shadow_rejected),
+            "shadow_rejection_reasons": dict(sorted(shadow_rejection_reasons.items())),
             "shadow_accepted_records": int(shadow_accepted),
             "shadow_decision_rows": 0,
             "source_paths": [
@@ -39528,6 +39563,7 @@ def _refresh_replay_dataset_from_tca(
         "shadow_source_available": bool(decision_path.exists()),
         "shadow_scanned_records": int(shadow_scanned),
         "shadow_rejected_records": int(shadow_rejected),
+        "shadow_rejection_reasons": dict(sorted(shadow_rejection_reasons.items())),
         "shadow_accepted_records": int(shadow_accepted),
         "shadow_decision_rows": int(shadow_rows),
         "source_paths": [

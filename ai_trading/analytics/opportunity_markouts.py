@@ -438,6 +438,7 @@ def _base_outcome(
         "label_reason": "unresolved",
         "evidence_type": "shadow_counterfactual",
         "evidence_partition": "shadow",
+        "research_only": True,
         "fill_based_evidence": False,
         "promotion_eligible": False,
         "runtime_authority": False,
@@ -593,6 +594,35 @@ def resolve_opportunity_markouts(
             outcomes.append(outcome)
     status_counts = Counter(str(row["label_status"]) for row in outcomes)
     reason_counts = Counter(str(row["label_reason"]) for row in outcomes)
+    opportunities_by_symbol = Counter(str(row["symbol"]) for row in contexts)
+    submitted_opportunities = sum(bool(row.get("submitted")) for row in contexts)
+    controlled_skip_opportunities = sum(
+        bool(row.get("controlled_skip")) for row in contexts
+    )
+    outcomes_by_horizon: dict[str, dict[str, int]] = {}
+    for horizon in parsed_horizons:
+        horizon_rows = [
+            row for row in outcomes if int(row["horizon_bars"]) == int(horizon)
+        ]
+        horizon_statuses = Counter(
+            str(row["label_status"]) for row in horizon_rows
+        )
+        outcomes_by_horizon[str(horizon)] = {
+            "expected": len(contexts),
+            "emitted": len(horizon_rows),
+            "resolved": int(horizon_statuses.get("resolved", 0)),
+            "censored": int(horizon_statuses.get("censored", 0)),
+            "unavailable": int(horizon_statuses.get("unavailable", 0)),
+        }
+    expected_outcomes = len(contexts) * len(parsed_horizons)
+    coverage_invariant_passed = bool(
+        len(outcomes) == expected_outcomes
+        and len(outcome_ids) == len(outcomes)
+        and all(
+            row["emitted"] == row["expected"]
+            for row in outcomes_by_horizon.values()
+        )
+    )
     resolved_values = [
         float(row["net_markout_bps"])
         for row in outcomes
@@ -607,11 +637,32 @@ def resolve_opportunity_markouts(
         "horizons": parsed_horizons,
         "horizons_bars": parsed_horizons,
         "eligible_opportunities": len(contexts),
-        "expected_outcomes": len(contexts) * len(parsed_horizons),
+        "expected_outcomes": expected_outcomes,
         "outcomes_emitted": len(outcomes),
         "duplicate_decision_rows_discarded": int(duplicate_rows),
         "eligible_rows_missing_correlation": int(missing_correlation),
         "outcome_ids_unique": len(outcome_ids) == len(outcomes),
+        "coverage": {
+            "eligible_opportunities": len(contexts),
+            "submitted_opportunities": int(submitted_opportunities),
+            "non_submitted_opportunities": int(
+                len(contexts) - submitted_opportunities
+            ),
+            "controlled_skip_opportunities": int(
+                controlled_skip_opportunities
+            ),
+            "opportunities_by_symbol": dict(
+                sorted(opportunities_by_symbol.items())
+            ),
+            "outcomes_by_horizon": outcomes_by_horizon,
+        },
+        "coverage_invariant": {
+            "name": "one_outcome_per_eligible_opportunity_horizon",
+            "passed": coverage_invariant_passed,
+            "expected_outcomes": expected_outcomes,
+            "emitted_outcomes": len(outcomes),
+            "outcome_ids_unique": len(outcome_ids) == len(outcomes),
+        },
         "label_status_counts": dict(sorted(status_counts.items())),
         "label_reason_counts": dict(sorted(reason_counts.items())),
         "mean_resolved_net_markout_bps": (
@@ -654,6 +705,7 @@ def resolve_opportunity_markouts(
         },
         "evidence_type": "shadow_counterfactual",
         "evidence_partition": "shadow",
+        "research_only": True,
         "fill_based_evidence": False,
         "promotion_eligible": False,
         "runtime_authority": False,

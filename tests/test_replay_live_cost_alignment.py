@@ -194,6 +194,91 @@ def test_insufficient_live_cost_samples_use_fallback() -> None:
     assert result["source"] == "fallback"
 
 
+def test_quote_prior_can_only_raise_research_fallback() -> None:
+    now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
+    payload = _live_cost_model(now, [])
+    payload["status"] = {"available": False, "status": "unavailable"}
+    payload["research_cost_prior"] = {
+        "evidence_type": "quote_derived_research_prior",
+        "promotion_eligible": False,
+        "promotion_authority": False,
+        "runtime_fill_authority": False,
+        "runtime_authority": False,
+        "live_money_authority": False,
+        "by_symbol_side_session_order_type_volatility": [
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "session_regime": "midday",
+                "order_type": "limit",
+                "volatility_bucket": "normal",
+                "sample_count": 2,
+                "sufficient_samples": True,
+                "p90_prior_cost_bps": 12.0,
+                "last_observed_at": now.isoformat().replace("+00:00", "Z"),
+            }
+        ],
+    }
+
+    result = resolve_live_cost_alignment(
+        payload,
+        symbol="AAPL",
+        side="buy",
+        session_bucket="midday",
+        order_type="limit",
+        volatility_bucket="normal",
+        fallback_cost_bps=7.0,
+        now=now,
+        min_samples=5,
+        max_age_seconds=600,
+    )
+
+    assert result["fallback_cost_bps"] == pytest.approx(7.0)
+    assert result["effective_fallback_cost_bps"] == pytest.approx(12.0)
+    assert result["resolved_cost_bps"] == pytest.approx(12.0)
+    assert result["source"] == "quote_derived_research_prior"
+    assert result["research_cost_prior"]["applied"] is True
+    assert result["research_cost_prior"]["promotion_eligible"] is False
+    assert result["sample_count"] == 0
+    assert result["alignment"] == "missing_live_cost_bucket"
+
+
+def test_quote_prior_with_authority_is_rejected() -> None:
+    now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
+    payload = _live_cost_model(now, [])
+    payload["research_cost_prior"] = {
+        "evidence_type": "quote_derived_research_prior",
+        "promotion_eligible": True,
+        "by_symbol_side_session_order_type_volatility": [
+            {
+                "symbol": "AAPL",
+                "side": "buy",
+                "session_regime": "midday",
+                "order_type": "limit",
+                "volatility_bucket": "normal",
+                "sample_count": 10,
+                "sufficient_samples": True,
+                "p90_prior_cost_bps": 99.0,
+            }
+        ],
+    }
+
+    result = resolve_live_cost_alignment(
+        payload,
+        symbol="AAPL",
+        side="buy",
+        session_bucket="midday",
+        order_type="limit",
+        volatility_bucket="normal",
+        fallback_cost_bps=7.0,
+        now=now,
+    )
+
+    assert result["resolved_cost_bps"] == pytest.approx(7.0)
+    assert result["source"] == "fallback"
+    assert result["research_cost_prior"]["available"] is False
+
+
 def test_batch_alignment_reports_optimism_pessimism_and_stale_counts() -> None:
     now = datetime(2026, 5, 8, 15, 0, tzinfo=UTC)
     payload = _live_cost_model(

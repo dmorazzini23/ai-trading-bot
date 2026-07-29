@@ -16,6 +16,7 @@ from ai_trading.analytics.opportunity_markouts import (
     DEFAULT_MARKOUT_HORIZONS,
     resolve_opportunity_markouts,
 )
+from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
@@ -388,10 +389,9 @@ def main(argv: list[str] | None = None) -> int:
     output_path = args.output_json or _default_output_path(str(args.report_date))
     latest_path = args.latest_json or output_path.with_name("opportunity_markouts_latest.json")
     for path in {output_path, latest_path}:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        atomic_write_text(
+            path,
             json.dumps(report, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
         )
     sys.stdout.write(
         json.dumps(

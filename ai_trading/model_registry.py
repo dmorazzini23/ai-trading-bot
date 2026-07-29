@@ -12,6 +12,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import hashlib
 import inspect
 import json
+import math
 import re
 import time
 import uuid
@@ -424,6 +425,7 @@ class ModelRegistry:
         dataset_fingerprint: str | None = None,
         tags: Sequence[str] | None = None,
         activate: bool = True,
+        candidate_identity: str | None = None,
     ) -> str:
         registered_at = datetime.now(UTC)
         dataset_fp = str(dataset_fingerprint) if dataset_fingerprint is not None else None
@@ -437,6 +439,22 @@ class ModelRegistry:
         else:
             payload, artifact_format = self._serialise_inline_model(model)
             model_hash = hashlib.sha256(payload).hexdigest()
+        identity = str(candidate_identity or "").strip() or None
+        if identity is not None:
+            existing = self.find_by_candidate_identity(identity)
+            if existing is not None:
+                existing_id, existing_info = existing
+                same_contract = bool(
+                    existing_info.get("strategy") == strategy
+                    and existing_info.get("model_type") == model_type
+                    and existing_info.get("model_hash") == model_hash
+                    and existing_info.get("dataset_fingerprint") == dataset_fp
+                )
+                if not same_contract:
+                    raise ValueError(
+                        "candidate identity collision with a different model contract"
+                    )
+                return existing_id
 
         for _attempt in range(64):
             model_id = self._generate_model_id(strategy, model_type, model_hash, registered_at)
@@ -481,6 +499,7 @@ class ModelRegistry:
             "active": bool(activate),
             "model_hash": model_hash,
             "dataset_fingerprint": dataset_fp,
+            "candidate_identity": identity,
             "tags": tags_list,
             "metadata": sanitised_metadata,
             "governance": governance,
@@ -495,6 +514,232 @@ class ModelRegistry:
         self._write_metadata_file(model_dir, metadata_payload)
         self._save_index()
         return model_id
+
+    def find_by_candidate_identity(
+        self,
+        candidate_identity: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Return the existing candidate with an exact stable identity."""
+
+        identity = str(candidate_identity or "").strip()
+        if not identity:
+            return None
+        for model_id, info in self.model_index.items():
+            if str(info.get("candidate_identity") or "").strip() == identity:
+                return model_id, dict(info)
+        return None
+
+    @staticmethod
+    def build_candidate_identity(
+        *,
+        strategy: str,
+        model_type: str,
+        model_hash: str,
+        dataset_fingerprint: str,
+        experiment_signature: str,
+        comparable_scope: Mapping[str, Any],
+    ) -> str:
+        """Build the stable identity used for idempotent shadow registration."""
+
+        payload = {
+            "strategy": str(strategy),
+            "model_type": str(model_type),
+            "model_hash": str(model_hash),
+            "dataset_fingerprint": str(dataset_fingerprint),
+            "experiment_signature": str(experiment_signature),
+            "comparable_scope": ModelRegistry._convert_metadata_value(comparable_scope),
+        }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def register_shadow_candidate(
+        self,
+        model: Any,
+        strategy: str,
+        model_type: str,
+        *,
+        dataset_fingerprint: str,
+        experiment_signature: str,
+        comparable_scope: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        metadata: Mapping[str, Any] | None = None,
+        tags: Sequence[str] | None = None,
+    ) -> tuple[str, bool]:
+        """Idempotently register a governed research candidate as shadow-only.
+
+        The returned boolean is true only when a new registry entry was
+        created. This API has no production or deployment authority.
+        """
+
+        external_path = self._extract_external_artifact_path(model, metadata)
+        if external_path:
+            model_hash = self._artifact_hash_for_path(external_path)
+        else:
+            payload, _artifact_format = self._serialise_inline_model(model)
+            model_hash = hashlib.sha256(payload).hexdigest()
+        identity = self.build_candidate_identity(
+            strategy=strategy,
+            model_type=model_type,
+            model_hash=model_hash,
+            dataset_fingerprint=dataset_fingerprint,
+            experiment_signature=experiment_signature,
+            comparable_scope=comparable_scope,
+        )
+        existing = self.find_by_candidate_identity(identity)
+        if existing is not None:
+            return existing[0], False
+        candidate_metadata = dict(metadata or {})
+        candidate_metadata.update(
+            {
+                "experiment_signature": str(experiment_signature),
+                "comparable_scope": dict(comparable_scope),
+                "metrics": dict(metrics),
+                "promotion_authority": False,
+                "runtime_authority": False,
+                "live_money_authority": False,
+            }
+        )
+        model_id = self.register_model(
+            model,
+            strategy,
+            model_type,
+            metadata=candidate_metadata,
+            dataset_fingerprint=dataset_fingerprint,
+            tags=[*(tags or ()), "shadow_candidate"],
+            activate=True,
+            candidate_identity=identity,
+        )
+        self.update_governance_status(
+            model_id,
+            "shadow",
+            extra={
+                "candidate_identity": identity,
+                "experiment_signature": str(experiment_signature),
+                "comparable_scope": dict(comparable_scope),
+                "metrics": dict(metrics),
+                "promotion_authority": False,
+                "runtime_authority": False,
+                "live_money_authority": False,
+                "manual_production_promotion_required": True,
+            },
+        )
+        return model_id, True
+
+    @staticmethod
+    def _candidate_metric(info: Mapping[str, Any], metric: str) -> float | None:
+        governance = info.get("governance")
+        metrics = governance.get("metrics") if isinstance(governance, Mapping) else None
+        if not isinstance(metrics, Mapping):
+            metadata = info.get("metadata")
+            metrics = metadata.get("metrics") if isinstance(metadata, Mapping) else None
+        if not isinstance(metrics, Mapping):
+            return None
+        try:
+            value = float(metrics.get(metric))
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
+    @staticmethod
+    def _candidate_scope(info: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        governance = info.get("governance")
+        scope = (
+            governance.get("comparable_scope")
+            if isinstance(governance, Mapping)
+            else None
+        )
+        if not isinstance(scope, Mapping):
+            metadata = info.get("metadata")
+            scope = (
+                metadata.get("comparable_scope")
+                if isinstance(metadata, Mapping)
+                else None
+            )
+        return scope if isinstance(scope, Mapping) else None
+
+    def retire_dominated_shadow_candidates(
+        self,
+        replacement_model_id: str,
+        *,
+        primary_metric: str,
+        stale_before: datetime,
+        min_improvement: float = 0.0,
+    ) -> list[str]:
+        """Retire stale, comparable shadows strictly dominated by a replacement.
+
+        Artifacts are retained. Production entries are never eligible.
+        """
+
+        replacement = self.model_index.get(replacement_model_id)
+        if replacement is None:
+            raise ValueError(f"Model {replacement_model_id} not found")
+        replacement_governance = replacement.get("governance")
+        replacement_status = (
+            str(replacement_governance.get("status") or "")
+            if isinstance(replacement_governance, Mapping)
+            else ""
+        )
+        if replacement_status != "shadow":
+            raise ValueError("replacement model must have shadow governance status")
+        replacement_metric = self._candidate_metric(replacement, primary_metric)
+        replacement_scope = self._candidate_scope(replacement)
+        if replacement_metric is None:
+            raise ValueError("replacement primary metric missing")
+        if replacement_scope is None:
+            raise ValueError("replacement comparable scope missing")
+        cutoff = stale_before.astimezone(UTC)
+        retired: list[str] = []
+        for model_id, info in list(self.model_index.items()):
+            if model_id == replacement_model_id:
+                continue
+            governance = info.get("governance")
+            status = (
+                str(governance.get("status") or "")
+                if isinstance(governance, Mapping)
+                else ""
+            )
+            if status != "shadow":
+                continue
+            registered_raw = str(info.get("registered_at") or "").strip()
+            try:
+                registered_at = datetime.fromisoformat(
+                    registered_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if registered_at.tzinfo is None:
+                registered_at = registered_at.replace(tzinfo=UTC)
+            if registered_at.astimezone(UTC) > cutoff:
+                continue
+            if dict(self._candidate_scope(info) or {}) != dict(replacement_scope):
+                continue
+            candidate_metric = self._candidate_metric(info, primary_metric)
+            if candidate_metric is None:
+                continue
+            improvement = replacement_metric - candidate_metric
+            if not improvement > max(0.0, float(min_improvement)):
+                continue
+            self.model_index[model_id]["active"] = False
+            self.update_governance_status(
+                model_id,
+                "retired",
+                extra={
+                    "retired_reason": "stale_strictly_dominated_shadow",
+                    "replacement_model_id": replacement_model_id,
+                    "primary_metric": str(primary_metric),
+                    "candidate_metric": float(candidate_metric),
+                    "replacement_metric": float(replacement_metric),
+                    "improvement": float(improvement),
+                    "artifact_retained": True,
+                    "promotion_authority": False,
+                },
+            )
+            retired.append(model_id)
+        return retired
 
     def latest_for(self, strategy: str, model_type: str) -> str | None:
         candidates = [
@@ -657,6 +902,7 @@ class ModelRegistry:
 
         info["governance"] = governance
         meta_payload["governance"] = governance
+        meta_payload["active"] = bool(info.get("active", True))
         self.model_index[model_id] = info
         self._write_metadata_file(model_dir, meta_payload)
         self._save_index()

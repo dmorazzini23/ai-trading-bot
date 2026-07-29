@@ -116,6 +116,43 @@ def test_shadow_markouts_cover_every_horizon_once_and_stay_non_promotional() -> 
     assert report["duplicate_decision_rows_discarded"] == 1
     assert report["outcomes_emitted"] == 3
     assert report["outcome_ids_unique"] is True
+    assert report["coverage"] == {
+        "eligible_opportunities": 1,
+        "submitted_opportunities": 0,
+        "non_submitted_opportunities": 1,
+        "controlled_skip_opportunities": 1,
+        "opportunities_by_symbol": {"AAPL": 1},
+        "outcomes_by_horizon": {
+            "1": {
+                "expected": 1,
+                "emitted": 1,
+                "resolved": 1,
+                "censored": 0,
+                "unavailable": 0,
+            },
+            "3": {
+                "expected": 1,
+                "emitted": 1,
+                "resolved": 1,
+                "censored": 0,
+                "unavailable": 0,
+            },
+            "5": {
+                "expected": 1,
+                "emitted": 1,
+                "resolved": 1,
+                "censored": 0,
+                "unavailable": 0,
+            },
+        },
+    }
+    assert report["coverage_invariant"] == {
+        "name": "one_outcome_per_eligible_opportunity_horizon",
+        "passed": True,
+        "expected_outcomes": 3,
+        "emitted_outcomes": 3,
+        "outcome_ids_unique": True,
+    }
     assert report["horizons"] == [1, 3, 5]
     assert report["horizons_bars"] == [1, 3, 5]
     assert report["label_status_counts"] == {"resolved": 3}
@@ -136,6 +173,7 @@ def test_shadow_markouts_cover_every_horizon_once_and_stay_non_promotional() -> 
     assert outcomes[0]["controlled_skip"] is True
     assert outcomes[0]["submitted"] is False
     assert all(row["evidence_partition"] == "shadow" for row in outcomes)
+    assert all(row["research_only"] is True for row in outcomes)
     assert all(row["fill_based_evidence"] is False for row in outcomes)
     assert all(row["promotion_eligible"] is False for row in outcomes)
     assert all(row["runtime_authority"] is False for row in outcomes)
@@ -269,6 +307,7 @@ def test_opportunity_markout_cli_writes_dated_and_latest_artifacts(tmp_path) -> 
 
     assert rc == 0
     assert output.read_bytes() == latest.read_bytes()
+    assert not list(tmp_path.glob(".*.tmp"))
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["report_date"] == "2026-07-21"
     assert payload["decision_rows_scanned"] == 1

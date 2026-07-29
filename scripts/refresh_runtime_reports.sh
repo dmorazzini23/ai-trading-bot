@@ -102,19 +102,35 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
     snapshot = _load_latest_replay_governance_snapshot()
     age_hours = snapshot.get("age_hours")
     max_age_hours = float(snapshot.get("max_age_hours") or 96.0)
+    source_data_available = bool(snapshot.get("source_data_available"))
+    source_data_fresh = snapshot.get("source_data_fresh") is True
+    source_data = snapshot.get("source_data")
+    source_age_hours = (
+        source_data.get("age_hours")
+        if isinstance(source_data, dict)
+        else None
+    )
     refresh_fraction = max(
         0.1,
         min(_env_float("AI_TRADING_RUNTIME_REPORT_REPLAY_REFRESH_FRACTION", 0.75), 0.95),
     )
+    refresh_reason = "missing"
     should_refresh = not bool(snapshot.get("available"))
     if age_hours is not None:
-        should_refresh = should_refresh or float(age_hours) >= max_age_hours * refresh_fraction
+        artifact_stale = float(age_hours) >= max_age_hours * refresh_fraction
+        if artifact_stale:
+            refresh_reason = "artifact_stale"
+        should_refresh = should_refresh or artifact_stale
+    if source_data_available and not source_data_fresh:
+        should_refresh = True
+        refresh_reason = "source_data_stale"
     if not should_refresh:
         return {
             "attempted": False,
             "reason": "fresh",
             "age_hours": age_hours,
             "max_age_hours": max_age_hours,
+            "source_age_hours": source_age_hours,
         }
     lock_path = runtime_root / "replay_governance_refresh.lock"
     try:
@@ -124,8 +140,10 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
         return {
             "attempted": False,
             "reason": "refresh_already_running",
+            "refresh_trigger": refresh_reason,
             "age_hours": age_hours,
             "max_age_hours": max_age_hours,
+            "source_age_hours": source_age_hours,
         }
     try:
         os.write(lock_fd, f"{datetime.now().isoformat()}\n".encode("utf-8"))
@@ -141,16 +159,20 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
         return {
             "attempted": True,
             "reason": "refreshed",
+            "refresh_trigger": refresh_reason,
             "previous_age_hours": age_hours,
             "max_age_hours": max_age_hours,
+            "previous_source_age_hours": source_age_hours,
             "replay": payload.get("replay", {}),
         }
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         failure = {
             "attempted": True,
             "reason": "refresh_failed",
+            "refresh_trigger": refresh_reason,
             "previous_age_hours": age_hours,
             "max_age_hours": max_age_hours,
+            "previous_source_age_hours": source_age_hours,
             "error": str(exc),
         }
         (runtime_root / "replay_governance_refresh_latest.json").write_text(

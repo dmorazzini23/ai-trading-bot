@@ -459,11 +459,18 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert persisted["config"]["edge_weight_quantile"] == pytest.approx(0.90)
     assert persisted["dataset"]["mean_label_score_bps"] != persisted["dataset"]["mean_round_trip_cost_bps"]
     assert persisted["thresholds_by_regime"]
-    assert persisted["threshold_scope"] == "walk_forward_oos_only"
+    assert persisted["threshold_scope"] == "nested_inner_validation_only"
     assert persisted["threshold_sweep_by_regime"]
     assert persisted["dataset"]["symbols"] == 2
     assert persisted["dataset"]["train_rows"] > 0
     assert persisted["dataset"]["validation_rows"] > 0
+    assert persisted["dataset"]["development_rows"] > 0
+    assert persisted["dataset"]["holdout_rows"] > 0
+    assert persisted["dataset"]["development_holdout"][
+        "unique_timestamp_non_overlap"
+    ] is True
+    assert persisted["holdout_evaluation"]["consumed"] is True
+    assert persisted["holdout_evaluation"]["selection_authority"] is False
     assert persisted["validation"]["rows"] == persisted["dataset"]["validation_rows"]
     assert persisted["threshold_sweep"]
     assert persisted["recommendation"] == "evaluate_candidate_in_shadow_with_governed_offline_replay"
@@ -477,7 +484,12 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert len(walk_forward["folds"]) == 5
     for fold in walk_forward["folds"]:
         assert fold["fit_scope"] == "fold_train_only"
-        assert fold["threshold_scope"] == "fold_train_only"
+        assert fold["threshold_scope"] == "nested_inner_validation_only"
+        assert fold["threshold_selection"]["scope"] == (
+            "nested_inner_validation_only"
+        )
+        assert fold["threshold_selection"]["fit_rows"] > 0
+        assert fold["threshold_selection"]["selection_rows"] > 0
         assert fold["fit_objective"] == "bounded_post_cost_edge_weighted_binary"
         assert fold["sample_weight"]["rows"] == fold["train_rows"]
         assert fold["sample_weight"]["partition_local"] is True
@@ -494,10 +506,12 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
         assert "ranking_separation" in fold
         assert fold["by_market_regime"]
     assert walk_forward["final_fit"]["scope"] == (
-        "full_governed_dataset_after_oos_evaluation"
+        "development_partition_only_after_oos_evaluation"
     )
-    assert walk_forward["final_fit"]["rows"] == persisted["dataset"]["rows"]
-    assert walk_forward["final_fit"]["threshold_scope"] == "walk_forward_oos_only"
+    assert walk_forward["final_fit"]["rows"] == persisted["dataset"]["development_rows"]
+    assert walk_forward["final_fit"]["threshold_scope"] == (
+        "nested_inner_validation_only"
+    )
     aggregate = walk_forward["aggregate"]
     assert aggregate["governance_status"] == "shadow"
     assert aggregate["promotion_authority"] is False
@@ -789,23 +803,30 @@ def test_fold_local_walk_forward_never_fits_on_oos_rows(monkeypatch) -> None:
         cost_model_identity={"version": "test_cost_v1"},
     )
 
-    assert len(trackers) == 6
+    assert len(trackers) == 11
     assert len(report["folds"]) == 5
-    for fold, tracker in zip(report["folds"], trackers[:5], strict=True):
-        assert len(tracker.predict_indexes) == 2
-        test_index = tracker.predict_indexes[1]
-        assert set(tracker.fit_index).isdisjoint(test_index)
-        assert max(tracker.fit_index) < min(test_index)
-        assert tracker.fit_weights is not None
-        assert len(tracker.fit_weights) == len(tracker.fit_index)
-        assert fold["sample_weight"]["rows"] == len(tracker.fit_index)
+    for fold_index, fold in enumerate(report["folds"]):
+        selector = trackers[fold_index * 2]
+        outer = trackers[(fold_index * 2) + 1]
+        assert len(selector.predict_indexes) == 1
+        assert set(selector.fit_index).isdisjoint(selector.predict_indexes[0])
+        assert max(selector.fit_index) < min(selector.predict_indexes[0])
+        assert len(outer.predict_indexes) == 1
+        test_index = outer.predict_indexes[0]
+        assert set(outer.fit_index).isdisjoint(test_index)
+        assert max(outer.fit_index) < min(test_index)
+        assert outer.fit_weights is not None
+        assert len(outer.fit_weights) == len(outer.fit_index)
+        assert fold["sample_weight"]["rows"] == len(outer.fit_index)
         assert fold["sample_weight"]["partition_local"] is True
     final_model = trackers[-1]
     assert final_model.fit_index == list(dataset.index)
     assert final_model.predict_indexes == []
-    assert report["final_fit"]["scope"] == "full_governed_dataset_after_oos_evaluation"
+    assert report["final_fit"]["scope"] == (
+        "development_partition_only_after_oos_evaluation"
+    )
     assert report["final_fit"]["rows"] == len(dataset)
-    assert report["final_fit"]["threshold_scope"] == "walk_forward_oos_only"
+    assert report["final_fit"]["threshold_scope"] == "nested_inner_validation_only"
     assert report["final_fit"]["promotion_authority"] is False
 
 

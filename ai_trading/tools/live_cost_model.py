@@ -430,6 +430,44 @@ def _summary_row(
     return row
 
 
+def _quote_prior_summary_row(
+    *,
+    key: tuple[str, ...],
+    observations: list[dict[str, Any]],
+    min_samples: int,
+    slippage_buffer_bps: float,
+    fee_buffer_bps: float,
+) -> dict[str, Any]:
+    """Summarize a conservative quote-derived cost prior.
+
+    The full quoted spread is used instead of half-spread so this research-only
+    prior cannot make sparse-fill training assumptions more optimistic.
+    """
+
+    row = _summary_row(
+        key=key,
+        observations=observations,
+        min_samples=min_samples,
+    )
+    spread_values = [
+        float(value)
+        for obs in observations
+        if (value := _to_float(obs.get("spread_bps"))) is not None
+    ]
+    prior_values = [
+        max(float(value), 0.0)
+        + max(float(slippage_buffer_bps), 0.0)
+        + max(float(fee_buffer_bps), 0.0)
+        for value in spread_values
+    ]
+    row["mean_prior_cost_bps"] = _mean(prior_values)
+    row["p90_prior_cost_bps"] = _percentile(prior_values, 0.90)
+    row["evidence_type"] = "quote_derived_research_prior"
+    row["promotion_eligible"] = False
+    row["runtime_fill_authority"] = False
+    return row
+
+
 def _cost_breaches(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -462,8 +500,12 @@ def build_live_cost_model(
     events_path: Path,
     fill_events_path: Path | None = None,
     tca_path: Path | None = None,
+    quote_events_path: Path | None = None,
     window_minutes: int = 390,
     min_samples: int = 5,
+    prior_min_samples: int = 1,
+    prior_slippage_buffer_bps: float = 2.0,
+    prior_fee_buffer_bps: float = 0.0,
     max_p90_total_cost_bps: float | None = None,
     max_future_skew_seconds: float = 300.0,
     now: datetime | None = None,
@@ -497,6 +539,25 @@ def build_live_cost_model(
                 rows_used += 1
         stats["rows_used"] = rows_used
         source_diagnostics[source] = stats
+
+    quote_observations: list[dict[str, Any]] = []
+    if quote_events_path is not None:
+        quote_rows, quote_stats = _read_jsonl_with_diagnostics(quote_events_path)
+        quote_rows_used = 0
+        for row in quote_rows:
+            observation = _observation_from_row(
+                row,
+                source="quote_events",
+                cutoff=cutoff,
+                generated_at=generated_at,
+                max_future_skew_seconds=max_future_skew_seconds,
+            )
+            if observation is None or _to_float(observation.get("spread_bps")) is None:
+                continue
+            quote_observations.append(observation)
+            quote_rows_used += 1
+        quote_stats["rows_used"] = quote_rows_used
+        source_diagnostics["quote_events"] = quote_stats
 
     buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     detailed_buckets: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -540,6 +601,49 @@ def build_live_cost_model(
         sufficient_rows,
         max_p90_total_cost_bps=max_p90_total_cost_bps,
     )
+    quote_buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    quote_detailed_buckets: dict[
+        tuple[str, str, str, str, str], list[dict[str, Any]]
+    ] = defaultdict(list)
+    for obs in quote_observations:
+        quote_buckets[
+            (
+                str(obs["symbol"]),
+                str(obs["side"]),
+                str(obs["session_regime"]),
+            )
+        ].append(obs)
+        quote_detailed_buckets[
+            (
+                str(obs["symbol"]),
+                str(obs["side"]),
+                str(obs["session_regime"]),
+                str(obs.get("order_type") or "unknown"),
+                str(obs.get("volatility_bucket") or "unknown"),
+            )
+        ].append(obs)
+    prior_rows = [
+        _quote_prior_summary_row(
+            key=key,
+            observations=rows,
+            min_samples=max(1, int(prior_min_samples)),
+            slippage_buffer_bps=max(0.0, float(prior_slippage_buffer_bps)),
+            fee_buffer_bps=max(0.0, float(prior_fee_buffer_bps)),
+        )
+        for key, rows in sorted(quote_buckets.items())
+        if rows
+    ]
+    detailed_prior_rows = [
+        _quote_prior_summary_row(
+            key=key,
+            observations=rows,
+            min_samples=max(1, int(prior_min_samples)),
+            slippage_buffer_bps=max(0.0, float(prior_slippage_buffer_bps)),
+            fee_buffer_bps=max(0.0, float(prior_fee_buffer_bps)),
+        )
+        for key, rows in sorted(quote_detailed_buckets.items())
+        if rows
+    ]
     return {
         "schema_version": "1.0.0",
         "artifact_type": "live_cost_model",
@@ -580,6 +684,22 @@ def build_live_cost_model(
                 else None
             ),
         },
+        "research_cost_prior": {
+            "evidence_type": "quote_derived_research_prior",
+            "available": bool(prior_rows),
+            "promotion_eligible": False,
+            "promotion_authority": False,
+            "runtime_fill_authority": False,
+            "runtime_authority": False,
+            "live_money_authority": False,
+            "method": "p90_full_quoted_spread_plus_nonnegative_buffers",
+            "sample_count": int(len(quote_observations)),
+            "min_samples": int(max(1, prior_min_samples)),
+            "slippage_buffer_bps": float(max(0.0, prior_slippage_buffer_bps)),
+            "fee_buffer_bps": float(max(0.0, prior_fee_buffer_bps)),
+            "by_symbol_side_session": prior_rows,
+            "by_symbol_side_session_order_type_volatility": detailed_prior_rows,
+        },
         "by_symbol_side_session": by_symbol_side_session,
         "by_symbol_side_session_order_type_volatility": (
             by_symbol_side_session_order_type_volatility
@@ -588,6 +708,9 @@ def build_live_cost_model(
             "execution_quality_events": str(events_path),
             "fill_events": str(fill_events_path) if fill_events_path is not None else None,
             "tca_records": str(tca_path) if tca_path is not None else None,
+            "quote_events": (
+                str(quote_events_path) if quote_events_path is not None else None
+            ),
         },
     }
 
@@ -609,9 +732,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--fill-events-jsonl", default="", help="Fill events JSONL path.")
     parser.add_argument("--tca-jsonl", default="", help="TCA records JSONL path.")
+    parser.add_argument(
+        "--quote-events-jsonl",
+        default="",
+        help="Optional decision/quote telemetry used only for a research cost prior.",
+    )
     parser.add_argument("--output-json", default="", help="Output live cost model JSON path.")
     parser.add_argument("--window-minutes", type=int, default=390)
     parser.add_argument("--min-samples", type=int, default=5)
+    parser.add_argument("--prior-min-samples", type=int, default=1)
+    parser.add_argument("--prior-slippage-buffer-bps", type=float, default=2.0)
+    parser.add_argument("--prior-fee-buffer-bps", type=float, default=0.0)
     parser.add_argument(
         "--max-p90-total-cost-bps",
         type=float,
@@ -638,6 +769,11 @@ def main(argv: list[str] | None = None) -> int:
         if str(args.tca_jsonl or "").strip()
         else _default_path("AI_TRADING_TCA_RECORDS_PATH", "runtime/tca_records.jsonl")
     )
+    quote_events_path = (
+        Path(args.quote_events_jsonl).expanduser()
+        if str(args.quote_events_jsonl or "").strip()
+        else None
+    )
     output_path = (
         Path(args.output_json).expanduser()
         if str(args.output_json or "").strip()
@@ -650,8 +786,12 @@ def main(argv: list[str] | None = None) -> int:
         events_path=events_path,
         fill_events_path=fill_events_path,
         tca_path=tca_path,
+        quote_events_path=quote_events_path,
         window_minutes=max(1, int(args.window_minutes)),
         min_samples=max(1, int(args.min_samples)),
+        prior_min_samples=max(1, int(args.prior_min_samples)),
+        prior_slippage_buffer_bps=max(0.0, float(args.prior_slippage_buffer_bps)),
+        prior_fee_buffer_bps=max(0.0, float(args.prior_fee_buffer_bps)),
         max_p90_total_cost_bps=(
             float(args.max_p90_total_cost_bps)
             if args.max_p90_total_cost_bps is not None

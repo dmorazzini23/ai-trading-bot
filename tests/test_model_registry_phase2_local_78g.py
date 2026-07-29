@@ -140,3 +140,123 @@ def test_model_registry_rich_edge_errors_and_filters(tmp_path: Path) -> None:
     Path(registry.model_index[active_id]["artifact_path"]).unlink()
     with pytest.raises(FileNotFoundError, match="Artifact"):
         registry.load_model(active_id)
+
+
+def test_shadow_candidate_registration_is_idempotent_and_retirement_is_safe(
+    tmp_path: Path,
+) -> None:
+    registry = mr.ModelRegistry(tmp_path / "registry")
+    scope = {
+        "horizon_bars": 1,
+        "label_objective": "net_markout",
+        "evaluation_window": "2026-h1",
+    }
+    candidate_args = {
+        "strategy": "replay_aligned_markout",
+        "model_type": "logistic",
+        "dataset_fingerprint": "dataset-1",
+        "experiment_signature": "experiment-1",
+        "comparable_scope": scope,
+        "metrics": {"net_edge_bps": 2.0},
+    }
+
+    first_id, first_created = registry.register_shadow_candidate(
+        {"weights": [1.0]},
+        **candidate_args,
+    )
+    repeated_id, repeated_created = registry.register_shadow_candidate(
+        {"weights": [1.0]},
+        **candidate_args,
+    )
+
+    assert first_created is True
+    assert repeated_created is False
+    assert repeated_id == first_id
+    assert len(registry.model_index) == 1
+    governance = registry.model_index[first_id]["governance"]
+    assert governance["status"] == "shadow"
+    assert governance["promotion_authority"] is False
+    assert governance["runtime_authority"] is False
+    assert governance["live_money_authority"] is False
+    assert governance["manual_production_promotion_required"] is True
+
+    dominated_id, _ = registry.register_shadow_candidate(
+        {"weights": [0.5]},
+        strategy="replay_aligned_markout",
+        model_type="logistic",
+        dataset_fingerprint="dataset-0",
+        experiment_signature="experiment-0",
+        comparable_scope=scope,
+        metrics={"net_edge_bps": 1.0},
+    )
+    equal_id, _ = registry.register_shadow_candidate(
+        {"weights": [0.7]},
+        strategy="replay_aligned_markout",
+        model_type="logistic",
+        dataset_fingerprint="dataset-equal",
+        experiment_signature="experiment-equal",
+        comparable_scope=scope,
+        metrics={"net_edge_bps": 2.0},
+    )
+    other_scope_id, _ = registry.register_shadow_candidate(
+        {"weights": [0.1]},
+        strategy="replay_aligned_markout",
+        model_type="logistic",
+        dataset_fingerprint="dataset-other",
+        experiment_signature="experiment-other",
+        comparable_scope=scope | {"horizon_bars": 5},
+        metrics={"net_edge_bps": -5.0},
+    )
+    production_id, _ = registry.register_shadow_candidate(
+        {"weights": [-1.0]},
+        strategy="replay_aligned_markout",
+        model_type="logistic",
+        dataset_fingerprint="dataset-production",
+        experiment_signature="experiment-production",
+        comparable_scope=scope,
+        metrics={"net_edge_bps": -10.0},
+    )
+    registry.update_governance_status(production_id, "production")
+    dominated_artifact = Path(registry.model_index[dominated_id]["artifact_path"])
+
+    retired = registry.retire_dominated_shadow_candidates(
+        first_id,
+        primary_metric="net_edge_bps",
+        stale_before=datetime.now(UTC),
+    )
+
+    assert retired == [dominated_id]
+    assert registry.model_index[dominated_id]["active"] is False
+    retired_governance = registry.model_index[dominated_id]["governance"]
+    assert retired_governance["status"] == "retired"
+    assert retired_governance["replacement_model_id"] == first_id
+    assert retired_governance["artifact_retained"] is True
+    assert dominated_artifact.is_file()
+    assert registry.model_index[equal_id]["governance"]["status"] == "shadow"
+    assert registry.model_index[other_scope_id]["governance"]["status"] == "shadow"
+    assert registry.model_index[production_id]["governance"]["status"] == "production"
+
+    reloaded = mr.ModelRegistry(tmp_path / "registry")
+    assert reloaded.model_index[dominated_id]["governance"]["status"] == "retired"
+    assert reloaded.model_index[dominated_id]["active"] is False
+
+
+def test_candidate_identity_collision_fails_closed(tmp_path: Path) -> None:
+    registry = mr.ModelRegistry(tmp_path / "registry")
+    identity = "stable-candidate"
+    registry.register_model(
+        {"weights": [1.0]},
+        "alpha",
+        "json",
+        dataset_fingerprint="dataset",
+        candidate_identity=identity,
+    )
+
+    with pytest.raises(ValueError, match="candidate identity collision"):
+        registry.register_model(
+            {"weights": [2.0]},
+            "alpha",
+            "json",
+            dataset_fingerprint="dataset",
+            candidate_identity=identity,
+        )

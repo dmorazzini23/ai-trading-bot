@@ -191,3 +191,80 @@ def test_training_accelerator_manifest_hash_changes_when_file_content_changes(tm
     second_file = second["inputs"]["data_dir"]["files"][0]
     assert first_file["sha256"] != second_file["sha256"]
     assert training_accelerator._stable_signature(first) != training_accelerator._stable_signature(second)  # noqa: SLF001
+
+
+def test_training_accelerator_manifest_tracks_code_and_feature_contract(
+    tmp_path: Path,
+) -> None:
+    args = argparse.Namespace(
+        data_dir=tmp_path / "bars",
+        live_cost_model_json=None,
+        output_dir=tmp_path / "out",
+    )
+    config = {"training_cache_dir": str(tmp_path / "cache")}
+
+    manifest = training_accelerator._accelerator_manifest(args, config)  # noqa: SLF001
+
+    assert manifest["feature_contract"]["columns"]
+    assert len(manifest["feature_contract"]["contract_sha256"]) == 64
+    assert manifest["implementation"]["training_accelerator"]["sha256"]
+    assert manifest["implementation"]["replay_aligned_trainer"]["sha256"]
+    assert manifest["implementation"]["model_selection"]["sha256"]
+
+
+def test_force_retrain_repeats_shadow_holdout_and_records_ledger(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls = {"count": 0}
+
+    def _fake_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+        calls["count"] += 1
+        output = Path(args.output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "multi_horizon_research_report.json").write_text(
+            "{}", encoding="utf-8"
+        )
+        return {
+            "ranked_candidates": [{"model_path": "m"}],
+            "lead_candidates": [{"model_path": "m"}],
+            "holdout_confirmation": {
+                "status": "passed",
+                "consumed": True,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
+        }
+
+    monkeypatch.setattr(
+        training_accelerator, "run_multi_horizon_pipeline", _fake_pipeline
+    )
+    data_dir = tmp_path / "bars"
+    data_dir.mkdir()
+    args = training_accelerator._build_parser().parse_args(  # noqa: SLF001
+        [
+            "--data-dir",
+            str(data_dir),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--training-cache-dir",
+            str(tmp_path / "cache"),
+        ]
+    )
+
+    first = training_accelerator.run_training_accelerator(args)
+    second = training_accelerator.run_training_accelerator(args)
+    args.force_retrain = True
+    forced = training_accelerator.run_training_accelerator(args)
+
+    assert first["status"] == "complete"
+    assert second["status"] == "skipped_unchanged"
+    assert forced["status"] == "complete"
+    assert forced["cache"]["forced_repeat_holdout"] is True
+    assert calls["count"] == 2
+    ledger = json.loads(
+        Path(forced["holdout_ledger_path"]).read_text(encoding="utf-8")
+    )
+    assert ledger["forced_repeat"] is True
+    assert ledger["promotion_authority"] is False
+    assert ledger["live_money_authority"] is False

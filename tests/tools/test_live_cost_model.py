@@ -197,6 +197,70 @@ def test_live_cost_model_reports_cost_threshold_breaches(tmp_path: Path) -> None
     assert breach["threshold_bps"] == 25.0
 
 
+def test_quote_prior_is_separate_and_cannot_satisfy_live_readiness(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 1, 15, 30, tzinfo=UTC)
+    events_path = tmp_path / "execution_quality_events.jsonl"
+    quote_path = tmp_path / "decision_records.jsonl"
+    _write_jsonl(events_path, [])
+    _write_jsonl(
+        quote_path,
+        [
+            {
+                "ts": now.isoformat(),
+                "symbol": "AAPL",
+                "side": "buy",
+                "order_type": "limit",
+                "spread_bps": 6.0,
+                "quote_age_ms": 20.0,
+            },
+            {
+                "ts": (now - timedelta(minutes=1)).isoformat(),
+                "symbol": "AAPL",
+                "side": "buy",
+                "order_type": "limit",
+                "spread_bps": 10.0,
+                "quote_age_ms": 30.0,
+            },
+        ],
+    )
+
+    report = live_cost_model.build_live_cost_model(
+        events_path=events_path,
+        quote_events_path=quote_path,
+        window_minutes=60,
+        min_samples=5,
+        prior_min_samples=2,
+        prior_slippage_buffer_bps=2.0,
+        prior_fee_buffer_bps=1.0,
+        now=now,
+    )
+
+    assert report["status"] == {
+        "available": False,
+        "status": "unavailable",
+        "mode": "observe",
+        "breach_count": 0,
+        "reason": "no_recent_samples",
+    }
+    assert report["window"]["sample_count"] == 0
+    assert report["by_symbol_side_session"] == []
+    prior = report["research_cost_prior"]
+    assert prior["available"] is True
+    assert prior["evidence_type"] == "quote_derived_research_prior"
+    assert prior["promotion_eligible"] is False
+    assert prior["promotion_authority"] is False
+    assert prior["runtime_fill_authority"] is False
+    assert prior["runtime_authority"] is False
+    assert prior["live_money_authority"] is False
+    assert prior["sample_count"] == 2
+    row = prior["by_symbol_side_session_order_type_volatility"][0]
+    assert row["p90_prior_cost_bps"] == 12.6
+    assert row["sample_count"] == 2
+    assert row["sufficient_samples"] is True
+
+
 def test_live_cost_model_cli_writes_artifact(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     events_path = tmp_path / "execution_quality_events.jsonl"

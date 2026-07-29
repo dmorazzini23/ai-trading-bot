@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -33,6 +34,15 @@ def _parse_objectives(value: str) -> list[str]:
     if not raw:
         return ["net_markout"]
     return [token.strip() for token in raw.split(",") if token.strip()]
+
+
+def _parse_text_list(value: str, *, default: tuple[str, ...]) -> list[str]:
+    parsed = [
+        token.strip().lower()
+        for token in str(value or "").split(",")
+        if token.strip()
+    ]
+    return sorted(set(parsed)) or list(default)
 
 
 def _slim_replay_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -143,119 +153,246 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     model_dir.mkdir(exist_ok=True)
     horizons = _parse_int_list(str(args.horizons), default=(1, 3, 5, 15))
     objectives = _parse_objectives(str(args.label_objectives))
+    model_types = _parse_text_list(
+        str(getattr(args, "model_types", "") or ""),
+        default=(str(args.model_type),),
+    )
+    allowed_model_types = {"logistic", "random_forest", "hist_gradient"}
+    invalid_model_types = sorted(set(model_types) - allowed_model_types)
+    if invalid_model_types:
+        raise ValueError(
+            "Unsupported model types: " + ",".join(invalid_model_types)
+        )
+    candidate_specs = [
+        (model_type, objective, horizon)
+        for model_type in model_types
+        for objective in objectives
+        for horizon in horizons
+    ]
+    max_candidates = max(
+        1, int(getattr(args, "max_candidates", len(candidate_specs)) or len(candidate_specs))
+    )
+    candidate_specs = candidate_specs[:max_candidates]
     candidates: list[dict[str, Any]] = []
     replay_errors: list[dict[str, Any]] = []
-    for objective in objectives:
-        for horizon in horizons:
-            model_name = f"{args.model_prefix}_h{horizon}_{objective}"
-            record: dict[str, Any] = {
-                "horizon_bars": int(horizon),
-                "label_objective": objective,
-                "model_name": model_name,
-                "governance_status": "shadow",
-                "promotion_authority": False,
-                "live_money_authority": False,
+    total_folds = max(2, int(getattr(args, "walk_forward_folds", 5) or 5))
+    screening_folds = max(
+        1,
+        min(
+            total_folds,
+            int(getattr(args, "screening_folds", min(2, total_folds)) or 1),
+        ),
+    )
+    halving_eta = max(2, int(getattr(args, "halving_eta", 2) or 2))
+
+    def _training_args(
+        record: Mapping[str, Any],
+        *,
+        evaluation_folds: int,
+        evaluate_holdout: bool,
+    ) -> argparse.Namespace:
+        return argparse.Namespace(
+            data_dir=Path(args.data_dir),
+            symbols=str(args.symbols or ""),
+            timestamp_col=str(args.timestamp_col),
+            output_dir=model_dir,
+            model_name=str(record["model_name"]),
+            model_type=str(record["model_type"]),
+            horizon_bars=int(record["horizon_bars"]),
+            label_objective=str(record["label_objective"]),
+            fee_bps=float(args.fee_bps),
+            slippage_bps=float(args.slippage_bps),
+            live_cost_model_json=getattr(args, "live_cost_model_json", None),
+            use_live_cost_model=getattr(args, "use_live_cost_model", None),
+            min_net_edge_bps=float(args.min_net_edge_bps),
+            train_fraction=float(args.train_fraction),
+            walk_forward_folds=total_folds,
+            evaluation_folds=evaluation_folds,
+            walk_forward_embargo_bars=int(
+                getattr(args, "walk_forward_embargo_bars", 1) or 1
+            ),
+            walk_forward_embargo_percent=float(
+                getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0
+            ),
+            walk_forward_min_trades=int(
+                getattr(args, "walk_forward_min_trades", 250) or 250
+            ),
+            walk_forward_min_profitable_fold_ratio=float(
+                getattr(args, "walk_forward_min_profitable_fold_ratio", 0.60)
+                or 0.60
+            ),
+            walk_forward_min_mean_net_edge_bps=float(
+                getattr(args, "walk_forward_min_mean_net_edge_bps", 0.0) or 0.0
+            ),
+            walk_forward_min_ranking_separation_bps=float(
+                getattr(args, "walk_forward_min_ranking_separation_bps", 0.0)
+                or 0.0
+            ),
+            edge_global_threshold=getattr(args, "edge_global_threshold", None),
+            nested_validation_fraction=float(
+                getattr(args, "nested_validation_fraction", 0.20) or 0.20
+            ),
+            nested_min_support=int(
+                getattr(args, "nested_min_support", 25) or 25
+            ),
+            evaluate_holdout=evaluate_holdout,
+            random_state=int(args.random_state)
+            + int(record["horizon_bars"])
+            + sum(ord(char) for char in str(record["model_type"])),
+            training_cache=getattr(args, "training_cache", None),
+            training_cache_dir=getattr(args, "training_cache_dir", None),
+        )
+
+    def _merge_training_report(
+        record: dict[str, Any],
+        training_report: Mapping[str, Any],
+    ) -> None:
+        record.update(
+            {
+                "model_path": training_report.get("model_path"),
+                "manifest_path": training_report.get("manifest_path"),
+                "training_report_path": training_report.get("report_path"),
+                "dataset": training_report.get("dataset"),
+                "validation": training_report.get("validation"),
+                "threshold_sweep": list(training_report.get("threshold_sweep", []))[:10],
+                "threshold_sweep_by_regime": training_report.get(
+                    "threshold_sweep_by_regime"
+                ),
+                "walk_forward": training_report.get("walk_forward"),
+                "market_regime_policy": training_report.get("market_regime_policy"),
+                "feature_importance": list(
+                    training_report.get("feature_importance", [])
+                )[:25],
+                "live_cost_model": training_report.get("live_cost_model"),
+                "holdout_evaluation": training_report.get("holdout_evaluation"),
             }
-            try:
-                training_report = train_replay_aligned_model(
-                    argparse.Namespace(
-                        data_dir=Path(args.data_dir),
-                        symbols=str(args.symbols or ""),
-                        timestamp_col=str(args.timestamp_col),
-                        output_dir=model_dir,
-                        model_name=model_name,
-                        model_type=str(args.model_type),
-                        horizon_bars=int(horizon),
-                        label_objective=objective,
-                        fee_bps=float(args.fee_bps),
-                        slippage_bps=float(args.slippage_bps),
-                        live_cost_model_json=getattr(args, "live_cost_model_json", None),
-                        use_live_cost_model=getattr(args, "use_live_cost_model", None),
-                        min_net_edge_bps=float(args.min_net_edge_bps),
-                        train_fraction=float(args.train_fraction),
-                        walk_forward_folds=int(
-                            getattr(args, "walk_forward_folds", 5) or 5
-                        ),
-                        walk_forward_embargo_bars=int(
-                            getattr(args, "walk_forward_embargo_bars", 1) or 1
-                        ),
-                        walk_forward_embargo_percent=float(
-                            getattr(args, "walk_forward_embargo_percent", 0.0) or 0.0
-                        ),
-                        walk_forward_min_trades=int(
-                            getattr(args, "walk_forward_min_trades", 250) or 250
-                        ),
-                        walk_forward_min_profitable_fold_ratio=float(
-                            getattr(
-                                args,
-                                "walk_forward_min_profitable_fold_ratio",
-                                0.60,
-                            )
-                            or 0.60
-                        ),
-                        walk_forward_min_mean_net_edge_bps=float(
-                            getattr(
-                                args,
-                                "walk_forward_min_mean_net_edge_bps",
-                                0.0,
-                            )
-                            or 0.0
-                        ),
-                        walk_forward_min_ranking_separation_bps=float(
-                            getattr(
-                                args,
-                                "walk_forward_min_ranking_separation_bps",
-                                0.0,
-                            )
-                            or 0.0
-                        ),
-                        edge_global_threshold=getattr(args, "edge_global_threshold", None),
-                        random_state=int(args.random_state) + int(horizon),
-                        training_cache=getattr(args, "training_cache", None),
-                        training_cache_dir=getattr(args, "training_cache_dir", None),
-                    )
+        )
+
+    multiple_families = len(model_types) > 1
+    for model_type, objective, horizon in candidate_specs:
+        family_suffix = f"_{model_type}" if multiple_families else ""
+        record: dict[str, Any] = {
+            "horizon_bars": int(horizon),
+            "label_objective": objective,
+            "model_type": model_type,
+            "model_name": f"{args.model_prefix}_h{horizon}_{objective}{family_suffix}",
+            "governance_status": "shadow",
+            "promotion_authority": False,
+            "live_money_authority": False,
+            "replay_status": "pending_selection",
+        }
+        try:
+            screening_report = train_replay_aligned_model(
+                _training_args(
+                    record,
+                    evaluation_folds=screening_folds,
+                    evaluate_holdout=False,
                 )
-                model_path = str(training_report["model_path"])
-                record.update(
-                    {
-                        "model_path": model_path,
-                        "manifest_path": training_report.get("manifest_path"),
-                        "training_report_path": training_report.get("report_path"),
-                        "dataset": training_report.get("dataset"),
-                        "validation": training_report.get("validation"),
-                        "threshold_sweep": training_report.get("threshold_sweep", [])[:10],
-                        "threshold_sweep_by_regime": training_report.get("threshold_sweep_by_regime"),
-                        "walk_forward": training_report.get("walk_forward"),
-                        "market_regime_policy": training_report.get(
-                            "market_regime_policy"
-                        ),
-                        "feature_importance": training_report.get("feature_importance", [])[:25],
-                        "live_cost_model": training_report.get("live_cost_model"),
-                        "replay_status": "pending_selection",
-                    }
-                )
-            except (OSError, ValueError, RuntimeError, TypeError) as exc:
-                record["error"] = {"type": type(exc).__name__, "message": str(exc)}
-            candidates.append(record)
-    valid_trained = [record for record in candidates if "error" not in record]
-    max_replay_candidates = int(getattr(args, "max_replay_candidates", 0) or 0)
-    if max_replay_candidates <= 0:
-        replay_selected = list(valid_trained)
-    else:
-        replay_selected = sorted(
-            valid_trained,
-            key=_candidate_training_rank_key,
-            reverse=True,
-        )[:max(1, max_replay_candidates)]
-    selected_ids = {
-        (int(record.get("horizon_bars", 0) or 0), str(record.get("label_objective") or ""))
-        for record in replay_selected
-    }
-    for record in valid_trained:
-        record_id = (int(record.get("horizon_bars", 0) or 0), str(record.get("label_objective") or ""))
-        if record_id not in selected_ids:
+            )
+            _merge_training_report(record, screening_report)
+            record["screening"] = {
+                "status": "complete",
+                "evaluation_folds": screening_folds,
+                "walk_forward": screening_report.get("walk_forward"),
+            }
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            record["error"] = {"type": type(exc).__name__, "message": str(exc)}
+            record["screening"] = {"status": "error"}
+        candidates.append(record)
+
+    screened = [record for record in candidates if "error" not in record]
+    survivor_count = max(1, int(math.ceil(len(screened) / halving_eta)))
+    survivors = sorted(
+        screened,
+        key=_candidate_training_rank_key,
+        reverse=True,
+    )[:survivor_count]
+    survivor_names = {str(record["model_name"]) for record in survivors}
+    for record in candidates:
+        if str(record["model_name"]) not in survivor_names and "error" not in record:
+            record["halving_status"] = "eliminated_after_screening"
             record["replay_status"] = "skipped_successive_halving"
-            continue
+    full_evaluated: list[dict[str, Any]] = []
+    for record in survivors:
+        try:
+            full_report = train_replay_aligned_model(
+                _training_args(
+                    record,
+                    evaluation_folds=total_folds,
+                    evaluate_holdout=False,
+                )
+            )
+            _merge_training_report(record, full_report)
+            record["halving_status"] = "full_evaluation_complete"
+            record["full_evaluation_folds"] = total_folds
+            full_evaluated.append(record)
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            record["full_evaluation_error"] = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+            record["halving_status"] = "full_evaluation_error"
+
+    development_ranked = sorted(
+        full_evaluated,
+        key=_candidate_training_rank_key,
+        reverse=True,
+    )
+    winner = development_ranked[0] if development_ranked else None
+    holdout_confirmation: dict[str, Any] = {
+        "status": "not_run",
+        "winner_model_name": None,
+        "fallback_attempted": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+    if winner is not None:
+        holdout_confirmation["winner_model_name"] = winner["model_name"]
+        try:
+            confirmation_report = train_replay_aligned_model(
+                _training_args(
+                    winner,
+                    evaluation_folds=total_folds,
+                    evaluate_holdout=True,
+                )
+            )
+            _merge_training_report(winner, confirmation_report)
+            holdout_payload = confirmation_report.get("holdout_evaluation")
+            metrics = (
+                holdout_payload.get("metrics", {})
+                if isinstance(holdout_payload, Mapping)
+                else {}
+            )
+            holdout_passed = bool(
+                isinstance(holdout_payload, Mapping)
+                and holdout_payload.get("consumed") is True
+                and int(metrics.get("trades", 0) or 0) > 0
+                and float(metrics.get("mean_post_cost_net_edge_bps") or 0.0) > 0.0
+            )
+            holdout_confirmation.update(
+                {
+                    "status": "passed" if holdout_passed else "failed",
+                    "consumed": True,
+                    "metrics": dict(metrics),
+                }
+            )
+            winner["holdout_confirmation_status"] = holdout_confirmation["status"]
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            holdout_confirmation.update(
+                {
+                    "status": "error",
+                    "consumed": True,
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                }
+            )
+            winner["holdout_confirmation_status"] = "error"
+
+    replay_selected = [winner] if winner is not None else []
+    for record in replay_selected:
+        record_id = (
+            int(record.get("horizon_bars", 0) or 0),
+            str(record.get("label_objective") or ""),
+        )
         model_path = str(record.get("model_path") or "")
         model_name = str(record.get("model_name") or f"candidate_h{record_id[0]}_{record_id[1]}")
         replay_path = output_dir / f"{model_name}_replay.json"
@@ -306,15 +443,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "replay": _slim_replay_summary(replay_payload),
             }
         )
-    ranked = sorted(
-        [
-            record
-            for record in candidates
-            if "error" not in record and str(record.get("replay_status") or "") == "complete"
-        ],
-        key=_candidate_rank_key,
-        reverse=True,
-    )
+    ranked = list(development_ranked)
+    valid_trained = list(screened)
+    max_replay_candidates = int(getattr(args, "max_replay_candidates", 0) or 0)
     report = {
         "schema_version": "2.0.0",
         "artifact_type": "multi_horizon_research_report",
@@ -324,6 +455,8 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "symbols": str(args.symbols or ""),
             "horizons": horizons,
             "label_objectives": objectives,
+            "model_types": model_types,
+            "max_candidates": max_candidates,
             "lead_horizon_bars": int(args.lead_horizon_bars),
             "live_cost_model_json": (
                 str(args.live_cost_model_json) if args.live_cost_model_json else None
@@ -356,15 +489,12 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         },
         "candidates": candidates,
         "replay_selection": {
-            "strategy": "successive_halving_top_n" if max_replay_candidates > 0 else "all_candidates",
+            "strategy": "one_winner_after_successive_halving",
             "max_replay_candidates": max_replay_candidates,
             "trained_candidate_count": len(valid_trained),
-            "replayed_candidate_count": len(
-                [
-                    record
-                    for record in valid_trained
-                    if str(record.get("replay_status") or "") == "complete"
-                ]
+            "replayed_candidate_count": int(
+                winner is not None
+                and str(winner.get("replay_status") or "") == "complete"
             ),
             "skipped_candidate_count": len(
                 [
@@ -375,11 +505,27 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "errors": replay_errors,
         },
+        "successive_halving": {
+            "strategy": "fixed_outer_fold_budget",
+            "screening_folds": screening_folds,
+            "full_evaluation_folds": total_folds,
+            "eta": halving_eta,
+            "screened_candidate_count": len(screened),
+            "survivor_count": len(survivors),
+            "fully_evaluated_count": len(full_evaluated),
+            "eliminated_model_names": sorted(
+                str(record["model_name"])
+                for record in candidates
+                if record.get("halving_status") == "eliminated_after_screening"
+            ),
+        },
+        "holdout_confirmation": holdout_confirmation,
         "ranked_candidates": ranked,
         "lead_candidates": [
             record
-            for record in ranked
+            for record in candidates
             if int(record.get("horizon_bars", 0)) == int(args.lead_horizon_bars)
+            and "error" not in record
         ],
         "one_bar_challengers": [
             record for record in candidates if int(record.get("horizon_bars", 0)) == 1
@@ -388,9 +534,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "promotion_authority": False,
         "live_money_authority": False,
         "recommendation": (
-            "evaluate_ranked_candidates_in_shadow_only"
-            if ranked
-            else "no_valid_candidates"
+            "shadow_winner_holdout_confirmed"
+            if holdout_confirmation.get("status") == "passed"
+            else "no_confirmed_candidate"
         ),
     }
     output_path = output_dir / "multi_horizon_research_report.json"
@@ -418,6 +564,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lead-horizon-bars", type=int, default=15)
     parser.add_argument("--model-prefix", type=str, default="replay_aligned")
     parser.add_argument("--model-type", choices=("logistic", "random_forest", "hist_gradient"), default="logistic")
+    parser.add_argument(
+        "--model-types",
+        type=str,
+        default="",
+        help="Optional comma-separated model-family grid; --model-type remains the fallback.",
+    )
+    parser.add_argument("--max-candidates", type=int, default=24)
+    parser.add_argument("--screening-folds", type=int, default=2)
+    parser.add_argument("--halving-eta", type=int, default=2)
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
@@ -427,6 +582,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--walk-forward-folds", type=int, default=5)
     parser.add_argument("--walk-forward-embargo-bars", type=int, default=1)
     parser.add_argument("--walk-forward-embargo-percent", type=float, default=0.0)
+    parser.add_argument("--nested-validation-fraction", type=float, default=0.20)
+    parser.add_argument("--nested-min-support", type=int, default=25)
     parser.add_argument("--walk-forward-min-trades", type=int, default=250)
     parser.add_argument(
         "--walk-forward-min-profitable-fold-ratio", type=float, default=0.60

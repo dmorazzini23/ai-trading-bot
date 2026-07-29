@@ -183,6 +183,87 @@ def _matching_live_cost_rows(
     return base_matches, "by_symbol_side_session"
 
 
+def _quote_prior_resolution(
+    live_cost_model: Mapping[str, Any],
+    *,
+    symbol: str,
+    side: str,
+    session_bucket: str,
+    order_type: str,
+    volatility_bucket: str,
+    fallback_cost_bps: float,
+    now: datetime,
+    max_age_seconds: float,
+) -> dict[str, Any]:
+    prior = live_cost_model.get("research_cost_prior")
+    fallback = max(0.0, float(fallback_cost_bps))
+    unavailable = {
+        "available": False,
+        "applied": False,
+        "cost_bps": None,
+        "resolved_fallback_cost_bps": fallback,
+        "source": "fallback",
+    }
+    if not isinstance(prior, Mapping):
+        return unavailable
+    if str(prior.get("evidence_type") or "") != "quote_derived_research_prior":
+        return unavailable
+    if any(
+        bool(prior.get(key))
+        for key in (
+            "promotion_eligible",
+            "promotion_authority",
+            "runtime_fill_authority",
+            "runtime_authority",
+            "live_money_authority",
+        )
+    ):
+        return unavailable
+    matches, bucket_source = _matching_live_cost_rows(
+        prior,
+        symbol=symbol,
+        side=side,
+        session_bucket=session_bucket,
+        order_type=order_type,
+        volatility_bucket=volatility_bucket,
+    )
+    ranked: list[tuple[float, Mapping[str, Any]]] = []
+    for row in matches:
+        value = _finite_float(row.get("p90_prior_cost_bps"))
+        if value is None or value < 0.0 or not bool(row.get("sufficient_samples", False)):
+            continue
+        ranked.append((float(value), row))
+    if not ranked:
+        return unavailable | {"available": bool(matches), "bucket_source": bucket_source}
+    cost_bps, row = max(ranked, key=lambda item: item[0])
+    freshness = _freshness(
+        model=live_cost_model,
+        row=row,
+        now=now,
+        max_age_seconds=max_age_seconds,
+    )
+    if not bool(freshness["fresh"]):
+        return unavailable | {
+            "available": True,
+            "cost_bps": float(cost_bps),
+            "bucket_source": bucket_source,
+            "freshness": freshness,
+        }
+    resolved = max(fallback, float(cost_bps))
+    applied = resolved > fallback
+    return {
+        "available": True,
+        "applied": bool(applied),
+        "cost_bps": float(cost_bps),
+        "resolved_fallback_cost_bps": float(resolved),
+        "source": "quote_derived_research_prior" if applied else "fallback",
+        "bucket_source": bucket_source,
+        "freshness": freshness,
+        "promotion_eligible": False,
+        "runtime_fill_authority": False,
+    }
+
+
 def resolve_live_cost_alignment(
     live_cost_model: Mapping[str, Any] | None,
     *,
@@ -242,6 +323,19 @@ def resolve_live_cost_alignment(
             ),
         }
 
+    quote_prior = _quote_prior_resolution(
+        live_cost_model,
+        symbol=symbol_token,
+        side=side_token,
+        session_bucket=session_token,
+        order_type=order_type_token,
+        volatility_bucket=volatility_token,
+        fallback_cost_bps=fallback,
+        now=now_utc,
+        max_age_seconds=max_age_seconds,
+    )
+    effective_fallback = float(quote_prior["resolved_fallback_cost_bps"])
+    fallback_source = str(quote_prior["source"])
     matches, bucket_source = _matching_live_cost_rows(
         live_cost_model,
         symbol=symbol_token,
@@ -253,13 +347,15 @@ def resolve_live_cost_alignment(
     if not matches:
         return {
             "key": key,
-            "resolved_cost_bps": float(fallback),
+            "resolved_cost_bps": effective_fallback,
             "fallback_cost_bps": float(fallback),
+            "effective_fallback_cost_bps": effective_fallback,
+            "research_cost_prior": quote_prior,
             "observed_live_cost_bps": None,
             "observed_live_cost_metric": None,
             "sample_count": 0,
             "min_samples": int(min_sample_count),
-            "source": "fallback",
+            "source": fallback_source,
             "bucket_source": bucket_source,
             "alignment": "missing_live_cost_bucket",
             "optimistic": False,
@@ -282,13 +378,15 @@ def resolve_live_cost_alignment(
         row = matches[0]
         return {
             "key": key,
-            "resolved_cost_bps": float(fallback),
+            "resolved_cost_bps": effective_fallback,
             "fallback_cost_bps": float(fallback),
+            "effective_fallback_cost_bps": effective_fallback,
+            "research_cost_prior": quote_prior,
             "observed_live_cost_bps": None,
             "observed_live_cost_metric": None,
             "sample_count": _finite_int(row.get("sample_count")),
             "min_samples": int(min_sample_count),
-            "source": "fallback",
+            "source": fallback_source,
             "bucket_source": bucket_source,
             "alignment": "missing_live_cost_metric",
             "optimistic": False,
@@ -314,29 +412,31 @@ def resolve_live_cost_alignment(
     )
     if not bool(freshness["fresh"]):
         alignment = "stale"
-        resolved = fallback
-        source = "fallback"
+        resolved = effective_fallback
+        source = fallback_source
     elif not sufficient:
         alignment = "insufficient_samples"
-        resolved = fallback
-        source = "fallback"
-    elif observed < fallback:
+        resolved = effective_fallback
+        source = fallback_source
+    elif observed < effective_fallback:
         alignment = "optimism"
-        resolved = fallback
-        source = "fallback"
-    elif observed > fallback:
+        resolved = effective_fallback
+        source = fallback_source
+    elif observed > effective_fallback:
         alignment = "pessimism"
         resolved = observed
         source = "live"
     else:
         alignment = "neutral"
-        resolved = fallback
-        source = "fallback"
+        resolved = effective_fallback
+        source = fallback_source
 
     return {
         "key": key,
         "resolved_cost_bps": float(resolved),
         "fallback_cost_bps": float(fallback),
+        "effective_fallback_cost_bps": effective_fallback,
+        "research_cost_prior": quote_prior,
         "observed_live_cost_bps": float(observed),
         "observed_live_cost_metric": metric,
         "sample_count": int(sample_count),

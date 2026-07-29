@@ -61,6 +61,14 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "huggingface_cache_materialization_plan" in step_names
     assert "upward_trajectory_report" in step_names
     assert "evidence_manifest" in payload
+    live_cost = next(
+        step
+        for step in payload["steps"]
+        if step["name"] == "live_cost_model"
+    )
+    live_cost_command = [str(token) for token in live_cost["command"]]
+    assert "--quote-events-jsonl" in live_cost_command
+    assert live_cost_command[live_cost_command.index("--prior-min-samples") + 1] == "25"
     calibration = next(
         step
         for step in payload["steps"]  # type: ignore[index]
@@ -238,11 +246,19 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     payload = _read(report_root / "daily" / "upward-test" / "research_automation_report.json")
     step_names = [str(step["name"]) for step in payload["steps"]]  # type: ignore[index]
     assert "upward_trajectory_report" in step_names
+    assert "research_candidate_registry_daily" in step_names
+    assert "model_registry_post_training_evaluation" in step_names
+    assert step_names.index("training_accelerator_daily") < step_names.index(
+        "research_candidate_registry_daily"
+    ) < step_names.index("model_registry_post_training_evaluation")
     assert step_names.index("regime_champion_models") < step_names.index("upward_trajectory_report")
     assert step_names.index("upward_trajectory_report") < step_names.index("operator_control_plane")
     assert step_names.index("opportunity_markouts") < step_names.index(
         "daily_research_pipeline"
     )
+    assert step_names.index("opportunity_markouts") < step_names.index(
+        "shadow_markout_replay_input"
+    ) < step_names.index("daily_research_pipeline")
     upward = next(step for step in payload["steps"] if step["name"] == "upward_trajectory_report")  # type: ignore[index]
     assert upward["metadata"]["research_only"] is True
     assert upward["metadata"]["live_money_authority"] is False
@@ -262,6 +278,15 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     assert markouts["metadata"]["after_hours_only"] is True
     assert markouts["metadata"]["fill_based_evidence"] is False
     assert markouts["metadata"]["promotion_eligible"] is False
+    shadow_replay = next(
+        step
+        for step in payload["steps"]
+        if step["name"] == "shadow_markout_replay_input"
+    )
+    assert shadow_replay["metadata"]["research_only"] is True
+    assert shadow_replay["metadata"]["fill_based_evidence"] is False
+    assert shadow_replay["metadata"]["promotion_authority"] is False
+    assert "--latest-manifest-json" in shadow_replay["command"]
 
 
 def test_daily_plan_adds_governed_historical_workflow_after_hours(
@@ -307,6 +332,7 @@ def test_daily_plan_adds_governed_historical_workflow_after_hours(
     assert (
         names.index("historical_training_backfill")
         < names.index("opportunity_markouts")
+        < names.index("shadow_markout_replay_input")
         < names.index("historical_replay_aligned_training")
         < names.index("daily_research_pipeline")
     )
@@ -339,6 +365,18 @@ def test_daily_plan_adds_governed_historical_workflow_after_hours(
     assert markouts["metadata"]["horizons_bars"] == [1, 3, 5]
     assert markouts["metadata"]["promotion_eligible"] is False
     assert markouts["metadata"]["runtime_authority"] is False
+    shadow_replay = next(
+        step for step in steps if step["name"] == "shadow_markout_replay_input"
+    )
+    shadow_command = [str(token) for token in shadow_replay["command"]]
+    assert shadow_command[shadow_command.index("--markout-report-json") + 1] == str(
+        report_root
+        / "daily"
+        / "historical-test"
+        / "opportunity_markouts.json"
+    )
+    assert shadow_replay["metadata"]["evidence_partition"] == "shadow"
+    assert shadow_replay["metadata"]["promotion_eligible"] is False
 
     training = next(
         step
@@ -387,6 +425,7 @@ def test_daily_plan_does_not_backfill_during_market_hours(
     assert "historical_training_backfill" not in names
     assert "historical_replay_aligned_training" not in names
     assert "opportunity_markouts" not in names
+    assert "shadow_markout_replay_input" not in names
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

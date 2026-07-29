@@ -97,7 +97,7 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
         )
     )
 
-    assert len(calls) == 4
+    assert len(calls) == 7
     assert all(call[0] in {1, 15} for call in calls)
     assert report["ranked_candidates"][0]["horizon_bars"] == 1
     assert report["config"]["training_cache"] is True
@@ -105,6 +105,10 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
     assert report["replay_config"]["max_hold_bars"] == 45
     assert report["lead_candidates"]
     assert report["one_bar_challengers"]
+    assert report["successive_halving"]["screened_candidate_count"] == 4
+    assert report["successive_halving"]["survivor_count"] == 2
+    assert report["successive_halving"]["fully_evaluated_count"] == 2
+    assert report["holdout_confirmation"]["fallback_attempted"] is False
     assert report["governance_status"] == "shadow"
     assert report["promotion_authority"] is False
     assert report["live_money_authority"] is False
@@ -201,11 +205,114 @@ def test_multi_horizon_pipeline_replays_only_top_training_candidates(
         )
     )
 
-    assert len(replayed) == 2
+    assert len(replayed) == 1
     assert any("_h1_" in path for path in replayed)
-    assert any("_h3_" in path for path in replayed)
     assert not any("_h15_" in path for path in replayed)
-    assert report["replay_selection"]["strategy"] == "successive_halving_top_n"
+    assert report["replay_selection"]["strategy"] == (
+        "one_winner_after_successive_halving"
+    )
     assert report["replay_selection"]["trained_candidate_count"] == 4
-    assert report["replay_selection"]["replayed_candidate_count"] == 2
+    assert report["replay_selection"]["replayed_candidate_count"] == 1
     assert report["replay_selection"]["skipped_candidate_count"] == 2
+
+
+def test_multi_family_halving_confirms_exactly_one_winner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, int, bool]] = []
+
+    def _fake_train(args: argparse.Namespace) -> dict[str, Any]:
+        calls.append(
+            (
+                str(args.model_type),
+                int(args.evaluation_folds),
+                bool(args.evaluate_holdout),
+            )
+        )
+        model_path = tmp_path / f"{args.model_name}.joblib"
+        model_path.write_text("model", encoding="utf-8")
+        edge = 8.0 if args.model_type == "hist_gradient" else 4.0
+        return {
+            "model_path": str(model_path),
+            "manifest_path": f"{model_path}.manifest.json",
+            "report_path": str(tmp_path / f"{args.model_name}.json"),
+            "dataset": {"rows": 500, "symbols": 2},
+            "validation": {"roc_auc": 0.6},
+            "threshold_sweep": [],
+            "walk_forward": {
+                "aggregate": {
+                    "evidence_qualified": True,
+                    "mean_post_cost_net_edge_bps": edge,
+                    "profitable_fold_ratio": 0.8,
+                    "stability_score": 0.8,
+                    "trades": 300,
+                }
+            },
+            "holdout_evaluation": (
+                {
+                    "consumed": True,
+                    "metrics": {
+                        "trades": 40,
+                        "mean_post_cost_net_edge_bps": 2.0,
+                    },
+                }
+                if args.evaluate_holdout
+                else {"consumed": False}
+            ),
+        }
+
+    monkeypatch.setattr(pipeline, "train_replay_aligned_model", _fake_train)
+    monkeypatch.setattr(
+        pipeline,
+        "run_replay",
+        lambda _argv: {"aggregate": {"total_trades": 10, "expectancy_bps": 1.0}},
+    )
+
+    report = pipeline.run_multi_horizon_pipeline(
+        argparse.Namespace(
+            data_dir=tmp_path,
+            symbols="AAPL,MSFT",
+            timestamp_col="timestamp",
+            output_dir=tmp_path / "out",
+            horizons="1",
+            label_objectives="risk_adjusted",
+            lead_horizon_bars=1,
+            model_prefix="candidate",
+            model_type="logistic",
+            model_types="logistic,hist_gradient",
+            max_candidates=2,
+            screening_folds=2,
+            halving_eta=2,
+            walk_forward_folds=5,
+            nested_validation_fraction=0.20,
+            nested_min_support=25,
+            fee_bps=0.0,
+            slippage_bps=0.0,
+            live_cost_model_json=None,
+            use_live_cost_model=None,
+            min_net_edge_bps=0.0,
+            train_fraction=0.7,
+            edge_global_threshold=0.66,
+            random_state=1,
+            training_cache=True,
+            training_cache_dir=tmp_path / "cache",
+            replay_confidence_threshold=0.66,
+            replay_entry_score_threshold=0.05,
+            min_hold_bars=3,
+            max_hold_bars=45,
+            stop_loss_bps=20.0,
+            take_profit_bps=50.0,
+            trailing_stop_bps=15.0,
+            max_replay_candidates=1,
+        )
+    )
+
+    assert sorted(call[0] for call in calls[:2]) == ["hist_gradient", "logistic"]
+    assert all(call[1:] == (2, False) for call in calls[:2])
+    assert calls[2][1:] == (5, False)
+    assert calls[3][1:] == (5, True)
+    assert sum(call[2] for call in calls) == 1
+    assert report["holdout_confirmation"]["status"] == "passed"
+    assert report["holdout_confirmation"]["fallback_attempted"] is False
+    assert report["config"]["model_types"] == ["hist_gradient", "logistic"]

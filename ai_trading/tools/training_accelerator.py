@@ -14,6 +14,9 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.multi_horizon_research_pipeline import run_multi_horizon_pipeline
+from ai_trading.tools.train_replay_aligned_model import (
+    REPLAY_ALIGNED_FEATURE_COLUMNS,
+)
 
 
 def _env_text(name: str, default: str = "") -> str:
@@ -107,6 +110,24 @@ def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> d
         "schema_version": "1.0.0",
         "artifact_type": "training_accelerator_input_manifest",
         "config": config,
+        "feature_contract": {
+            "columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
+            "contract_sha256": _stable_signature(
+                {"columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS)}
+            ),
+        },
+        "implementation": {
+            "training_accelerator": _path_manifest(Path(__file__)),
+            "multi_horizon_pipeline": _path_manifest(
+                Path(__file__).with_name("multi_horizon_research_pipeline.py")
+            ),
+            "replay_aligned_trainer": _path_manifest(
+                Path(__file__).with_name("train_replay_aligned_model.py")
+            ),
+            "model_selection": _path_manifest(
+                Path(__file__).parents[1] / "research" / "model_selection.py"
+            ),
+        },
         "inputs": {
             "data_dir": _path_manifest(
                 Path(args.data_dir) if args.data_dir is not None else None,
@@ -148,6 +169,19 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         "lead_horizon_bars": int(getattr(args, "lead_horizon_bars", 0) or lead),
         "model_prefix": str(getattr(args, "model_prefix", "accelerated_replay_aligned")),
         "model_type": str(args.model_type),
+        "model_types": str(getattr(args, "model_types", "") or ""),
+        "max_candidates": int(getattr(args, "max_candidates", 24) or 24),
+        "screening_folds": int(getattr(args, "screening_folds", 2) or 2),
+        "halving_eta": int(getattr(args, "halving_eta", 2) or 2),
+        "walk_forward_folds": int(
+            getattr(args, "walk_forward_folds", 5) or 5
+        ),
+        "nested_validation_fraction": float(
+            getattr(args, "nested_validation_fraction", 0.20) or 0.20
+        ),
+        "nested_min_support": int(
+            getattr(args, "nested_min_support", 25) or 25
+        ),
         "fee_bps": float(getattr(args, "fee_bps", 1.0)),
         "slippage_bps": float(getattr(args, "slippage_bps", 2.0)),
         "live_cost_model_json": (
@@ -175,6 +209,9 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     manifest_path = output_dir / "training_accelerator_input_manifest.json"
     _write_json(manifest_path, input_manifest | {"signature": input_signature})
     success_state_path = training_cache_dir / "training_accelerator_success_signature.json"
+    holdout_ledger_path = (
+        training_cache_dir / "training_accelerator_holdout_ledger.json"
+    )
     previous_state = _read_success_state(success_state_path)
     previous_signature = (
         str(previous_state.get("input_signature"))
@@ -192,18 +229,21 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     previous_report_exists = bool(previous_report_path is not None and previous_report_path.exists())
+    terminal_statuses = {"complete", "no_valid_candidates"}
+    force_retrain = bool(getattr(args, "force_retrain", False))
     cache_hit = bool(
         not args.plan_only
+        and not force_retrain
         and previous_signature == input_signature
-        and previous_status == "complete"
+        and previous_status in terminal_statuses
         and previous_report_exists
     )
     if previous_state is None:
         miss_reason = "no_success_state"
     elif previous_signature != input_signature:
         miss_reason = "signature_changed"
-    elif previous_status != "complete":
-        miss_reason = "previous_status_not_successful"
+    elif previous_status not in terminal_statuses:
+        miss_reason = "previous_status_not_terminal"
     elif not previous_report_exists:
         miss_reason = "previous_report_missing"
     else:
@@ -218,6 +258,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         "config": config,
         "input_manifest": str(manifest_path),
         "input_signature": input_signature,
+        "holdout_ledger_path": str(holdout_ledger_path),
         "cache": {
             "success_state_path": str(success_state_path),
             "hit": cache_hit,
@@ -226,6 +267,10 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             "previous_signature": previous_signature,
             "previous_status": previous_status,
             "previous_report_exists": previous_report_exists,
+            "force_retrain": force_retrain,
+            "forced_repeat_holdout": bool(
+                force_retrain and previous_signature == input_signature
+            ),
         },
         "timing": {"started_at": started_at},
     }
@@ -248,6 +293,15 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             lead_horizon_bars=int(config["lead_horizon_bars"]),
             model_prefix=str(config["model_prefix"]),
             model_type=str(config["model_type"]),
+            model_types=str(config["model_types"]),
+            max_candidates=int(config["max_candidates"]),
+            screening_folds=int(config["screening_folds"]),
+            halving_eta=int(config["halving_eta"]),
+            walk_forward_folds=int(config["walk_forward_folds"]),
+            nested_validation_fraction=float(
+                config["nested_validation_fraction"]
+            ),
+            nested_min_support=int(config["nested_min_support"]),
             fee_bps=float(config["fee_bps"]),
             slippage_bps=float(config["slippage_bps"]),
             live_cost_model_json=getattr(args, "live_cost_model_json", None),
@@ -277,12 +331,15 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         )
         report["ranked_candidate_count"] = len(pipeline_report.get("ranked_candidates", []))
         report["lead_candidate_count"] = len(pipeline_report.get("lead_candidates", []))
+        report["holdout_confirmation"] = pipeline_report.get(
+            "holdout_confirmation"
+        )
     completed_at = _artifact_timestamp()
     report["timing"]["completed_at"] = completed_at
     report["timing"]["duration_seconds"] = round(perf_counter() - started_perf, 6)
     output_path = output_dir / "training_accelerator_report.json"
     _write_json(output_path, report)
-    if report["status"] == "complete":
+    if report["status"] in terminal_statuses:
         _write_json(
             success_state_path,
             {
@@ -295,6 +352,27 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
                 "status": report["status"],
                 "ranked_candidate_count": int(report.get("ranked_candidate_count", 0)),
                 "lead_candidate_count": int(report.get("lead_candidate_count", 0)),
+                "holdout_confirmation": report.get("holdout_confirmation"),
+                "forced_repeat_holdout": bool(
+                    report.get("cache", {}).get("forced_repeat_holdout", False)
+                ),
+            },
+        )
+        _write_json(
+            holdout_ledger_path,
+            {
+                "schema_version": "1.0.0",
+                "artifact_type": "training_accelerator_holdout_ledger",
+                "generated_at": completed_at,
+                "input_signature": input_signature,
+                "report_path": str(output_path),
+                "status": report["status"],
+                "holdout_confirmation": report.get("holdout_confirmation"),
+                "forced_repeat": bool(
+                    report.get("cache", {}).get("forced_repeat_holdout", False)
+                ),
+                "promotion_authority": False,
+                "live_money_authority": False,
             },
         )
     latest = resolve_runtime_artifact_path(
@@ -325,6 +403,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lead-horizon-bars", type=int, default=lead)
     parser.add_argument("--model-prefix", default="accelerated_replay_aligned")
     parser.add_argument("--model-type", choices=("logistic", "random_forest", "hist_gradient"), default="logistic")
+    parser.add_argument("--model-types", default="")
+    parser.add_argument("--max-candidates", type=int, default=24)
+    parser.add_argument("--screening-folds", type=int, default=2)
+    parser.add_argument("--halving-eta", type=int, default=2)
+    parser.add_argument("--walk-forward-folds", type=int, default=5)
+    parser.add_argument("--nested-validation-fraction", type=float, default=0.20)
+    parser.add_argument("--nested-min-support", type=int, default=25)
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
@@ -342,6 +427,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trailing-stop-bps", type=float, default=15.0)
     parser.add_argument("--training-cache-dir", type=Path, default=None)
     parser.add_argument("--max-replay-candidates", type=int, default=replay_top_n)
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="Repeat an unchanged shadow experiment and record the repeated holdout consumption.",
+    )
     parser.add_argument("--plan-only", action="store_true")
     return parser
 
