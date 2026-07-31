@@ -34,6 +34,28 @@ def test_secret_guard_ignores_placeholders(tmp_path: Path) -> None:
     assert "no likely live secrets" in result.stdout.lower()
 
 
+def test_secret_guard_ignores_secret_name_metadata_and_masked_hf_token(
+    tmp_path: Path,
+) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / ".env.example").write_text(
+        "AI_TRADING_HF_TOKEN_SECRET_NAME=AI_TRADING_HF_TOKEN\n"
+        "HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "add", ".env.example"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = _run_guard(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "no likely live secrets" in result.stdout.lower()
+
+
 def test_secret_guard_blocks_live_like_values(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     (tmp_path / ".env.production").write_text(

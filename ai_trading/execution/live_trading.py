@@ -1139,8 +1139,14 @@ _UNSUPPORTED_STANDALONE_PROTECTIVE_ORDER_TYPES = {
 
 
 def _canonical_order_type(order_type: Any, default: str = "limit") -> str:
-    token = str(order_type if order_type not in (None, "") else default).strip().lower()
+    raw_order_type = order_type if order_type not in (None, "") else default
+    raw_order_type = getattr(raw_order_type, "value", raw_order_type)
+    if raw_order_type in (None, ""):
+        raw_order_type = default
+    token = str(raw_order_type).strip().lower()
     token = token.replace("-", "_").replace(" ", "_")
+    if "." in token:
+        token = token.rsplit(".", 1)[-1]
     if token == "stoploss":
         token = "stop"
     if token in {"trail", "trailingstop"}:
@@ -3359,6 +3365,15 @@ class ExecutionEngine:
             "broker_order_id": order_id or None,
             "client_order_id": client_order_id or None,
         }
+
+    def _paper_sampling_passive_reprice_manages_order(self, order: Any) -> bool:
+        """Return whether passive sampling policy owns this broker-open order."""
+
+        config = self._paper_sampling_passive_reprice_config()
+        if not bool(config.get("enabled", False)):
+            return False
+        context = self._paper_sampling_pending_context(order)
+        return bool(context is not None and context.get("verified", False))
 
     @staticmethod
     def _paper_sampling_reprice_session_status(

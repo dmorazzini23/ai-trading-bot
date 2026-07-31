@@ -289,6 +289,43 @@ def test_handle_pending_orders_applies_stale_sweep_before_full_cleanup(monkeypat
     assert any(record.message == "PENDING_STALE_SWEEP_APPLIED" for record in caplog.records)
 
 
+def test_stale_sweep_defers_verified_sampling_order_to_passive_reprice(monkeypatch):
+    now_dt = datetime(2026, 3, 1, 15, 0, 0, tzinfo=UTC)
+    stale_order = _order(
+        "pending_new",
+        "sampling-order",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    ownership_checks: list[Any] = []
+    execution_engine = types.SimpleNamespace(
+        _paper_sampling_passive_reprice_manages_order=lambda order: (
+            ownership_checks.append(order) or True
+        )
+    )
+    runtime = types.SimpleNamespace(state={}, execution_engine=execution_engine)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stale sweep must not cancel passive-reprice-owned orders")
+        ),
+    )
+
+    result = be._maybe_apply_pending_stale_sweep(
+        runtime=runtime,
+        pending_orders=[stale_order],
+        now_dt=now_dt,
+        now_ts=now_dt.timestamp(),
+    )
+
+    assert result is None
+    assert ownership_checks == [stale_order]
+
+
 def test_handle_pending_orders_reads_mapping_order_status_for_stale_sweep(monkeypatch, caplog):
     runtime = types.SimpleNamespace(state={})
     cancel_all_mock = MagicMock()

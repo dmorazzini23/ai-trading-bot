@@ -78,7 +78,22 @@ def maybe_apply_pending_stale_sweep(
         stale_after_s
     )
     stale_candidates: list[tuple[float, Any]] = []
+    execution_engine = getattr(runtime, "execution_engine", None)
+    passive_reprice_owns_order = getattr(
+        execution_engine,
+        "_paper_sampling_passive_reprice_manages_order",
+        None,
+    )
     for order in pending_orders:
+        if callable(passive_reprice_owns_order):
+            try:
+                if bool(passive_reprice_owns_order(order)):
+                    continue
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                be.logger.debug(
+                    "PENDING_STALE_SWEEP_OWNERSHIP_CHECK_FAILED",
+                    exc_info=True,
+                )
         status = _extract_pending_order_status(order)
         age_s = be._pending_order_broker_age_seconds(order, now_dt)
         if age_s is None:

@@ -117,6 +117,10 @@ LIVE_VALUE_PREFIXES = (
     "xoxp-",
 )
 
+NON_SECRET_METADATA_KEY_SUFFIXES = (
+    "_SECRET_NAME",
+)
+
 
 def _git_tracked_files(root: Path) -> list[str]:
     result = subprocess.run(
@@ -178,11 +182,15 @@ def _looks_placeholder(value: str) -> bool:
         return True
     if all(char in {"*", "x", "X", "-", "_"} for char in value):
         return True
+    if re.fullmatch(r"hf_[xX]{8,}", value):
+        return True
     return any(token in lowered for token in PLACEHOLDER_TOKENS)
 
 
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.upper()
+    if normalized.endswith(NON_SECRET_METADATA_KEY_SUFFIXES):
+        return False
     return normalized in SENSITIVE_KEYS or bool(SENSITIVE_KEY_RE.search(normalized))
 
 

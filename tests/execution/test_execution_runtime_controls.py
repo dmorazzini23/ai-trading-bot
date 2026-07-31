@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from alpaca.trading.enums import OrderType
 
 from ai_trading.execution import live_trading as lt
 from ai_trading.telemetry import runtime_state
@@ -856,6 +857,20 @@ def _verified_sampling_pending_entry() -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize(
+    ("raw_order_type", "expected"),
+    (
+        (OrderType.LIMIT, "limit"),
+        (OrderType.MARKET, "market"),
+    ),
+)
+def test_canonical_order_type_unwraps_alpaca_enum(
+    raw_order_type: OrderType,
+    expected: str,
+) -> None:
+    assert lt._canonical_order_type(raw_order_type) == expected
+
+
 def test_pending_policy_routes_verified_sample_to_passive_reprice_only(monkeypatch):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)
@@ -866,7 +881,7 @@ def test_pending_policy_routes_verified_sample_to_passive_reprice_only(monkeypat
         side="buy",
         qty="2",
         status="pending_new",
-        type="limit",
+        type=OrderType.LIMIT,
         limit_price="100.00",
         created_at=now_dt - timedelta(seconds=120),
     )
@@ -912,11 +927,27 @@ def test_pending_policy_routes_verified_sample_to_passive_reprice_only(monkeypat
 
 
 @pytest.mark.parametrize(
-    ("config_overrides", "entry_overrides", "expected_reason"),
+    ("config_overrides", "entry_overrides", "order_type", "expected_reason"),
     [
-        ({"execution_mode": "live", "paper": False}, {}, "sampling_reprice_not_enabled"),
-        ({}, {"correlation_id": None}, "sampling_metadata_unverified"),
-        ({"paper_sampling_passive_reprice_max_retries": 1}, {"paper_sampling_reprice_generation": 1}, "sampling_reprice_retry_limit"),
+        (
+            {"execution_mode": "live", "paper": False},
+            {},
+            OrderType.LIMIT,
+            "sampling_reprice_not_enabled",
+        ),
+        (
+            {},
+            {"correlation_id": None},
+            OrderType.LIMIT,
+            "sampling_metadata_unverified",
+        ),
+        (
+            {"paper_sampling_passive_reprice_max_retries": 1},
+            {"paper_sampling_reprice_generation": 1},
+            OrderType.LIMIT,
+            "sampling_reprice_retry_limit",
+        ),
+        ({}, {}, OrderType.MARKET, "sampling_order_not_limit"),
     ],
 )
 def test_pending_policy_cancels_sampling_order_when_reprice_is_not_safe(
@@ -924,6 +955,7 @@ def test_pending_policy_cancels_sampling_order_when_reprice_is_not_safe(
     caplog,
     config_overrides: dict[str, Any],
     entry_overrides: dict[str, Any],
+    order_type: OrderType,
     expected_reason: str,
 ):
     engine = _engine_stub()
@@ -935,7 +967,7 @@ def test_pending_policy_cancels_sampling_order_when_reprice_is_not_safe(
         side="buy",
         qty="2",
         status="pending_new",
-        type="limit",
+        type=order_type,
         limit_price="100.00",
         created_at=now_dt - timedelta(seconds=120),
     )
