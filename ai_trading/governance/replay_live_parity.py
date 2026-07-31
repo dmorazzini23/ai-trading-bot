@@ -188,6 +188,18 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         if isinstance(counterfactual_raw, Mapping)
         else {}
     )
+    counterfactual_candidate_raw = counterfactual.get("candidate")
+    counterfactual_candidate = (
+        dict(counterfactual_candidate_raw)
+        if isinstance(counterfactual_candidate_raw, Mapping)
+        else {}
+    )
+    counterfactual_required_raw = counterfactual.get("required")
+    counterfactual_required = (
+        dict(counterfactual_required_raw)
+        if isinstance(counterfactual_required_raw, Mapping)
+        else {}
+    )
     counterfactual_passed = counterfactual.get("passed") is True
     schema_version = str(payload.get("schema_version") or "").strip()
     policy_hash = str(payload.get("policy_hash") or "").strip()
@@ -226,6 +238,22 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "policy_hash": policy_hash,
         "counterfactual_available": "passed" in counterfactual,
         "counterfactual": counterfactual,
+        "counterfactual_candidate_samples": _as_int(
+            counterfactual_candidate.get("sample_count"),
+            0,
+        ),
+        "counterfactual_required_samples": _as_int(
+            counterfactual_required.get("min_samples"),
+            0,
+        ),
+        "counterfactual_candidate_net_edge_bps": _as_float(
+            counterfactual_candidate.get("net_edge_bps"),
+            0.0,
+        ),
+        "counterfactual_required_net_edge_bps": _as_float(
+            counterfactual_required.get("min_net_edge_bps"),
+            0.0,
+        ),
         "source_data_fresh": source_data.get("fresh") is True,
         "source_data_available": bool(source_data),
         "source_data": source_data,
@@ -330,6 +358,22 @@ def summarize_replay_live_parity_gate(
         counterfactual_payload = dict(replay_snapshot.get("counterfactual", {}))
         counterfactual_raw = counterfactual_payload.get("passed")
         replay_counterfactual_available = "passed" in counterfactual_payload
+    else:
+        counterfactual_payload = (
+            dict(replay_snapshot.get("counterfactual", {}))
+            if isinstance(replay_snapshot.get("counterfactual"), Mapping)
+            else {}
+        )
+    candidate_payload = (
+        dict(counterfactual_payload.get("candidate", {}))
+        if isinstance(counterfactual_payload.get("candidate"), Mapping)
+        else {}
+    )
+    required_payload = (
+        dict(counterfactual_payload.get("required", {}))
+        if isinstance(counterfactual_payload.get("required"), Mapping)
+        else {}
+    )
     replay_counterfactual_passed = counterfactual_raw is True
     replay_counterfactual_available = bool(replay_counterfactual_available)
 
@@ -473,6 +517,34 @@ def summarize_replay_live_parity_gate(
             "replay_counterfactual_available": bool(replay_counterfactual_available),
             "replay_counterfactual_waived": bool(
                 not require_counterfactual_passed and not replay_counterfactual_passed
+            ),
+            "replay_counterfactual_candidate_samples": _as_int(
+                replay_snapshot.get(
+                    "counterfactual_candidate_samples",
+                    candidate_payload.get("sample_count"),
+                ),
+                0,
+            ),
+            "replay_counterfactual_required_samples": _as_int(
+                replay_snapshot.get(
+                    "counterfactual_required_samples",
+                    required_payload.get("min_samples"),
+                ),
+                0,
+            ),
+            "replay_counterfactual_candidate_net_edge_bps": _as_float(
+                replay_snapshot.get(
+                    "counterfactual_candidate_net_edge_bps",
+                    candidate_payload.get("net_edge_bps"),
+                ),
+                0.0,
+            ),
+            "replay_counterfactual_required_net_edge_bps": _as_float(
+                replay_snapshot.get(
+                    "counterfactual_required_net_edge_bps",
+                    required_payload.get("min_net_edge_bps"),
+                ),
+                0.0,
             ),
             "oms_lifecycle_parity_enabled": bool(lifecycle_enabled),
             "oms_lifecycle_parity_available": bool(lifecycle_available),

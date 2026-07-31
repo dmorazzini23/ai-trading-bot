@@ -112,6 +112,7 @@ class DecisionRecorder:
     session_bucket_from_ts: Callable[[datetime], str]
     safe_float: Callable[[Any], float | None]
     quote_snapshot_func: Callable[[str], Mapping[str, Any]] | None = None
+    replay_entry_control_func: Callable[[], Mapping[str, Any] | None] | None = None
     decision_gate_counts: Counter[str] = field(default_factory=Counter)
     decision_records_total: int = 0
     decision_observations: list[dict[str, Any]] = field(default_factory=list)
@@ -212,6 +213,31 @@ class DecisionRecorder:
             normalize_opportunity_side(side) in {"buy", "sell"},
         )
         metrics_payload.setdefault("evidence_type", "decision_opportunity")
+        replay_entry_control: dict[str, Any] = {}
+        if self.replay_entry_control_func is not None:
+            try:
+                control_raw = self.replay_entry_control_func()
+                if isinstance(control_raw, Mapping):
+                    replay_entry_control = dict(control_raw)
+            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+                logger.warning(
+                    "DECISION_REPLAY_ENTRY_CONTROL_SNAPSHOT_FAILED",
+                    extra={"symbol": str(symbol).strip().upper(), "error": str(exc)},
+                )
+        status = str(replay_entry_control.get("status") or "").strip().lower()
+        explicitly_governed = bool(
+            (
+                status == "monitor_only"
+                and replay_entry_control.get("monitor_only") is True
+            )
+            or (
+                status == "blocked"
+                and replay_entry_control.get("block_exposure_increasing") is True
+            )
+        )
+        if explicitly_governed:
+            metrics_payload["replay_shadow_evidence"] = True
+            metrics_payload["replay_live_entry_control"] = replay_entry_control
         quote_age_ms = _finite_float(quote_snapshot.get("quote_age_ms"))
         if quote_age_ms is None:
             quote_age_sec = _finite_float(quote_snapshot.get("age_sec"))
@@ -241,18 +267,80 @@ class DecisionRecorder:
             metrics_payload.setdefault("quote_source", quote_source)
         bid = _finite_float(quote_snapshot.get("bid"))
         ask = _finite_float(quote_snapshot.get("ask"))
+        if bid is not None:
+            metrics_payload.setdefault("raw_quote_bid", bid)
+        if ask is not None:
+            metrics_payload.setdefault("raw_quote_ask", ask)
+        if quote_age_ms is not None:
+            metrics_payload.setdefault("raw_quote_age_ms", max(0.0, quote_age_ms))
+        if quote_timestamp:
+            metrics_payload.setdefault("raw_quote_timestamp", quote_timestamp)
+        if quote_source:
+            metrics_payload.setdefault("raw_quote_source", quote_source)
+
+        quote_anomaly_reason: str | None = None
+        if bid is None or ask is None:
+            quote_anomaly_reason = "bid_or_ask_missing"
+        elif bid <= 0.0 or ask <= 0.0:
+            quote_anomaly_reason = "bid_or_ask_nonpositive"
+        elif ask < bid:
+            quote_anomaly_reason = "crossed_quote"
         if bid is not None and ask is not None and bid > 0.0 and ask >= bid:
             midpoint = (bid + ask) / 2.0
             if midpoint > 0.0:
-                metrics_payload.setdefault(
-                    "spread_bps",
-                    ((ask - bid) / midpoint) * 10_000.0,
-                )
+                raw_spread_bps = ((ask - bid) / midpoint) * 10_000.0
+                metrics_payload.setdefault("spread_bps", raw_spread_bps)
+                metrics_payload.setdefault("raw_quote_spread_bps", raw_spread_bps)
                 metrics_payload.setdefault("reference_price", midpoint)
+                anomaly_spread_bps = _finite_float(
+                    quote_snapshot.get("anomaly_spread_bps")
+                )
+                if (
+                    anomaly_spread_bps is not None
+                    and anomaly_spread_bps > 0.0
+                    and raw_spread_bps >= anomaly_spread_bps
+                ):
+                    quote_anomaly_reason = "spread_at_or_above_anomaly_threshold"
+                    metrics_payload.setdefault(
+                        "quote_anomaly_spread_threshold_bps",
+                        anomaly_spread_bps,
+                    )
+        if quote_anomaly_reason is None and quote_snapshot.get("allowed") is False:
+            quote_anomaly_reason = (
+                _first_text(quote_snapshot.get("reason")) or "quote_not_allowed"
+            )
+        metrics_payload.setdefault(
+            "quote_quality_status",
+            "anomalous" if quote_anomaly_reason else "ok",
+        )
+        metrics_payload.setdefault("quote_anomaly_reason", quote_anomaly_reason)
         if "reference_price" not in metrics_payload:
             last_price = _finite_float(quote_snapshot.get("last_price"))
             if last_price is not None and last_price > 0.0:
                 metrics_payload["reference_price"] = last_price
+        opportunity_side = normalize_opportunity_side(side)
+        metrics_payload.setdefault("opportunity_side", opportunity_side)
+        opportunity_price = _finite_float(metrics_payload.get("reference_price"))
+        if opportunity_price is not None and opportunity_price > 0.0:
+            metrics_payload.setdefault("opportunity_price", opportunity_price)
+        opportunity_quantity = abs(float(net_target.target_shares))
+        if opportunity_quantity <= 0.0 and opportunity_price:
+            primary_debug = _primary_sleeve_debug(resolved_sleeves)
+            primary_size_dollars = _finite_float(primary_debug.get("size_dollars"))
+            if primary_size_dollars is None and resolved_sleeves:
+                primary = max(
+                    resolved_sleeves,
+                    key=lambda sleeve: (
+                        abs(float(sleeve.target_dollars)),
+                        abs(float(sleeve.score)),
+                        str(sleeve.sleeve),
+                    ),
+                )
+                primary_size_dollars = abs(float(primary.target_dollars))
+            if primary_size_dollars is not None and primary_size_dollars > 0.0:
+                opportunity_quantity = primary_size_dollars / opportunity_price
+        if opportunity_quantity > 0.0:
+            metrics_payload.setdefault("opportunity_quantity", opportunity_quantity)
 
         order_intent_metadata = getattr(order_intent, "metadata", None)
         intent_metadata = (

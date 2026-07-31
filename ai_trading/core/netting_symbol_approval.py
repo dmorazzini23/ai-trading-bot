@@ -641,6 +641,7 @@ def prepare_netting_symbol_approval(
     opening_trade = abs(current_shares + delta_shares_value) > abs(current_shares)
 
     if current_shares == 0 and alpha_decay_deweight_enabled:
+        alpha_before_qty = int(delta_shares_value)
         alpha_guard = alpha_decay_entry_guard_func(state, symbol, now)
         if alpha_guard.get("blocked"):
             if gate_blocks_func("ALPHA_DECAY_BLOCK"):
@@ -699,8 +700,13 @@ def prepare_netting_symbol_approval(
                     "start_trades": start_trades,
                     "multiplier": multiplier,
                 }
+                snapshot_updates.setdefault("sizing_lineage", {})["alpha_decay"] = {
+                    "before_delta_shares": alpha_before_qty,
+                    "after_delta_shares": int(delta_shares_value),
+                }
 
     if capacity_throttle_enabled and delta_shares_value != 0:
+        capacity_before_qty = int(delta_shares_value)
         capacity_scale = 1.0
         spread_bps_now = max(float(liq_features.spread_bps), 0.0)
         if capacity_spread_hard_bps > capacity_spread_soft_bps and spread_bps_now > capacity_spread_soft_bps:
@@ -763,6 +769,8 @@ def prepare_netting_symbol_approval(
                 gates_added.append("CAPACITY_THROTTLE_SCALE")
                 snapshot_updates["capacity_throttle"] = {
                     "scale": capacity_scale,
+                    "before_delta_shares": capacity_before_qty,
+                    "after_delta_shares": int(delta_shares_value),
                     "spread_bps": spread_bps_now,
                     "rolling_volume": rolling_volume,
                     "slo_derisk": slo_derisk_details,

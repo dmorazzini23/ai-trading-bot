@@ -190,8 +190,28 @@ def _record_skip_submit(
             detail=detail,
             context=dict(context or {}),
         )
+        outcome = getattr(be._exec_engine, "_last_submit_outcome", None)
+        if isinstance(outcome, dict) and context:
+            outcome["context"] = dict(context)
+            paper_sampling = context.get("paper_sampling")
+            if isinstance(paper_sampling, Mapping):
+                outcome["paper_sampling"] = dict(paper_sampling)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         be.logger.debug("SUBMIT_SKIP_HANDLER_FAILED", exc_info=True)
+
+
+def _attach_paper_sampling_outcome(
+    be: Any,
+    telemetry: Mapping[str, Any],
+) -> None:
+    outcome = getattr(be._exec_engine, "_last_submit_outcome", None)
+    if not isinstance(outcome, dict):
+        return
+    outcome["paper_sampling"] = dict(telemetry)
+    context = outcome.get("context")
+    merged_context = dict(context) if isinstance(context, Mapping) else {}
+    merged_context["paper_sampling"] = dict(telemetry)
+    outcome["context"] = merged_context
 
 
 def _resolved_submit_runtime(be: Any, ctx: Any) -> Any:
@@ -728,6 +748,18 @@ def submit_order_runtime(
         price=price,
         consumes_daily_slot=consumes_sampling_slot,
     )
+    sampling_telemetry: dict[str, Any] = {
+        "evaluated": True,
+        "enabled": bool(sampling_decision.enabled),
+        "allowed": bool(sampling_decision.allowed),
+        "evaluation_reason": str(sampling_decision.reason),
+        "reserved": False,
+        "admitted": False,
+        "released": False,
+        "consumes_daily_slot": bool(consumes_sampling_slot),
+        "requested_qty": int(max(qty, 0)),
+        "adjusted_qty": int(sampling_decision.qty),
+    }
     if sampling_decision.enabled:
         if not sampling_decision.allowed:
             be.logger.warning(
@@ -740,7 +772,10 @@ def submit_order_runtime(
                 side=side_norm,
                 reason=sampling_decision.reason,
                 detail=str(sampling_decision.details.get("reason") or sampling_decision.reason),
-                context=sampling_decision.details,
+                context={
+                    **sampling_decision.details,
+                    "paper_sampling": sampling_telemetry,
+                },
             )
             return None
         qty = int(sampling_decision.qty)
@@ -785,7 +820,10 @@ def submit_order_runtime(
             side=side_norm,
             reason=pretrade_reason,
             detail=str(pretrade_details.get("reason") or pretrade_reason),
-            context=pretrade_details,
+            context={
+                **pretrade_details,
+                "paper_sampling": sampling_telemetry,
+            },
         )
         return None
 
@@ -809,7 +847,7 @@ def submit_order_runtime(
                 side=side_norm,
                 reason="PAPER_SAMPLING_SHORT_BLOCK",
                 detail="opening paper samples must be long-only",
-                context=details,
+                context={**details, "paper_sampling": sampling_telemetry},
             )
             return None
         passive_bid = _safe_float(submit_snapshot.get("submit_bid_at_arrival"))
@@ -835,7 +873,7 @@ def submit_order_runtime(
                 side=side_norm,
                 reason="PAPER_SAMPLING_PASSIVE_QUOTE_BLOCK",
                 detail="valid unlocked bid/ask required for passive sampling",
-                context=details,
+                context={**details, "paper_sampling": sampling_telemetry},
             )
             return None
         passive_sampling_limit = float(passive_bid)
@@ -860,6 +898,7 @@ def submit_order_runtime(
         consumes_daily_slot=consumes_sampling_slot,
     )
     if sampling_reservation.enabled and not sampling_reservation.allowed:
+        sampling_telemetry["reservation_reason"] = str(sampling_reservation.reason)
         be.logger.warning(
             sampling_reservation.reason,
             extra=sampling_reservation.details,
@@ -870,15 +909,27 @@ def submit_order_runtime(
             side=side_norm,
             reason=sampling_reservation.reason,
             detail=str(sampling_reservation.details.get("reason") or sampling_reservation.reason),
-            context=sampling_reservation.details,
+            context={
+                **sampling_reservation.details,
+                "paper_sampling": sampling_telemetry,
+            },
         )
         return None
     sampling_reservation_token = str(
         sampling_reservation.details.get("reservation_token") or ""
     ).strip() or None
     if sampling_reservation_token is not None:
+        sampling_telemetry.update(
+            {
+                "reserved": True,
+                "reservation_reason": str(sampling_reservation.reason),
+                "reservation_token": sampling_reservation_token,
+            }
+        )
         annotations["paper_sampling_reservation_token"] = sampling_reservation_token
         metadata["paper_sampling_reservation_token"] = sampling_reservation_token
+    annotations["paper_sampling_state"] = dict(sampling_telemetry)
+    metadata["paper_sampling_state"] = dict(sampling_telemetry)
 
     merged_annotations = dict(intent_context.order_annotations)
     merged_annotations.update(annotations)
@@ -958,6 +1009,9 @@ def submit_order_runtime(
             consumes_daily_slot=consumes_sampling_slot,
             reservation_token=sampling_reservation_token,
         )
+        sampling_telemetry["released"] = bool(sampling_reservation_token)
+        sampling_telemetry["release_reason"] = "submit_not_accepted"
+        _attach_paper_sampling_outcome(be, sampling_telemetry)
         submit_none_reason = be._resolve_submit_none_reason(runtime_like)
         be._record_auth_forbidden_cooldown(
             be.state,
@@ -979,6 +1033,9 @@ def submit_order_runtime(
             consumes_daily_slot=consumes_sampling_slot,
             reservation_token=sampling_reservation_token,
         )
+        sampling_telemetry["released"] = bool(sampling_reservation_token)
+        sampling_telemetry["release_reason"] = f"broker_status:{status_token}"
+        _attach_paper_sampling_outcome(be, sampling_telemetry)
         reason_code = f"BROKER_ORDER_{status_token.upper()}".replace("CANCELLED", "CANCELED")
         be._record_auth_forbidden_cooldown(
             be.state,
@@ -993,6 +1050,10 @@ def submit_order_runtime(
         )
         return None
 
+    sampling_telemetry["admitted"] = True
+    merged_annotations["paper_sampling_state"] = dict(sampling_telemetry)
+    merged_metadata["paper_sampling_state"] = dict(sampling_telemetry)
+    _attach_paper_sampling_outcome(be, sampling_telemetry)
     _attach_order_identity(order, client_order_id=intent_context.client_order_id)
     _attach_order_evidence(
         order,

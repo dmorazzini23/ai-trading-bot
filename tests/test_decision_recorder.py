@@ -144,6 +144,7 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
             "ask": 100.1,
             "quote_age_ms": 250.0,
             "quote_timestamp": "2026-07-21T14:29:59.750000+00:00",
+            "anomaly_spread_bps": 5.0,
             "execution_profile": "paper_sampling_passive",
             "market_regime": "sideways",
         },
@@ -183,6 +184,16 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
     assert record.metrics is not None
     assert record.metrics["quote_age_ms"] == 250.0
     assert record.metrics["spread_bps"] == pytest.approx(9.99500249874909)
+    assert record.metrics["raw_quote_bid"] == 100.0
+    assert record.metrics["raw_quote_ask"] == 100.1
+    assert record.metrics["raw_quote_spread_bps"] == pytest.approx(9.99500249874909)
+    assert record.metrics["raw_quote_source"] == "alpaca_iex"
+    assert record.metrics["raw_quote_age_ms"] == 250.0
+    assert record.metrics["quote_quality_status"] == "anomalous"
+    assert (
+        record.metrics["quote_anomaly_reason"]
+        == "spread_at_or_above_anomaly_threshold"
+    )
     assert record.metrics["order_type"] == "not_submitted"
     assert record.metrics["session_regime"] == "opening"
     assert record.metrics["market_regime"] == "volatile"
@@ -202,6 +213,74 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
     assert metadata["execution_profile"] == "paper_sampling_passive"
     assert metadata["metadata_quality_status"] == "complete"
     assert metadata["metadata_missing_reasons"] == {}
+
+
+def test_decision_recorder_marks_explicit_monitor_only_replay_evidence() -> None:
+    recorder = DecisionRecorder(
+        runtime=type("Runtime", (), {"execution_candidate_rank_expected_edge_bps": {}})(),
+        path="runtime/decision_records.jsonl",
+        write_impl=lambda _record, _path: None,
+        dedupe_gate_root_causes=lambda gates: list(dict.fromkeys(gates)),
+        session_bucket_from_ts=lambda _ts: "midday",
+        safe_float=lambda value: float(value) if value is not None else None,
+        quote_snapshot_func=lambda _symbol: {
+            "bid": 100.0,
+            "ask": 100.1,
+            "quote_timestamp": "2026-07-21T16:00:00+00:00",
+        },
+        replay_entry_control_func=lambda: {
+            "status": "monitor_only",
+            "monitor_only": True,
+            "block_exposure_increasing": False,
+            "gate_reason": "replay_counterfactual",
+        },
+    )
+    bar_ts = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
+    proposal = _lineage_test_proposal(bar_ts=bar_ts, ml_influenced=True)
+    record = recorder.build_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="AAPL",
+            bar_ts=bar_ts,
+            target_dollars=1000.0,
+            target_shares=0.0,
+            proposals=[proposal],
+        ),
+        sleeves=[proposal],
+        gates=["CAPACITY_THROTTLE_BLOCK"],
+    )
+
+    assert record.metrics["replay_shadow_evidence"] is True
+    assert record.metrics["replay_live_entry_control"]["status"] == "monitor_only"
+    assert record.metrics["opportunity_side"] == "buy"
+    assert record.metrics["opportunity_quantity"] == pytest.approx(1000.0 / 100.05)
+    assert record.metrics["opportunity_price"] == pytest.approx(100.05)
+
+
+def test_decision_recorder_does_not_mark_inconsistent_replay_control() -> None:
+    recorder = _lineage_test_recorder([])
+    recorder.replay_entry_control_func = lambda: {
+        "status": "monitor_only",
+        "monitor_only": False,
+    }
+    bar_ts = datetime(2026, 7, 21, 16, 0, tzinfo=UTC)
+    proposal = _lineage_test_proposal(bar_ts=bar_ts, ml_influenced=False)
+    record = recorder.build_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="AAPL",
+            bar_ts=bar_ts,
+            target_dollars=1000.0,
+            target_shares=5.0,
+            proposals=[proposal],
+        ),
+        sleeves=[proposal],
+        gates=["NET_EDGE_FLOOR_GATE"],
+    )
+
+    assert "replay_shadow_evidence" not in record.metrics
 
 
 def test_decision_recorder_reports_quote_metadata_failure_without_crashing() -> None:

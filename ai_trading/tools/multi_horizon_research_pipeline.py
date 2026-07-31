@@ -146,6 +146,15 @@ def _candidate_training_rank_key(
     )
 
 
+def _development_eligible(record: Mapping[str, Any]) -> bool:
+    aggregate = _walk_forward_aggregate(record)
+    return bool(
+        aggregate.get("evidence_qualified")
+        and int(aggregate.get("trades") or 0) > 0
+        and float(aggregate.get("mean_post_cost_net_edge_bps") or 0.0) > 0.0
+    )
+
+
 def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +202,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     ) -> argparse.Namespace:
         return argparse.Namespace(
             data_dir=Path(args.data_dir),
+            acquisition_manifest_json=getattr(
+                args, "acquisition_manifest_json", None
+            ),
             symbols=str(args.symbols or ""),
             timestamp_col=str(args.timestamp_col),
             output_dir=model_dir,
@@ -338,11 +350,22 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         key=_candidate_training_rank_key,
         reverse=True,
     )
-    winner = development_ranked[0] if development_ranked else None
+    for record in development_ranked:
+        aggregate = _walk_forward_aggregate(record)
+        record["development_eligible"] = _development_eligible(record)
+        record["development_eligibility_reasons"] = list(
+            aggregate.get("qualification_reasons") or []
+        )
+    eligible_ranked = [
+        record for record in development_ranked if record["development_eligible"]
+    ]
+    winner = eligible_ranked[0] if eligible_ranked else None
     holdout_confirmation: dict[str, Any] = {
         "status": "not_run",
         "winner_model_name": None,
         "fallback_attempted": False,
+        "consumed": False,
+        "reason": "no_development_eligible_candidate",
         "promotion_authority": False,
         "live_money_authority": False,
     }
@@ -373,6 +396,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 {
                     "status": "passed" if holdout_passed else "failed",
                     "consumed": True,
+                    "reason": None,
                     "metrics": dict(metrics),
                 }
             )
@@ -395,6 +419,17 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
         model_path = str(record.get("model_path") or "")
         model_name = str(record.get("model_name") or f"candidate_h{record_id[0]}_{record_id[1]}")
+        walk_forward = record.get("walk_forward")
+        selected_threshold = (
+            walk_forward.get("selected_threshold", {})
+            if isinstance(walk_forward, Mapping)
+            else {}
+        )
+        replay_confidence_threshold = float(
+            selected_threshold.get(
+                "confidence_threshold", args.replay_confidence_threshold
+            )
+        )
         replay_path = output_dir / f"{model_name}_replay.json"
         replay_argv = [
             "--data-dir",
@@ -406,9 +441,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "--model-path",
             model_path,
             "--confidence-threshold",
-            str(args.replay_confidence_threshold),
+            str(replay_confidence_threshold),
             "--entry-score-threshold",
-            str(args.replay_entry_score_threshold),
+            "0.0",
             "--min-hold-bars",
             str(args.min_hold_bars),
             "--max-hold-bars",
@@ -441,6 +476,12 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "replay_status": "complete",
                 "replay_output": str(replay_path),
                 "replay": _slim_replay_summary(replay_payload),
+                "replay_score_semantics": {
+                    "semantics": "positive_class_probability_rank",
+                    "cutoff_source": "development_only_percentile_selection",
+                    "frozen_probability_cutoff": replay_confidence_threshold,
+                    "entry_score_threshold": 0.0,
+                },
             }
         )
     ranked = list(development_ranked)
@@ -551,6 +592,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--acquisition-manifest-json", type=Path, default=None)
     parser.add_argument("--symbols", type=str, default="")
     parser.add_argument("--timestamp-col", type=str, default="timestamp")
     parser.add_argument("--output-dir", type=Path, required=True)

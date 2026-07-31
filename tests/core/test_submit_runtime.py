@@ -400,6 +400,21 @@ def test_submit_order_releases_exact_sampling_reservation_token(monkeypatch) -> 
         "reservation-exact-1"
     )
     assert engine_kwargs["metadata"]["session_regime"] == "opening"
+    assert engine._last_submit_outcome["paper_sampling"] == {
+        "evaluated": True,
+        "enabled": True,
+        "allowed": True,
+        "evaluation_reason": "OK",
+        "reserved": True,
+        "admitted": False,
+        "released": True,
+        "consumes_daily_slot": True,
+        "requested_qty": 1,
+        "adjusted_qty": 1,
+        "reservation_reason": "OK",
+        "reservation_token": "reservation-exact-1",
+        "release_reason": "broker_status:rejected",
+    }
 
 
 def test_submit_order_forces_opening_paper_sample_to_passive_day_limit(

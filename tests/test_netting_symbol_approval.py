@@ -349,3 +349,5 @@ def test_prepare_netting_symbol_approval_keeps_flip_close_as_sell_after_throttle
     assert result.opening_trade is False
     assert "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION" in result.gates_added
     assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
+    assert result.snapshot_updates["capacity_throttle"]["before_delta_shares"] == -5
+    assert result.snapshot_updates["capacity_throttle"]["after_delta_shares"] == -2

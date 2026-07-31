@@ -91,6 +91,38 @@ class NettingSubmitExecutionResult:
     order_payload: dict[str, Any] | None
     decision_trace_id: str | None
     order_intent_contract: Any | None
+    terminal_stage: str
+    terminal_reason: str
+    terminal_detail: str | None
+    terminal_context: dict[str, Any]
+
+
+def _last_submit_outcome(runtime: Any) -> dict[str, Any]:
+    exec_engine = getattr(runtime, "execution_engine", None) or getattr(
+        runtime,
+        "exec_engine",
+        None,
+    )
+    outcome = getattr(exec_engine, "_last_submit_outcome", None)
+    return dict(outcome) if isinstance(outcome, Mapping) else {}
+
+
+def _terminal_context_from_outcome(outcome: Mapping[str, Any]) -> dict[str, Any]:
+    context = outcome.get("context")
+    terminal_context = dict(context) if isinstance(context, Mapping) else {}
+    for key in (
+        "status",
+        "phase",
+        "error_code",
+        "status_code",
+        "trace_id",
+        "client_order_id",
+        "paper_sampling",
+    ):
+        value = outcome.get(key)
+        if value not in (None, ""):
+            terminal_context.setdefault(key, value)
+    return terminal_context
 
 
 def execute_netting_submission(
@@ -296,9 +328,17 @@ def execute_netting_submission(
             order_payload=None,
             decision_trace_id=None,
             order_intent_contract=intent_contract,
+            terminal_stage="broker_submit",
+            terminal_reason=reason_code,
+            terminal_detail=str(exc),
+            terminal_context={
+                "error_category": str(getattr(error_info.category, "value", error_info.category)),
+                "breaker_open_reason": submit_open_reason,
+            },
         )
 
     if order is None:
+        submit_outcome = _last_submit_outcome(runtime)
         submit_none_reason = resolve_submit_none_reason_func(runtime)
         record_auth_forbidden_cooldown_func(
             state,
@@ -318,6 +358,14 @@ def execute_netting_submission(
             order_payload=None,
             decision_trace_id=None,
             order_intent_contract=intent_contract,
+            terminal_stage="submit_runtime",
+            terminal_reason=submit_none_reason,
+            terminal_detail=(
+                str(submit_outcome.get("detail"))
+                if submit_outcome.get("detail") not in (None, "")
+                else None
+            ),
+            terminal_context=_terminal_context_from_outcome(submit_outcome),
         )
 
     order_state = normalize_submitted_order_func(
@@ -417,6 +465,12 @@ def execute_netting_submission(
             },
             decision_trace_id=decision_trace_id_for_order,
             order_intent_contract=intent_contract,
+            terminal_stage="broker_response",
+            terminal_reason=reason_code,
+            terminal_detail=str(
+                getattr(order_state, "status_text", status_token) or status_token
+            ),
+            terminal_context={"broker_status": status_token},
         )
     breakers.record_success("broker_submit")
     record_successful_submission_func(
@@ -480,4 +534,8 @@ def execute_netting_submission(
         },
         decision_trace_id=decision_trace_id_for_order,
         order_intent_contract=intent_contract,
+        terminal_stage="submitted",
+        terminal_reason="OK_TRADE",
+        terminal_detail=None,
+        terminal_context={"broker_status": str(order_state.status_text or "")},
     )

@@ -317,14 +317,19 @@ def build_model_data_drift_evidence(
     return payload
 
 
-def build_governed_drift_baseline(
+def _canonical_sha256(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_drift_baseline_proposal(
     evidence: Mapping[str, Any],
     *,
     baseline_id: str,
-    approved_by: str,
-    approved_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Promote complete normalized evidence to a non-authoritative baseline."""
+    """Create an immutable baseline proposal that requires separate review."""
 
     coverage = evidence.get("coverage")
     if not isinstance(coverage, Mapping) or not bool(coverage.get("complete")):
@@ -334,13 +339,54 @@ def build_governed_drift_baseline(
     if evidence.get("evidence_contract_version") != EVIDENCE_CONTRACT_VERSION:
         raise ValueError("baseline_evidence_contract_incompatible")
     identifier = str(baseline_id or "").strip()
-    approver = str(approved_by or "").strip()
     if not identifier:
         raise ValueError("baseline_id_required")
+    proposed = datetime.now(UTC)
+    proposal = dict(evidence)
+    proposal.update(
+        {
+            "schema_version": "1.0.0",
+            "artifact_type": "model_data_drift_baseline_proposal",
+            "baseline_id": identifier,
+            "proposed_at": proposed.isoformat().replace("+00:00", "Z"),
+            "status": "review_required",
+            "approval": {
+                "approved": False,
+                "automatic_roll_forward": False,
+                "separate_approval_artifact_required": True,
+            },
+            "promotion_authority": False,
+            "live_money_authority": False,
+        }
+    )
+    proposal["proposal_sha256"] = _canonical_sha256(proposal)
+    return proposal
+
+
+def build_governed_drift_baseline(
+    proposal: Mapping[str, Any],
+    *,
+    approved_by: str,
+    approved_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Approve a previously persisted proposal without mutating it."""
+
+    if proposal.get("artifact_type") != "model_data_drift_baseline_proposal":
+        raise ValueError("baseline_proposal_required")
+    expected_hash = str(proposal.get("proposal_sha256") or "")
+    unsigned = dict(proposal)
+    unsigned.pop("proposal_sha256", None)
+    if not expected_hash or expected_hash != _canonical_sha256(unsigned):
+        raise ValueError("baseline_proposal_hash_mismatch")
+    coverage = proposal.get("coverage")
+    if not isinstance(coverage, Mapping) or not bool(coverage.get("complete")):
+        raise ValueError("baseline_evidence_incomplete")
+    identifier = str(proposal.get("baseline_id") or "").strip()
+    approver = str(approved_by or "").strip()
     if not approver:
         raise ValueError("baseline_approver_required")
     approved = (approved_at or datetime.now(UTC)).astimezone(UTC)
-    baseline = dict(evidence)
+    baseline = dict(proposal)
     baseline.update(
         {
             "schema_version": "1.0.0",
@@ -353,6 +399,7 @@ def build_governed_drift_baseline(
                 "approved_by": approver,
                 "approved_at": approved.isoformat().replace("+00:00", "Z"),
                 "automatic_roll_forward": False,
+                "proposal_sha256": expected_hash,
             },
             "promotion_authority": False,
             "live_money_authority": False,
@@ -402,8 +449,8 @@ def model_identity_from_registry(registry: Mapping[str, Any]) -> dict[str, str |
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fills-jsonl", type=Path, required=True)
-    parser.add_argument("--tca-jsonl", type=Path, required=True)
+    parser.add_argument("--fills-jsonl", type=Path, default=None)
+    parser.add_argument("--tca-jsonl", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--min-samples", type=int, default=25)
@@ -413,8 +460,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-registry-json", type=Path, default=None)
     parser.add_argument("--baseline-id", default="")
     parser.add_argument("--approved-by", default="")
+    parser.add_argument("--approve-proposal-json", type=Path, default=None)
     args = parser.parse_args(argv)
 
+    if args.approve_proposal_json is not None:
+        if not str(args.approved_by or "").strip():
+            parser.error("--approved-by is required with --approve-proposal-json")
+        if not args.approve_proposal_json.is_file():
+            parser.error(f"baseline proposal does not exist: {args.approve_proposal_json}")
+        try:
+            proposal = json.loads(
+                args.approve_proposal_json.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"baseline proposal is unreadable: {exc}")
+        if not isinstance(proposal, Mapping):
+            parser.error("baseline proposal must contain a JSON object")
+        approved_payload = build_governed_drift_baseline(
+            proposal, approved_by=str(args.approved_by)
+        )
+        if args.output_json.exists():
+            parser.error(
+                f"refusing to overwrite immutable drift artifact: {args.output_json}"
+            )
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(
+            json.dumps(approved_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return 0
+
+    if str(args.approved_by or "").strip():
+        parser.error(
+            "approval must be a separate invocation using --approve-proposal-json"
+        )
+    if args.fills_jsonl is None or args.tca_jsonl is None:
+        parser.error("--fills-jsonl and --tca-jsonl are required for evidence/proposals")
     for path in (args.fills_jsonl, args.tca_jsonl):
         if not path.is_file():
             parser.error(f"evidence source does not exist: {path}")
@@ -454,11 +535,10 @@ def main(argv: list[str] | None = None) -> int:
         sources=tuple(_source_descriptor(path) for path in source_paths),
     )
     payload: Mapping[str, Any] = evidence
-    if str(args.baseline_id or "").strip() or str(args.approved_by or "").strip():
-        payload = build_governed_drift_baseline(
+    if str(args.baseline_id or "").strip():
+        payload = build_drift_baseline_proposal(
             evidence,
             baseline_id=str(args.baseline_id),
-            approved_by=str(args.approved_by),
         )
     if args.output_json.exists():
         parser.error(f"refusing to overwrite immutable drift artifact: {args.output_json}")

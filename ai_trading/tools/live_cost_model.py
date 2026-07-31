@@ -72,8 +72,15 @@ def _metric(row: Mapping[str, Any], *keys: str) -> float | None:
     context = _mapping(row, "context")
     cost = _mapping(row, "cost")
     market = _mapping(row, "market")
+    metrics = _mapping(row, "metrics")
     for key in keys:
-        parsed = _first_float(row.get(key), cost.get(key), market.get(key), context.get(key))
+        parsed = _first_float(
+            row.get(key),
+            cost.get(key),
+            market.get(key),
+            context.get(key),
+            metrics.get(key),
+        )
         if parsed is not None:
             return parsed
     return None
@@ -83,9 +90,18 @@ def _text_metric(row: Mapping[str, Any], *keys: str, default: str = "") -> str:
     context = _mapping(row, "context")
     cost = _mapping(row, "cost")
     market = _mapping(row, "market")
+    metrics = _mapping(row, "metrics")
     values: list[Any] = []
     for key in keys:
-        values.extend((row.get(key), cost.get(key), market.get(key), context.get(key)))
+        values.extend(
+            (
+                row.get(key),
+                cost.get(key),
+                market.get(key),
+                context.get(key),
+                metrics.get(key),
+            )
+        )
     return _first_text(*values, default=default)
 
 
@@ -236,18 +252,45 @@ def _session_regime(row: Mapping[str, Any], ts: datetime | None) -> str:
 
 
 def _timestamp(row: Mapping[str, Any]) -> datetime | None:
-    for key in (
+    timestamp_keys = (
         "ts",
         "timestamp",
+        "decision_ts",
+        "decision_timestamp",
+        "quote_ts",
+        "quote_timestamp",
+        "order_ts",
+        "order_timestamp",
+        "fill_ts",
+        "fill_timestamp",
         "filled_at",
         "executed_at",
         "first_fill_ts",
         "submit_ts",
         "event_ts",
-    ):
-        parsed = _parse_ts(row.get(key))
-        if parsed is not None:
-            return parsed
+    )
+    containers = (
+        row,
+        *(
+            value
+            for key in (
+                "decision",
+                "quote",
+                "order",
+                "fill",
+                "event",
+                "context",
+                "metrics",
+                "timestamps",
+            )
+            if isinstance((value := row.get(key)), Mapping)
+        ),
+    )
+    for container in containers:
+        for key in timestamp_keys:
+            parsed = _parse_ts(container.get(key))
+            if parsed is not None:
+                return parsed
     return None
 
 
@@ -307,6 +350,12 @@ def _observation_from_row(
         "quote_spread_bps",
     )
     quote_age_ms = _metric(row, "quote_age_ms", "quote_staleness_ms", "quote_age")
+    # Negative spreads and ages are objectively invalid telemetry. Genuine wide
+    # positive spreads remain untouched and are surfaced as anomalies below.
+    if spread_bps is not None and spread_bps < 0.0:
+        spread_bps = None
+    if quote_age_ms is not None and quote_age_ms < 0.0:
+        quote_age_ms = None
     slippage_bps = _metric(
         row,
         "slippage_bps",
@@ -493,6 +542,42 @@ def _cost_breaches(
         )
     breaches.sort(key=lambda item: float(item["p90_total_cost_bps"]), reverse=True)
     return breaches
+
+
+def _anomaly_diagnostics(
+    observations: Iterable[Mapping[str, Any]],
+    *,
+    wide_spread_bps: float = 100.0,
+) -> list[dict[str, Any]]:
+    buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for observation in observations:
+        spread = _to_float(observation.get("spread_bps"))
+        if spread is None:
+            continue
+        buckets[
+            (
+                str(observation.get("symbol") or "unknown"),
+                str(observation.get("session_regime") or "unknown"),
+            )
+        ].append(spread)
+    diagnostics: list[dict[str, Any]] = []
+    for (symbol, session), spreads in sorted(buckets.items()):
+        wide = [value for value in spreads if value >= float(wide_spread_bps)]
+        diagnostics.append(
+            {
+                "symbol": symbol,
+                "session_regime": session,
+                "observations": len(spreads),
+                "wide_spread_observations": len(wide),
+                "wide_spread_threshold_bps": float(wide_spread_bps),
+                "max_spread_bps": max(spreads),
+                "p90_spread_bps": _percentile(spreads, 0.90),
+                "anomaly": bool(wide),
+                "action": "review_source_quote_quality" if wide else "none",
+                "observations_preserved": True,
+            }
+        )
+    return diagnostics
 
 
 def build_live_cost_model(
@@ -682,6 +767,12 @@ def build_live_cost_model(
                 float(max_p90_total_cost_bps)
                 if max_p90_total_cost_bps is not None and max_p90_total_cost_bps > 0.0
                 else None
+            ),
+        },
+        "anomaly_diagnostics": {
+            "policy": "preserve_valid_wide_spreads_exclude_only_invalid_negative_values",
+            "by_symbol_session": _anomaly_diagnostics(
+                [*observations, *quote_observations]
             ),
         },
         "research_cost_prior": {

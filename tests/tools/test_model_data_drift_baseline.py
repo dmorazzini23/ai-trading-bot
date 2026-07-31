@@ -52,9 +52,12 @@ def test_build_governed_baseline_requires_complete_evidence() -> None:
         model_hash="abc123",
     )
 
-    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+    proposal = model_data_drift_baseline.build_drift_baseline_proposal(
         evidence,
         baseline_id="shadow-1-20260718",
+    )
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        proposal,
         approved_by="operator",
         approved_at=now,
     )
@@ -64,6 +67,9 @@ def test_build_governed_baseline_requires_complete_evidence() -> None:
     assert baseline["artifact_type"] == "model_data_drift_baseline"
     assert baseline["status"] == "approved"
     assert baseline["approval"]["automatic_roll_forward"] is False
+    assert proposal["status"] == "review_required"
+    assert proposal["approval"]["approved"] is False
+    assert baseline["approval"]["proposal_sha256"] == proposal["proposal_sha256"]
     assert baseline["promotion_authority"] is False
     assert baseline["live_money_authority"] is False
 
@@ -79,11 +85,9 @@ def test_governed_baseline_rejects_incomplete_category_coverage() -> None:
     )
 
     with pytest.raises(ValueError, match="baseline_evidence_incomplete"):
-        model_data_drift_baseline.build_governed_drift_baseline(
+        model_data_drift_baseline.build_drift_baseline_proposal(
             evidence,
             baseline_id="too-small",
-            approved_by="operator",
-            approved_at=now,
         )
 
 
@@ -92,6 +96,7 @@ def test_baseline_cli_records_sources_and_refuses_overwrite(tmp_path: Path) -> N
     fills, tca = _rows(now)
     fills_path = tmp_path / "fills.jsonl"
     tca_path = tmp_path / "tca.jsonl"
+    proposal_output = tmp_path / "baseline-proposal.json"
     output = tmp_path / "baseline.json"
     fills_path.write_text("".join(json.dumps(row) + "\n" for row in fills), encoding="utf-8")
     tca_path.write_text("".join(json.dumps(row) + "\n" for row in tca), encoding="utf-8")
@@ -101,22 +106,32 @@ def test_baseline_cli_records_sources_and_refuses_overwrite(tmp_path: Path) -> N
         "--tca-jsonl",
         str(tca_path),
         "--output-json",
-        str(output),
+        str(proposal_output),
         "--model-id",
         "shadow-1",
         "--baseline-id",
         "shadow-1-baseline",
-        "--approved-by",
-        "operator",
     ]
 
     assert model_data_drift_baseline.main(args) == 0
+    proposal = json.loads(proposal_output.read_text(encoding="utf-8"))
+    assert proposal["status"] == "review_required"
+    assert proposal["artifact_type"] == "model_data_drift_baseline_proposal"
+    approval_args = [
+        "--output-json",
+        str(output),
+        "--approve-proposal-json",
+        str(proposal_output),
+        "--approved-by",
+        "operator",
+    ]
+    assert model_data_drift_baseline.main(approval_args) == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["status"] == "approved"
     assert len(payload["sources"]) == 2
     assert all(len(source["sha256"]) == 64 for source in payload["sources"])
     with pytest.raises(SystemExit) as exc_info:
-        model_data_drift_baseline.main(args)
+        model_data_drift_baseline.main(approval_args)
     assert exc_info.value.code == 2
 
 

@@ -235,6 +235,22 @@ walk-forward folds with an embargo. Historical rows are always tagged
 `evidence_type=historical_research`, `promotion_eligible=false`, and
 `runtime_fill_authority=false`.
 
+Replay-aligned candidates use positive-class probability as a development-only
+ranking score. Percentile selection and all tuning occur inside the development
+partition; the frozen probability cutoff is then evaluated once on holdout only
+when the candidate has positive, stable, sufficiently supported post-cost
+walk-forward evidence. With no development-eligible candidate, holdout and
+replay remain unconsumed. The primary accelerator accepts only AAPL, AMZN, and
+MSFT, and a requested live-cost model must report ready/usable rather than
+silently falling back to static costs.
+
+Drift baselines use two immutable artifacts. First generate a
+`model_data_drift_baseline_proposal` with `--baseline-id`; it remains
+`review_required`. After review, approve that saved proposal in a separate
+invocation with `--approve-proposal-json`, `--approved-by`, and a new output
+path. Automation may normalize current evidence and run the monitor, but it
+never overwrites or automatically approves a baseline.
+
 The daily report's promotion-eligible sample count is a positive allowlist of
 executed paper/live fill evidence. Historical and shadow counts are reported in
 separate partitions and cannot satisfy fill-count or model-promotion gates,

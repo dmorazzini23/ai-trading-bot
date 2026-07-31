@@ -617,10 +617,20 @@ def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
     decision_path = tmp_path / "decision_records.jsonl"
     tca_path.write_text("", encoding="utf-8")
     valid = {
+        "correlation_id": "opp_shadow_msft_1",
         "gates": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+        "metrics": {
+            "correlation_id": "opp_shadow_msft_1",
+            "replay_shadow_evidence": True,
+            "replay_live_entry_control": {
+                "status": "monitor_only",
+                "monitor_only": True,
+            },
+        },
         "decision_journal": {
             "submitted": False,
             "bar_ts": "2026-02-18T20:00:00+00:00",
+            "correlation_id": "opp_shadow_msft_1",
             "reasons": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
             "order_intent": {
                 "symbol": "MSFT",
@@ -640,6 +650,7 @@ def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
     unmarked = json.loads(json.dumps(valid))
     unmarked["gates"] = []
     unmarked["decision_journal"]["reasons"] = []
+    unmarked["metrics"]["replay_shadow_evidence"] = False
     decision_path.write_text(
         "\n".join(
             json.dumps(row)
@@ -667,6 +678,7 @@ def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
         {
             "client_order_id": "shadow-msft-1",
             "close": 405.25,
+            "correlation_id": "opp_shadow_msft_1",
             "order_type": "limit",
             "qty": 3.0,
             "regime_profile": "unknown",
@@ -686,6 +698,8 @@ def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
         "symbol_or_side_invalid": 1,
     }
     assert context["shadow_accepted_records"] == 1
+    assert context["shadow_intent_accepted_records"] == 1
+    assert context["shadow_opportunity_accepted_records"] == 0
     assert context["shadow_decision_rows"] == 1
     assert context["shadow_source_path"] == str(decision_path)
     assert set(context["source_paths"]) == {str(tca_path), str(decision_path)}
@@ -715,10 +729,20 @@ def test_refresh_replay_dataset_prefers_tca_on_shadow_identity_collision(
     decision_path.write_text(
         json.dumps(
             {
+                "correlation_id": "opp_shared_aapl_1",
                 "gates": ["REPLAY_LIVE_PARITY_GATE_FAILED"],
+                "metrics": {
+                    "correlation_id": "opp_shared_aapl_1",
+                    "replay_shadow_evidence": True,
+                    "replay_live_entry_control": {
+                        "status": "blocked",
+                        "block_exposure_increasing": True,
+                    },
+                },
                 "decision_journal": {
                     "submitted": False,
                     "bar_ts": "2026-02-18T20:00:00+00:00",
+                    "correlation_id": "opp_shared_aapl_1",
                     "order_intent": {
                         "symbol": "AAPL",
                         "side": "buy",
@@ -754,6 +778,69 @@ def test_refresh_replay_dataset_prefers_tca_on_shadow_identity_collision(
     assert context["shadow_accepted_records"] == 1
     assert context["shadow_decision_rows"] == 0
     assert context["tca_decision_rows"] == 1
+
+
+def test_refresh_replay_dataset_accepts_marked_opportunity_without_intent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    tca_path = tmp_path / "tca_records.jsonl"
+    decision_path = tmp_path / "decision_records.jsonl"
+    tca_path.write_text("", encoding="utf-8")
+    decision_path.write_text(
+        json.dumps(
+            {
+                "correlation_id": "opp_aapl_opportunity_1",
+                "symbol": "AAPL",
+                "bar_ts": "2026-02-18T20:00:00+00:00",
+                "metrics": {
+                    "correlation_id": "opp_aapl_opportunity_1",
+                    "opportunity_eligible": True,
+                    "opportunity_side": "buy",
+                    "opportunity_quantity": 4.5,
+                    "opportunity_price": 191.25,
+                    "replay_shadow_evidence": True,
+                    "replay_live_entry_control": {
+                        "status": "monitor_only",
+                        "monitor_only": True,
+                    },
+                },
+                "decision_journal": {
+                    "submitted": False,
+                    "correlation_id": "opp_aapl_opportunity_1",
+                    "bar_ts": "2026-02-18T20:00:00+00:00",
+                    "order_intent": None,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_REFRESH_FROM_TCA", "1")
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_DECISION_SHADOW_SOURCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DECISION_LOG_PATH", str(decision_path))
+
+    output_path, context = bot_engine._refresh_replay_dataset_from_tca(
+        data_dir=tmp_path / "replay_data",
+        now=now,
+    )
+
+    assert output_path is not None
+    rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["source_kind"] == "decision_journal_parity_opportunity"
+    assert rows[0]["correlation_id"] == "opp_aapl_opportunity_1"
+    assert rows[0]["qty"] == 4.5
+    assert rows[0]["close"] == 191.25
+    assert rows[0]["order_type"] == "not_submitted"
+    assert context["shadow_intent_accepted_records"] == 0
+    assert context["shadow_opportunity_accepted_records"] == 1
+    assert context["shadow_opportunity_rows"] == 1
 
 
 def test_rollout_replay_eligibility_fails_closed_for_required_live_gate(

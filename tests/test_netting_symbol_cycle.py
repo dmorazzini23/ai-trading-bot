@@ -283,6 +283,8 @@ def test_process_netting_symbol_halt_records_block() -> None:
     assert result.submitted_increment == 0
     assert len(records) == 1
     assert records[0]["gates"] == ["HALT_TRADING"]
+    assert records[0]["metrics"]["terminal_stage"] == "decision_filter"
+    assert records[0]["metrics"]["terminal_reason"] == "HALT_TRADING"
 
 
 def test_process_netting_symbol_suppresses_short_opening_in_long_only(monkeypatch) -> None:
@@ -391,3 +393,53 @@ def test_process_netting_symbol_submitted_order_records_and_counts() -> None:
     assert records[0]["order"] == {"client_order_id": "cid-1"}
     assert records[0]["decision_trace_id"] == "trace-1"
     assert "OK_TRADE" in records[0]["gates"]
+
+
+def test_process_netting_symbol_leaves_alpha_and_capacity_sizing_to_approval() -> None:
+    approval_deltas: list[int] = []
+
+    def prepare_symbol_approval_func(**kwargs: Any) -> Any:
+        approval_deltas.append(int(kwargs["delta_shares"]))
+        return SimpleNamespace(
+            delta_shares=4,
+            target_shares=4,
+            target_dollars=40.0,
+            side="buy",
+            opening_trade=True,
+            gates_added=("ALPHA_DECAY_DEWEIGHT", "CAPACITY_THROTTLE_SCALE"),
+            snapshot_updates={
+                "alpha_decay": {"before_delta_shares": 10, "after_delta_shares": 5},
+                "capacity_throttle": {"before_delta_shares": 5, "after_delta_shares": 4},
+            },
+            blocked_reason=None,
+            blocked_metrics=None,
+            approval=SimpleNamespace(expected_net_edge_bps=3.0),
+            approval_context={"approved": True},
+        )
+
+    processor, records = _make_processor(
+        alpha_decay_deweight_enabled=True,
+        alpha_decay_qty_step=0.5,
+        alpha_decay_qty_max_deweight=0.5,
+        capacity_throttle_enabled=True,
+        capacity_spread_soft_bps=1.0,
+        capacity_spread_hard_bps=2.0,
+        capacity_min_scale=0.5,
+        alpha_decay_entry_guard_func=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("outer cycle must not apply alpha sizing")
+        ),
+        prepare_symbol_approval_func=prepare_symbol_approval_func,
+    )
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now),
+        orders_submitted=0,
+    )
+
+    assert result.submitted_increment == 1
+    assert approval_deltas == [10]
+    assert records[0]["net_target"].target_shares == 4
+    assert records[0]["config_snapshot"]["alpha_decay"]["before_delta_shares"] == 10
+    assert records[0]["config_snapshot"]["capacity_throttle"]["after_delta_shares"] == 4

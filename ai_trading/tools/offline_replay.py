@@ -126,6 +126,8 @@ class ReplayModelContext:
     orientation_inverse: bool
     symbol_penalties: dict[str, dict[str, float]]
     supports_short_scores: bool = False
+    score_semantics: str = "legacy_signed_probability"
+    development_probability_cutoff: float | None = None
     market_regime_policy: Mapping[str, Any] | None = None
 
 
@@ -411,6 +413,9 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
     except TypeError:
         label_sides = set()
     semantics = str(getattr(model, "edge_score_semantics_", "") or "").strip().lower()
+    development_probability_cutoff = _finite_float(
+        getattr(model, "edge_global_threshold_", None)
+    )
     supports_short_scores = bool(getattr(model, "supports_short_scores_", False)) or bool(
         label_sides.intersection({"sell", "short", "sell_short"})
     ) or semantics in {"directional", "long_short_probability", "signed_edge"}
@@ -441,6 +446,12 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
             getattr(model, "edge_negative_symbol_penalties_", None)
         ),
         supports_short_scores=supports_short_scores,
+        score_semantics=semantics or "legacy_signed_probability",
+        development_probability_cutoff=(
+            float(np.clip(development_probability_cutoff, 0.0, 1.0))
+            if development_probability_cutoff is not None
+            else None
+        ),
         market_regime_policy=market_regime_policy,
     )
     logger.info(
@@ -451,6 +462,8 @@ def _load_replay_model_context(args: argparse.Namespace) -> ReplayModelContext |
             "orientation": "inverse" if context.orientation_inverse else "direct",
             "symbol_penalty_count": len(context.symbol_penalties),
             "supports_short_scores": bool(context.supports_short_scores),
+            "score_semantics": context.score_semantics,
+            "development_probability_cutoff": context.development_probability_cutoff,
         },
     )
     return context
@@ -913,8 +926,12 @@ def _compute_model_signal(
             probs,
         )
 
-    score = np.clip((2.0 * probs) - 1.0, -1.0, 1.0)
-    confidence = np.maximum(probs, 1.0 - probs)
+    if model_context.score_semantics == "positive_class_probability_rank":
+        score = probs
+        confidence = probs
+    else:
+        score = np.clip((2.0 * probs) - 1.0, -1.0, 1.0)
+        confidence = np.maximum(probs, 1.0 - probs)
     return pd.Series(score, index=df.index, dtype=float), pd.Series(
         confidence, index=df.index, dtype=float
     )
@@ -2287,6 +2304,17 @@ def _run_parity_simulation(
         confidence_threshold, entry_score_threshold, session_regime, threshold_source = (
             _thresholds_for_regime(cfg, ts=ts_iso)
         )
+        rank_probability_semantics = bool(
+            model_context is not None
+            and model_context.score_semantics
+            == "positive_class_probability_rank"
+        )
+        if (
+            rank_probability_semantics
+            and model_context.development_probability_cutoff is not None
+        ):
+            confidence_threshold = model_context.development_probability_cutoff
+            threshold_source = "persisted_development_probability_cutoff"
         if model_context is not None:
             regime_policy_decision = evaluate_market_regime_policy(
                 model_context.market_regime_policy,
@@ -2302,7 +2330,9 @@ def _run_parity_simulation(
         if confidence < confidence_threshold:
             return None
         side: str | None = None
-        if score >= entry_score_threshold:
+        if rank_probability_semantics:
+            side = "buy"
+        elif score >= entry_score_threshold:
             side = "buy"
         elif (
             cfg.allow_shorts
@@ -2601,6 +2631,10 @@ def _run_parity_simulation(
             "symbol_penalty_count": len(model_context.symbol_penalties),
             "feature_count": len(model_context.feature_names),
             "supports_short_scores": bool(model_context.supports_short_scores),
+            "score_semantics": model_context.score_semantics,
+            "development_probability_cutoff": (
+                model_context.development_probability_cutoff
+            ),
             "market_regime_policy": {
                 "declared": model_context.market_regime_policy is not None,
                 "governance_status": "shadow",

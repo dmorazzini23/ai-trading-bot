@@ -2548,6 +2548,7 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
     walk_forward = config.run_dir / "walk_forward_capital_simulation.json"
     order_optimizer = config.run_dir / "order_type_optimizer.json"
     post_trade_surveillance = config.run_dir / "post_trade_surveillance.json"
+    current_drift_evidence = config.run_dir / "model_data_drift_current.json"
     drift_monitor = config.run_dir / "model_data_drift_monitor.json"
     pretrade_risk = config.run_dir / "pretrade_risk_control_verification.json"
     operator_control = config.run_dir / "operator_control_plane.json"
@@ -2747,19 +2748,42 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
             metadata={"live_money_authority": False, "fail_closed": True},
         ),
         ResearchStep(
+            name="model_data_drift_current_evidence",
+            command=_python_module(
+                "ai_trading.tools.model_data_drift_baseline",
+                "--fills-jsonl",
+                _runtime_input_path("runtime/fill_events.jsonl"),
+                "--tca-jsonl",
+                _runtime_input_path("runtime/tca_records.jsonl"),
+                "--output-json",
+                current_drift_evidence,
+                "--lookback-days",
+                _env_text("AI_TRADING_MODEL_DRIFT_LOOKBACK_DAYS", "30"),
+                "--min-samples",
+                _env_text("AI_TRADING_MODEL_DRIFT_MIN_SAMPLES", "25"),
+            ),
+            purpose="Normalize weekend fill/TCA evidence before drift comparison.",
+            output_path=current_drift_evidence,
+            metadata={
+                "baseline_mutation": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            },
+        ),
+        ResearchStep(
             name="model_data_drift_monitor",
             command=_python_module(
                 "ai_trading.tools.model_data_drift_monitor",
                 "--baseline-json",
                 config.report_root / "latest" / "model_data_drift_baseline.json",
                 "--current-json",
-                expected_edge,
+                current_drift_evidence,
                 "--output-json",
                 drift_monitor,
             ),
-            purpose="Review drift before Monday preparation.",
+            purpose="Review normalized drift evidence before Monday preparation.",
             output_path=drift_monitor,
-            metadata={"live_money_authority": False},
+            metadata={"baseline_mutation": False, "live_money_authority": False},
         ),
         ResearchStep(
             name="operator_control_plane",

@@ -39236,58 +39236,59 @@ def _replay_parity_shadow_row_diagnostic(
     if not isinstance(journal_raw, Mapping):
         return None, "decision_journal_missing"
     intent_raw = journal_raw.get("order_intent")
-    if not isinstance(intent_raw, Mapping):
-        return None, "order_intent_missing"
     if journal_raw.get("submitted") is not False:
         return None, "not_explicitly_unsubmitted"
     broker_result = journal_raw.get("broker_result")
     if isinstance(broker_result, Mapping) and broker_result.get("submitted") is not False:
         return None, "broker_result_submitted"
 
-    gates: list[Any] = []
-    for container in (record, journal_raw, journal_raw.get("risk_decision")):
-        if not isinstance(container, Mapping):
-            continue
-        for key in ("gates", "reasons"):
-            values = container.get(key)
-            if isinstance(values, (list, tuple, set, frozenset)):
-                gates.extend(values)
-    gate_tokens = {
-        str(value or "").strip().upper().replace("-", "_") for value in gates
-    }
-    parity_marked = "REPLAY_LIVE_PARITY_GATE_FAILED" in gate_tokens
-    if not parity_marked:
-        for metadata in (
-            record.get("metrics"),
-            intent_raw.get("metadata"),
-            journal_raw.get("metadata"),
+    metadata_candidates = [
+        record.get("metrics"),
+        intent_raw.get("metadata") if isinstance(intent_raw, Mapping) else None,
+        journal_raw.get("metadata"),
+    ]
+    evidence_metadata: Mapping[str, Any] | None = None
+    for metadata_candidate in metadata_candidates:
+        if (
+            not isinstance(metadata_candidate, Mapping)
+            or metadata_candidate.get("replay_shadow_evidence") is not True
         ):
-            if not isinstance(metadata, Mapping) or metadata.get("replay_shadow_evidence") is not True:
-                continue
-            control = metadata.get("replay_live_entry_control")
-            if isinstance(control, Mapping) and (
-                str(control.get("status") or "").strip().lower()
-                in {"blocked", "monitor_only"}
-                or bool(control.get("gate_reason"))
-            ):
-                parity_marked = True
-                break
-    if not parity_marked:
+            continue
+        control = metadata_candidate.get("replay_live_entry_control")
+        if not isinstance(control, Mapping):
+            continue
+        status = str(control.get("status") or "").strip().lower()
+        explicitly_governed = bool(
+            (status == "monitor_only" and control.get("monitor_only") is True)
+            or (
+                status == "blocked"
+                and control.get("block_exposure_increasing") is True
+            )
+        )
+        if explicitly_governed:
+            evidence_metadata = metadata_candidate
+            break
+    if evidence_metadata is None:
         return None, "parity_marker_missing"
 
-    status = str(intent_raw.get("status") or "").strip().lower()
-    if status in {
-        "accepted",
-        "new",
-        "open",
-        "pending",
-        "submitted",
-        "partially_filled",
-        "filled",
-    }:
-        return None, "intent_status_submitted"
+    correlation_id = str(record.get("correlation_id") or "").strip()
+    journal_correlation_id = str(journal_raw.get("correlation_id") or "").strip()
+    if (
+        not correlation_id.startswith("opp_")
+        or journal_correlation_id != correlation_id
+    ):
+        return None, "canonical_correlation_missing_or_mismatched"
+    for metadata_candidate in metadata_candidates:
+        if not isinstance(metadata_candidate, Mapping):
+            continue
+        declared_correlation_id = str(
+            metadata_candidate.get("correlation_id") or ""
+        ).strip()
+        if declared_correlation_id and declared_correlation_id != correlation_id:
+            return None, "canonical_correlation_missing_or_mismatched"
+
     ts = _parse_iso_timestamp(
-        intent_raw.get("bar_ts")
+        (intent_raw.get("bar_ts") if isinstance(intent_raw, Mapping) else None)
         or journal_raw.get("bar_ts")
         or record.get("bar_ts")
         or record.get("ts")
@@ -39298,19 +39299,57 @@ def _replay_parity_shadow_row_diagnostic(
         return None, "timestamp_before_lookback"
     if ts > now + timedelta(minutes=5):
         return None, "timestamp_future_dated"
-    symbol = str(intent_raw.get("symbol") or "").strip().upper()
-    side = str(intent_raw.get("side") or "").strip().lower()
+    metadata_raw = record.get("metrics")
+    metadata = metadata_raw if isinstance(metadata_raw, Mapping) else {}
+    source_kind = "decision_journal_parity_shadow"
+    raw_client_order_id = ""
+    order_type = "limit"
+    timeframe = "5Min"
+    if isinstance(intent_raw, Mapping):
+        status = str(intent_raw.get("status") or "").strip().lower()
+        if status in {
+            "accepted",
+            "new",
+            "open",
+            "pending",
+            "submitted",
+            "partially_filled",
+            "filled",
+        }:
+            return None, "intent_status_submitted"
+        intent_correlation_id = str(intent_raw.get("correlation_id") or "").strip()
+        if intent_correlation_id and intent_correlation_id != correlation_id:
+            return None, "canonical_correlation_missing_or_mismatched"
+        symbol = str(intent_raw.get("symbol") or "").strip().upper()
+        side = str(intent_raw.get("side") or "").strip().lower()
+        qty_raw = intent_raw.get("qty")
+        price_raw = intent_raw.get("limit_price") or intent_raw.get("price")
+        raw_client_order_id = str(intent_raw.get("client_order_id") or "").strip()
+        order_type = str(intent_raw.get("order_type") or "limit").strip().lower()
+        timeframe = str(intent_raw.get("timeframe") or "5Min").strip() or "5Min"
+    else:
+        if metadata.get("opportunity_eligible") is not True:
+            return None, "opportunity_not_eligible"
+        symbol = str(
+            record.get("symbol") or journal_raw.get("symbol") or ""
+        ).strip().upper()
+        side = str(metadata.get("opportunity_side") or "").strip().lower()
+        qty_raw = metadata.get("opportunity_quantity")
+        price_raw = (
+            metadata.get("opportunity_price") or metadata.get("reference_price")
+        )
+        order_type = "not_submitted"
+        source_kind = "decision_journal_parity_opportunity"
     if not symbol or side not in {"buy", "sell"}:
         return None, "symbol_or_side_invalid"
     try:
-        qty = float(intent_raw.get("qty"))
-        price = float(intent_raw.get("limit_price") or intent_raw.get("price"))
+        qty = float(qty_raw)
+        price = float(price_raw)
     except (TypeError, ValueError):
         return None, "quantity_or_price_invalid"
     if qty <= 0.0 or price <= 0.0 or not math.isfinite(qty) or not math.isfinite(price):
         return None, "quantity_or_price_invalid"
 
-    raw_client_order_id = str(intent_raw.get("client_order_id") or "").strip()
     identity_seed = "|".join(
         (
             symbol,
@@ -39323,21 +39362,20 @@ def _replay_parity_shadow_row_diagnostic(
     client_order_id = raw_client_order_id or hashlib.sha256(
         identity_seed.encode("utf-8")
     ).hexdigest()[:24]
-    metadata_raw = record.get("metrics")
-    metadata = metadata_raw if isinstance(metadata_raw, Mapping) else {}
     return (
         (
-            raw_client_order_id or identity_seed,
+            raw_client_order_id or correlation_id,
             {
                 "symbol": symbol,
                 "ts": ts.isoformat(),
                 "close": float(price),
                 "side": side,
                 "qty": float(qty),
-                "order_type": str(intent_raw.get("order_type") or "limit").strip().lower(),
+                "order_type": order_type,
                 "client_order_id": client_order_id,
-                "timeframe": str(intent_raw.get("timeframe") or "5Min").strip() or "5Min",
-                "source_kind": "decision_journal_parity_shadow",
+                "correlation_id": correlation_id,
+                "timeframe": timeframe,
+                "source_kind": source_kind,
                 "regime_profile": str(
                     metadata.get("regime_profile")
                     or metadata.get("market_regime")
@@ -39413,6 +39451,8 @@ def _refresh_replay_dataset_from_tca(
     shadow_scanned = 0
     shadow_rejected = 0
     shadow_accepted = 0
+    shadow_intent_accepted = 0
+    shadow_opportunity_accepted = 0
     shadow_rejection_reasons: dict[str, int] = {}
     if shadow_enabled and decision_path.exists():
         for record in _read_jsonl_records(str(decision_path), max_records=max_records):
@@ -39431,6 +39471,10 @@ def _refresh_replay_dataset_from_tca(
             dedupe_key, row = parsed
             deduplicated[dedupe_key] = row
             shadow_accepted += 1
+            if row.get("source_kind") == "decision_journal_parity_opportunity":
+                shadow_opportunity_accepted += 1
+            else:
+                shadow_intent_accepted += 1
 
     tca_records = (
         _read_jsonl_records(str(tca_path), max_records=max_records)
@@ -39491,7 +39535,11 @@ def _refresh_replay_dataset_from_tca(
         client_order_id = raw_client_order_id or hashlib.sha256(
             identity_seed.encode("utf-8")
         ).hexdigest()[:24]
-        dedupe_key = raw_client_order_id or identity_seed
+        correlation_id = str(record.get("correlation_id") or "").strip()
+        for collision_key in (correlation_id, raw_client_order_id):
+            if collision_key:
+                deduplicated.pop(collision_key, None)
+        dedupe_key = correlation_id or raw_client_order_id or identity_seed
         deduplicated[dedupe_key] = {
             "symbol": symbol,
             "ts": submit_ts.isoformat(),
@@ -39500,6 +39548,7 @@ def _refresh_replay_dataset_from_tca(
             "qty": float(qty),
             "order_type": str(record.get("order_type") or "limit").strip().lower(),
             "client_order_id": client_order_id,
+            "correlation_id": correlation_id or None,
             "timeframe": "5Min",
             "source_kind": "tca_decision",
             "regime_profile": str(
@@ -39531,6 +39580,10 @@ def _refresh_replay_dataset_from_tca(
             "shadow_rejected_records": int(shadow_rejected),
             "shadow_rejection_reasons": dict(sorted(shadow_rejection_reasons.items())),
             "shadow_accepted_records": int(shadow_accepted),
+            "shadow_intent_accepted_records": int(shadow_intent_accepted),
+            "shadow_opportunity_accepted_records": int(
+                shadow_opportunity_accepted
+            ),
             "shadow_decision_rows": 0,
             "source_paths": [
                 str(path)
@@ -39549,6 +39602,11 @@ def _refresh_replay_dataset_from_tca(
         for row in rows
         if row.get("source_kind") == "decision_journal_parity_shadow"
     )
+    shadow_opportunity_rows = sum(
+        1
+        for row in rows
+        if row.get("source_kind") == "decision_journal_parity_opportunity"
+    )
     tca_rows = sum(1 for row in rows if row.get("source_kind") == "tca_decision")
     return target, {
         "enabled": True,
@@ -39565,7 +39623,10 @@ def _refresh_replay_dataset_from_tca(
         "shadow_rejected_records": int(shadow_rejected),
         "shadow_rejection_reasons": dict(sorted(shadow_rejection_reasons.items())),
         "shadow_accepted_records": int(shadow_accepted),
+        "shadow_intent_accepted_records": int(shadow_intent_accepted),
+        "shadow_opportunity_accepted_records": int(shadow_opportunity_accepted),
         "shadow_decision_rows": int(shadow_rows),
+        "shadow_opportunity_rows": int(shadow_opportunity_rows),
         "source_paths": [
             str(path)
             for path in (tca_path, decision_path if shadow_enabled else None)
@@ -41769,6 +41830,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     def _decision_quote_snapshot(symbol: str) -> dict[str, Any]:
         payload = dict(_ml_shadow_quote_snapshot(symbol=symbol))
+        payload["anomaly_spread_bps"] = max(
+            0.0,
+            float(
+                get_env(
+                    "AI_TRADING_CAPACITY_SPREAD_HARD_BPS",
+                    30.0,
+                    cast=float,
+                )
+            ),
+        )
         normalized_symbol = str(symbol).strip().upper()
         paper_sampling_passive = (
             str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
@@ -41785,6 +41856,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         return payload
 
+    def _decision_replay_entry_control() -> Mapping[str, Any] | None:
+        for source in (state, runtime):
+            control = getattr(source, "replay_live_entry_control", None)
+            if isinstance(control, Mapping):
+                return dict(control)
+        return None
+
     decision_recorder = DecisionRecorder(
         runtime=runtime,
         path=decision_path,
@@ -41793,6 +41871,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         session_bucket_from_ts=_session_bucket_from_ts,
         safe_float=_safe_float,
         quote_snapshot_func=_decision_quote_snapshot,
+        replay_entry_control_func=_decision_replay_entry_control,
     )
 
     def _make_decision_record(**kwargs: Any) -> Any:

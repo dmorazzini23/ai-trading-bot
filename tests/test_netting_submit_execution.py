@@ -110,6 +110,39 @@ def test_execute_netting_submission_returns_blocked_on_exception() -> None:
     assert result.gates_added == ("BROKER_SUBMIT_ERROR",)
     assert result.attempted_increment == 1
     assert result.order_intent_contract == {"symbol": "AAPL", "side": "buy"}
+    assert result.terminal_stage == "broker_submit"
+    assert result.terminal_reason == "BROKER_SUBMIT_ERROR"
+
+
+def test_execute_netting_submission_preserves_submit_outcome_detail() -> None:
+    kwargs = _base_kwargs()
+    kwargs["runtime"] = SimpleNamespace(
+        execution_engine=SimpleNamespace(
+            _last_submit_outcome={
+                "status": "skipped",
+                "reason": "PAPER_SAMPLING_SYMBOL_BLOCK",
+                "detail": "symbol not governed",
+                "context": {
+                    "paper_sampling": {
+                        "evaluated": True,
+                        "allowed": False,
+                        "reserved": False,
+                    }
+                },
+            }
+        )
+    )
+    kwargs["submit_order_func"] = lambda *args, **call_kwargs: None
+    kwargs["resolve_submit_none_reason_func"] = (
+        lambda runtime: "PAPER_SAMPLING_SYMBOL_BLOCK"
+    )
+
+    result = execute_netting_submission(**cast(Any, kwargs))
+
+    assert result.terminal_stage == "submit_runtime"
+    assert result.terminal_reason == "PAPER_SAMPLING_SYMBOL_BLOCK"
+    assert result.terminal_detail == "symbol not governed"
+    assert result.terminal_context["paper_sampling"]["evaluated"] is True
 
 
 def test_execute_netting_submission_returns_success_payload() -> None:

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from ai_trading.tools import training_accelerator
 
 
@@ -34,6 +36,60 @@ def test_training_accelerator_plan_writes_report(tmp_path: Path) -> None:
     manifest = json.loads(Path(payload["input_manifest"]).read_text(encoding="utf-8"))
     assert manifest["inputs"]["data_dir"]["exists"] is False
     assert payload["cache"]["hit"] is False
+
+
+def test_training_accelerator_rejects_symbols_outside_governed_universe(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="not governed: GOOGL"):
+        training_accelerator.run_training_accelerator(
+            argparse.Namespace(
+                cadence="daily",
+                data_dir=tmp_path,
+                symbols="AAPL,GOOGL",
+                output_dir=tmp_path / "out",
+                training_cache_dir=tmp_path / "cache",
+                model_type="logistic",
+                plan_only=True,
+                max_replay_candidates=None,
+            )
+        )
+
+
+def test_training_accelerator_blocks_required_unusable_live_cost(
+    tmp_path: Path,
+) -> None:
+    live_cost = tmp_path / "live_cost.json"
+    live_cost.write_text(
+        json.dumps(
+            {
+                "status": {
+                    "available": True,
+                    "status": "warming_up",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = training_accelerator.run_training_accelerator(
+        argparse.Namespace(
+            cadence="daily",
+            data_dir=tmp_path,
+            symbols="AAPL,AMZN,MSFT",
+            output_dir=tmp_path / "out",
+            training_cache_dir=tmp_path / "cache",
+            model_type="logistic",
+            live_cost_model_json=live_cost,
+            use_live_cost_model=True,
+            plan_only=False,
+            max_replay_candidates=None,
+        )
+    )
+
+    assert report["status"] == "blocked"
+    assert report["blocked_reasons"] == ["required_live_cost_model_unusable"]
+    assert report["live_cost_usability"]["reason"] == "not_ready"
 
 
 def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, monkeypatch) -> None:

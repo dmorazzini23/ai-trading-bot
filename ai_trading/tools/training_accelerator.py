@@ -18,6 +18,8 @@ from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
 )
 
+_GOVERNED_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
+
 
 def _env_text(name: str, default: str = "") -> str:
     return str(get_env(name, default, cast=str, resolve_aliases=False) or default).strip()
@@ -96,6 +98,51 @@ def _stable_signature(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
+def _governed_symbols(raw: str) -> str:
+    requested = {
+        token.strip().upper() for token in str(raw or "").split(",") if token.strip()
+    }
+    invalid = requested - _GOVERNED_SYMBOLS
+    if invalid:
+        raise ValueError(
+            "training accelerator symbols are not governed: "
+            + ",".join(sorted(invalid))
+        )
+    return ",".join(sorted(requested or _GOVERNED_SYMBOLS))
+
+
+def _default_governed_symbols(raw: str) -> str:
+    requested = {
+        token.strip().upper() for token in str(raw or "").split(",") if token.strip()
+    }
+    governed = requested & _GOVERNED_SYMBOLS
+    return ",".join(sorted(governed or _GOVERNED_SYMBOLS))
+
+
+def _live_cost_usability(path: Path | None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "requested_path": str(path) if path is not None else None,
+        "usable": False,
+        "reason": "not_requested" if path is None else "unreadable",
+    }
+    if path is None:
+        return result
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return result
+    status = payload.get("status") if isinstance(payload, dict) else None
+    if not isinstance(status, dict):
+        result["reason"] = "status_missing"
+        return result
+    result["status"] = status.get("status")
+    result["available"] = bool(status.get("available"))
+    result["usable"] = bool(
+        status.get("available") and str(status.get("status") or "") == "ready"
+    )
+    result["reason"] = "ready" if result["usable"] else "not_ready"
+    return result
+
 
 def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     live_cost_model_json = getattr(args, "live_cost_model_json", None)
@@ -129,11 +176,19 @@ def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> d
             ),
         },
         "inputs": {
+            "acquisition_manifest_json": _path_manifest(
+                Path(getattr(args, "acquisition_manifest_json"))
+                if getattr(args, "acquisition_manifest_json", None) is not None
+                else None
+            ),
             "data_dir": _path_manifest(
                 Path(args.data_dir) if args.data_dir is not None else None,
                 exclude_paths=tuple(data_excludes),
             ),
             "live_cost_model_json": _path_manifest(
+                Path(live_cost_model_json) if live_cost_model_json is not None else None
+            ),
+            "live_cost_usability": _live_cost_usability(
                 Path(live_cost_model_json) if live_cost_model_json is not None else None
             ),
         },
@@ -162,7 +217,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     training_cache_dir = Path(args.training_cache_dir) if args.training_cache_dir else output_dir / "feature_cache"
     config = {
         "data_dir": str(args.data_dir),
-        "symbols": str(getattr(args, "symbols", "") or ""),
+        "symbols": _governed_symbols(str(getattr(args, "symbols", "") or "")),
         "timestamp_col": str(getattr(args, "timestamp_col", "timestamp")),
         "horizons": str(getattr(args, "horizons", "") or horizons),
         "label_objectives": str(getattr(args, "label_objectives", "") or objectives),
@@ -187,6 +242,11 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         "live_cost_model_json": (
             str(getattr(args, "live_cost_model_json", None))
             if getattr(args, "live_cost_model_json", None) is not None
+            else None
+        ),
+        "acquisition_manifest_json": (
+            str(getattr(args, "acquisition_manifest_json", None))
+            if getattr(args, "acquisition_manifest_json", None) is not None
             else None
         ),
         "use_live_cost_model": getattr(args, "use_live_cost_model", None),
@@ -274,7 +334,16 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         },
         "timing": {"started_at": started_at},
     }
-    if args.plan_only:
+    live_cost_status = input_manifest["inputs"]["live_cost_usability"]
+    required_live_cost_blocked = bool(
+        config["use_live_cost_model"] is True
+        and not bool(live_cost_status.get("usable"))
+    )
+    if required_live_cost_blocked:
+        report["status"] = "blocked"
+        report["blocked_reasons"] = ["required_live_cost_model_unusable"]
+        report["live_cost_usability"] = live_cost_status
+    elif args.plan_only:
         report["status"] = "planned"
     elif cache_hit:
         report["status"] = "skipped_unchanged"
@@ -285,6 +354,9 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         pipeline_started = perf_counter()
         pipeline_args = argparse.Namespace(
             data_dir=Path(args.data_dir),
+            acquisition_manifest_json=getattr(
+                args, "acquisition_manifest_json", None
+            ),
             symbols=str(config["symbols"]),
             timestamp_col=str(config["timestamp_col"]),
             output_dir=output_dir / "multi_horizon",
@@ -395,7 +467,13 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(default_data_dir) if default_data_dir else None,
     )
-    parser.add_argument("--symbols", default=_env_text("AI_TRADING_CANARY_SYMBOLS", "AAPL,AMZN"))
+    parser.add_argument(
+        "--symbols",
+        default=_default_governed_symbols(
+            _env_text("AI_TRADING_CANARY_SYMBOLS", "AAPL,AMZN")
+        ),
+    )
+    parser.add_argument("--acquisition-manifest-json", type=Path, default=None)
     parser.add_argument("--timestamp-col", default="timestamp")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--horizons", default=horizons)

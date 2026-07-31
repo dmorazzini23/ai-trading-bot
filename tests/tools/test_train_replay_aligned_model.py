@@ -199,11 +199,11 @@ def test_threshold_report_does_not_turn_long_probabilities_into_shorts() -> None
         allow_short_labels=True,
     )
 
-    assert all(row["candidates"] == 0 for row in long_only)
-    assert any(
-        row["candidates"] > 0 and float(row["total_net_markout_bps"]) > 0.0
-        for row in directional
-    )
+    assert all(row["score_semantics"] == "positive_class_probability_rank" for row in long_only)
+    assert all(float(row["total_net_markout_bps"]) < 0.0 for row in long_only)
+    assert all(row["entry_score_threshold"] == 0.0 for row in long_only)
+    assert all(row["score_semantics"] == "positive_class_probability_rank" for row in directional)
+    assert all(row["candidates"] > 0 for row in directional)
 
 
 def test_best_thresholds_ignore_zero_candidate_rows() -> None:
@@ -445,7 +445,13 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert report_path.is_file()
     assert verify_artifact(model_path=model_path, manifest_path=manifest_path) == (True, "OK")
     loaded = joblib.load(model_path)
-    assert getattr(loaded, "edge_global_threshold_") == 0.66
+    selected_cutoff = report["walk_forward"]["selected_threshold"][
+        "confidence_threshold"
+    ]
+    assert getattr(loaded, "edge_global_threshold_") == pytest.approx(selected_cutoff)
+    assert getattr(loaded, "edge_score_semantics_") == (
+        "positive_class_probability_rank"
+    )
     assert getattr(loaded, "edge_thresholds_by_regime_")
 
     persisted = cast(dict[str, Any], json.loads(report_path.read_text(encoding="utf-8")))

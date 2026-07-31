@@ -134,9 +134,12 @@ def _governed_evidence(now: datetime, *, model_id: str = "shadow-1") -> dict[str
 def test_model_data_drift_monitor_accepts_approved_compatible_baseline() -> None:
     now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
     current = _governed_evidence(now)
-    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+    proposal = model_data_drift_baseline.build_drift_baseline_proposal(
         current,
         baseline_id="shadow-1-20260718",
+    )
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        proposal,
         approved_by="operator",
         approved_at=now,
     )
@@ -179,9 +182,12 @@ def test_model_data_drift_monitor_rejects_unapproved_or_mismatched_evidence() ->
 def test_model_data_drift_monitor_rejects_wrong_current_contract() -> None:
     now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
     evidence = _governed_evidence(now)
-    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+    proposal = model_data_drift_baseline.build_drift_baseline_proposal(
         evidence,
         baseline_id="shadow-1-20260718",
+    )
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        proposal,
         approved_by="operator",
         approved_at=now,
     )

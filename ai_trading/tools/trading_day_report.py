@@ -399,6 +399,29 @@ def _funnel_reasons(row: Mapping[str, Any]) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+def _funnel_terminal(row: Mapping[str, Any]) -> dict[str, Any]:
+    journal = _nested_mapping(row, "decision_journal")
+    metrics = _nested_mapping(row, "metrics")
+    metadata = _nested_mapping(journal, "metadata")
+    for payload in (row, metrics, journal, metadata):
+        stage = str(payload.get("terminal_stage") or "").strip()
+        reason = str(payload.get("terminal_reason") or "").strip()
+        if not stage and not reason:
+            continue
+        context = payload.get("terminal_context")
+        return {
+            "stage": stage or "unknown",
+            "reason": reason or "unspecified",
+            "detail": (
+                str(payload.get("terminal_detail"))
+                if payload.get("terminal_detail") not in (None, "")
+                else None
+            ),
+            "context": dict(context) if isinstance(context, Mapping) else {},
+        }
+    return {}
+
+
 def _funnel_opportunity_eligible(row: Mapping[str, Any]) -> bool:
     journal = _nested_mapping(row, "decision_journal")
     metadata = _nested_mapping(journal, "metadata")
@@ -488,6 +511,7 @@ def _build_execution_funnel(
                 "rejected": False,
                 "submitted": False,
                 "filled": False,
+                "terminal": {},
             },
         )
         if entity["symbol"] == "UNKNOWN":
@@ -495,6 +519,9 @@ def _build_execution_funnel(
         entity["reasons"] = list(
             dict.fromkeys([*entity["reasons"], *_funnel_reasons(row)])
         )
+        terminal = _funnel_terminal(row)
+        if terminal:
+            entity["terminal"] = terminal
         return entity
 
     for index, row in enumerate(decisions):
@@ -597,7 +624,13 @@ def _build_execution_funnel(
             if bool(entity[source_stage]) and not bool(entity[target_stage])
         ]
         reasons = Counter(
-            str(entity["reasons"][0] if entity["reasons"] else default_reason)
+            str(
+                entity["terminal"].get("reason")
+                if entity["terminal"]
+                else entity["reasons"][0]
+                if entity["reasons"]
+                else default_reason
+            )
             for entity in dropped
         )
         by_symbol = Counter(str(entity["symbol"]) for entity in dropped)
@@ -607,8 +640,38 @@ def _build_execution_funnel(
             "by_symbol": dict(sorted(by_symbol.items())),
         }
 
+    terminal_entities = [
+        entity
+        for entity in entities.values()
+        if bool(entity["evaluated"]) and not bool(entity["submitted"])
+    ]
+    terminal_dropoffs: dict[str, dict[str, Any]] = {}
+    for entity in terminal_entities:
+        terminal = entity["terminal"]
+        if terminal:
+            stage = str(terminal.get("stage") or "unknown")
+            reason = str(terminal.get("reason") or "unspecified")
+        elif not entity["eligible"]:
+            stage, reason = "eligibility", "not_opportunity_eligible"
+        elif not entity["nonzero_target"]:
+            stage, reason = "sizing", "zero_or_missing_target"
+        elif not entity["precheck_candidate"]:
+            stage, reason = "precheck", "no_precheck_candidate"
+        else:
+            stage, reason = "submission", "not_submitted"
+        bucket = terminal_dropoffs.setdefault(
+            stage,
+            {"count": 0, "reasons": Counter(), "by_symbol": Counter()},
+        )
+        bucket["count"] += 1
+        bucket["reasons"][reason] += 1
+        bucket["by_symbol"][str(entity["symbol"])] += 1
+    for payload in terminal_dropoffs.values():
+        payload["reasons"] = dict(sorted(payload["reasons"].items()))
+        payload["by_symbol"] = dict(sorted(payload["by_symbol"].items()))
+
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "identity": {
             "primary_key": "correlation_id",
             "legacy_fallbacks": [
@@ -622,6 +685,7 @@ def _build_execution_funnel(
         },
         "stages": stages,
         "dropoffs": dropoffs,
+        "terminal_dropoffs": dict(sorted(terminal_dropoffs.items())),
     }
 
 

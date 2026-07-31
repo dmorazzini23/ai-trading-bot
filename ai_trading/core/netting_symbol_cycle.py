@@ -200,6 +200,26 @@ def _short_openings_allowed(cfg: Any) -> bool:
     return bool(allowed)
 
 
+def _terminal_metrics(
+    metrics: Mapping[str, Any] | None,
+    *,
+    stage: str,
+    reason: str,
+    detail: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(metrics or {})
+    payload.update(
+        {
+            "terminal_stage": str(stage),
+            "terminal_reason": str(reason),
+            "terminal_detail": str(detail) if detail not in (None, "") else None,
+            "terminal_context": dict(context or {}),
+        }
+    )
+    return payload
+
+
 def process_netting_symbol(
     *,
     processor: NettingSymbolProcessor,
@@ -207,6 +227,25 @@ def process_netting_symbol(
     net_target: Any,
     orders_submitted: int,
 ) -> NettingSymbolProcessResult:
+    def _record_decision(**kwargs: Any) -> Any:
+        metrics_raw = kwargs.get("metrics")
+        metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {}
+        if "terminal_stage" not in metrics and not kwargs.get("order"):
+            gate_values = [
+                str(gate).strip()
+                for gate in kwargs.get("gates", ())
+                if str(gate).strip()
+            ]
+            reason = gate_values[-1] if gate_values else "NO_ACTION"
+            metrics = _terminal_metrics(
+                metrics,
+                stage="decision_filter",
+                reason=reason,
+                context={"gates": gate_values},
+            )
+        kwargs["metrics"] = metrics
+        return processor.record_decision_func(**kwargs)
+
     liq_features = processor.latest_liquidity.get(
         symbol,
         LiquidityFeatures(rolling_volume=0.0, spread_bps=0.0, volatility_proxy=0.0),
@@ -225,7 +264,7 @@ def process_netting_symbol(
         symbol_snapshot["liquidity_regime"] = liq_regime.value
     if processor.state.halt_trading:
         reason = processor.state.halt_reason or "HALT_TRADING"
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -239,12 +278,15 @@ def process_netting_symbol(
     current_shares = int(processor.positions.get(symbol, 0) or 0)
     if price <= 0:
         net_target.reasons.append("BAD_DATA_CONTRACT")
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
             net_target=net_target,
-            gates=list(processor.skip_reasons.get(symbol, [])),
+            gates=[
+                *processor.skip_reasons.get(symbol, []),
+                "BAD_DATA_CONTRACT",
+            ],
             config_snapshot=symbol_snapshot,
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
@@ -270,7 +312,7 @@ def process_netting_symbol(
         if int(current_shares) < 0:
             initial_requested_delta_shares = int(delta_shares)
         else:
-            processor.record_decision_func(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -317,7 +359,7 @@ def process_netting_symbol(
     net_target.target_shares = int(symbol_prelude.target_shares)
     net_target.target_dollars = float(symbol_prelude.target_dollars)
     if symbol_prelude.blocked_reason:
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -334,7 +376,7 @@ def process_netting_symbol(
         if bool(processor.primary_feed_derisk.get("block", False)) and not reducing_exposure:
             gates.append("DERISK_PRIMARY_FEED_BLOCK")
             symbol_snapshot["primary_feed_derisk"] = dict(processor.primary_feed_derisk)
-            processor.record_decision_func(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -378,7 +420,7 @@ def process_netting_symbol(
                 net_target.target_shares = 0
                 delta_shares = -current_shares
             else:
-                processor.record_decision_func(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -410,7 +452,7 @@ def process_netting_symbol(
                 processor.state.stop_lock.pop(symbol, None)
 
     if delta_shares == 0:
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -422,7 +464,7 @@ def process_netting_symbol(
 
     if processor.kill_switch:
         gates.append("KILL_SWITCH_BLOCK")
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -452,7 +494,7 @@ def process_netting_symbol(
         symbol_snapshot["event_risk_near"] = event_risk_near
         if event_risk_near:
             gates.append("EVENT_RISK_BLACKOUT_BLOCK")
-            processor.record_decision_func(
+            _record_decision(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
                 sleeves=net_target.proposals,
@@ -464,7 +506,7 @@ def process_netting_symbol(
 
     if processor.state.last_order_bar_ts.get(symbol) == net_target.bar_ts:
         gates.append("BAR_DEDUP")
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -492,7 +534,7 @@ def process_netting_symbol(
             participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
             if participation_block_mode == "block" or _gate_blocks(processor, str(participation_gate)):
                 gates.append(str(participation_gate))
-                processor.record_decision_func(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -539,7 +581,7 @@ def process_netting_symbol(
         if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
             if _gate_blocks(processor, "LIQ_THIN_MAX_ORDER_BLOCK"):
                 gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
-                processor.record_decision_func(
+                _record_decision(
                     symbol=symbol,
                     bar_ts=net_target.bar_ts,
                     sleeves=net_target.proposals,
@@ -558,138 +600,6 @@ def process_netting_symbol(
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price
             gates.append("LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED")
-
-    if current_shares == 0 and processor.alpha_decay_deweight_enabled:
-        alpha_guard = processor.alpha_decay_entry_guard_func(processor.state, symbol, processor.now)
-        if alpha_guard.get("blocked"):
-            if _gate_blocks(processor, "ALPHA_DECAY_BLOCK"):
-                gates.append("ALPHA_DECAY_BLOCK")
-                processor.record_decision_func(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={"alpha_decay": alpha_guard},
-                    config_snapshot=symbol_snapshot,
-                )
-                return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
-            gates.append("ALPHA_DECAY_BLOCK_BYPASSED")
-        trades_in_window = int(alpha_guard.get("trades_in_window", 0) or 0)
-        start_trades = int(alpha_guard.get("start_trades", 0) or 0)
-        over_start = max(0, trades_in_window - max(0, start_trades) + 1)
-        if over_start > 0 and processor.alpha_decay_qty_step > 0:
-            deweight = min(
-                processor.alpha_decay_qty_max_deweight,
-                over_start * processor.alpha_decay_qty_step,
-            )
-            multiplier = max(0.05, 1.0 - deweight)
-            scaled_qty = int(round(float(delta_shares) * multiplier))
-            if scaled_qty == 0:
-                if _gate_blocks(processor, "ALPHA_DECAY_ZERO_QTY_BLOCK"):
-                    gates.append("ALPHA_DECAY_ZERO_QTY_BLOCK")
-                    processor.record_decision_func(
-                        symbol=symbol,
-                        bar_ts=net_target.bar_ts,
-                        sleeves=net_target.proposals,
-                        net_target=net_target,
-                        gates=gates,
-                        metrics={
-                            "alpha_decay": {
-                                **dict(alpha_guard),
-                                "multiplier": multiplier,
-                            }
-                        },
-                        config_snapshot=symbol_snapshot,
-                    )
-                    return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
-                scaled_qty = 1 if delta_shares > 0 else -1
-            if scaled_qty != delta_shares:
-                delta_shares = scaled_qty
-                net_target.target_shares = current_shares + delta_shares
-                net_target.target_dollars = net_target.target_shares * price
-                gates.append("ALPHA_DECAY_DEWEIGHT")
-                symbol_snapshot["alpha_decay"] = {
-                    "trades_in_window": trades_in_window,
-                    "start_trades": start_trades,
-                    "multiplier": multiplier,
-                }
-
-    if processor.capacity_throttle_enabled and delta_shares != 0:
-        capacity_scale = 1.0
-        spread_bps_now = max(float(liq_features.spread_bps), 0.0)
-        if (
-            processor.capacity_spread_hard_bps > processor.capacity_spread_soft_bps
-            and spread_bps_now > processor.capacity_spread_soft_bps
-        ):
-            if spread_bps_now >= processor.capacity_spread_hard_bps:
-                spread_scale = processor.capacity_min_scale
-            else:
-                spread_progress = (spread_bps_now - processor.capacity_spread_soft_bps) / (
-                    processor.capacity_spread_hard_bps - processor.capacity_spread_soft_bps
-                )
-                spread_scale = 1.0 - spread_progress * (1.0 - processor.capacity_min_scale)
-            capacity_scale = min(capacity_scale, max(processor.capacity_min_scale, spread_scale))
-        rolling_volume = max(float(liq_features.rolling_volume), 0.0)
-        if (
-            rolling_volume > 0
-            and processor.capacity_volume_hard_participation
-            > processor.capacity_volume_soft_participation
-        ):
-            participation = abs(float(delta_shares)) / rolling_volume
-            if participation > processor.capacity_volume_soft_participation:
-                if participation >= processor.capacity_volume_hard_participation:
-                    volume_scale = processor.capacity_min_scale
-                else:
-                    participation_progress = (
-                        participation - processor.capacity_volume_soft_participation
-                    ) / (
-                        processor.capacity_volume_hard_participation
-                        - processor.capacity_volume_soft_participation
-                    )
-                    volume_scale = 1.0 - participation_progress * (
-                        1.0 - processor.capacity_min_scale
-                    )
-                capacity_scale = min(
-                    capacity_scale,
-                    max(processor.capacity_min_scale, volume_scale),
-                )
-        if processor.slo_derisk_scale < 1.0:
-            capacity_scale = min(capacity_scale, processor.slo_derisk_scale)
-        if feed_derisk_scale < 1.0:
-            capacity_scale = min(capacity_scale, feed_derisk_scale)
-        if capacity_scale < 1.0:
-            throttled_qty = int(round(float(delta_shares) * capacity_scale))
-            if throttled_qty == 0:
-                gates.append("CAPACITY_THROTTLE_BLOCK")
-                processor.record_decision_func(
-                    symbol=symbol,
-                    bar_ts=net_target.bar_ts,
-                    sleeves=net_target.proposals,
-                    net_target=net_target,
-                    gates=gates,
-                    metrics={
-                        "capacity_scale": capacity_scale,
-                        "spread_bps": spread_bps_now,
-                        "rolling_volume": rolling_volume,
-                        "slo_derisk": dict(processor.slo_derisk_details),
-                        "primary_feed_derisk": dict(processor.primary_feed_derisk),
-                    },
-                    config_snapshot=symbol_snapshot,
-                )
-                return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
-            if throttled_qty != delta_shares:
-                delta_shares = throttled_qty
-                net_target.target_shares = current_shares + delta_shares
-                net_target.target_dollars = net_target.target_shares * price
-                gates.append("CAPACITY_THROTTLE_SCALE")
-                symbol_snapshot["capacity_throttle"] = {
-                    "scale": capacity_scale,
-                    "spread_bps": spread_bps_now,
-                    "rolling_volume": rolling_volume,
-                    "slo_derisk": dict(processor.slo_derisk_details),
-                    "primary_feed_derisk": dict(processor.primary_feed_derisk),
-                }
 
     expanding_exposure = abs(current_shares + delta_shares) > abs(current_shares)
     adjustment_result = processor.apply_symbol_adjustments_func(
@@ -721,7 +631,7 @@ def process_netting_symbol(
     gates.extend(adjustment_result.gates_added)
     symbol_snapshot.update(adjustment_result.snapshot_updates)
     if adjustment_result.blocked_reason:
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
@@ -782,13 +692,18 @@ def process_netting_symbol(
     net_target.target_shares = int(approval_result.target_shares)
     net_target.target_dollars = float(approval_result.target_dollars)
     if approval_result.blocked_reason:
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
             net_target=net_target,
             gates=gates,
-            metrics=approval_result.blocked_metrics,
+            metrics=_terminal_metrics(
+                approval_result.blocked_metrics,
+                stage="execution_approval",
+                reason=str(approval_result.blocked_reason),
+                context={"gates_added": list(approval_result.gates_added)},
+            ),
             config_snapshot=symbol_snapshot,
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
@@ -846,13 +761,18 @@ def process_netting_symbol(
     gates.extend(submit_prelude.gates_added)
     symbol_snapshot.update(submit_prelude.snapshot_updates)
     if submit_prelude.blocked_reason:
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
             net_target=net_target,
             gates=gates,
-            metrics=submit_prelude.blocked_metrics,
+            metrics=_terminal_metrics(
+                submit_prelude.blocked_metrics,
+                stage="precheck",
+                reason=str(submit_prelude.blocked_reason),
+                context={"gates_added": list(submit_prelude.gates_added)},
+            ),
             config_snapshot=symbol_snapshot,
             order_intent=submit_prelude.blocked_order_intent,
             correlation_id=opportunity_correlation_id,
@@ -947,14 +867,27 @@ def process_netting_symbol(
         breakers=processor.breakers,
     )
     gates.extend(submit_result.gates_added)
+    submit_metrics = _terminal_metrics(
+        submit_result.metrics,
+        stage=str(getattr(submit_result, "terminal_stage", "submitted")),
+        reason=str(
+            getattr(
+                submit_result,
+                "terminal_reason",
+                submit_result.gates_added[0] if submit_result.gates_added else submit_result.status,
+            )
+        ),
+        detail=getattr(submit_result, "terminal_detail", None),
+        context=getattr(submit_result, "terminal_context", None),
+    )
     if submit_result.status != "submitted":
-        processor.record_decision_func(
+        _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
             net_target=net_target,
             gates=gates,
-            metrics=submit_result.metrics,
+            metrics=submit_metrics,
             config_snapshot=symbol_snapshot,
             order_intent=submit_result.order_intent_contract,
             correlation_id=opportunity_correlation_id,
@@ -964,14 +897,14 @@ def process_netting_symbol(
             submitted_increment=int(submit_result.submitted_increment),
         )
 
-    processor.record_decision_func(
+    _record_decision(
         symbol=symbol,
         bar_ts=net_target.bar_ts,
         sleeves=net_target.proposals,
         net_target=net_target,
         gates=gates,
         order=submit_result.order_payload,
-        metrics=submit_result.metrics,
+        metrics=submit_metrics,
         config_snapshot=symbol_snapshot,
         tca=submit_result.tca_record,
         decision_trace_id=submit_result.decision_trace_id,

@@ -37,7 +37,17 @@ def _write_replay_artifact(
         },
     }
     if counterfactual_passed is not None:
-        payload["counterfactual"] = {"passed": bool(counterfactual_passed)}
+        payload["counterfactual"] = {
+            "passed": bool(counterfactual_passed),
+            "candidate": {
+                "sample_count": 71,
+                "net_edge_bps": -17.89,
+            },
+            "required": {
+                "min_samples": 250,
+                "min_net_edge_bps": 0.0,
+            },
+        }
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
 
@@ -62,6 +72,16 @@ def test_replay_live_parity_gate_passes_with_fresh_clean_replay(monkeypatch, tmp
     assert payload["status"] == "pass"
     assert payload["observed"]["replay_fresh"] is True
     assert payload["observed"]["replay_violations_count"] == 0
+    assert payload["observed"]["replay_counterfactual_candidate_samples"] == 71
+    assert payload["observed"]["replay_counterfactual_required_samples"] == 250
+    assert (
+        payload["observed"]["replay_counterfactual_candidate_net_edge_bps"]
+        == -17.89
+    )
+    assert (
+        payload["observed"]["replay_counterfactual_required_net_edge_bps"]
+        == 0.0
+    )
 
 
 def test_replay_live_parity_gate_fails_on_stale_replay(monkeypatch, tmp_path: Path) -> None:

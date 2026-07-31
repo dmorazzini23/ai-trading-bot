@@ -109,6 +109,77 @@ def test_live_cost_model_uses_explicit_total_cost_precedence(tmp_path: Path) -> 
     assert detailed["volatility_bucket"] == "wide_spread"
 
 
+def test_live_cost_model_reads_nested_decision_timestamp_and_preserves_wide_spread(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 5, 1, 15, 30, tzinfo=UTC)
+    events_path = tmp_path / "execution_quality_events.jsonl"
+    _write_jsonl(
+        events_path,
+        [
+            {
+                "decision": {"decision_timestamp": now.isoformat()},
+                "symbol": "AMD",
+                "side": "buy",
+                "spread_bps": 445.0,
+                "slippage_bps": 2.0,
+            }
+        ],
+    )
+
+    report = live_cost_model.build_live_cost_model(
+        events_path=events_path,
+        window_minutes=60,
+        min_samples=1,
+        now=now,
+    )
+
+    assert report["by_symbol_side_session"][0]["mean_spread_bps"] == 445.0
+    diagnostic = report["anomaly_diagnostics"]["by_symbol_session"][0]
+    assert diagnostic["symbol"] == "AMD"
+    assert diagnostic["wide_spread_observations"] == 1
+    assert diagnostic["observations_preserved"] is True
+
+
+def test_live_cost_model_reads_canonical_decision_metrics(tmp_path: Path) -> None:
+    now = datetime(2026, 5, 1, 15, 30, tzinfo=UTC)
+    events_path = tmp_path / "execution_quality_events.jsonl"
+    quote_events_path = tmp_path / "decision_records.jsonl"
+    _write_jsonl(events_path, [])
+    _write_jsonl(
+        quote_events_path,
+        [
+            {
+                "bar_ts": now.isoformat(),
+                "symbol": "META",
+                "metrics": {
+                    "decision_ts": now.isoformat(),
+                    "quote_age_ms": 42.0,
+                    "spread_bps": 310.0,
+                    "order_type": "limit",
+                    "session_regime": "midday",
+                },
+            }
+        ],
+    )
+
+    report = live_cost_model.build_live_cost_model(
+        events_path=events_path,
+        quote_events_path=quote_events_path,
+        window_minutes=60,
+        min_samples=1,
+        prior_min_samples=1,
+        now=now,
+    )
+
+    assert report["sources"]["quote_events"]["rows_used"] == 1
+    assert report["research_cost_prior"]["sample_count"] == 1
+    diagnostic = report["anomaly_diagnostics"]["by_symbol_session"][0]
+    assert diagnostic["symbol"] == "META"
+    assert diagnostic["session_regime"] == "midday"
+    assert diagnostic["max_spread_bps"] == 310.0
+
+
 def test_live_cost_model_filters_non_executed_and_future_rows(tmp_path: Path) -> None:
     now = datetime(2026, 5, 1, 15, 30, tzinfo=UTC)
     events_path = tmp_path / "execution_quality_events.jsonl"

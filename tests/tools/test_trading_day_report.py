@@ -513,6 +513,75 @@ def test_execution_funnel_deduplicates_correlations_and_attributes_dropoffs():
     assert funnel["identity"]["missing_correlation_by_source"] == {}
 
 
+def test_execution_funnel_prioritizes_explicit_mutually_exclusive_terminal_fields():
+    decisions = [
+        {
+            "bar_ts": "2026-07-22T14:00:00Z",
+            "correlation_id": "corr-sizing",
+            "symbol": "AAPL",
+            "metrics": {
+                "opportunity_eligible": True,
+                "terminal_stage": "execution_approval",
+                "terminal_reason": "CAPACITY_THROTTLE_BLOCK",
+                "terminal_detail": "scaled quantity rounded to zero",
+                "terminal_context": {"before_delta_shares": 1},
+            },
+            "net_target": {"target_shares": 1},
+            "gates": ["RISK_FACTOR_SOFT_THROTTLE", "CAPACITY_THROTTLE_BLOCK"],
+        },
+        {
+            "bar_ts": "2026-07-22T14:01:00Z",
+            "correlation_id": "corr-sampling",
+            "symbol": "MSFT",
+            "metrics": {
+                "opportunity_eligible": True,
+                "terminal_stage": "submit_runtime",
+                "terminal_reason": "PAPER_SAMPLING_SYMBOL_FAIRNESS_BLOCK",
+                "terminal_context": {
+                    "paper_sampling": {
+                        "evaluated": True,
+                        "reserved": False,
+                        "admitted": False,
+                    }
+                },
+            },
+            "net_target": {"target_shares": 1},
+            "decision_journal": {"order_intent": {"symbol": "MSFT"}},
+        },
+    ]
+
+    report = trading_day_report.build_trading_day_report(
+        report_date="2026-07-22",
+        order_intents=[],
+        fills=[],
+        shadow_rows=[],
+        gate_rows=[],
+        live_cost_model={},
+        symbol_scorecard={},
+        decisions=decisions,
+    )
+
+    funnel = report["execution_funnel"]
+    assert funnel["schema_version"] == "1.1.0"
+    assert funnel["terminal_dropoffs"] == {
+        "execution_approval": {
+            "count": 1,
+            "reasons": {"CAPACITY_THROTTLE_BLOCK": 1},
+            "by_symbol": {"AAPL": 1},
+        },
+        "submit_runtime": {
+            "count": 1,
+            "reasons": {"PAPER_SAMPLING_SYMBOL_FAIRNESS_BLOCK": 1},
+            "by_symbol": {"MSFT": 1},
+        },
+    }
+    assert (
+        funnel["dropoffs"]["nonzero_target_to_precheck_candidate"]["reasons"]
+        ["CAPACITY_THROTTLE_BLOCK"]
+        == 1
+    )
+
+
 def test_date_match_supports_top_level_and_nested_bar_timestamps_safely():
     assert trading_day_report._date_match(
         {"bar_ts": "2026-07-17T14:30:00Z"},

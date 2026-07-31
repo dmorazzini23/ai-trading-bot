@@ -1001,36 +1001,46 @@ def _threshold_report(
     *,
     allow_short_labels: bool = False,
 ) -> list[dict[str, Any]]:
+    """Evaluate development-only percentile selections.
+
+    Class probabilities are ranking scores for this one-sided, imbalanced
+    target.  They are not interpreted as signed edge via ``2p - 1``.
+    """
+
     rows: list[dict[str, Any]] = []
     p = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
-    score = (2.0 * p) - 1.0
-    confidence = np.maximum(p, 1.0 - p) if allow_short_labels else p
     net = pd.to_numeric(dataset["net_long_bps"], errors="coerce").to_numpy(dtype=float)
-    for confidence_threshold in (0.52, 0.58, 0.62, 0.66):
-        for entry_threshold in (0.05, 0.10, 0.15, 0.20):
-            if allow_short_labels:
-                mask = (confidence >= confidence_threshold) & (np.abs(score) >= entry_threshold)
-            else:
-                mask = (confidence >= confidence_threshold) & (score >= entry_threshold)
-            if not bool(mask.any()):
-                mean_net = None
-                total_net = 0.0
-                positive_rate = None
-            else:
-                signed_net = np.where(score[mask] >= 0.0, net[mask], -net[mask]) if allow_short_labels else net[mask]
-                mean_net = float(np.nanmean(signed_net))
-                total_net = float(np.nansum(signed_net))
-                positive_rate = float(np.nanmean(signed_net > 0.0))
-            rows.append(
-                {
-                    "confidence_threshold": float(confidence_threshold),
-                    "entry_score_threshold": float(entry_threshold),
-                    "candidates": int(mask.sum()),
-                    "mean_net_markout_bps": mean_net,
-                    "total_net_markout_bps": total_net,
-                    "positive_rate": positive_rate,
-                }
-            )
+    for percentile_threshold in (0.70, 0.80, 0.90, 0.95):
+        probability_cutoff = float(np.quantile(p, percentile_threshold))
+        if allow_short_labels:
+            lower_cutoff = float(np.quantile(p, 1.0 - percentile_threshold))
+            long_mask = p >= probability_cutoff
+            short_mask = p <= lower_cutoff
+            mask = long_mask | short_mask
+            signed_net = np.where(long_mask[mask], net[mask], -net[mask])
+        else:
+            mask = p >= probability_cutoff
+            signed_net = net[mask]
+        selected = signed_net[np.isfinite(signed_net)]
+        rows.append(
+            {
+                # Retained as the frozen probability cutoff consumed by replay.
+                "confidence_threshold": probability_cutoff,
+                "entry_score_threshold": 0.0,
+                "score_percentile_threshold": float(percentile_threshold),
+                "probability_cutoff": probability_cutoff,
+                "score_semantics": "positive_class_probability_rank",
+                "selection_scope": "development_only",
+                "candidates": int(selected.size),
+                "mean_net_markout_bps": (
+                    float(np.mean(selected)) if selected.size else None
+                ),
+                "total_net_markout_bps": float(np.sum(selected)),
+                "positive_rate": (
+                    float(np.mean(selected > 0.0)) if selected.size else None
+                ),
+            }
+        )
     rows.sort(
         key=lambda item: (
             item["mean_net_markout_bps"] is not None and int(item.get("candidates", 0) or 0) > 0,
@@ -1052,6 +1062,11 @@ def _select_nested_threshold(
     """Choose a feasible post-cost threshold from inner validation only."""
 
     reports = _threshold_report(dataset, probabilities)
+    requested_percentile = (
+        float(np.clip(fixed_confidence_threshold, 0.0, 0.99))
+        if fixed_confidence_threshold is not None
+        else None
+    )
     feasible = [
         row
         for row in reports
@@ -1059,53 +1074,37 @@ def _select_nested_threshold(
         and row.get("mean_net_markout_bps") is not None
         and float(row.get("mean_net_markout_bps") or 0.0) > 0.0
         and (
-            fixed_confidence_threshold is None
+            requested_percentile is None
             or abs(
-                float(row.get("confidence_threshold", 0.0))
-                - float(fixed_confidence_threshold)
+                float(row.get("score_percentile_threshold", 0.0))
+                - requested_percentile
             )
             < 1e-9
         )
     ]
-    if not feasible and fixed_confidence_threshold is not None:
-        fixed_rows = [
-            row
-            for row in reports
-            if abs(
-                float(row.get("confidence_threshold", 0.0))
-                - float(fixed_confidence_threshold)
-            )
-            < 1e-9
-        ]
-        if not fixed_rows:
-            # Preserve explicit legacy thresholds that are outside the diagnostic grid.
-            probability = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
-            score = (2.0 * probability) - 1.0
-            net = pd.to_numeric(
-                dataset["net_long_bps"], errors="coerce"
-            ).to_numpy(dtype=float)
-            for entry_threshold in (0.05, 0.10, 0.15, 0.20):
-                mask = (probability >= float(fixed_confidence_threshold)) & (
-                    score >= entry_threshold
-                )
-                selected = net[mask & np.isfinite(net)]
-                row = {
-                    "confidence_threshold": float(fixed_confidence_threshold),
-                    "entry_score_threshold": float(entry_threshold),
-                    "candidates": int(selected.size),
-                    "mean_net_markout_bps": (
-                        float(np.mean(selected)) if selected.size else None
-                    ),
-                    "total_net_markout_bps": float(np.sum(selected)),
-                    "positive_rate": (
-                        float(np.mean(selected > 0.0)) if selected.size else None
-                    ),
-                }
-                if (
-                    selected.size >= max(1, int(min_support))
-                    and float(row["mean_net_markout_bps"] or 0.0) > 0.0
-                ):
-                    feasible.append(row)
+    if not feasible and requested_percentile is not None:
+        probability = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
+        cutoff = float(np.quantile(probability, requested_percentile))
+        net = pd.to_numeric(dataset["net_long_bps"], errors="coerce").to_numpy(dtype=float)
+        selected = net[(probability >= cutoff) & np.isfinite(net)]
+        selected_mean = float(np.mean(selected)) if selected.size else None
+        row = {
+            "confidence_threshold": cutoff,
+            "entry_score_threshold": 0.0,
+            "score_percentile_threshold": requested_percentile,
+            "probability_cutoff": cutoff,
+            "score_semantics": "positive_class_probability_rank",
+            "selection_scope": "development_only",
+            "candidates": int(selected.size),
+            "mean_net_markout_bps": selected_mean,
+            "total_net_markout_bps": float(np.sum(selected)),
+            "positive_rate": float(np.mean(selected > 0.0)) if selected.size else None,
+        }
+        if (
+            selected.size >= max(1, int(min_support))
+            and float(selected_mean or 0.0) > 0.0
+        ):
+            feasible.append(row)
     if not feasible:
         return None
     return max(
@@ -1185,7 +1184,8 @@ def _attach_model_metadata(
 ) -> None:
     for name, value in (
         ("edge_score_orientation_", "direct"),
-        ("edge_score_semantics_", "long_probability"),
+        ("edge_score_semantics_", "positive_class_probability_rank"),
+        ("edge_threshold_selection_scope_", "development_only_percentile"),
         ("replay_aligned_objective_", "one_bar_net_markout"),
         ("replay_label_sides_", np.asarray(["buy"], dtype=object)),
         ("supports_short_scores_", False),
@@ -1261,10 +1261,7 @@ def _selected_post_cost_metrics(
     entry_score_threshold: float,
 ) -> tuple[dict[str, Any], np.ndarray]:
     probability = np.clip(np.asarray(probabilities, dtype=float), 0.0, 1.0)
-    score = (2.0 * probability) - 1.0
-    selected = (probability >= float(confidence_threshold)) & (
-        score >= float(entry_score_threshold)
-    )
+    selected = probability >= float(confidence_threshold)
     net = pd.to_numeric(dataset["net_long_bps"], errors="coerce").to_numpy(dtype=float)
     selected_net = net[selected & np.isfinite(net)]
     gains = float(selected_net[selected_net > 0.0].sum()) if selected_net.size else 0.0
@@ -1289,6 +1286,8 @@ def _selected_post_cost_metrics(
         ),
         "confidence_threshold": float(confidence_threshold),
         "entry_score_threshold": float(entry_score_threshold),
+        "score_semantics": "positive_class_probability_rank",
+        "threshold_selection_scope": "development_only_percentile",
         "ranking_separation": _ranking_separation(dataset, probability),
     }
     return metrics, selected
@@ -1987,7 +1986,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     )
     _attach_model_metadata(
         model,
-        edge_global_threshold=edge_global_threshold,
+        edge_global_threshold=selected_confidence_threshold,
         edge_thresholds_by_regime=edge_thresholds_by_regime,
     )
     feature_importance = _feature_importance(model)

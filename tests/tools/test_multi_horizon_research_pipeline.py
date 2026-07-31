@@ -8,6 +8,28 @@ from typing import Any
 from ai_trading.tools import multi_horizon_research_pipeline as pipeline
 
 
+def test_development_eligibility_requires_qualified_positive_supported_edge() -> None:
+    base = {
+        "walk_forward": {
+            "aggregate": {
+                "evidence_qualified": True,
+                "trades": 250,
+                "mean_post_cost_net_edge_bps": 0.1,
+            }
+        }
+    }
+    assert pipeline._development_eligible(base) is True  # noqa: SLF001
+    for override in (
+        {"evidence_qualified": False},
+        {"trades": 0},
+        {"mean_post_cost_net_edge_bps": 0.0},
+        {"mean_post_cost_net_edge_bps": -0.1},
+    ):
+        aggregate = dict(base["walk_forward"]["aggregate"], **override)
+        record = {"walk_forward": {"aggregate": aggregate}}
+        assert pipeline._development_eligible(record) is False  # noqa: SLF001
+
+
 def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
     tmp_path: Path,
     monkeypatch,
