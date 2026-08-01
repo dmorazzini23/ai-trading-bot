@@ -43,6 +43,15 @@ def test_ensure_alpaca_api_preserves_shadow_submit_behavior(monkeypatch):
     runtime = importlib.import_module("ai_trading.shadow_mode.runtime")
     alpaca_api = runtime.ensure_alpaca_api()
 
+    managed_env = alpaca_api._managed_env
+
+    def _managed_env_without_ambient_shadow(name, *args, **kwargs):
+        if name == "SHADOW_MODE":
+            return ""
+        return managed_env(name, *args, **kwargs)
+
+    monkeypatch.setattr(alpaca_api, "_managed_env", _managed_env_without_ambient_shadow)
+
     state: dict[str, bool] = {"shadow": True}
 
     def _from_env():
