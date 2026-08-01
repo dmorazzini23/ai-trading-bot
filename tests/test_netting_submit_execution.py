@@ -123,6 +123,8 @@ def test_execute_netting_submission_preserves_submit_outcome_detail() -> None:
                 "reason": "PAPER_SAMPLING_SYMBOL_BLOCK",
                 "detail": "symbol not governed",
                 "context": {
+                    "expected_edge_bps": 0.24,
+                    "required_edge_bps": 5.05,
                     "paper_sampling": {
                         "evaluated": True,
                         "allowed": False,
@@ -142,6 +144,8 @@ def test_execute_netting_submission_preserves_submit_outcome_detail() -> None:
     assert result.terminal_stage == "submit_runtime"
     assert result.terminal_reason == "PAPER_SAMPLING_SYMBOL_BLOCK"
     assert result.terminal_detail == "symbol not governed"
+    assert result.terminal_context["expected_edge_bps"] == 0.24
+    assert result.terminal_context["required_edge_bps"] == 5.05
     assert result.terminal_context["paper_sampling"]["evaluated"] is True
 
 

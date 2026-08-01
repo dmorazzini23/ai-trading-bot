@@ -932,6 +932,10 @@ def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_fa
     assert engine._cycle_order_outcomes
     assert engine._cycle_order_outcomes[-1]["status"] == "skipped"
     assert engine._cycle_order_outcomes[-1]["reason"] == "cycle_duplicate_intent"
+    assert (
+        engine._last_submit_outcome["context"]["source"]
+        == "execution_cycle_compaction"
+    )
     assert any(record.msg == "ORDER_SUBMIT_SKIPPED" for record in caplog.records)
     detail_records = [
         record

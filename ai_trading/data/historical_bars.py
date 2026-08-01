@@ -90,7 +90,7 @@ def load_historical_bars(
                 idx = pd.RangeIndex(start=0, stop=len(df), step=1)
                 inferred_range_index = True
 
-    if inferred_range_index and not allow_research_synthetic:
+    if inferred_range_index and (require_timestamp or not allow_research_synthetic):
         raise ValueError(
             f"{path} requires timestamp-authoritative bars; "
             "CSV did not provide a parseable datetime column. "

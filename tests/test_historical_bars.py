@@ -111,14 +111,12 @@ def test_load_historical_bars_can_require_authoritative_timestamps(tmp_path: Pat
     with pytest.raises(ValueError, match="requires timestamp-authoritative bars"):
         load_historical_bars(csv_path, require_timestamp=True)
 
-    frame, report = load_historical_bars(
-        csv_path,
-        require_timestamp=True,
-        allow_research_synthetic=True,
-    )
-    assert len(frame) == 3
-    assert report.timestamp_authoritative is False
-    assert report.research_synthetic is True
+    with pytest.raises(ValueError, match="requires timestamp-authoritative bars"):
+        load_historical_bars(
+            csv_path,
+            require_timestamp=True,
+            allow_research_synthetic=True,
+        )
 
 
 def test_load_historical_bars_reports_source_provider_column(tmp_path: Path) -> None:

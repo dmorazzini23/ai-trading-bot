@@ -15275,6 +15275,7 @@ class ExecutionEngine:
             "symbol": str(symbol) if symbol else None,
             "side": str(side) if side else None,
             "detail": str(detail) if detail else None,
+            "context": dict(context) if isinstance(context, Mapping) else {},
             "recorded_at_mono": float(monotonic_time()),
         }
         self._record_cycle_order_outcome(

@@ -45,7 +45,6 @@ from ai_trading.config.management import (
 from ai_trading.config.settings import get_settings, _secret_to_str
 from ai_trading.settings import (
     POSITION_SIZE_MIN_USD_DEFAULT,
-    get_position_size_min_usd,
 )
 
 

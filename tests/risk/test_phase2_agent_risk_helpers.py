@@ -38,12 +38,10 @@ def _bare_risk_engine(**config_updates: Any) -> risk_engine.RiskEngine:
     return cast(risk_engine.RiskEngine, engine)
 
 
-def test_minimum_quantity_uses_config_then_fallback_and_logs_once(
-    monkeypatch: pytest.MonkeyPatch,
+def test_minimum_quantity_rejects_invalid_config_and_logs_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     engine = _bare_risk_engine(position_size_min_usd="bad")
-    monkeypatch.setattr(risk_engine, "get_position_size_min_usd", lambda: 300.0)
 
     with caplog.at_level(logging.WARNING):
         first = risk_engine._derive_minimum_quantity(engine, price=100.0)

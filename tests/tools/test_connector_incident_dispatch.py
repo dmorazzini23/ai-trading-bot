@@ -693,7 +693,7 @@ def test_notify_openclaw_incident_min_interval_allows_blocker_change(
     assert posts
 
 
-def test_run_dispatch_openclaw_min_severity_suppresses_noncritical() -> None:
+def test_run_dispatch_openclaw_min_severity_suppresses_noncritical(tmp_path: Path) -> None:
     calls: dict[str, dict[str, Any]] = {}
 
     def _incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
@@ -720,6 +720,9 @@ def test_run_dispatch_openclaw_min_severity_suppresses_noncritical() -> None:
             "AI_TRADING_CONNECTOR_OPENCLAW_MIN_SEVERITY": "critical",
             "AI_TRADING_CONNECTOR_SLACK_ENABLED": "0",
             "AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED": "0",
+            "AI_TRADING_OPENCLAW_INCIDENT_STATE_PATH": str(
+                tmp_path / "openclaw-incident-state.json"
+            ),
         },
         slack_notifier=lambda args: {"unused": args},
         slack_eod_notifier=lambda args: {"unused": args},
