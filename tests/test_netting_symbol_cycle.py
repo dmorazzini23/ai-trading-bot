@@ -287,6 +287,32 @@ def test_process_netting_symbol_halt_records_block() -> None:
     assert records[0]["metrics"]["terminal_reason"] == "HALT_TRADING"
 
 
+def test_process_netting_symbol_stop_lock_blocks_same_bar_reentry() -> None:
+    processor, records = _make_processor()
+    processor.state.stop_lock["AAPL"] = {
+        "bar_ts": processor.now,
+        "direction": "long",
+    }
+    net_target = _make_net_target(bar_ts=processor.now)
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=net_target,
+        orders_submitted=0,
+    )
+
+    assert result.attempted_increment == 0
+    assert result.submitted_increment == 0
+    assert net_target.target_shares == 0
+    assert net_target.target_dollars == 0.0
+    assert len(records) == 1
+    assert records[0]["gates"] == ["STOP_LOCK"]
+    assert records[0]["metrics"]["terminal_stage"] == "decision_filter"
+    assert records[0]["metrics"]["terminal_reason"] == "STOP_LOCK"
+    assert "AAPL" in processor.state.stop_lock
+
+
 def test_process_netting_symbol_suppresses_short_opening_in_long_only(monkeypatch) -> None:
     monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
     processor, records = _make_processor(
