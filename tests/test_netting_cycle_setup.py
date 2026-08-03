@@ -222,6 +222,42 @@ def test_prepare_netting_cycle_inputs_loads_fallback_universe_when_runtime_symbo
     assert not any(event == "NETTING_NO_SYMBOLS" for event, _ in logger.events)
 
 
+def test_prepare_netting_cycle_inputs_filters_pending_blocked_symbols() -> None:
+    state = SimpleNamespace(
+        canary_mode_logged=False,
+        last_loop_duration=0.0,
+        netting_symbol_budget_cursor=0,
+    )
+    runtime = SimpleNamespace(
+        tickers=["AAPL", "MSFT"],
+        execution_engine=None,
+        _pending_order_blocked_symbols=("aapl",),
+    )
+    logger = _Logger()
+    kwargs = _prepare_kwargs(
+        state=state,
+        runtime=runtime,
+        logger=logger,
+        env={},
+    )
+    kwargs["pending_orders_block_scope_func"] = lambda: "symbol"
+
+    result = prepare_netting_cycle_inputs(**kwargs)
+
+    assert result is not None
+    assert result.symbols == ["MSFT"]
+    assert any(
+        event == "NETTING_PENDING_SYMBOL_FILTER_APPLIED"
+        and extra == {
+            "before": 2,
+            "after": 1,
+            "blocked_symbols_count": 1,
+            "blocked_symbols": ["AAPL"],
+        }
+        for event, extra in logger.events
+    )
+
+
 def test_symbol_prune_shadow_mode_preserves_candidates_before_prerank() -> None:
     state = SimpleNamespace(
         canary_mode_logged=False,
