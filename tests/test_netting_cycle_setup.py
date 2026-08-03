@@ -189,6 +189,39 @@ def test_prepare_netting_cycle_inputs_returns_filtered_symbols_and_positions() -
     assert result.symbols == ["AAPL"]
 
 
+def test_prepare_netting_cycle_inputs_loads_fallback_universe_when_runtime_symbols_missing() -> None:
+    state = SimpleNamespace(
+        canary_mode_logged=False,
+        last_loop_duration=0.0,
+        netting_symbol_budget_cursor=0,
+    )
+    runtime = SimpleNamespace(tickers=[], universe_tickers=[], execution_engine=None)
+    logger = _Logger()
+    loader_calls: list[SimpleNamespace] = []
+    kwargs = _prepare_kwargs(
+        state=state,
+        runtime=runtime,
+        logger=logger,
+        env={
+            "AI_TRADING_UNIVERSE_MISMATCH_ALERT_ENABLED": False,
+            "AI_TRADING_SYMBOL_PRUNE_ENABLED": False,
+        },
+    )
+
+    def _load_candidate_universe(runtime_arg: SimpleNamespace) -> list[str]:
+        loader_calls.append(runtime_arg)
+        return ["AAPL"]
+
+    kwargs["load_candidate_universe_func"] = _load_candidate_universe
+
+    result = prepare_netting_cycle_inputs(**kwargs)
+
+    assert result is not None
+    assert loader_calls == [runtime]
+    assert result.symbols == ["AAPL"]
+    assert not any(event == "NETTING_NO_SYMBOLS" for event, _ in logger.events)
+
+
 def test_symbol_prune_shadow_mode_preserves_candidates_before_prerank() -> None:
     state = SimpleNamespace(
         canary_mode_logged=False,
