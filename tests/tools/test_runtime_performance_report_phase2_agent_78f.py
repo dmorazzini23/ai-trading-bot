@@ -213,6 +213,82 @@ def test_runtime_report_exposes_same_day_fill_pnl_and_broker_position_basis(
     assert reconciliation["2026-05-12"]["status"] == "mismatch"
     assert reconciliation["2026-05-12"]["accounting_net_pnl"] == pytest.approx(-7.21)
     assert reconciliation["2026-05-12"]["same_day_fill_gross_pnl"] == pytest.approx(-0.19)
+    operational = {
+        row["date"]: row for row in summary["operational_daily_trade_stats"]
+    }
+    assert operational["2026-05-12"]["net_pnl"] == pytest.approx(-7.21)
+    assert operational["2026-05-12"]["operational_pnl_source"] == "accounting"
+
+
+def test_operational_daily_stats_prevent_fifo_gain_from_masking_same_day_loss() -> None:
+    rows, basis = rpr._operational_daily_trade_stats(
+        accounting_rows=[
+            {
+                "date": "2026-08-04",
+                "trades": 2,
+                "net_pnl": 52.28,
+                "slippage_cost": -0.15,
+            }
+        ],
+        same_day_rows=[
+            {
+                "date": "2026-08-04",
+                "trades": 2,
+                "net_pnl": -1.47,
+                "slippage_cost": 0.02,
+            }
+        ],
+        same_day_open_positions_by_date={},
+        broker_positions_available=True,
+        broker_positions={},
+    )
+
+    assert rows == [
+        {
+            "date": "2026-08-04",
+            "trades": 2,
+            "net_pnl": -1.47,
+            "slippage_cost": -0.15,
+            "operational_pnl_source": "same_day_fill_pairs",
+            "operational_basis": "conservative_min_broker_flat_balanced_same_day",
+            "accounting_net_pnl": 52.28,
+            "same_day_fill_net_pnl": -1.47,
+        }
+    ]
+    assert basis["mode"] == "conservative_current_day"
+    assert basis["selected_pnl_source"] == "same_day_fill_pairs"
+
+
+@pytest.mark.parametrize(
+    ("broker_available", "broker_positions", "open_by_date", "reason"),
+    [
+        (False, {}, {}, "broker_positions_unavailable"),
+        (True, {"AAPL": 1.0}, {}, "broker_positions_nonflat"),
+        (
+            True,
+            {},
+            {"2026-08-04": {"AAPL": 1.0}},
+            "same_day_positions_nonflat",
+        ),
+    ],
+)
+def test_operational_daily_stats_require_reconciled_flat_state(
+    broker_available: bool,
+    broker_positions: dict[str, float],
+    open_by_date: dict[str, dict[str, float]],
+    reason: str,
+) -> None:
+    accounting = [{"date": "2026-08-04", "net_pnl": 52.28}]
+    rows, basis = rpr._operational_daily_trade_stats(
+        accounting_rows=accounting,
+        same_day_rows=[{"date": "2026-08-04", "net_pnl": -1.47}],
+        same_day_open_positions_by_date=open_by_date,
+        broker_positions_available=broker_available,
+        broker_positions=broker_positions,
+    )
+
+    assert rows == accounting
+    assert basis["reason"] == reason
 
 
 def test_build_report_flattens_execution_fields_and_handles_invalid_optional_states(

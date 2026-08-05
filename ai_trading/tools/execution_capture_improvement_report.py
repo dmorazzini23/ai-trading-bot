@@ -217,6 +217,19 @@ def _event_timestamp(row: Mapping[str, Any]) -> datetime | None:
     return None
 
 
+def _terminal_fill_candidate(
+    rows: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    terminal = [
+        row
+        for row in rows
+        if is_fill_based_execution_evidence(row)
+        and str(row.get("status") or row.get("order_status") or "").strip().lower()
+        in {"filled", "partially_filled"}
+    ]
+    return terminal[0] if len(terminal) == 1 else None
+
+
 def _metadata_join(
     fill: Mapping[str, Any],
     tca_rows: Sequence[Mapping[str, Any]],
@@ -246,6 +259,9 @@ def _metadata_join(
             if len(exact_correlated) == 1:
                 return exact_correlated[0], "correlation_and_order_id"
             if len(exact_correlated) > 1:
+                terminal = _terminal_fill_candidate(exact_correlated)
+                if terminal is not None:
+                    return terminal, "correlation_and_order_id_terminal_fill"
                 return None, "ambiguous_correlation_and_order_id"
             legacy_exact = [
                 tca

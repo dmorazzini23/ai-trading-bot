@@ -90,6 +90,17 @@ def test_training_accelerator_blocks_required_unusable_live_cost(
     assert report["status"] == "blocked"
     assert report["blocked_reasons"] == ["required_live_cost_model_unusable"]
     assert report["live_cost_usability"]["reason"] == "not_ready"
+    assert report["promotion_authority"] is False
+    assert report["runtime_authority"] is False
+    assert report["live_money_authority"] is False
+    persisted = json.loads(
+        (tmp_path / "out" / "training_accelerator_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["status"] == "blocked"
+    assert persisted["runtime_authority"] is False
+    assert persisted["live_money_authority"] is False
 
 
 def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, monkeypatch) -> None:

@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -34,6 +35,84 @@ def _health_step(module: ModuleType, payload: Mapping[str, object]):
 
 def _pass_step(module: ModuleType, name: str):
     return module.Step(name=name, status="pass", summary=f"{name} ok", details={})
+
+
+def _write_readiness_artifacts(
+    tmp_path: Path,
+    *,
+    trained_at: str = "2026-08-03T20:00:00Z",
+    markouts_at: str = "2026-08-03T21:00:00Z",
+    decision_code: str = "RANK_DOWNSIDE_OVERLAP_CAP",
+) -> None:
+    artifact = tmp_path / "models" / "production.joblib"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("model", encoding="utf-8")
+    (tmp_path / "models" / "registry_index.json").write_text(
+        json.dumps(
+            {
+                "production-day": {
+                    "active": True,
+                    "strategy": "ml_edge",
+                    "artifact_path": str(artifact),
+                    "metadata": {"trained_at": trained_at},
+                    "governance": {"status": "production", "metrics": {}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    markout_path = (
+        tmp_path
+        / "runtime"
+        / "research_reports"
+        / "latest"
+        / "opportunity_markouts_latest.json"
+    )
+    markout_path.parent.mkdir(parents=True)
+    markout_path.write_text(
+        json.dumps(
+            {
+                "artifact_type": "opportunity_markout_report",
+                "evidence_partition": "shadow",
+                "research_only": True,
+                "live_money_authority": False,
+                "generated_at": markouts_at,
+                "eligible_opportunities": 12,
+                "outcomes_emitted": 36,
+            }
+        ),
+        encoding="utf-8",
+    )
+    decision_path = tmp_path / "runtime" / "decision_records.jsonl"
+    decision_path.parent.mkdir(parents=True, exist_ok=True)
+    decision_path.write_text(
+        json.dumps({"gates": [decision_code]}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _readiness_health_payload() -> dict[str, object]:
+    return {
+        "reason": "market_closed",
+        "data_provider": {"status": "warming_up", "reason": "market_closed"},
+        "model_liveness": {"ml_age_s": 50_000, "ml_max_age_s": 5_400},
+        "broker": {
+            "connected": True,
+            "fresh": True,
+            "open_orders_fresh": True,
+            "positions_fresh": True,
+            "open_orders_count": 0,
+            "positions_count": 0,
+        },
+        "alpaca": {"paper": True},
+        "entry_control": {
+            "execution_mode": "paper",
+            "live_new_exposure_allowed": False,
+        },
+        "attention_flags": [],
+        "readiness_failures": [],
+        "readiness_gates": {},
+    }
 
 
 def test_canonical_env_map_normalizes_runtime_quotes(tmp_path: Path) -> None:
@@ -354,6 +433,94 @@ def test_preopen_operator_drill_warns_without_health_payload(tmp_path: Path) -> 
     assert step.details["health_step_status"] == "warn"
 
 
+def test_preopen_readiness_verdict_passes_six_factors_overnight(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_gate_module()
+    _write_readiness_artifacts(tmp_path)
+    monkeypatch.delenv("AI_TRADING_DATA_DIR", raising=False)
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START", "1")
+    payload = _readiness_health_payload()
+    health_step = _health_step(module, payload)
+    operator_step = module._check_preopen_operator_drill(
+        tmp_path,
+        health_step=health_step,
+    )
+
+    verdict = module._build_preopen_readiness_verdict(
+        tmp_path,
+        health_step=health_step,
+        operator_step=operator_step,
+        now=datetime(2026, 8, 4, 10, 0, tzinfo=UTC),
+    )
+
+    assert verdict.status == "pass"
+    assert verdict.details["factor_count"] == 6
+    assert set(verdict.details["factors"]) == {
+        "governed_production_model",
+        "shadow_opportunity_markouts",
+        "decision_data_contract_tail",
+        "broker_snapshot",
+        "orders_and_flat_start",
+        "paper_sim_authority",
+    }
+    assert verdict.details["overnight_signal_age_enforced"] is False
+    assert verdict.details["market_closed_warming_allowed"] is True
+    assert verdict.details["read_only"] is True
+    assert verdict.details["mutations_performed"] is False
+
+
+def test_preopen_readiness_verdict_fails_closed_across_all_factors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _load_gate_module()
+    _write_readiness_artifacts(
+        tmp_path,
+        trained_at="2026-07-01T20:00:00Z",
+        markouts_at="2026-07-01T21:00:00Z",
+        decision_code="BAD_DATA_CONTRACT",
+    )
+    monkeypatch.delenv("AI_TRADING_DATA_DIR", raising=False)
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_REQUIRE_FLAT_START", "1")
+    payload = _readiness_health_payload()
+    payload["broker"] = {
+        "connected": True,
+        "fresh": False,
+        "open_orders_fresh": False,
+        "positions_fresh": False,
+        "open_orders_count": 1,
+        "positions_count": 0,
+    }
+    payload["alpaca"] = {"paper": False}
+    payload["entry_control"] = {
+        "execution_mode": "live",
+        "live_new_exposure_allowed": True,
+    }
+    health_step = _health_step(module, payload)
+    operator_step = module._check_preopen_operator_drill(
+        tmp_path,
+        health_step=health_step,
+    )
+
+    verdict = module._build_preopen_readiness_verdict(
+        tmp_path,
+        health_step=health_step,
+        operator_step=operator_step,
+        now=datetime(2026, 8, 4, 10, 0, tzinfo=UTC),
+    )
+
+    assert verdict.status == "fail"
+    assert set(verdict.details["failed_factors"]) == set(verdict.details["factors"])
+    assert verdict.details["factors"]["decision_data_contract_tail"][
+        "bad_data_contract_count"
+    ] == 1
+    assert verdict.details["factors"]["shadow_opportunity_markouts"][
+        "max_age_hours"
+    ] == 96.0
+
+
 def test_main_json_includes_preopen_operator_drill_and_fails_on_blocker(
     tmp_path: Path,
     monkeypatch,
@@ -385,6 +552,13 @@ def test_main_json_includes_preopen_operator_drill_and_fails_on_blocker(
         module,
         "_check_health",
         lambda repo_dir, *, port, timeout_seconds, skip: _health_step(module, payload),
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_preopen_readiness_verdict",
+        lambda repo_dir, *, health_step, operator_step: _pass_step(
+            module, "preopen_readiness_verdict"
+        ),
     )
     monkeypatch.setattr(
         sys,
@@ -434,6 +608,13 @@ def test_main_json_returns_warning_exit_when_preopen_drill_warns_only(
         module,
         "_check_health",
         lambda repo_dir, *, port, timeout_seconds, skip: _health_step(module, payload),
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_preopen_readiness_verdict",
+        lambda repo_dir, *, health_step, operator_step: _pass_step(
+            module, "preopen_readiness_verdict"
+        ),
     )
     monkeypatch.setattr(
         sys,

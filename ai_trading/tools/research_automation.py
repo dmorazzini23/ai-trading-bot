@@ -29,6 +29,7 @@ logger = get_logger(__name__)
 _WEEKEND_CADENCES = {"weekend-saturday", "weekend-sunday"}
 _CADENCES = {"daily", "weekly", "monthly", "manual", *_WEEKEND_CADENCES}
 _MANUAL_WORKFLOWS = {"promotion", "live-cutover", "incident-replay", "strategy-change"}
+_GOVERNED_ACCELERATOR_SYMBOLS = ("AAPL", "AMZN", "MSFT")
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,18 @@ def _capped_symbols(symbols: str, max_symbols: int) -> str:
         if len(capped) >= max_symbols:
             break
     return ",".join(capped)
+
+
+def _governed_accelerator_symbols(symbols: str) -> str:
+    requested = {
+        raw.strip().upper()
+        for raw in str(symbols or "").split(",")
+        if raw.strip()
+    }
+    filtered = [
+        symbol for symbol in _GOVERNED_ACCELERATOR_SYMBOLS if symbol in requested
+    ]
+    return ",".join(filtered or _GOVERNED_ACCELERATOR_SYMBOLS)
 
 
 def _weekend_runtime_limit_minutes(cadence: str) -> int:
@@ -901,6 +914,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "evaluate",
                 "--registry-json",
                 model_registry_source,
+                "--primary-metric",
+                "mean_post_cost_net_edge_bps",
                 "--output-json",
                 model_registry,
                 "--latest-json",
@@ -1680,7 +1695,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "--data-dir",
                     config.data_dir,
                     "--symbols",
-                    config.symbols,
+                    _governed_accelerator_symbols(config.symbols),
                     "--output-dir",
                     config.run_dir / "training_accelerator",
                     "--training-cache-dir",
@@ -1832,6 +1847,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "evaluate",
                     "--registry-json",
                     model_registry_source,
+                    "--primary-metric",
+                    "mean_post_cost_net_edge_bps",
                     "--output-json",
                     model_registry,
                     "--latest-json",
@@ -1964,7 +1981,7 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "--data-dir",
                     config.data_dir,
                     "--symbols",
-                    config.symbols,
+                    _governed_accelerator_symbols(config.symbols),
                     "--output-dir",
                     config.run_dir / "training_accelerator",
                     "--live-cost-model-json",
@@ -2416,6 +2433,8 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 "evaluate",
                 "--registry-json",
                 model_registry_source,
+                "--primary-metric",
+                "mean_post_cost_net_edge_bps",
                 "--output-json",
                 model_registry,
                 "--latest-json",
@@ -2440,7 +2459,7 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                     "--data-dir",
                     config.data_dir,
                     "--symbols",
-                    symbols,
+                    _governed_accelerator_symbols(symbols),
                     "--output-dir",
                     config.run_dir / "training_accelerator",
                     *cache_args,
@@ -2869,7 +2888,9 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
                     "--data-dir",
                     config.data_dir,
                     "--symbols",
-                    str(caps["effective_symbols"]),
+                    _governed_accelerator_symbols(
+                        str(caps["effective_symbols"])
+                    ),
                     "--output-dir",
                     config.run_dir / "training_accelerator_validation",
                     *_training_cache_args(config, "weekend"),

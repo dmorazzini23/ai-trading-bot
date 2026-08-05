@@ -153,6 +153,54 @@ def test_evaluate_challenger_is_advisory_and_requires_manual_promotion(
     assert evaluation["manual_promotion_required"] is True
 
 
+def test_post_cost_evaluation_blocks_unqualified_or_unsupported_challenger(
+    tmp_path: Path,
+) -> None:
+    champion_model = tmp_path / "champion.joblib"
+    challenger_model = tmp_path / "challenger.joblib"
+    champion_model.write_text("champion", encoding="utf-8")
+    challenger_model.write_text("challenger", encoding="utf-8")
+    generated = datetime(2026, 5, 5, 21, 0, tzinfo=UTC)
+    registry = {
+        "models": [
+            {
+                "model_id": "champion",
+                "role": "champion",
+                "status": "production",
+                "model_path": str(champion_model),
+                "metrics": {
+                    "generated_at": "2026-05-05T20:00:00Z",
+                    "mean_post_cost_net_edge_bps": 1.0,
+                },
+            },
+            {
+                "model_id": "challenger",
+                "role": "challenger",
+                "status": "shadow",
+                "model_path": str(challenger_model),
+                "metrics": {
+                    "generated_at": "2026-05-05T20:00:00Z",
+                    "mean_post_cost_net_edge_bps": -0.1,
+                    "trades": 0,
+                    "evidence_qualified": False,
+                },
+            },
+        ]
+    }
+
+    evaluation = model_registry.build_model_evaluation(
+        registry=registry,
+        generated_at=generated,
+    )
+
+    assert evaluation["status"] == "blocked"
+    assert "challenger_post_cost_edge_not_positive" in evaluation["blocked_reasons"]
+    assert "challenger_trade_evidence_missing" in evaluation["blocked_reasons"]
+    assert "challenger_evidence_not_qualified" in evaluation["blocked_reasons"]
+    assert evaluation["promotion_authority"] is False
+    assert evaluation["recommendation"] == "blocked"
+
+
 def test_evaluate_governed_keyed_registry_discovers_viable_identities_read_only(
     tmp_path: Path,
 ) -> None:

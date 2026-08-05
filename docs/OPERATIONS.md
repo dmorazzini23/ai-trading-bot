@@ -392,6 +392,44 @@ Important `attention_flags` include:
 - `oms_invariants_failed`
 - `oms_lifecycle_parity_failed`
 
+#### Read-only pre-open acceptance verdict
+
+Before market open, run the acceptance gate from the repository as `aiuser`:
+
+```bash
+./venv/bin/python scripts/pre_open_acceptance_gate.py --json
+```
+
+The `preopen_readiness_verdict` step is a non-mutating six-factor check of the
+governed production day/`ml_edge` artifact and its training age, recent shadow
+opportunity-markout evidence (96-hour default bounded window), the last 500
+decision records within a 4 MiB read bound for `BAD_DATA_CONTRACT`, broker and
+order/position snapshot freshness, zero open orders plus the configured
+flat-start policy, and coherent paper/simulation authority with
+`live_new_exposure_allowed=false`. It reuses the single `/healthz` payload
+already fetched by the command. Market-closed provider warming and overnight
+signal age are intentionally not blockers; artifact training time and bounded
+evidence time are the applicable freshness checks.
+
+Exit codes retain the existing automation contract:
+
+- `0`: every step passed.
+- `1`: at least one blocking failure; do not treat the bot as open-ready.
+- `2`: no blocking failure, but at least one warning requires operator review.
+
+The default command synchronizes runtime environment state and refreshes
+reports before evaluating them. For a strictly read-only diagnostic that does
+not perform those preparatory writes, use:
+
+```bash
+./venv/bin/python scripts/pre_open_acceptance_gate.py --no-sync-env --no-refresh --json
+```
+
+The verdict itself never promotes or deploys a model, submits or cancels an
+order, changes exposure, changes launch authority, or relaxes replay/go-no-go
+gates. Replay and runtime go/no-go remain independent required steps in the
+same report.
+
 ### Provider Safe-Mode
 
 Repeated Alpaca failures can trigger provider safe-mode:

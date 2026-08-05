@@ -87,6 +87,60 @@ def test_decision_recorder_can_record_global_block() -> None:
     assert recorder.decision_observations[0]["symbol"] == "ALL"
 
 
+def test_decision_recorder_partitions_stale_model_counterfactual() -> None:
+    recorder = DecisionRecorder(
+        runtime=type("Runtime", (), {"execution_candidate_rank_expected_edge_bps": {}})(),
+        path=None,
+        write_impl=lambda _record, _path: None,
+        dedupe_gate_root_causes=lambda gates: list(gates),
+        session_bucket_from_ts=lambda _ts: "opening",
+        safe_float=lambda value: float(value) if value is not None else None,
+        quote_snapshot_func=lambda _symbol: {"bid": 99.9, "ask": 100.1},
+    )
+    bar_ts = datetime(2026, 8, 3, 13, 40, tzinfo=UTC)
+    proposal = SleeveProposal(
+        symbol="AAPL",
+        sleeve="day",
+        bar_ts=bar_ts,
+        target_dollars=0.0,
+        expected_edge_bps=5.0,
+        expected_cost_bps=2.0,
+        score=0.7,
+        confidence=0.6,
+        blocked=True,
+        reason_code="DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE",
+        debug={
+            "evidence_partition": "stale_model_shadow",
+            "counterfactual_side": "buy",
+            "counterfactual_target_dollars": 500.0,
+            "counterfactual_score": 0.7,
+            "counterfactual_confidence": 0.6,
+        },
+    )
+    record = recorder.build_record(
+        symbol="AAPL",
+        bar_ts=bar_ts,
+        net_target=NettedTarget(
+            symbol="AAPL",
+            bar_ts=bar_ts,
+            target_dollars=0.0,
+            target_shares=0.0,
+            proposals=[proposal],
+        ),
+        gates=["DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE"],
+    )
+
+    assert record.metrics["opportunity_eligible"] is True
+    assert record.metrics["opportunity_side"] == "buy"
+    assert record.metrics["opportunity_quantity"] == pytest.approx(5.0)
+    assert record.metrics["evidence_partition"] == "stale_model_shadow"
+    assert record.metrics["research_only"] is True
+    assert record.metrics["promotion_eligible"] is False
+    assert record.metrics["model_authority"] is False
+    assert record.metrics["runtime_authority"] is False
+    assert record.metrics["live_money_authority"] is False
+
+
 def test_decision_recorder_correlation_is_not_derived_from_order_intent() -> None:
     recorder = _lineage_test_recorder([])
     bar_ts = datetime(2026, 7, 21, 14, 30, tzinfo=UTC)

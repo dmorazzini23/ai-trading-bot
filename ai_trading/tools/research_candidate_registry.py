@@ -36,11 +36,15 @@ def _resolve_tournament(
     report = _read_object(report_path)
     if report.get("artifact_type") == "training_accelerator_report":
         _false_authority(report, context="training accelerator report")
-        nested_path = str(report.get("multi_horizon_report") or "").strip()
-        if not nested_path:
-            raise ValueError("training accelerator report has no completed tournament")
-        tournament = _read_object(Path(nested_path).expanduser())
         signature = str(report.get("input_signature") or "").strip()
+        if str(report.get("status") or "").strip().lower() == "blocked":
+            tournament = dict(report)
+            tournament["candidates"] = []
+        else:
+            nested_path = str(report.get("multi_horizon_report") or "").strip()
+            if not nested_path:
+                raise ValueError("training accelerator report has no completed tournament")
+            tournament = _read_object(Path(nested_path).expanduser())
     elif report.get("artifact_type") == "multi_horizon_research_report":
         tournament = report
         signature = ""
@@ -64,6 +68,30 @@ def _resolve_tournament(
     return tournament, signature
 
 
+def _walk_forward_metrics(
+    candidate: Mapping[str, Any],
+    *,
+    fallback_generated_at: Any = None,
+) -> dict[str, Any]:
+    """Project the canonical walk-forward aggregate into registry evidence."""
+
+    walk_forward = candidate.get("walk_forward")
+    walk_forward_payload = walk_forward if isinstance(walk_forward, Mapping) else {}
+    aggregate = walk_forward_payload.get("aggregate")
+    source = aggregate if isinstance(aggregate, Mapping) else walk_forward_payload
+    generated_at = candidate.get("generated_at") or fallback_generated_at
+    metrics = {
+        "mean_post_cost_net_edge_bps": source.get("mean_post_cost_net_edge_bps"),
+        "profitable_fold_ratio": source.get("profitable_fold_ratio"),
+        "stability_score": source.get("stability_score"),
+        "trades": source.get("trades"),
+        "evidence_qualified": bool(source.get("evidence_qualified")),
+    }
+    if str(generated_at or "").strip():
+        metrics["generated_at"] = str(generated_at).strip()
+    return metrics
+
+
 def register_research_candidates(
     *,
     report_path: Path,
@@ -82,6 +110,19 @@ def register_research_candidates(
     candidates = raw_candidates if isinstance(raw_candidates, list) else []
     registered: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    if str(tournament.get("status") or "").strip().lower() == "blocked":
+        blocked_reasons = tournament.get("blocked_reasons")
+        reasons = (
+            [str(reason) for reason in blocked_reasons if str(reason).strip()]
+            if isinstance(blocked_reasons, list)
+            else []
+        )
+        skipped.append(
+            {
+                "candidate": "training_accelerator_report",
+                "reason": "source_blocked:" + (",".join(reasons) or "unspecified"),
+            }
+        )
     retired: set[str] = set()
     generated_at = (now or datetime.now(UTC)).astimezone(UTC)
     stale_before = generated_at - timedelta(days=max(1, int(stale_days)))
@@ -107,26 +148,13 @@ def register_research_candidates(
         dataset = raw.get("dataset")
         dataset_payload = dataset if isinstance(dataset, Mapping) else {}
         dataset_hash = str(dataset_payload.get("dataset_hash") or "").strip()
-        walk_forward = raw.get("walk_forward")
-        walk_forward_payload = (
-            walk_forward if isinstance(walk_forward, Mapping) else {}
-        )
         if not dataset_hash:
             skipped.append({"candidate": name, "reason": "dataset_hash_missing"})
             continue
-        metrics = {
-            "mean_post_cost_net_edge_bps": walk_forward_payload.get(
-                "mean_post_cost_net_edge_bps"
-            ),
-            "profitable_fold_ratio": walk_forward_payload.get(
-                "profitable_fold_ratio"
-            ),
-            "stability_score": walk_forward_payload.get("stability_score"),
-            "trades": walk_forward_payload.get("trades"),
-            "evidence_qualified": bool(
-                walk_forward_payload.get("evidence_qualified")
-            ),
-        }
+        metrics = _walk_forward_metrics(
+            raw,
+            fallback_generated_at=tournament.get("generated_at"),
+        )
         comparable_scope = {
             "symbols": str(tournament_config.get("symbols") or ""),
             "horizon_bars": int(raw.get("horizon_bars") or 0),

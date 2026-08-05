@@ -155,6 +155,21 @@ def test_finalized_day_bars_exclude_forming_five_minute_bar() -> None:
     assert frame.index[-1] not in finalized.index
 
 
+def test_day_sleeve_opening_warmup_precedes_first_finalized_bar() -> None:
+    prior_session = _frame()
+
+    assert bot_engine._day_sleeve_waiting_for_first_finalized_bar(
+        prior_session,
+        now=datetime(2026, 8, 3, 13, 34, tzinfo=UTC),
+        grace_seconds=2.0,
+    ) is True
+    assert bot_engine._day_sleeve_waiting_for_first_finalized_bar(
+        prior_session,
+        now=datetime(2026, 8, 3, 13, 35, 3, tzinfo=UTC),
+        grace_seconds=2.0,
+    ) is False
+
+
 def test_day_sleeve_fetch_window_covers_sma_200_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

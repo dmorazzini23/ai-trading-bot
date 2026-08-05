@@ -156,7 +156,10 @@ from ai_trading.runtime.quarantine import (
     save_quarantine_state,
 )
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
-from ai_trading.runtime.paper_sampling import paper_sampling_deficit_snapshot
+from ai_trading.runtime.paper_sampling import (
+    paper_sampling_deficit_snapshot,
+    stale_model_diagnostics_allowed,
+)
 from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import (
     enforce_artifact_verification,
@@ -7382,6 +7385,36 @@ def _finalized_day_sleeve_bars(
     cutoff = pd.Timestamp(now.astimezone(UTC) - timedelta(seconds=bounded_grace))
     bar_close = frame.index.tz_convert(UTC) + pd.Timedelta(minutes=5)
     return frame.loc[bar_close <= cutoff].copy()
+
+
+def _day_sleeve_waiting_for_first_finalized_bar(
+    frame: pd.DataFrame,
+    *,
+    now: datetime,
+    grace_seconds: float,
+) -> bool:
+    """Return whether the current session first five-minute bar is not due."""
+
+    now_eastern = now.astimezone(ZoneInfo("America/New_York"))
+    if now_eastern.weekday() >= 5:
+        return False
+    minute = now_eastern.hour * 60 + now_eastern.minute
+    if minute < 9 * 60 + 30:
+        return False
+    first_bar_due = now_eastern.replace(
+        hour=9, minute=35, second=0, microsecond=0
+    ) + timedelta(seconds=max(0.0, min(float(grace_seconds), 60.0)))
+    if now_eastern >= first_bar_due:
+        return False
+    if frame is None or frame.empty:
+        return True
+    try:
+        latest_session_date = frame.index[-1].tz_convert(
+            "America/New_York"
+        ).date()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return bool(latest_session_date < now_eastern.date())
 
 
 def _day_sleeve_positive_probability(model: Any, features: pd.DataFrame) -> float:
@@ -42309,6 +42342,28 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     now=now,
                     grace_seconds=day_sleeve_bar_finality_grace_seconds,
                 )
+                if _day_sleeve_waiting_for_first_finalized_bar(
+                    df,
+                    now=now,
+                    grace_seconds=day_sleeve_bar_finality_grace_seconds,
+                ):
+                    proposals_by_symbol[symbol].append(
+                        SleeveProposal(
+                            symbol=symbol,
+                            sleeve=sleeve.name,
+                            bar_ts=now,
+                            target_dollars=0.0,
+                            expected_edge_bps=0.0,
+                            expected_cost_bps=0.0,
+                            score=0.0,
+                            confidence=0.0,
+                            blocked=True,
+                            reason_code="NO_FINALIZED_DAY_BAR",
+                            debug={"reason": "opening_warmup"},
+                        )
+                    )
+                    skip_reasons[symbol].append("NO_FINALIZED_DAY_BAR")
+                    continue
             if bool(getattr(cfg, "data_contract_enabled", True)):
                 contract_result = validate_bars(
                     df,
@@ -42401,6 +42456,22 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 vol,
                 volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
             )
+            if is_day_sleeve_model_path and day_sleeve_inference_error:
+                proposal.debug.update(
+                    {
+                        "counterfactual_side": (
+                            "buy" if score > 0.0 else "sell" if score < 0.0 else "hold"
+                        ),
+                        "counterfactual_target_dollars": float(proposal.target_dollars),
+                        "counterfactual_score": float(score),
+                        "counterfactual_confidence": float(confidence),
+                        "evidence_partition": "stale_model_shadow",
+                        "research_only": True,
+                        "promotion_eligible": False,
+                        "model_authority": False,
+                        "runtime_authority": False,
+                    }
+                )
             if day_sleeve_ml_debug is not None:
                 proposal.debug.update(day_sleeve_ml_debug)
             elif is_day_sleeve_model_path and (
@@ -42409,9 +42480,21 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 if day_sleeve_inference_error:
                     proposal.debug["ml_fallback_reason"] = day_sleeve_inference_error
                 if day_sleeve_ml_required and day_sleeve_inference_error:
-                    proposal.blocked = True
-                    proposal.reason_code = "DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE"
-                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+                    diagnostic_allowed = stale_model_diagnostics_allowed(
+                        cfg,
+                        model_error=day_sleeve_inference_error,
+                    )
+                    proposal.debug["stale_model_paper_diagnostic"] = bool(
+                        diagnostic_allowed
+                    )
+                    if diagnostic_allowed:
+                        proposal.debug["evidence_partition"] = (
+                            "stale_model_paper_diagnostic"
+                        )
+                    else:
+                        proposal.blocked = True
+                        proposal.reason_code = "DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE"
+                        proposal.target_dollars = positions.get(symbol, 0.0) * price
             proposals_total += 1
             rolling_volume = _rolling_volume_from_bars(df, liq_lookback_bars)
             latest_liquidity[symbol] = _liquidity_features(

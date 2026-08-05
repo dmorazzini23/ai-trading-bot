@@ -139,6 +139,37 @@ class DecisionRecorder:
             list(sleeves) if sleeves is not None else list(net_target.proposals)
         )
         metrics_payload = dict(metrics) if isinstance(metrics, Mapping) else {}
+        diagnostic_debug = next(
+            (
+                dict(debug)
+                for sleeve in resolved_sleeves
+                if isinstance((debug := getattr(sleeve, "debug", None)), Mapping)
+                and str(debug.get("evidence_partition") or "").startswith(
+                    "stale_model_"
+                )
+            ),
+            None,
+        )
+        if diagnostic_debug is not None:
+            metrics_payload.update(
+                {
+                    "evidence_partition": str(diagnostic_debug["evidence_partition"]),
+                    "research_only": True,
+                    "promotion_eligible": False,
+                    "model_authority": False,
+                    "runtime_authority": False,
+                    "promotion_authority": False,
+                    "live_money_authority": False,
+                    "counterfactual_side": diagnostic_debug.get("counterfactual_side"),
+                    "counterfactual_target_dollars": diagnostic_debug.get(
+                        "counterfactual_target_dollars"
+                    ),
+                    "counterfactual_score": diagnostic_debug.get("counterfactual_score"),
+                    "counterfactual_confidence": diagnostic_debug.get(
+                        "counterfactual_confidence"
+                    ),
+                }
+            )
         model_lineage = _derive_ml_model_lineage(resolved_sleeves)
         for key, value in model_lineage.items():
             if not str(metrics_payload.get(key) or "").strip():
@@ -165,7 +196,11 @@ class DecisionRecorder:
                         "error": str(exc),
                     },
                 )
-        side = order_payload.get("side") or getattr(order_intent, "side", None)
+        side = (
+            order_payload.get("side")
+            or getattr(order_intent, "side", None)
+            or metrics_payload.get("counterfactual_side")
+        )
         if normalize_opportunity_side(side) == "hold":
             if float(net_target.target_shares) > 0.0:
                 side = "buy"
@@ -324,6 +359,15 @@ class DecisionRecorder:
         if opportunity_price is not None and opportunity_price > 0.0:
             metrics_payload.setdefault("opportunity_price", opportunity_price)
         opportunity_quantity = abs(float(net_target.target_shares))
+        counterfactual_target_dollars = _finite_float(
+            metrics_payload.get("counterfactual_target_dollars")
+        )
+        if (
+            opportunity_quantity <= 0.0
+            and opportunity_price
+            and counterfactual_target_dollars is not None
+        ):
+            opportunity_quantity = abs(counterfactual_target_dollars) / opportunity_price
         if opportunity_quantity <= 0.0 and opportunity_price:
             primary_debug = _primary_sleeve_debug(resolved_sleeves)
             primary_size_dollars = _finite_float(primary_debug.get("size_dollars"))

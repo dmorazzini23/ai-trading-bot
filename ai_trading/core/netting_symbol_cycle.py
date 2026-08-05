@@ -277,16 +277,40 @@ def process_netting_symbol(
     price = processor.latest_price.get(symbol, 0.0)
     current_shares = int(processor.positions.get(symbol, 0) or 0)
     if price <= 0:
-        net_target.reasons.append("BAD_DATA_CONTRACT")
+        proposal_reasons = {
+            str(getattr(proposal, "reason_code", "") or "").strip()
+            for proposal in net_target.proposals
+            if str(getattr(proposal, "reason_code", "") or "").strip()
+        }
+        skip_reason_values = {
+            str(reason or "").strip()
+            for reason in processor.skip_reasons.get(symbol, [])
+            if str(reason or "").strip()
+        }
+        opening_warmup = bool(net_target.proposals) and all(
+            bool(getattr(proposal, "blocked", False))
+            and str(getattr(proposal, "reason_code", "") or "").strip()
+            == "NO_FINALIZED_DAY_BAR"
+            for proposal in net_target.proposals
+        ) and skip_reason_values <= {"NO_FINALIZED_DAY_BAR"}
+        if not opening_warmup:
+            net_target.reasons.append("BAD_DATA_CONTRACT")
+        missing_price_gates = list(
+            dict.fromkeys(
+                [
+                    *processor.skip_reasons.get(symbol, []),
+                    *sorted(proposal_reasons),
+                ]
+            )
+        )
+        if not opening_warmup:
+            missing_price_gates.append("BAD_DATA_CONTRACT")
         _record_decision(
             symbol=symbol,
             bar_ts=net_target.bar_ts,
             sleeves=net_target.proposals,
             net_target=net_target,
-            gates=[
-                *processor.skip_reasons.get(symbol, []),
-                "BAD_DATA_CONTRACT",
-            ],
+            gates=missing_price_gates,
             config_snapshot=symbol_snapshot,
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
@@ -790,6 +814,27 @@ def process_netting_symbol(
     intent = execution_intent_context.pretrade_intent
     order_lineage_metadata = dict(execution_intent_context.order_lineage_metadata)
     order_annotations = dict(execution_intent_context.order_annotations)
+    diagnostic_debug = next(
+        (
+            debug
+            for proposal in net_target.proposals
+            if isinstance((debug := getattr(proposal, "debug", None)), Mapping)
+            and debug.get("stale_model_paper_diagnostic") is True
+        ),
+        None,
+    )
+    if diagnostic_debug is not None:
+        diagnostic_firewall = {
+            "evidence_partition": "stale_model_paper_diagnostic",
+            "research_only": True,
+            "promotion_eligible": False,
+            "model_authority": False,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        }
+        order_annotations.update(diagnostic_firewall)
+        order_lineage_metadata.update(diagnostic_firewall)
     model_id_for_order = str(processor.execution_model_lineage.get("model_id") or "").strip()
     model_version_for_order = str(
         processor.execution_model_lineage.get("model_version") or ""

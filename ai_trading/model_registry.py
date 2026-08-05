@@ -591,7 +591,31 @@ class ModelRegistry:
         )
         existing = self.find_by_candidate_identity(identity)
         if existing is not None:
-            return existing[0], False
+            existing_id, existing_info = existing
+            governance = existing_info.get("governance")
+            if (
+                isinstance(governance, Mapping)
+                and governance.get("status") == "shadow"
+            ):
+                normalized_metrics = self._convert_metadata_value(dict(metrics))
+                metadata_payload = existing_info.get("metadata")
+                normalized_metadata = (
+                    dict(metadata_payload)
+                    if isinstance(metadata_payload, Mapping)
+                    else {}
+                )
+                normalized_metadata["metrics"] = normalized_metrics
+                normalized_governance = dict(governance)
+                normalized_governance["metrics"] = normalized_metrics
+                existing_info["metadata"] = normalized_metadata
+                existing_info["governance"] = normalized_governance
+                self.model_index[existing_id] = existing_info
+                self._write_metadata_file(
+                    Path(str(existing_info["path"])),
+                    existing_info,
+                )
+                self._save_index()
+            return existing_id, False
         candidate_metadata = dict(metadata or {})
         candidate_metadata.update(
             {

@@ -142,8 +142,8 @@ def _evaluation_models(registry: Mapping[str, Any]) -> tuple[list[dict[str, Any]
 
     raw = registry.get("models")
     if isinstance(raw, list):
-        models = [dict(item) for item in raw if isinstance(item, Mapping)]
-        return models, "legacy_models_list"
+        legacy_models = [dict(item) for item in raw if isinstance(item, Mapping)]
+        return legacy_models, "legacy_models_list"
 
     models: list[dict[str, Any]] = []
     for model_id, raw_model in registry.items():
@@ -459,7 +459,7 @@ def build_model_evaluation(
     *,
     registry: Mapping[str, Any],
     challenger_id: str | None = None,
-    primary_metric: str = "net_edge_bps",
+    primary_metric: str = "mean_post_cost_net_edge_bps",
     min_delta: float = 0.0,
     generated_at: datetime | None = None,
     max_evidence_age_hours: float = 96.0,
@@ -558,6 +558,29 @@ def build_model_evaluation(
         blocked_reasons.append("champion_primary_metric_missing")
     if challenger is not None and challenger_metric is None:
         blocked_reasons.append("challenger_primary_metric_missing")
+    if primary_metric == "mean_post_cost_net_edge_bps":
+        challenger_metrics = (
+            challenger.get("metrics")
+            if challenger is not None
+            and isinstance(challenger.get("metrics"), Mapping)
+            else {}
+        )
+        challenger_trades = _finite_float(challenger_metrics.get("trades"))
+        if (
+            challenger is not None
+            and challenger_metric is not None
+            and challenger_metric <= 0.0
+        ):
+            blocked_reasons.append("challenger_post_cost_edge_not_positive")
+        if challenger is not None and (
+            challenger_trades is None or challenger_trades <= 0.0
+        ):
+            blocked_reasons.append("challenger_trade_evidence_missing")
+        if (
+            challenger is not None
+            and challenger_metrics.get("evidence_qualified") is not True
+        ):
+            blocked_reasons.append("challenger_evidence_not_qualified")
 
     delta = (
         float(challenger_metric - champion_metric)
@@ -676,7 +699,10 @@ def main(argv: list[str] | None = None) -> int:
     evaluate = subparsers.add_parser("evaluate", help="Evaluate challenger against champion.")
     evaluate.add_argument("--registry-json", type=Path, required=True)
     evaluate.add_argument("--challenger-id", default="")
-    evaluate.add_argument("--primary-metric", default="net_edge_bps")
+    evaluate.add_argument(
+        "--primary-metric",
+        default="mean_post_cost_net_edge_bps",
+    )
     evaluate.add_argument("--min-delta", type=float, default=0.0)
     evaluate.add_argument("--max-evidence-age-hours", type=float, default=96.0)
     evaluate.add_argument("--generated-at", default="")

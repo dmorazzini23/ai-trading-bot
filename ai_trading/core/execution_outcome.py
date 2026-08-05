@@ -210,6 +210,12 @@ def build_order_metrics_and_tca(
         "trend_regime",
         "execution_profile",
         "paper_sampling_reservation_token",
+        "evidence_partition",
+        "research_only",
+        "model_authority",
+        "runtime_authority",
+        "promotion_authority",
+        "live_money_authority",
     ):
         value = lineage.get(key)
         if value not in (None, ""):
@@ -218,7 +224,8 @@ def build_order_metrics_and_tca(
         "fill_execution" if persistable_fill else "order_execution"
     )
     metrics["fill_based_evidence"] = bool(persistable_fill)
-    metrics["promotion_eligible"] = bool(persistable_fill)
+    research_only = bool(lineage.get("research_only"))
+    metrics["promotion_eligible"] = bool(persistable_fill and not research_only)
 
     if not bool(get_env("AI_TRADING_TCA_ENABLED", False, cast=bool)):
         return metrics, None
@@ -390,7 +397,7 @@ def build_order_metrics_and_tca(
             "fill_execution" if persistable_fill else "order_execution"
         ),
         fill_based_evidence=bool(persistable_fill),
-        promotion_eligible=bool(persistable_fill),
+        promotion_eligible=bool(persistable_fill and not research_only),
     )
     session_regime_token = session_token or session_bucket_from_ts_func(now)
     spread_paid_for_role = safe_float(tca_record.get("spread_paid_bps"))

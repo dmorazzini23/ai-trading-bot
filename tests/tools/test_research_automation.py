@@ -238,6 +238,8 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
             "upward-test",
             "--data-dir",
             str(data_dir),
+            "--symbols",
+            "AAPL,AMZN",
             "--plan-only",
         ]
     )
@@ -263,6 +265,22 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     assert upward["metadata"]["research_only"] is True
     assert upward["metadata"]["live_money_authority"] is False
     assert "--training-accelerator-json" in upward["command"]
+    accelerator = next(
+        step for step in payload["steps"] if step["name"] == "training_accelerator_daily"
+    )
+    accelerator_command = [str(token) for token in accelerator["command"]]
+    assert accelerator_command[accelerator_command.index("--symbols") + 1] == (
+        "AAPL,AMZN"
+    )
+    registry_evaluation = next(
+        step
+        for step in payload["steps"]
+        if step["name"] == "model_registry_post_training_evaluation"
+    )
+    registry_command = [str(token) for token in registry_evaluation["command"]]
+    assert registry_command[registry_command.index("--primary-metric") + 1] == (
+        "mean_post_cost_net_edge_bps"
+    )
     daily_research = next(step for step in payload["steps"] if step["name"] == "daily_research_pipeline")  # type: ignore[index]
     assert "--upward-trajectory-json" in daily_research["command"]
     markouts = next(
@@ -447,6 +465,8 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
             "weekly-test",
             "--data-dir",
             str(data_dir),
+            "--symbols",
+            "AAPL,AMZN,MSFT,NVDA",
             "--shadow-jsonl",
             str(shadow),
             "--accepted-candidates-jsonl",
@@ -469,6 +489,22 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     assert "microstructure_replay_bridge" in step_names
     assert "huggingface_research_discovery" in step_names
     assert "huggingface_candidate_intake" in step_names
+    accelerator = next(
+        step for step in payload["steps"] if step["name"] == "training_accelerator_weekly"
+    )
+    accelerator_command = [str(token) for token in accelerator["command"]]
+    assert accelerator_command[accelerator_command.index("--symbols") + 1] == (
+        "AAPL,AMZN,MSFT"
+    )
+    objective_search = next(
+        step
+        for step in payload["steps"]
+        if step["name"] == "multi_horizon_objective_search"
+    )
+    objective_command = [str(token) for token in objective_search["command"]]
+    assert objective_command[objective_command.index("--symbols") + 1] == (
+        "AAPL,AMZN,MSFT,NVDA"
+    )
     bridge = next(step for step in payload["steps"] if step["name"] == "microstructure_replay_bridge")  # type: ignore[index]
     assert bridge["metadata"]["enforcement_authority"] is False
 

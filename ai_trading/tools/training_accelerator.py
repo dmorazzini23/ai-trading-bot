@@ -315,6 +315,8 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         "cadence": str(args.cadence),
         "status": "planned" if args.plan_only else "running",
         "promotion_authority": False,
+        "runtime_authority": False,
+        "live_money_authority": False,
         "config": config,
         "input_manifest": str(manifest_path),
         "input_signature": input_signature,

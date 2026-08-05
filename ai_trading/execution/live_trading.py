@@ -27535,8 +27535,11 @@ class ExecutionEngine:
             "prefer_live",
         }:
             fill_source = "live"
-        daily_rows_raw: Any = trade_payload.get("daily_trade_stats")
-        if fill_source != "all":
+        daily_rows_raw: Any = trade_payload.get("operational_daily_trade_stats")
+        operational_view = isinstance(daily_rows_raw, list)
+        if not operational_view:
+            daily_rows_raw = trade_payload.get("daily_trade_stats")
+        if fill_source != "all" and not operational_view:
             by_source_raw = trade_payload.get("daily_trade_stats_by_fill_source")
             if isinstance(by_source_raw, Mapping):
                 candidate = by_source_raw.get(fill_source)
@@ -27577,6 +27580,7 @@ class ExecutionEngine:
             "threshold_net_pnl": float(max_loss),
             "today_net_pnl": float(net_pnl),
             "trade_fill_source": fill_source,
+            "daily_stats_view": "operational" if operational_view else "accounting",
         }
 
     def _runtime_intraday_adaptive_slippage_budget(
@@ -29539,8 +29543,11 @@ class ExecutionEngine:
             "prefer_live",
         }:
             fill_source = "live"
-        daily_rows_raw: Any = trade_payload.get("daily_trade_stats")
-        if fill_source != "all":
+        daily_rows_raw: Any = trade_payload.get("operational_daily_trade_stats")
+        operational_view = isinstance(daily_rows_raw, list)
+        if not operational_view:
+            daily_rows_raw = trade_payload.get("daily_trade_stats")
+        if fill_source != "all" and not operational_view:
             by_source_raw = trade_payload.get("daily_trade_stats_by_fill_source")
             if isinstance(by_source_raw, Mapping):
                 candidate = by_source_raw.get(fill_source)
@@ -29608,6 +29615,7 @@ class ExecutionEngine:
             "min_trades": int(min_trades),
             "today_trades": int(today_trades),
             "adaptive": adaptive_context,
+            "daily_stats_view": "operational" if operational_view else "accounting",
         }
 
     def _runtime_pending_new_pressure_allows_openings(self) -> tuple[bool, dict[str, Any]]:

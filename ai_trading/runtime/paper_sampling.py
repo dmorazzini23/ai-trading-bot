@@ -118,6 +118,37 @@ def _is_paper_sampling_active(cfg: Any) -> tuple[bool, str | None]:
     return True, None
 
 
+def stale_model_diagnostics_allowed(cfg: Any, *, model_error: str | None) -> bool:
+    """Allow the narrow unavailable-model diagnostic only in explicit paper mode."""
+
+    active, _ = _is_paper_sampling_active(cfg)
+    if not active:
+        return False
+    if not bool(
+        get_env(
+            "AI_TRADING_PAPER_SAMPLING_STALE_MODEL_DIAGNOSTICS_ENABLED",
+            False,
+            cast=bool,
+        )
+    ):
+        return False
+    error_token = str(model_error or "").strip().lower()
+    unsafe_failure_tokens = (
+        "incompatible",
+        "contract",
+        "verification",
+        "checksum",
+        "signature",
+        "lineage",
+        "feature order",
+    )
+    if any(token in error_token for token in unsafe_failure_tokens):
+        return False
+    return "unavailable" in error_token or (
+        error_token.startswith("active model ") and " is stale" in error_token
+    )
+
+
 def _cfg_int(cfg: Any, field: str, default: int) -> int:
     try:
         raw_value = getattr(cfg, field, default)
@@ -922,4 +953,5 @@ __all__ = [
     "paper_sampling_deficit_snapshot",
     "release_paper_sampling_order",
     "reserve_paper_sampling_order",
+    "stale_model_diagnostics_allowed",
 ]

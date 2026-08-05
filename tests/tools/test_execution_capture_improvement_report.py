@@ -255,6 +255,79 @@ def test_execution_capture_disambiguates_same_second_children_and_excludes_shado
     assert rows["child-2"]["quote_age_ms"] == 900.0
 
 
+def test_execution_capture_resolves_pending_and_filled_lifecycle_rows() -> None:
+    fill = {
+        **_bad_fill(),
+        "correlation_id": "opp-1",
+        "client_order_id": "child-1",
+        "order_id": "broker-1",
+        "quote_age_ms": None,
+    }
+    common_tca = {
+        "ts": "2026-07-01T15:30:00Z",
+        "correlation_id": "opp-1",
+        "client_order_id": "child-1",
+        "order_id": "broker-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "decision_quote_age_ms": 125.0,
+    }
+    report = build_execution_capture_improvement_report(
+        report_date="2026-07-01",
+        fills=[fill],
+        tca_rows=[
+            {
+                **common_tca,
+                "status": "pending_new",
+                "evidence_type": "order_execution",
+                "fill_based_evidence": False,
+            },
+            {
+                **common_tca,
+                "status": "filled",
+                "evidence_type": "fill_execution",
+                "fill_based_evidence": True,
+            },
+        ],
+        min_bucket_samples=1,
+    )
+
+    row = report["normalized_rows"][0]
+    assert row["metadata_join_method"] == "correlation_and_order_id_terminal_fill"
+    assert row["quote_age_ms"] == 125.0
+
+
+def test_execution_capture_keeps_multiple_terminal_fills_ambiguous() -> None:
+    fill = {
+        **_bad_fill(),
+        "correlation_id": "opp-1",
+        "client_order_id": "child-1",
+        "quote_age_ms": None,
+    }
+    terminal = {
+        "correlation_id": "opp-1",
+        "client_order_id": "child-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "status": "filled",
+        "evidence_type": "fill_execution",
+        "fill_based_evidence": True,
+    }
+    report = build_execution_capture_improvement_report(
+        report_date="2026-07-01",
+        fills=[fill],
+        tca_rows=[
+            {**terminal, "decision_quote_age_ms": 100.0},
+            {**terminal, "decision_quote_age_ms": 900.0},
+        ],
+        min_bucket_samples=1,
+    )
+
+    row = report["normalized_rows"][0]
+    assert row["metadata_join_method"] == "ambiguous_correlation_and_order_id"
+    assert row["quote_age_ms"] is None
+
+
 def test_fill_evidence_classifier_uses_explicit_real_fill_allowlist() -> None:
     for evidence_type in (
         "fill_execution",

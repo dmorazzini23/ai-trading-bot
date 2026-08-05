@@ -159,6 +159,68 @@ def test_build_order_metrics_returns_without_tca_when_disabled(monkeypatch: pyte
     assert tca_record is None
 
 
+def test_research_only_fill_cannot_become_promotion_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 3, 16, tzinfo=UTC)
+    monkeypatch.setattr(
+        execution_outcome,
+        "get_env",
+        _env_getter({"AI_TRADING_TCA_ENABLED": False}),
+    )
+
+    metrics, tca_record = execution_outcome.build_order_metrics_and_tca(
+        symbol="AAPL",
+        side="buy",
+        price=100.0,
+        delta_shares=1,
+        now=now,
+        net_target=SimpleNamespace(bar_ts=now, proposals=[]),
+        order=SimpleNamespace(client_order_id="diagnostic-1"),
+        order_state=SubmittedOrderState(
+            status_text="filled",
+            status_token="filled",
+            broker_order_id="broker-1",
+            filled_qty=1.0,
+            requested_qty=1.0,
+            fill_price=100.0,
+            fill_timestamp=now,
+            fill_fees=0.0,
+            persistable_fill=True,
+        ),
+        submit_arrival_price=100.0,
+        submit_bid_at_arrival=99.9,
+        submit_ask_at_arrival=100.1,
+        submit_mid_at_arrival=100.0,
+        submit_quote_source="sip",
+        candidate_expected_net_edge={},
+        candidate_expected_capture={},
+        get_regime_signal_profile_func=lambda: "regular",
+        normalize_quote_source_token_func=lambda value: str(value) if value else None,
+        resolve_quote_proxy_source_func=lambda *_args, **_kwargs: None,
+        resolved_tca_path_func=lambda: "unused.jsonl",
+        write_tca_record_func=lambda _path, _payload: None,
+        session_bucket_from_ts_func=lambda _ts: "regular",
+        compute_attribution_metrics_func=lambda **_kwargs: {},
+        safe_float=_safe_float,
+        logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+        order_lineage_metadata={
+            "evidence_partition": "stale_model_paper_diagnostic",
+            "research_only": True,
+            "model_authority": False,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
+    )
+
+    assert tca_record is None
+    assert metrics["fill_based_evidence"] is True
+    assert metrics["promotion_eligible"] is False
+    assert metrics["evidence_partition"] == "stale_model_paper_diagnostic"
+    assert metrics["model_authority"] is False
+
+
 def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime(2026, 4, 25, 16, tzinfo=UTC)
     writes: list[tuple[str, Mapping[str, Any]]] = []

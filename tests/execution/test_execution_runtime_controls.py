@@ -3528,6 +3528,12 @@ def test_runtime_gonogo_intraday_pnl_kill_switch_blocks(monkeypatch):
                 "daily_trade_stats": [
                     {
                         "date": today,
+                        "net_pnl": 100.0,
+                    }
+                ],
+                "operational_daily_trade_stats": [
+                    {
+                        "date": today,
                         "net_pnl": -100.0,
                     }
                 ]
@@ -3538,6 +3544,7 @@ def test_runtime_gonogo_intraday_pnl_kill_switch_blocks(monkeypatch):
 
     assert allowed is False
     assert context["reason"] == "intraday_loss_breach"
+    assert context["daily_stats_view"] == "operational"
 
 
 def test_runtime_gonogo_intraday_slippage_kill_switch_blocks(monkeypatch):
@@ -3566,6 +3573,13 @@ def test_runtime_gonogo_intraday_slippage_kill_switch_blocks(monkeypatch):
                     {
                         "date": today,
                         "trades": 10,
+                        "slippage_cost": 1.0,
+                    }
+                ],
+                "operational_daily_trade_stats": [
+                    {
+                        "date": today,
+                        "trades": 10,
                         "slippage_cost": 40.0,
                     }
                 ]
@@ -3576,6 +3590,7 @@ def test_runtime_gonogo_intraday_slippage_kill_switch_blocks(monkeypatch):
 
     assert allowed is False
     assert context["reason"] == "intraday_slippage_drag_breach"
+    assert context["daily_stats_view"] == "operational"
 
 
 def test_runtime_gonogo_intraday_slippage_kill_switch_adaptive_tightens(monkeypatch):

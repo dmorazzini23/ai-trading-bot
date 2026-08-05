@@ -280,8 +280,11 @@ for target in report_targets:
 
 trade = report.get("trade_history", {})
 gate = report.get("gate_effectiveness", {})
+operational_trade_rows = trade.get("operational_daily_trade_stats")
+if not isinstance(operational_trade_rows, list):
+    operational_trade_rows = trade.get("daily_trade_stats", [])
 trade_day = next(
-    (row for row in trade.get("daily_trade_stats", []) if row.get("date") == REPORT_DATE),
+    (row for row in operational_trade_rows if row.get("date") == REPORT_DATE),
     {},
 )
 expectancy_day = next(

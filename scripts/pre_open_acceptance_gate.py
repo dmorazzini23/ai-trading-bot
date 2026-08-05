@@ -11,6 +11,9 @@ Workflow:
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from collections.abc import Mapping
+from datetime import UTC, datetime
 import json
 import os
 import re
@@ -37,6 +40,10 @@ HEALTH_REQUIRE_OMS_LIFECYCLE_PARITY_ENV = "AI_TRADING_HEALTH_REQUIRE_OMS_LIFECYC
 _SECRET_KEY_HINT_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|WEBHOOK_URL$|API_KEY$)")
 _SECRETS_BACKEND_NONE = {"", "none", "off", "disabled"}
 _PACKAGED_RUNTIME_ENV_PATH = Path("/run/ai-trading-bot/ai-trading-runtime.env")
+_PREOPEN_MODEL_MAX_AGE_DAYS = 14
+_PREOPEN_SHADOW_MAX_AGE_HOURS = 96.0
+_PREOPEN_DECISION_TAIL_ROWS = 500
+_PREOPEN_DECISION_TAIL_BYTES = 4 * 1024 * 1024
 
 
 @dataclass
@@ -484,6 +491,381 @@ def _health_payload_from_step(health_step: Step) -> dict[str, Any] | None:
     return dict(payload) if isinstance(payload, dict) else None
 
 
+def _parse_timestamp(value: Any) -> datetime | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    if token.endswith("Z"):
+        token = token[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(token)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _runtime_artifact(repo_dir: Path, relative: str) -> Path:
+    configured, _source = _env_value(repo_dir, "AI_TRADING_DATA_DIR")
+    if configured and Path(configured).expanduser().is_absolute():
+        return Path(configured).expanduser() / relative
+    if repo_dir == Path("/home/aiuser/ai-trading-bot").resolve():
+        return Path("/var/lib/ai-trading-bot") / relative
+    return repo_dir / relative
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _nested_timestamp(entry: Mapping[str, Any]) -> datetime | None:
+    metadata_raw = entry.get("metadata")
+    metadata = metadata_raw if isinstance(metadata_raw, Mapping) else {}
+    manifest_raw = metadata.get("manifest_metadata")
+    manifest = manifest_raw if isinstance(manifest_raw, Mapping) else {}
+    governance_raw = entry.get("governance")
+    governance = governance_raw if isinstance(governance_raw, Mapping) else {}
+    metrics_raw = governance.get("metrics")
+    metrics = metrics_raw if isinstance(metrics_raw, Mapping) else {}
+    for source in (metadata, manifest, metrics):
+        for key in (
+            "trained_at",
+            "training_timestamp",
+            "generated_at",
+            "created_ts",
+        ):
+            parsed = _parse_timestamp(source.get(key))
+            if parsed is not None:
+                return parsed
+    manifest_path = str(
+        entry.get("manifest_path") or metadata.get("manifest_path") or ""
+    ).strip()
+    if manifest_path:
+        manifest_payload = _read_json_object(Path(manifest_path).expanduser())
+        for key in (
+            "trained_at",
+            "training_timestamp",
+            "generated_at",
+            "created_ts",
+        ):
+            parsed = _parse_timestamp(manifest_payload.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _model_readiness_factor(repo_dir: Path, *, now: datetime) -> dict[str, Any]:
+    registry_path = _runtime_artifact(repo_dir, "models/registry_index.json")
+    registry = _read_json_object(registry_path)
+    candidates: list[tuple[datetime, int, str, Mapping[str, Any]]] = []
+    for model_id, raw in registry.items():
+        if not isinstance(raw, Mapping) or raw.get("active") is False:
+            continue
+        governance = raw.get("governance")
+        if not isinstance(governance, Mapping) or governance.get("status") != "production":
+            continue
+        if str(raw.get("strategy") or "").strip() not in {"ml_edge", "day_sleeve"}:
+            continue
+        registered_at = _parse_timestamp(raw.get("registered_at")) or datetime.min.replace(
+            tzinfo=UTC
+        )
+        try:
+            registered_seq = int(raw.get("registered_seq") or 0)
+        except (TypeError, ValueError):
+            registered_seq = 0
+        candidates.append((registered_at, registered_seq, str(model_id), raw))
+    if not candidates:
+        return {
+            "status": "fail",
+            "reason": "governed_production_model_missing",
+            "registry_path": str(registry_path),
+        }
+    _registered_at, _registered_seq, model_id, entry = max(
+        candidates,
+        key=lambda item: (item[0], item[1]),
+    )
+    trained_at = _nested_timestamp(entry)
+    if trained_at is None:
+        return {
+            "status": "fail",
+            "reason": "governed_production_training_timestamp_missing",
+            "registry_path": str(registry_path),
+            "model_id": model_id,
+            "strategy": entry.get("strategy"),
+            "artifact_path": entry.get("artifact_path"),
+        }
+    artifact_path = Path(str(entry.get("artifact_path") or "")).expanduser()
+    max_age_days_raw, _source = _env_value(repo_dir, "AI_TRADING_MODEL_MAX_AGE_DAYS")
+    try:
+        max_age_days = max(1, int(max_age_days_raw or _PREOPEN_MODEL_MAX_AGE_DAYS))
+    except ValueError:
+        max_age_days = _PREOPEN_MODEL_MAX_AGE_DAYS
+    age_hours = max(0.0, (now - trained_at).total_seconds() / 3600.0)
+    future_dated = trained_at > now
+    artifact_exists = artifact_path.is_file()
+    fresh = not future_dated and age_hours <= max_age_days * 24.0
+    return {
+        "status": "pass" if artifact_exists and fresh else "fail",
+        "reason": (
+            "ok"
+            if artifact_exists and fresh
+            else "production_artifact_missing"
+            if not artifact_exists
+            else "production_training_timestamp_future_dated"
+            if future_dated
+            else "production_model_stale"
+        ),
+        "registry_path": str(registry_path),
+        "model_id": model_id,
+        "strategy": entry.get("strategy"),
+        "artifact_path": str(artifact_path),
+        "artifact_exists": artifact_exists,
+        "trained_at": trained_at.isoformat().replace("+00:00", "Z"),
+        "age_hours": age_hours,
+        "max_age_hours": float(max_age_days * 24),
+    }
+
+
+def _shadow_evidence_factor(repo_dir: Path, *, now: datetime) -> dict[str, Any]:
+    path = _runtime_artifact(
+        repo_dir,
+        "runtime/research_reports/latest/opportunity_markouts_latest.json",
+    )
+    report = _read_json_object(path)
+    generated_at = _parse_timestamp(report.get("generated_at"))
+    max_age_raw, _source = _env_value(
+        repo_dir,
+        "AI_TRADING_PREOPEN_SHADOW_EVIDENCE_MAX_AGE_HOURS",
+    )
+    try:
+        max_age_hours = max(1.0, float(max_age_raw or _PREOPEN_SHADOW_MAX_AGE_HOURS))
+    except ValueError:
+        max_age_hours = _PREOPEN_SHADOW_MAX_AGE_HOURS
+    age_hours = (
+        max(0.0, (now - generated_at).total_seconds() / 3600.0)
+        if generated_at is not None
+        else None
+    )
+    contract_ok = bool(
+        report.get("artifact_type") == "opportunity_markout_report"
+        and report.get("evidence_partition") == "shadow"
+        and report.get("research_only") is True
+        and report.get("live_money_authority") is False
+    )
+    fresh = bool(
+        generated_at is not None
+        and generated_at <= now
+        and age_hours is not None
+        and age_hours <= max_age_hours
+    )
+    return {
+        "status": "pass" if contract_ok and fresh else "fail",
+        "reason": (
+            "ok"
+            if contract_ok and fresh
+            else "shadow_evidence_contract_invalid"
+            if not contract_ok
+            else "shadow_evidence_timestamp_missing"
+            if generated_at is None
+            else "shadow_evidence_future_dated"
+            if generated_at > now
+            else "shadow_evidence_stale"
+        ),
+        "path": str(path),
+        "generated_at": (
+            generated_at.isoformat().replace("+00:00", "Z")
+            if generated_at is not None
+            else None
+        ),
+        "age_hours": age_hours,
+        "max_age_hours": max_age_hours,
+        "eligible_opportunities": _safe_nonnegative_int(
+            report.get("eligible_opportunities")
+        ),
+        "outcomes_emitted": _safe_nonnegative_int(report.get("outcomes_emitted")),
+    }
+
+
+def _bounded_tail_lines(path: Path) -> list[bytes]:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - _PREOPEN_DECISION_TAIL_BYTES))
+            chunk = handle.read(_PREOPEN_DECISION_TAIL_BYTES)
+    except OSError:
+        return []
+    lines = chunk.splitlines()
+    if size > _PREOPEN_DECISION_TAIL_BYTES and lines:
+        lines = lines[1:]
+    return list(deque(lines, maxlen=_PREOPEN_DECISION_TAIL_ROWS))
+
+
+def _contains_bad_data_contract(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_bad_data_contract(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_bad_data_contract(item) for item in value)
+    return str(value or "").strip() == "BAD_DATA_CONTRACT"
+
+
+def _decision_contract_factor(repo_dir: Path) -> dict[str, Any]:
+    path = _runtime_artifact(repo_dir, "runtime/decision_records.jsonl")
+    lines = _bounded_tail_lines(path)
+    parsed_count = 0
+    violation_count = 0
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        parsed_count += 1
+        if _contains_bad_data_contract(record):
+            violation_count += 1
+    available = bool(lines and parsed_count)
+    return {
+        "status": "pass" if available and violation_count == 0 else "fail",
+        "reason": (
+            "ok"
+            if available and violation_count == 0
+            else "decision_tail_unavailable"
+            if not available
+            else "bad_data_contract_present"
+        ),
+        "path": str(path),
+        "max_rows": _PREOPEN_DECISION_TAIL_ROWS,
+        "max_bytes": _PREOPEN_DECISION_TAIL_BYTES,
+        "rows_loaded": len(lines),
+        "rows_parsed": parsed_count,
+        "bad_data_contract_count": violation_count,
+    }
+
+
+def _broker_readiness_factor(payload: Mapping[str, Any]) -> dict[str, Any]:
+    broker_raw = payload.get("broker")
+    broker = broker_raw if isinstance(broker_raw, Mapping) else {}
+    checks = {
+        "connected": broker.get("connected") is True,
+        "fresh": broker.get("fresh") is True,
+        "open_orders_fresh": broker.get("open_orders_fresh") is True,
+        "positions_fresh": broker.get("positions_fresh") is True,
+    }
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "reason": "ok" if all(checks.values()) else "broker_snapshot_not_ready",
+        "checks": checks,
+        "last_success_at": broker.get("last_success_at"),
+    }
+
+
+def _flat_start_factor(
+    payload: Mapping[str, Any],
+    operator_step: Step,
+) -> dict[str, Any]:
+    broker_raw = payload.get("broker")
+    broker = broker_raw if isinstance(broker_raw, Mapping) else {}
+    open_orders_count = _safe_nonnegative_int(broker.get("open_orders_count"))
+    flat_raw = operator_step.details.get("flat_start")
+    flat = flat_raw if isinstance(flat_raw, Mapping) else {}
+    blockers_raw = flat.get("blockers")
+    blockers = list(blockers_raw) if isinstance(blockers_raw, list) else []
+    required = flat.get("required") is True
+    policy_blockers = blockers if required else [b for b in blockers if b == "preopen_open_orders"]
+    passed = open_orders_count == 0 and not policy_blockers
+    status = "pass" if passed else "fail"
+    if passed and blockers:
+        status = "warn"
+    return {
+        "status": status,
+        "reason": "ok" if status == "pass" else "flat_start_observation" if status == "warn" else "flat_start_blocked",
+        "open_orders_count": open_orders_count,
+        "flat_start_required": required,
+        "flat_start_blockers": blockers,
+        "runtime_context": flat.get("runtime_context", {}),
+    }
+
+
+def _paper_authority_factor(payload: Mapping[str, Any]) -> dict[str, Any]:
+    entry_raw = payload.get("entry_control")
+    entry = entry_raw if isinstance(entry_raw, Mapping) else {}
+    alpaca_raw = payload.get("alpaca")
+    alpaca = alpaca_raw if isinstance(alpaca_raw, Mapping) else {}
+    mode = str(entry.get("execution_mode") or "").strip().lower()
+    non_live_mode = mode in {"paper", "sim", "simulation"}
+    endpoint_coherent = mode != "paper" or alpaca.get("paper") is True
+    live_disabled = entry.get("live_new_exposure_allowed") is False
+    passed = non_live_mode and endpoint_coherent and live_disabled
+    return {
+        "status": "pass" if passed else "fail",
+        "reason": "ok" if passed else "paper_sim_authority_incoherent",
+        "execution_mode": mode,
+        "alpaca_paper": alpaca.get("paper"),
+        "live_new_exposure_allowed": entry.get("live_new_exposure_allowed"),
+    }
+
+
+def _build_preopen_readiness_verdict(
+    repo_dir: Path,
+    *,
+    health_step: Step,
+    operator_step: Step,
+    now: datetime | None = None,
+) -> Step:
+    """Build one read-only six-factor pre-open readiness verdict."""
+
+    payload = _health_payload_from_step(health_step)
+    if payload is None:
+        return Step(
+            name="preopen_readiness_verdict",
+            status="fail",
+            summary="pre-open readiness blocked: health payload unavailable",
+            details={"factors": {}, "read_only": True},
+        )
+    evaluated_at = (now or datetime.now(UTC)).astimezone(UTC)
+    factors = {
+        "governed_production_model": _model_readiness_factor(
+            repo_dir, now=evaluated_at
+        ),
+        "shadow_opportunity_markouts": _shadow_evidence_factor(
+            repo_dir, now=evaluated_at
+        ),
+        "decision_data_contract_tail": _decision_contract_factor(repo_dir),
+        "broker_snapshot": _broker_readiness_factor(payload),
+        "orders_and_flat_start": _flat_start_factor(payload, operator_step),
+        "paper_sim_authority": _paper_authority_factor(payload),
+    }
+    failed = [name for name, factor in factors.items() if factor["status"] == "fail"]
+    warnings = [name for name, factor in factors.items() if factor["status"] == "warn"]
+    status = "fail" if failed else "warn" if warnings else "pass"
+    return Step(
+        name="preopen_readiness_verdict",
+        status=status,
+        summary=(
+            "pre-open readiness passed"
+            if status == "pass"
+            else f"pre-open readiness {status}: " + ",".join(failed or warnings)
+        ),
+        details={
+            "evaluated_at": evaluated_at.isoformat().replace("+00:00", "Z"),
+            "factor_count": 6,
+            "factors": factors,
+            "failed_factors": failed,
+            "warning_factors": warnings,
+            "read_only": True,
+            "mutations_performed": False,
+            "overnight_signal_age_enforced": False,
+            "market_closed_warming_allowed": True,
+        },
+    )
+
+
 def _runtime_flat_start_context(payload: dict[str, Any]) -> dict[str, Any]:
     preopen_raw = payload.get("preopen_readiness")
     if not isinstance(preopen_raw, dict):
@@ -740,7 +1122,15 @@ def main() -> int:
         skip=bool(args.skip_health),
     )
     steps.append(health_step)
-    steps.append(_check_preopen_operator_drill(repo_dir, health_step=health_step))
+    operator_step = _check_preopen_operator_drill(repo_dir, health_step=health_step)
+    steps.append(operator_step)
+    steps.append(
+        _build_preopen_readiness_verdict(
+            repo_dir,
+            health_step=health_step,
+            operator_step=operator_step,
+        )
+    )
     fail_count = sum(1 for step in steps if step.status == "fail")
     warn_count = sum(1 for step in steps if step.status == "warn")
     report: dict[str, Any] = {

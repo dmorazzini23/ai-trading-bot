@@ -3146,6 +3146,99 @@ def _pnl_reconciliation_rows(
     return rows
 
 
+def _operational_daily_trade_stats(
+    *,
+    accounting_rows: Sequence[Mapping[str, Any]],
+    same_day_rows: Sequence[Mapping[str, Any]],
+    same_day_open_positions_by_date: Mapping[str, Mapping[str, Any]],
+    broker_positions_available: bool,
+    broker_positions: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build a conservative current-day view without changing accounting history."""
+
+    operational = [dict(row) for row in accounting_rows]
+    basis: dict[str, Any] = {
+        "mode": "accounting",
+        "reason": "same_day_safety_unproven",
+        "selected_date": None,
+    }
+    if not same_day_rows:
+        basis["reason"] = "same_day_rows_unavailable"
+        return operational, basis
+    selected_same_day = max(
+        (dict(row) for row in same_day_rows),
+        key=lambda row: str(row.get("date") or ""),
+    )
+    selected_date = str(selected_same_day.get("date") or "").strip()
+    if not selected_date:
+        basis["reason"] = "same_day_date_unavailable"
+        return operational, basis
+    if not broker_positions_available:
+        basis["reason"] = "broker_positions_unavailable"
+        return operational, basis
+    if broker_positions:
+        basis["reason"] = "broker_positions_nonflat"
+        return operational, basis
+    if same_day_open_positions_by_date.get(selected_date):
+        basis["reason"] = "same_day_positions_nonflat"
+        return operational, basis
+
+    accounting_by_date = _daily_rows_by_date(accounting_rows)
+    selected_accounting = dict(accounting_by_date.get(selected_date, {}))
+    accounting_pnl = _as_float(selected_accounting.get("net_pnl"))
+    same_day_pnl = _as_float(selected_same_day.get("net_pnl"))
+    candidates = [
+        ("accounting", selected_accounting, accounting_pnl),
+        ("same_day_fill_pairs", selected_same_day, same_day_pnl),
+    ]
+    available = [candidate for candidate in candidates if candidate[2] is not None]
+    if not available:
+        basis["reason"] = "net_pnl_unavailable"
+        return operational, basis
+    selected_source, selected_row, _selected_pnl = min(
+        available,
+        key=lambda candidate: float(candidate[2]),
+    )
+    conservative = dict(selected_row)
+    conservative.update(
+        {
+            "date": selected_date,
+            "operational_pnl_source": selected_source,
+            "operational_basis": "conservative_min_broker_flat_balanced_same_day",
+            "accounting_net_pnl": accounting_pnl,
+            "same_day_fill_net_pnl": same_day_pnl,
+        }
+    )
+    slippage_values = [
+        value
+        for row in (selected_accounting, selected_same_day)
+        if (value := _as_float(row.get("slippage_cost"))) is not None
+    ]
+    if slippage_values:
+        conservative["slippage_cost"] = max(slippage_values, key=abs)
+    trade_values = [
+        value
+        for row in (selected_accounting, selected_same_day)
+        if (value := _as_int(row.get("trades"))) is not None
+    ]
+    if trade_values:
+        conservative["trades"] = max(trade_values)
+    operational = [
+        row for row in operational if str(row.get("date") or "") != selected_date
+    ]
+    operational.append(conservative)
+    operational.sort(key=lambda row: str(row.get("date") or ""))
+    basis = {
+        "mode": "conservative_current_day",
+        "reason": "broker_flat_and_same_day_balanced",
+        "selected_date": selected_date,
+        "selected_pnl_source": selected_source,
+        "accounting_net_pnl": accounting_pnl,
+        "same_day_fill_net_pnl": same_day_pnl,
+    }
+    return operational, basis
+
+
 def _normalise_position_map(values: Mapping[str, Any] | None) -> dict[str, float]:
     if not isinstance(values, Mapping):
         return {}
@@ -3487,6 +3580,18 @@ def summarize_trade_history(
                 accounting_rows=aggregated.get("daily_trade_stats", []),
                 same_day_rows=same_day_aggregated.get("daily_trade_stats", []),
             )
+            (
+                aggregated["operational_daily_trade_stats"],
+                aggregated["operational_daily_trade_stats_basis"],
+            ) = _operational_daily_trade_stats(
+                accounting_rows=aggregated.get("daily_trade_stats", []),
+                same_day_rows=same_day_aggregated.get("daily_trade_stats", []),
+                same_day_open_positions_by_date=same_day_fill_open_positions_by_date,
+                broker_positions_available=bool(
+                    summary.get("broker_open_positions_available")
+                ),
+                broker_positions=summary.get("broker_open_positions"),
+            )
         summary.update(aggregated)
         return summary
 
@@ -3525,6 +3630,18 @@ def summarize_trade_history(
         aggregated["daily_pnl_reconciliation"] = _pnl_reconciliation_rows(
             accounting_rows=aggregated.get("daily_trade_stats", []),
             same_day_rows=same_day_aggregated.get("daily_trade_stats", []),
+        )
+        (
+            aggregated["operational_daily_trade_stats"],
+            aggregated["operational_daily_trade_stats_basis"],
+        ) = _operational_daily_trade_stats(
+            accounting_rows=aggregated.get("daily_trade_stats", []),
+            same_day_rows=same_day_aggregated.get("daily_trade_stats", []),
+            same_day_open_positions_by_date=same_day_fill_open_positions_by_date,
+            broker_positions_available=bool(
+                summary.get("broker_open_positions_available")
+            ),
+            broker_positions=summary.get("broker_open_positions"),
         )
     summary.update(aggregated)
     return summary

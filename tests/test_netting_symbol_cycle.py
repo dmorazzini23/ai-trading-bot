@@ -287,6 +287,43 @@ def test_process_netting_symbol_halt_records_block() -> None:
     assert records[0]["metrics"]["terminal_reason"] == "HALT_TRADING"
 
 
+def test_process_netting_symbol_preserves_opening_warmup_without_bad_data() -> None:
+    processor, records = _make_processor(
+        latest_price={},
+        skip_reasons={"AAPL": ["NO_FINALIZED_DAY_BAR"]},
+    )
+    target = _make_net_target(bar_ts=processor.now, target_dollars=0.0)
+    target.proposals[0].blocked = True
+    target.proposals[0].reason_code = "NO_FINALIZED_DAY_BAR"
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=target,
+        orders_submitted=0,
+    )
+
+    assert result.attempted_increment == 0
+    assert records[0]["gates"] == ["NO_FINALIZED_DAY_BAR"]
+    assert "BAD_DATA_CONTRACT" not in target.reasons
+
+
+def test_process_netting_symbol_missing_price_still_records_bad_data() -> None:
+    processor, records = _make_processor(latest_price={})
+    target = _make_net_target(bar_ts=processor.now)
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=target,
+        orders_submitted=0,
+    )
+
+    assert result.attempted_increment == 0
+    assert "BAD_DATA_CONTRACT" in records[0]["gates"]
+    assert target.reasons == ["BAD_DATA_CONTRACT"]
+
+
 def test_process_netting_symbol_stop_lock_blocks_same_bar_reentry() -> None:
     processor, records = _make_processor()
     processor.state.stop_lock["AAPL"] = {
@@ -419,6 +456,48 @@ def test_process_netting_symbol_submitted_order_records_and_counts() -> None:
     assert records[0]["order"] == {"client_order_id": "cid-1"}
     assert records[0]["decision_trace_id"] == "trace-1"
     assert "OK_TRADE" in records[0]["gates"]
+
+
+def test_process_netting_symbol_partitions_stale_model_diagnostic_order() -> None:
+    submitted: list[dict[str, Any]] = []
+
+    def execute_submission_func(**kwargs: Any) -> Any:
+        submitted.append(kwargs)
+        return SimpleNamespace(
+            status="submitted",
+            gates_added=("OK_TRADE",),
+            attempted_increment=1,
+            submitted_increment=1,
+            metrics={"fill_prob": 0.8},
+            tca_record=None,
+            order_payload={"client_order_id": "cid-1"},
+            decision_trace_id="trace-1",
+            order_intent_contract={"intent": "dummy"},
+        )
+
+    processor, _records = _make_processor(
+        execute_submission_func=execute_submission_func
+    )
+    target = _make_net_target(bar_ts=processor.now)
+    target.proposals[0].debug = {"stale_model_paper_diagnostic": True}
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=target,
+        orders_submitted=0,
+    )
+
+    assert result.submitted_increment == 1
+    assert len(submitted) == 1
+    for payload_name in ("order_annotations", "order_lineage_metadata"):
+        payload = submitted[0][payload_name]
+        assert payload["evidence_partition"] == "stale_model_paper_diagnostic"
+        assert payload["research_only"] is True
+        assert payload["promotion_eligible"] is False
+        assert payload["model_authority"] is False
+        assert payload["runtime_authority"] is False
+        assert payload["live_money_authority"] is False
 
 
 def test_process_netting_symbol_leaves_alpha_and_capacity_sizing_to_approval() -> None:

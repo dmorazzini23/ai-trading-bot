@@ -760,6 +760,32 @@ def submit_order_runtime(
         "requested_qty": int(max(qty, 0)),
         "adjusted_qty": int(sampling_decision.qty),
     }
+    stale_model_diagnostic = (
+        str(metadata.get("evidence_partition") or "").strip().lower()
+        == "stale_model_paper_diagnostic"
+    )
+    if stale_model_diagnostic and not sampling_decision.enabled:
+        _record_skip_submit(
+            be,
+            symbol=symbol,
+            side=side_norm,
+            reason="STALE_MODEL_DIAGNOSTIC_REQUIRES_PAPER_SAMPLING",
+            detail=str(sampling_decision.reason),
+            context={"paper_sampling": sampling_telemetry},
+        )
+        return None
+    if stale_model_diagnostic:
+        evidence_firewall = {
+            "evidence_partition": "stale_model_paper_diagnostic",
+            "research_only": True,
+            "promotion_eligible": False,
+            "model_authority": False,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        }
+        annotations.update(evidence_firewall)
+        metadata.update(evidence_firewall)
     if sampling_decision.enabled:
         if not sampling_decision.allowed:
             be.logger.warning(
