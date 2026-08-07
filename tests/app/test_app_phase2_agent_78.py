@@ -192,3 +192,52 @@ def test_create_health_only_app_wraps_non_mapping_payload(monkeypatch) -> None:
     assert payload["ok"] is False
     assert payload["service"] == "ai-trading"
     assert "alpaca" in payload
+
+
+def test_healthz_preserves_alpaca_preflight_failure_details(monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "_seed_pytest_env_defaults", lambda: None)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+    monkeypatch.setattr(app_module, "_register_metrics_endpoint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        app_module,
+        "build_canonical_healthz_payload",
+        lambda **_kwargs: {
+            "ok": False,
+            "status": "degraded",
+            "reason": "alpaca_preflight_unavailable",
+            "alpaca": {
+                "sdk_ok": True,
+                "preflight": {
+                    "available": False,
+                    "status": "backoff",
+                    "failure_kind": "transient",
+                    "last_error": "read timeout",
+                    "last_failure_at": "2026-08-07T13:30:00+00:00",
+                    "retry_at": "2026-08-07T13:30:05+00:00",
+                    "retry_in_seconds": 5.0,
+                    "consecutive_failures": 1,
+                },
+            },
+        },
+    )
+
+    app = app_module.create_app(
+        health_only=True,
+        fail_fast_env=False,
+        force_ok_for_pytest=False,
+    )
+
+    response = app.test_client().get("/healthz")
+
+    assert response.status_code == 503
+    preflight = response.get_json()["alpaca"]["preflight"]
+    assert preflight == {
+        "available": False,
+        "status": "backoff",
+        "failure_kind": "transient",
+        "last_error": "read timeout",
+        "last_failure_at": "2026-08-07T13:30:00+00:00",
+        "retry_at": "2026-08-07T13:30:05+00:00",
+        "retry_in_seconds": 5.0,
+        "consecutive_failures": 1,
+    }

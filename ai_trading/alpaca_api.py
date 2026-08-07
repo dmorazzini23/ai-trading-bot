@@ -217,6 +217,13 @@ if str(_managed_env("AI_TRADING_FORCE_ALPACA_UNAVAILABLE", "", cast=str)).strip(
     ALPACA_AVAILABLE = False
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 _ALPACA_SERVICE_AVAILABLE: bool = True
+_ALPACA_SERVICE_STATE_LOCK = RLock()
+_ALPACA_PREFLIGHT_FAILURE_KIND: str | None = None
+_ALPACA_PREFLIGHT_LAST_ERROR: str | None = None
+_ALPACA_PREFLIGHT_LAST_FAILURE_AT: str | None = None
+_ALPACA_PREFLIGHT_RETRY_AT: str | None = None
+_ALPACA_PREFLIGHT_RETRY_MONOTONIC: float | None = None
+_ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES = 0
 
 
 def initialize() -> None:
@@ -242,12 +249,121 @@ def initialize() -> None:
 def is_alpaca_service_available() -> bool:
     """Return ``True`` when Alpaca API requests are currently authenticated."""
 
-    return _ALPACA_SERVICE_AVAILABLE
+    with _ALPACA_SERVICE_STATE_LOCK:
+        return _ALPACA_SERVICE_AVAILABLE
 
 
 def _set_alpaca_service_available(value: bool) -> None:
     global _ALPACA_SERVICE_AVAILABLE
-    _ALPACA_SERVICE_AVAILABLE = bool(value)
+    global _ALPACA_PREFLIGHT_FAILURE_KIND
+    global _ALPACA_PREFLIGHT_LAST_ERROR
+    global _ALPACA_PREFLIGHT_LAST_FAILURE_AT
+    global _ALPACA_PREFLIGHT_RETRY_AT
+    global _ALPACA_PREFLIGHT_RETRY_MONOTONIC
+    global _ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES
+
+    with _ALPACA_SERVICE_STATE_LOCK:
+        _ALPACA_SERVICE_AVAILABLE = bool(value)
+        if value:
+            _ALPACA_PREFLIGHT_FAILURE_KIND = None
+            _ALPACA_PREFLIGHT_LAST_ERROR = None
+            _ALPACA_PREFLIGHT_LAST_FAILURE_AT = None
+            _ALPACA_PREFLIGHT_RETRY_AT = None
+            _ALPACA_PREFLIGHT_RETRY_MONOTONIC = None
+            _ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES = 0
+
+
+def record_alpaca_preflight_failure(
+    detail: str,
+    *,
+    failure_kind: str,
+    retry_base_seconds: float = 5.0,
+    retry_max_seconds: float = 300.0,
+) -> dict[str, Any]:
+    """Record an Alpaca preflight failure and return its health snapshot.
+
+    Transient failures receive bounded exponential backoff. Permanent failures
+    remain unavailable until configuration is corrected and the process is
+    restarted or a successful request explicitly restores availability.
+    """
+
+    global _ALPACA_SERVICE_AVAILABLE
+    global _ALPACA_PREFLIGHT_FAILURE_KIND
+    global _ALPACA_PREFLIGHT_LAST_ERROR
+    global _ALPACA_PREFLIGHT_LAST_FAILURE_AT
+    global _ALPACA_PREFLIGHT_RETRY_AT
+    global _ALPACA_PREFLIGHT_RETRY_MONOTONIC
+    global _ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES
+
+    kind = str(failure_kind or "unavailable").strip().lower()
+    transient = kind == "transient"
+    now = dt.datetime.now(dt.UTC)
+    with _ALPACA_SERVICE_STATE_LOCK:
+        if _ALPACA_PREFLIGHT_FAILURE_KIND == kind:
+            _ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES += 1
+        else:
+            _ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES = 1
+        retry_delay: float | None = None
+        if transient:
+            base = max(1.0, float(retry_base_seconds))
+            maximum = max(base, float(retry_max_seconds))
+            exponent = min(_ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES - 1, 20)
+            retry_delay = min(maximum, base * (2**exponent))
+            _ALPACA_PREFLIGHT_RETRY_MONOTONIC = monotonic_time() + retry_delay
+            _ALPACA_PREFLIGHT_RETRY_AT = (
+                now + dt.timedelta(seconds=retry_delay)
+            ).isoformat()
+        else:
+            _ALPACA_PREFLIGHT_RETRY_MONOTONIC = None
+            _ALPACA_PREFLIGHT_RETRY_AT = None
+        _ALPACA_SERVICE_AVAILABLE = False
+        _ALPACA_PREFLIGHT_FAILURE_KIND = kind
+        _ALPACA_PREFLIGHT_LAST_ERROR = str(detail or kind)
+        _ALPACA_PREFLIGHT_LAST_FAILURE_AT = now.isoformat()
+
+    return get_alpaca_service_status()
+
+
+def alpaca_preflight_retry_ready() -> bool:
+    """Return whether a transient preflight failure is due for another probe."""
+
+    with _ALPACA_SERVICE_STATE_LOCK:
+        if _ALPACA_SERVICE_AVAILABLE:
+            return True
+        if _ALPACA_PREFLIGHT_FAILURE_KIND != "transient":
+            return False
+        retry_at = _ALPACA_PREFLIGHT_RETRY_MONOTONIC
+        return retry_at is None or monotonic_time() >= retry_at
+
+
+def get_alpaca_service_status() -> dict[str, Any]:
+    """Return the process-local Alpaca preflight state for health reporting."""
+
+    with _ALPACA_SERVICE_STATE_LOCK:
+        retry_remaining: float | None = None
+        if _ALPACA_PREFLIGHT_RETRY_MONOTONIC is not None:
+            retry_remaining = max(
+                0.0,
+                _ALPACA_PREFLIGHT_RETRY_MONOTONIC - monotonic_time(),
+            )
+        return {
+            "available": _ALPACA_SERVICE_AVAILABLE,
+            "status": (
+                "ready"
+                if _ALPACA_SERVICE_AVAILABLE
+                else (
+                    "backoff"
+                    if _ALPACA_PREFLIGHT_FAILURE_KIND == "transient"
+                    else "unavailable"
+                )
+            ),
+            "failure_kind": _ALPACA_PREFLIGHT_FAILURE_KIND,
+            "last_error": _ALPACA_PREFLIGHT_LAST_ERROR,
+            "last_failure_at": _ALPACA_PREFLIGHT_LAST_FAILURE_AT,
+            "retry_at": _ALPACA_PREFLIGHT_RETRY_AT,
+            "retry_in_seconds": retry_remaining,
+            "consecutive_failures": _ALPACA_PREFLIGHT_CONSECUTIVE_FAILURES,
+        }
 
 
 TimeFrameUnit: type[Any] | None = None
@@ -1662,6 +1778,9 @@ __all__ = [
     "ALPACA_AVAILABLE",
     "is_shadow_mode",
     "is_alpaca_service_available",
+    "alpaca_preflight_retry_ready",
+    "get_alpaca_service_status",
+    "record_alpaca_preflight_failure",
     "RETRY_HTTP_CODES",
     "RETRYABLE_HTTP_STATUSES",
     "submit_order",

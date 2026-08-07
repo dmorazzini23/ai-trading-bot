@@ -1995,6 +1995,9 @@ def run_cycle() -> None:
     auth_error_type = alpaca_namespace.get("AlpacaAuthenticationError")
     if not isinstance(auth_error_type, type):
         auth_error_type = getattr(alpaca_api, "AlpacaAuthenticationError", None)
+    get_service_status = alpaca_namespace.get("get_alpaca_service_status")
+    retry_ready = alpaca_namespace.get("alpaca_preflight_retry_ready")
+    record_preflight_failure = alpaca_namespace.get("record_alpaca_preflight_failure")
 
     def _set_alpaca_service_state(value: bool) -> None:
         if callable(set_service_available):
@@ -2199,10 +2202,45 @@ def run_cycle() -> None:
         except MAIN_FALLBACK_EXC:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
 
-    if not _alpaca_service_available():
+    service_status = get_service_status() if callable(get_service_status) else {}
+    failure_kind = str(service_status.get("failure_kind") or "").strip().lower()
+    transient_retry_due = bool(
+        failure_kind == "transient"
+        and callable(retry_ready)
+        and retry_ready()
+    )
+    if not _alpaca_service_available() and not transient_retry_due:
+        if failure_kind == "transient":
+            runtime_state.update_service_status(
+                status="degraded",
+                reason="alpaca_preflight_backoff",
+                phase="active",
+            )
+            if _should_emit_info_log(
+                "ALPACA_PREFLIGHT_BACKOFF",
+                ttl_seconds=60.0,
+            ):
+                logger.warning(
+                    "ALPACA_PREFLIGHT_BACKOFF",
+                    extra={
+                        "retry_in_seconds": service_status.get("retry_in_seconds"),
+                        "consecutive_failures": service_status.get(
+                            "consecutive_failures"
+                        ),
+                    },
+                )
+            return
         _log_auth_preflight_failure(
-            detail="Alpaca authentication previously marked unavailable",
+            detail=str(
+                service_status.get("last_error")
+                or "Alpaca authentication previously marked unavailable"
+            ),
             action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
+        )
+        runtime_state.update_service_status(
+            status="failed",
+            reason="alpaca_preflight_unavailable",
+            phase="active",
         )
         return
 
@@ -2224,18 +2262,81 @@ def run_cycle() -> None:
             and isinstance(exc, auth_error_type)
         ) or exc.__class__.__name__ == "AlpacaAuthenticationError"
         if is_auth_failure:
-            _set_alpaca_service_state(False)
+            if callable(record_preflight_failure):
+                record_preflight_failure(
+                    str(exc),
+                    failure_kind="authentication",
+                )
+            else:
+                _set_alpaca_service_state(False)
             _log_auth_preflight_failure(
                 detail=str(exc),
                 action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
             )
+            runtime_state.update_service_status(
+                status="failed",
+                reason="alpaca_preflight_authentication_failed",
+                phase="active",
+            )
             return
-        _set_alpaca_service_state(False)
-        _log_auth_preflight_failure(
-            detail=f"Unexpected Alpaca preflight error: {exc}",
-            action="Verify Alpaca credentials and network connectivity",
+        retry_base_seconds = max(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_ALPACA_PREFLIGHT_RETRY_BASE_SEC",
+                    5.0,
+                    cast=float,
+                )
+            ),
+        )
+        retry_max_seconds = max(
+            retry_base_seconds,
+            float(
+                get_env(
+                    "AI_TRADING_ALPACA_PREFLIGHT_RETRY_MAX_SEC",
+                    300.0,
+                    cast=float,
+                )
+            ),
+        )
+        if callable(record_preflight_failure):
+            failure_status = record_preflight_failure(
+                str(exc),
+                failure_kind="transient",
+                retry_base_seconds=retry_base_seconds,
+                retry_max_seconds=retry_max_seconds,
+            )
+        else:
+            _set_alpaca_service_state(False)
+            failure_status = {}
+        runtime_state.update_service_status(
+            status="degraded",
+            reason="alpaca_preflight_backoff",
+            phase="active",
+        )
+        logger.warning(
+            "ALPACA_PREFLIGHT_TRANSIENT_FAILURE",
+            extra={
+                "detail": str(exc),
+                "retry_at": failure_status.get("retry_at"),
+                "retry_in_seconds": failure_status.get("retry_in_seconds"),
+                "consecutive_failures": failure_status.get("consecutive_failures"),
+            },
         )
         return
+
+    recovered_from_failure = bool(failure_kind)
+    _set_alpaca_service_state(True)
+    if recovered_from_failure:
+        runtime_state.update_service_status(
+            status="ready",
+            reason="alpaca_preflight_recovered",
+            phase="active",
+        )
+        logger.info(
+            "ALPACA_PREFLIGHT_RECOVERED",
+            extra={"previous_failure_kind": failure_kind},
+        )
 
     from ai_trading.core.bot_engine import (
         BotState,

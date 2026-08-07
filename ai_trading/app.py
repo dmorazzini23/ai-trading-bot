@@ -60,6 +60,17 @@ else:
     _PROM_OK = bool(PROMETHEUS_AVAILABLE)
     _PROM_REG = REGISTRY
 
+_ALPACA_PREFLIGHT_DEFAULTS: dict[str, Any] = {
+    "available": True,
+    "status": "ready",
+    "failure_kind": None,
+    "last_error": None,
+    "last_failure_at": None,
+    "retry_at": None,
+    "retry_in_seconds": None,
+    "consecutive_failures": 0,
+}
+
 _ALPACA_SECTION_DEFAULTS: dict[str, Any] = {
     "sdk_ok": False,
     "initialized": False,
@@ -69,6 +80,7 @@ _ALPACA_SECTION_DEFAULTS: dict[str, Any] = {
     "base_url": "",
     "paper": False,
     "shadow_mode": False,
+    "preflight": _ALPACA_PREFLIGHT_DEFAULTS,
 }
 
 _ALPACA_BOOL_KEYS = {
@@ -631,12 +643,15 @@ def suppress_flask_startup_noise() -> None:
 def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
     """Return a fresh Alpaca payload seeded with required keys."""
     normalised = dict(_ALPACA_SECTION_DEFAULTS)
+    normalised["preflight"] = dict(_ALPACA_PREFLIGHT_DEFAULTS)
     if isinstance(raw, dict):
         for key, value in raw.items():
             if key in _ALPACA_BOOL_KEYS:
                 normalised[key] = bool(value)
             elif key == "base_url":
                 normalised[key] = str(value) if value is not None else ""
+            elif key == "preflight" and isinstance(value, Mapping):
+                normalised["preflight"].update(dict(value))
             elif key in normalised:
                 normalised[key] = value
     return normalised

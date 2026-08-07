@@ -131,6 +131,49 @@ def test_build_alpaca_health_payload_enrich_failure_preserves_context(monkeypatc
     assert payload["paper"] is True
 
 
+def test_service_health_fails_when_alpaca_preflight_is_in_backoff(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_payload,
+        "build_runtime_health_payload",
+        lambda **_kwargs: {
+            "ok": True,
+            "status": "healthy",
+            "readiness_failures": [],
+            "attention_flags": [],
+            "readiness_gates": {},
+            "entry_control": {
+                "paper_evidence_allowed": True,
+                "live_new_exposure_allowed": False,
+                "reason": "ready",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        health_payload,
+        "build_alpaca_health_payload",
+        lambda *_args, **_kwargs: {
+            "preflight": {
+                "available": False,
+                "status": "backoff",
+                "failure_kind": "transient",
+                "retry_at": "2026-08-07T13:31:00+00:00",
+                "retry_in_seconds": 5.0,
+                "consecutive_failures": 1,
+            }
+        },
+    )
+
+    payload = health_payload.build_service_health_payload()
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "alpaca_preflight_unavailable"
+    assert payload["readiness_failures"] == ["alpaca_preflight_unavailable"]
+    assert payload["attention_flags"] == ["alpaca_preflight_unavailable"]
+    assert payload["readiness_gates"]["alpaca_preflight"]["status"] == "failed"
+    assert payload["entry_control"]["paper_evidence_allowed"] is False
+
+
 def test_canonical_healthz_error_and_extras_override(monkeypatch) -> None:
     monkeypatch.setattr(
         health_payload,

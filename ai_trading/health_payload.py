@@ -1054,6 +1054,16 @@ def build_alpaca_health_payload(
         "base_url": "",
         "paper": False,
         "shadow_mode": False,
+        "preflight": {
+            "available": True,
+            "status": "ready",
+            "failure_kind": None,
+            "last_error": None,
+            "last_failure_at": None,
+            "retry_at": None,
+            "retry_in_seconds": None,
+            "consecutive_failures": 0,
+        },
     }
     if isinstance(context, Mapping):
         for key, value in context.items():
@@ -1063,6 +1073,15 @@ def build_alpaca_health_payload(
                 payload[key] = bool(value)
             elif value is not None:
                 payload[key] = value
+
+    try:
+        from ai_trading.alpaca_api import get_alpaca_service_status
+
+        preflight = get_alpaca_service_status()
+        if isinstance(preflight, Mapping):
+            payload["preflight"] = dict(preflight)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        pass
 
     if enrich_from_runtime_env:
         try:
@@ -1855,6 +1874,47 @@ def build_service_health_payload(
         alpaca_context,
         enrich_from_runtime_env=enrich_alpaca_from_runtime_env,
     )
+    alpaca_preflight = payload["alpaca"].get("preflight", {})
+    preflight_failure = bool(
+        isinstance(alpaca_preflight, Mapping)
+        and alpaca_preflight.get("available") is False
+        and alpaca_preflight.get("failure_kind")
+    )
+    if preflight_failure and not force_ok_for_pytest:
+        failure_reason = "alpaca_preflight_unavailable"
+        payload["ok"] = False
+        payload["status"] = "degraded"
+        payload["reason"] = failure_reason
+        readiness_failures = payload.setdefault("readiness_failures", [])
+        if failure_reason not in readiness_failures:
+            readiness_failures.insert(0, failure_reason)
+        attention_flags = payload.setdefault("attention_flags", [])
+        if failure_reason not in attention_flags:
+            attention_flags.insert(0, failure_reason)
+        readiness_gates = payload.setdefault("readiness_gates", {})
+        readiness_gates["alpaca_preflight"] = {
+            "enabled": True,
+            "required": True,
+            "available": False,
+            "ok": False,
+            "status": "failed",
+            "reason": failure_reason,
+            "failure_kind": alpaca_preflight.get("failure_kind"),
+            "retry_at": alpaca_preflight.get("retry_at"),
+            "retry_in_seconds": alpaca_preflight.get("retry_in_seconds"),
+            "consecutive_failures": alpaca_preflight.get(
+                "consecutive_failures"
+            ),
+            "action": (
+                "Wait for the bounded Alpaca preflight retry or investigate "
+                "credentials and broker connectivity."
+            ),
+        }
+        entry_control = payload.get("entry_control")
+        if isinstance(entry_control, dict):
+            entry_control["paper_evidence_allowed"] = False
+            entry_control["live_new_exposure_allowed"] = False
+            entry_control["reason"] = failure_reason
 
     env_error_text = str(env_error or "").strip()
     if env_error_text:

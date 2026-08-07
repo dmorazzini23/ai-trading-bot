@@ -289,3 +289,37 @@ def test_run_cycle_aborts_on_alpaca_auth_failure(monkeypatch, caplog):
     assert "ALPACA_AUTH_PREFLIGHT_FAILED" in caplog.text
     assert "ai_trading.core.bot_engine" not in sys.modules
     assert not is_alpaca_service_available()
+
+
+def test_run_cycle_retries_transient_preflight_after_backoff(monkeypatch, caplog):
+    import ai_trading.alpaca_api as alpaca_api
+
+    clock = {"value": 100.0}
+    calls = {"count": 0}
+    monkeypatch.setenv("ALLOW_AFTER_HOURS", "1")
+    monkeypatch.setenv("AI_TRADING_ALPACA_PREFLIGHT_RETRY_BASE_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_ALPACA_PREFLIGHT_RETRY_MAX_SEC", "30")
+    monkeypatch.setattr(main, "_is_market_open_base", lambda: True)
+    monkeypatch.setattr(main, "alpaca_credential_status", lambda: (True, True))
+    monkeypatch.setattr(alpaca_api, "monotonic_time", lambda: clock["value"])
+    alpaca_api._set_alpaca_service_available(True)
+
+    def raise_timeout(*_args, **_kwargs):
+        calls["count"] += 1
+        raise TimeoutError("account preflight timed out")
+
+    monkeypatch.setattr(alpaca_api, "alpaca_get", raise_timeout)
+
+    with caplog.at_level("WARNING"):
+        main.run_cycle()
+        main.run_cycle()
+        clock["value"] = 105.0
+        main.run_cycle()
+
+    status = alpaca_api.get_alpaca_service_status()
+    assert calls["count"] == 2
+    assert status["failure_kind"] == "transient"
+    assert status["consecutive_failures"] == 2
+    assert "ALPACA_PREFLIGHT_TRANSIENT_FAILURE" in caplog.text
+    assert "ALPACA_PREFLIGHT_BACKOFF" in caplog.text
+    alpaca_api._set_alpaca_service_available(True)

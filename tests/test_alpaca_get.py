@@ -37,10 +37,13 @@ class _Response:
 
 @pytest.fixture(autouse=True)
 def _alpaca_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    alpaca_api._set_alpaca_service_available(True)
     monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://example.com")
     monkeypatch.setenv("ALPACA_API_KEY", "key-id")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.delenv("ALPACA_SHADOW", raising=False)
+    yield
+    alpaca_api._set_alpaca_service_available(True)
 
 
 @pytest.fixture
@@ -149,6 +152,48 @@ def test_alpaca_get_auth_error_marks_unavailable(
     assert calls.count == 1
     assert errors.count == 1
     assert not is_alpaca_service_available()
+
+
+def test_transient_preflight_failure_uses_bounded_exponential_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"value": 100.0}
+    monkeypatch.setattr(
+        alpaca_api,
+        "monotonic_time",
+        lambda: clock["value"],
+    )
+
+    first = alpaca_api.record_alpaca_preflight_failure(
+        "read timeout",
+        failure_kind="transient",
+        retry_base_seconds=5.0,
+        retry_max_seconds=8.0,
+    )
+
+    assert first["available"] is False
+    assert first["status"] == "backoff"
+    assert first["retry_in_seconds"] == pytest.approx(5.0)
+    assert alpaca_api.alpaca_preflight_retry_ready() is False
+
+    clock["value"] = 105.0
+    assert alpaca_api.alpaca_preflight_retry_ready() is True
+
+    second = alpaca_api.record_alpaca_preflight_failure(
+        "second timeout",
+        failure_kind="transient",
+        retry_base_seconds=5.0,
+        retry_max_seconds=8.0,
+    )
+
+    assert second["consecutive_failures"] == 2
+    assert second["retry_in_seconds"] == pytest.approx(8.0)
+
+    alpaca_api._set_alpaca_service_available(True)
+    recovered = alpaca_api.get_alpaca_service_status()
+    assert recovered["available"] is True
+    assert recovered["failure_kind"] is None
+    assert recovered["consecutive_failures"] == 0
 
 
 def test_get_latest_price_uses_live_quote(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
