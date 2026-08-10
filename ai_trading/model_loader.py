@@ -7,7 +7,7 @@ This module prefers :mod:`joblib` for serializing simple fallback models and
 avoids ``pickle.load`` where possible.
 """
 
-from ai_trading.logging import get_logger
+from ai_trading.logging import get_logger, logger_once
 from ai_trading.paths import MODELS_DIR
 from ai_trading.config.management import get_env
 from datetime import UTC, datetime, timedelta
@@ -367,7 +367,13 @@ def _active_model_timestamp(meta: dict[str, Any]) -> datetime:
     raise RuntimeError("Active model registry entry is missing freshness metadata")
 
 
-def _validate_active_model_freshness(symbol: str, meta: dict[str, Any]) -> None:
+def _active_model_freshness_snapshot(
+    meta: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return the canonical freshness calculation used by loading and health."""
+
     trained_at = _active_model_timestamp(meta)
     max_age_days = int(
         get_env(
@@ -378,19 +384,111 @@ def _validate_active_model_freshness(symbol: str, meta: dict[str, Any]) -> None:
     )
     if max_age_days <= 0:
         raise RuntimeError("AI_TRADING_MODEL_MAX_AGE_DAYS must be positive")
-    age = datetime.now(UTC) - trained_at
-    if age > timedelta(days=max_age_days):
-        logger.error(
+    observed_at = (now or datetime.now(UTC)).astimezone(UTC)
+    age = max(observed_at - trained_at, timedelta(0))
+    age_days = age.total_seconds() / 86400.0
+    return {
+        "trained_at": trained_at.isoformat(),
+        "age_days": age_days,
+        "max_age_days": max_age_days,
+        "fresh": age <= timedelta(days=max_age_days),
+    }
+
+
+def _validate_active_model_freshness(symbol: str, meta: dict[str, Any]) -> None:
+    freshness = _active_model_freshness_snapshot(meta)
+    if not bool(freshness["fresh"]):
+        logger_once.error(
             "MODEL_REGISTRY_STALE",
             extra={
                 "symbol": symbol,
-                "trained_at": trained_at.isoformat(),
-                "max_age_days": max_age_days,
+                "trained_at": freshness["trained_at"],
+                "age_days": freshness["age_days"],
+                "max_age_days": freshness["max_age_days"],
             },
+            key=f"model_registry_stale:{symbol}:{freshness['trained_at']}",
         )
         raise RuntimeError(
-            f"Active model for '{symbol}' is stale: trained_at={trained_at.isoformat()}"
+            f"Active model for '{symbol}' is stale: trained_at={freshness['trained_at']}"
         )
+
+
+def day_sleeve_model_readiness_snapshot(
+    *,
+    allow_shadow: bool = False,
+) -> dict[str, Any]:
+    """Describe the exact governed artifact authority used by day-sleeve inference."""
+
+    from ai_trading.model_registry import ModelRegistry
+
+    registry = ModelRegistry()
+    selected = registry.get_viable_production_model("ml_edge")
+    if selected is None and allow_shadow:
+        selected = registry.get_viable_shadow_model("ml_edge")
+    if selected is None:
+        return {
+            "enabled": True,
+            "available": False,
+            "ok": False,
+            "status": "unavailable",
+            "reason": "required_model_unavailable",
+            "allow_shadow": bool(allow_shadow),
+        }
+
+    model_id, registry_meta = selected
+    governance = registry_meta.get("governance")
+    governance_status = (
+        str(governance.get("status") or "").strip().lower()
+        if isinstance(governance, Mapping)
+        else ""
+    )
+    serving_authority = (
+        "production" if governance_status == "production" else "paper_only"
+    )
+    base = {
+        "enabled": True,
+        "available": True,
+        "model_id": str(model_id),
+        "governance_status": governance_status,
+        "serving_authority": serving_authority,
+        "allow_shadow": bool(allow_shadow),
+    }
+    try:
+        freshness = _active_model_freshness_snapshot(registry_meta)
+    except RuntimeError as exc:
+        return {
+            **base,
+            "ok": False,
+            "status": "invalid",
+            "reason": "required_model_invalid",
+            "error": str(exc),
+        }
+    if not bool(freshness["fresh"]):
+        return {
+            **base,
+            **freshness,
+            "ok": False,
+            "status": "stale",
+            "reason": "required_model_stale",
+        }
+    try:
+        load_day_sleeve_production_model(allow_shadow=allow_shadow)
+    except RuntimeError as exc:
+        return {
+            **base,
+            **freshness,
+            "ok": False,
+            "status": "invalid",
+            "reason": "required_model_invalid",
+            "error": str(exc),
+        }
+    return {
+        **base,
+        **freshness,
+        "ok": True,
+        "status": "ready",
+        "reason": "required_model_ready",
+    }
 
 
 def _cache_meta_from_registry(meta: dict[str, Any]) -> dict[str, str | None]:

@@ -9,7 +9,10 @@ import pandas as pd
 import pytest
 
 from ai_trading.features.day_sleeve import build_day_sleeve_features
-from ai_trading.model_loader import load_day_sleeve_production_model
+from ai_trading.model_loader import (
+    day_sleeve_model_readiness_snapshot,
+    load_day_sleeve_production_model,
+)
 from ai_trading.model_registry import ModelRegistry
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.models.contracts import (
@@ -246,6 +249,30 @@ def test_production_loader_rejects_stale_registry_entry(
 
     with pytest.raises(RuntimeError, match="stale"):
         load_day_sleeve_production_model()
+
+
+def test_day_sleeve_readiness_snapshot_exposes_stale_governed_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, model_id, _artifact, _manifest = _register_model(
+        tmp_path,
+        monkeypatch,
+        status="shadow",
+    )
+    registry.model_index[model_id]["registered_at"] = "2000-01-01T00:00:00+00:00"
+    registry._save_index()
+
+    snapshot = day_sleeve_model_readiness_snapshot(allow_shadow=True)
+
+    assert snapshot["ok"] is False
+    assert snapshot["status"] == "stale"
+    assert snapshot["reason"] == "required_model_stale"
+    assert snapshot["model_id"] == model_id
+    assert snapshot["governance_status"] == "shadow"
+    assert snapshot["serving_authority"] == "paper_only"
+    assert snapshot["trained_at"] == "2000-01-01T00:00:00+00:00"
+    assert snapshot["age_days"] > snapshot["max_age_days"]
 
 
 def test_production_loader_rejects_unverifiable_artifact(

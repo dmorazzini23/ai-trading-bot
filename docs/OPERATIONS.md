@@ -297,6 +297,13 @@ never accept shadow governance and continue to require a verified production
 artifact. Do not promote a shadow candidate merely to restore trading; it must
 pass the normal offline, replay, and runtime evidence gates.
 
+Set `AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL=1` when the day sleeve is a
+required runtime dependency. `/healthz` then reports the governed artifact
+under `day_sleeve_model` with its model ID, governance authority, training
+timestamp, age, and maximum age. Missing, stale, or unverifiable artifacts make
+readiness unhealthy; they must be repaired by training and governance, not by
+editing timestamps or relaxing freshness and promotion gates.
+
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
 evaluation continue, and the replay-blocked decision source is retained as

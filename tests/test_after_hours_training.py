@@ -3514,6 +3514,52 @@ def test_on_market_close_writes_after_hours_training_marker(
     assert payload["model_name"] == "logreg"
 
 
+def test_on_market_close_marks_deterministic_rejection_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(_tz=None):
+            return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    calls = {"count": 0}
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH",
+        str(marker_path),
+    )
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+
+    def _rejected_training(**_kwargs):
+        calls["count"] += 1
+        return {
+            "status": "skipped",
+            "reason": "no_qualified_candidate",
+            "governance_status": "shadow",
+        }
+
+    monkeypatch.setattr(
+        after_hours,
+        "run_after_hours_training",
+        _rejected_training,
+    )
+
+    bot_engine.on_market_close()
+    bot_engine.on_market_close()
+
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert calls["count"] == 1
+    assert marker["status"] == "skipped"
+    assert marker["reason"] == "no_qualified_candidate"
+
+
 def test_on_market_close_skips_legacy_retrain_when_stop_requested_after_after_hours(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3623,6 +3669,55 @@ def test_marker_write_falls_back_when_requested_path_unwritable(
     assert payload["date"] == "2026-01-06"
     assert payload["status"] == "trained"
     assert bot_engine._after_hours_training_completed_for_date("2026-01-06")
+
+
+def test_after_hours_marker_treats_deterministic_skip_as_completed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH",
+        str(marker_path),
+    )
+
+    bot_engine._write_after_hours_training_marker(
+        "2026-01-06",
+        {
+            "status": "skipped",
+            "reason": "no_qualified_candidate",
+            "governance_status": "shadow",
+        },
+    )
+
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["reason"] == "no_qualified_candidate"
+    assert bot_engine._after_hours_training_completed_for_date("2026-01-06")
+
+
+def test_after_hours_marker_leaves_transient_skip_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH",
+        str(marker_path),
+    )
+
+    bot_engine._write_after_hours_training_marker(
+        "2026-01-06",
+        {
+            "status": "skipped",
+            "reason": "insufficient_dataset",
+        },
+    )
+
+    assert not bot_engine._after_hours_training_completed_for_date("2026-01-06")
 
 
 def test_on_market_close_overnight_catchup_writes_previous_business_marker_date(
@@ -3752,6 +3847,24 @@ def test_after_hours_training_does_not_fit_artifact_when_all_candidates_are_nega
     assert result["governance_status"] == "shadow"
     assert result["selection_constraints"]["selection_failed_closed"] is True
     assert all(not item["selected"] for item in result["candidate_metrics"])
+    assert result["authority"] == {
+        "runtime": False,
+        "promotion": False,
+        "live_money": False,
+    }
+    report_path = Path(result["report_path"])
+    latest_path = Path(result["report_latest_path"])
+    assert report_path.exists()
+    assert latest_path.exists()
+    latest = json.loads(latest_path.read_text(encoding="utf-8"))
+    assert latest["report"]["reason"] == "no_qualified_candidate"
+    assert latest["report"]["authority"]["promotion"] is False
+    state_path = tmp_path / "after_hours_training_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["last_attempt_status"] == "skipped"
+    assert state["last_attempt_reason"] == "no_qualified_candidate"
+    assert "updated_at" not in state
+    assert "model_id" not in state
     assert not model_dir.exists()
 
 

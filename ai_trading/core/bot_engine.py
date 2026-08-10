@@ -31866,11 +31866,23 @@ def _load_after_hours_training_marker(path: Path) -> dict[str, Any]:
 
 
 def _after_hours_training_completed_for_date(date_key: str) -> bool:
+    terminal_skip_reasons = {
+        "no_candidate_models",
+        "no_new_signal_data",
+        "no_qualified_candidate",
+    }
     for marker_path in _resolve_after_hours_training_marker_paths():
         marker = _load_after_hours_training_marker(marker_path)
         marker_date = str(marker.get("date") or "").strip()
         marker_status = str(marker.get("status") or "").strip().lower()
-        if marker_date == date_key and marker_status == "trained":
+        marker_reason = str(marker.get("reason") or "").strip().lower()
+        if marker_date == date_key and (
+            marker_status == "trained"
+            or (
+                marker_status == "skipped"
+                and marker_reason in terminal_skip_reasons
+            )
+        ):
             return True
     return False
 
@@ -31896,6 +31908,7 @@ def _write_after_hours_training_marker(date_key: str, outcome: Mapping[str, Any]
     payload = {
         "date": date_key,
         "status": str(outcome.get("status") or "").strip().lower(),
+        "reason": str(outcome.get("reason") or "").strip().lower(),
         "model_id": str(outcome.get("model_id") or "").strip(),
         "model_name": str(outcome.get("model_name") or "").strip(),
         "governance_status": str(outcome.get("governance_status") or "").strip(),
@@ -32005,12 +32018,26 @@ def on_market_close() -> None:
                     "reason": outcome.get("reason"),
                 },
             )
-            if (
-                after_hours_once_per_day
-                and isinstance(outcome, Mapping)
-                and str(outcome.get("status") or "").strip().lower() == "trained"
-            ):
-                _write_after_hours_training_marker(after_hours_date_key, outcome)
+            if after_hours_once_per_day and isinstance(outcome, Mapping):
+                outcome_status = str(outcome.get("status") or "").strip().lower()
+                outcome_reason = str(outcome.get("reason") or "").strip().lower()
+                terminal_outcome = bool(
+                    outcome_status == "trained"
+                    or (
+                        outcome_status == "skipped"
+                        and outcome_reason
+                        in {
+                            "no_candidate_models",
+                            "no_new_signal_data",
+                            "no_qualified_candidate",
+                        }
+                    )
+                )
+                if terminal_outcome:
+                    _write_after_hours_training_marker(
+                        after_hours_date_key,
+                        outcome,
+                    )
             if isinstance(outcome, Mapping):
                 promoted_model_path = str(outcome.get("promoted_model_path") or "").strip()
                 promoted_manifest_path = str(outcome.get("promoted_manifest_path") or "").strip()
@@ -42267,9 +42294,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
         except BOT_ENGINE_FALLBACK_EXC as exc:
             day_sleeve_model_error = str(exc)
-            logger.warning(
+            logger_once.warning(
                 "DAY_SLEEVE_ML_MODEL_UNAVAILABLE",
                 extra={"error": day_sleeve_model_error},
+                key=f"day_sleeve_model_unavailable:{day_sleeve_model_error}",
             )
     elif day_sleeve_configured and day_sleeve_ml_required:
         day_sleeve_model_error = "day_sleeve_ml_disabled_while_model_required"

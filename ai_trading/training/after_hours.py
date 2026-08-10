@@ -6137,23 +6137,14 @@ def _write_after_hours_reports(
     return timestamped_path, daily_alias_path
 
 
-def _sync_after_hours_latest_artifacts(
+def _write_after_hours_latest_report(
     *,
     report_dir: Path,
     now_utc: datetime,
     report: Mapping[str, Any],
     report_path: Path,
     daily_report_path: Path,
-) -> dict[str, str | None]:
-    """Write canonical latest after-hours artifacts used by runtime governance."""
-
-    sync_paths: dict[str, str | None] = {
-        "report_latest_path": None,
-        "orientation_latest_path": None,
-        "sensitivity_latest_path": None,
-        "rl_governance_sidecar_path": None,
-    }
-
+) -> str | None:
     report_latest_raw = str(
         get_env(
             "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH",
@@ -6177,12 +6168,39 @@ def _sync_after_hours_latest_artifacts(
     }
     try:
         _write_json(report_latest_path, report_latest_payload)
-        sync_paths["report_latest_path"] = str(report_latest_path)
+        return str(report_latest_path)
     except OSError as exc:
         logger.warning(
             "AFTER_HOURS_REPORT_LATEST_WRITE_FAILED",
             extra={"path": str(report_latest_path), "error": str(exc)},
         )
+        return None
+
+
+def _sync_after_hours_latest_artifacts(
+    *,
+    report_dir: Path,
+    now_utc: datetime,
+    report: Mapping[str, Any],
+    report_path: Path,
+    daily_report_path: Path,
+) -> dict[str, str | None]:
+    """Write canonical latest after-hours artifacts used by runtime governance."""
+
+    sync_paths: dict[str, str | None] = {
+        "report_latest_path": None,
+        "orientation_latest_path": None,
+        "sensitivity_latest_path": None,
+        "rl_governance_sidecar_path": None,
+    }
+
+    sync_paths["report_latest_path"] = _write_after_hours_latest_report(
+        report_dir=report_dir,
+        now_utc=now_utc,
+        report=report,
+        report_path=report_path,
+        daily_report_path=daily_report_path,
+    )
 
     model_raw = report.get("model")
     model_payload = dict(model_raw) if isinstance(model_raw, Mapping) else {}
@@ -6330,7 +6348,13 @@ def _is_pytest_temp_path(path_value: Any) -> bool:
 def _sanitize_after_hours_training_state_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     sanitized = dict(payload)
     removed_keys: list[str] = []
-    for key in ("report_path", "daily_report_path"):
+    for key in (
+        "report_path",
+        "daily_report_path",
+        "last_attempt_report_path",
+        "last_attempt_daily_report_path",
+        "last_attempt_latest_report_path",
+    ):
         value = sanitized.get(key)
         if value is None:
             continue
@@ -6426,6 +6450,72 @@ def _write_after_hours_training_state(
             extra={"path": str(target), "error": str(exc)},
         )
         return None
+
+
+def _persist_after_hours_terminal_attempt(
+    *,
+    report_dir: Path,
+    now_utc: datetime,
+    outcome: Mapping[str, Any],
+    training_state_path_hint: Path,
+) -> dict[str, Any]:
+    """Persist a non-authoritative terminal attempt without changing model authority."""
+
+    report = {
+        **dict(outcome),
+        "authority": {
+            "runtime": False,
+            "promotion": False,
+            "live_money": False,
+        },
+    }
+    report_path, daily_report_path = _write_after_hours_reports(
+        report_dir=report_dir,
+        now_utc=now_utc,
+        payload=report,
+    )
+    latest_report_path = _write_after_hours_latest_report(
+        report_dir=report_dir,
+        now_utc=now_utc,
+        report=report,
+        report_path=report_path,
+        daily_report_path=daily_report_path,
+    )
+    prior_state = _load_after_hours_training_state(
+        preferred_path=training_state_path_hint
+    )
+    state = dict(prior_state) if isinstance(prior_state, Mapping) else {}
+    state.update(
+        {
+            "last_attempt_at": now_utc.isoformat(),
+            "last_attempt_status": str(report.get("status") or ""),
+            "last_attempt_reason": str(report.get("reason") or ""),
+            "last_attempt_report_path": str(report_path),
+            "last_attempt_daily_report_path": str(daily_report_path),
+            "last_attempt_latest_report_path": latest_report_path,
+        }
+    )
+    if report.get("rows") is not None:
+        state["last_attempt_rows"] = int(report.get("rows") or 0)
+    if report.get("dataset_fingerprint"):
+        state["last_attempt_dataset_fingerprint"] = str(
+            report.get("dataset_fingerprint")
+        )
+    if isinstance(report.get("selection_constraints"), Mapping):
+        state["last_attempt_selection_constraints"] = dict(
+            report["selection_constraints"]
+        )
+    state_path = _write_after_hours_training_state(
+        state,
+        preferred_path=training_state_path_hint,
+    )
+    return {
+        **report,
+        "report_path": str(report_path),
+        "daily_report_path": str(daily_report_path),
+        "report_latest_path": latest_report_path,
+        "training_state_path": str(state_path) if state_path is not None else None,
+    }
 
 
 def _new_rows_since_training_state(
@@ -6812,13 +6902,37 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "reason": "before_market_close",
             "timestamp": now_utc.isoformat(),
         }
+    requested_report_dir = _resolve_after_hours_output_path(
+        str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_REPORT_DIR",
+                "runtime/research_reports",
+                cast=str,
+            )
+            or ""
+        ),
+        default_relative="runtime/research_reports",
+    )
+    report_dir = _resolve_writable_output_dir(
+        requested=requested_report_dir,
+        fallback=(paths.DATA_DIR / "runtime/research_reports").resolve(),
+        event_name="AFTER_HOURS_REPORT_DIR_FALLBACK",
+    )
+    training_state_path_hint = (
+        report_dir.parent / "after_hours_training_state.json"
+    ).resolve()
     symbols = _load_symbols()
     if not symbols:
-        return {
-            "status": "skipped",
-            "reason": "no_symbols",
-            "timestamp": now_utc.isoformat(),
-        }
+        return _persist_after_hours_terminal_attempt(
+            report_dir=report_dir,
+            now_utc=now_utc,
+            training_state_path_hint=training_state_path_hint,
+            outcome={
+                "status": "skipped",
+                "reason": "no_symbols",
+                "timestamp": now_utc.isoformat(),
+            },
+        )
     tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
     tca_records = _read_jsonl_records(
         tca_path,
@@ -6842,23 +6956,18 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     )
     min_rows = int(get_env("AI_TRADING_AFTER_HOURS_MIN_ROWS", 250, cast=int))
     if dataset.empty or len(dataset) < min_rows:
-        return {
-            "status": "skipped",
-            "reason": "insufficient_dataset",
-            "rows": int(len(dataset)),
-            "required_rows": min_rows,
-            "timestamp": now_utc.isoformat(),
-        }
-    requested_report_dir = _resolve_after_hours_output_path(
-        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports", cast=str) or ""),
-        default_relative="runtime/research_reports",
-    )
-    report_dir = _resolve_writable_output_dir(
-        requested=requested_report_dir,
-        fallback=(paths.DATA_DIR / "runtime/research_reports").resolve(),
-        event_name="AFTER_HOURS_REPORT_DIR_FALLBACK",
-    )
-    training_state_path_hint = (report_dir.parent / "after_hours_training_state.json").resolve()
+        return _persist_after_hours_terminal_attempt(
+            report_dir=report_dir,
+            now_utc=now_utc,
+            training_state_path_hint=training_state_path_hint,
+            outcome={
+                "status": "skipped",
+                "reason": "insufficient_dataset",
+                "rows": int(len(dataset)),
+                "required_rows": min_rows,
+                "timestamp": now_utc.isoformat(),
+            },
+        )
     dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
     training_state = _load_after_hours_training_state(
         preferred_path=training_state_path_hint
@@ -6887,16 +6996,23 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         and isinstance(training_state, Mapping)
         and (unchanged_dataset_fingerprint or int(new_rows) < min_new_rows)
     ):
-        return {
-            "status": "skipped",
-            "reason": "no_new_signal_data",
-            "rows": int(len(dataset)),
-            "new_rows": int(new_rows),
-            "min_new_rows": int(min_new_rows),
-            "unchanged_dataset_fingerprint": bool(unchanged_dataset_fingerprint),
-            "dataset_fingerprint": str(dataset_fp),
-            "timestamp": now_utc.isoformat(),
-        }
+        return _persist_after_hours_terminal_attempt(
+            report_dir=report_dir,
+            now_utc=now_utc,
+            training_state_path_hint=training_state_path_hint,
+            outcome={
+                "status": "skipped",
+                "reason": "no_new_signal_data",
+                "rows": int(len(dataset)),
+                "new_rows": int(new_rows),
+                "min_new_rows": int(min_new_rows),
+                "unchanged_dataset_fingerprint": bool(
+                    unchanged_dataset_fingerprint
+                ),
+                "dataset_fingerprint": str(dataset_fp),
+                "timestamp": now_utc.isoformat(),
+            },
+        )
     split_idx = max(20, int(len(dataset) * 0.7))
     horizon_bars = max(
         1,
@@ -6961,11 +7077,18 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         if metrics is not None:
             candidate_results.append(metrics)
     if not candidate_results:
-        return {
-            "status": "skipped",
-            "reason": "no_candidate_models",
-            "timestamp": now_utc.isoformat(),
-        }
+        return _persist_after_hours_terminal_attempt(
+            report_dir=report_dir,
+            now_utc=now_utc,
+            training_state_path_hint=training_state_path_hint,
+            outcome={
+                "status": "skipped",
+                "reason": "no_candidate_models",
+                "rows": int(len(dataset)),
+                "dataset_fingerprint": str(dataset_fp),
+                "timestamp": now_utc.isoformat(),
+            },
+        )
     selection_weights = _resolved_model_selection_weights()
     candidate_pool, selection_constraints = _filter_candidates_for_selection(candidate_results)
     logger.info(
@@ -6981,19 +7104,26 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         },
     )
     if not candidate_pool:
-        return {
-            "status": "skipped",
-            "reason": "no_qualified_candidate",
-            "governance_status": "shadow",
-            "timestamp": now_utc.isoformat(),
-            "candidate_metrics": _serialize_candidate_metrics(
-                candidate_results,
-                best_name="",
-                selection_weights=selection_weights,
-            ),
-            "selection_weights": dict(selection_weights),
-            "selection_constraints": selection_constraints,
-        }
+        return _persist_after_hours_terminal_attempt(
+            report_dir=report_dir,
+            now_utc=now_utc,
+            training_state_path_hint=training_state_path_hint,
+            outcome={
+                "status": "skipped",
+                "reason": "no_qualified_candidate",
+                "governance_status": "shadow",
+                "rows": int(len(dataset)),
+                "dataset_fingerprint": str(dataset_fp),
+                "timestamp": now_utc.isoformat(),
+                "candidate_metrics": _serialize_candidate_metrics(
+                    candidate_results,
+                    best_name="",
+                    selection_weights=selection_weights,
+                ),
+                "selection_weights": dict(selection_weights),
+                "selection_constraints": selection_constraints,
+            },
+        )
     best = max(
         candidate_pool,
         key=lambda item: (

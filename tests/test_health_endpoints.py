@@ -761,6 +761,44 @@ def test_runtime_health_payload_db_requirement_marks_degraded(monkeypatch):
     assert payload.get("reason") == "database_unhealthy"
 
 
+def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
+    monkeypatch,
+):
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL", "1")
+    monkeypatch.setattr(
+        health_payload_module,
+        "_day_sleeve_model_readiness_snapshot_cached",
+        lambda **_kwargs: {
+            "enabled": True,
+            "available": True,
+            "ok": False,
+            "status": "stale",
+            "reason": "required_model_stale",
+            "model_id": "ml-edge-shadow",
+            "governance_status": "shadow",
+            "serving_authority": "paper_only",
+            "trained_at": "2026-07-17T20:03:50+00:00",
+            "age_days": 24.0,
+            "max_age_days": 14,
+        },
+    )
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "required_model_stale"
+    assert "required_model_stale" in payload["readiness_failures"]
+    assert "required_model_stale" in payload["attention_flags"]
+    assert payload["readiness_gates"]["day_sleeve_model"]["status"] == "required_failed"
+    assert payload["day_sleeve_model"]["model_id"] == "ml-edge-shadow"
+    assert payload["day_sleeve_model"]["age_days"] == 24.0
+
+
 def test_runtime_health_payload_db_requirement_rejects_unconfigured_db(monkeypatch):
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DB_READY", "1")
     monkeypatch.setattr(

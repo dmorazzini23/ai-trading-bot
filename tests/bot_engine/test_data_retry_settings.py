@@ -186,6 +186,50 @@ def test_pre_rank_execution_candidates_prefers_runtime_rank(monkeypatch):
     assert ranked == ["AAPL", "GOOG"]
 
 
+def test_pre_rank_execution_candidates_reserves_governed_sampling_slots(
+    monkeypatch,
+):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "2")
+    monkeypatch.setenv("AI_TRADING_EXEC_OPPORTUNITY_QUALITY_ENABLED", "0")
+    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "paper_sampling_deficit_snapshot",
+        lambda _cfg: {
+            "active": True,
+            "fairness_enabled": True,
+            "configured_symbols": ["AAPL", "AMZN", "MSFT"],
+            "priority_reason": "balanced_deficit",
+        },
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "paper_sampling_reservation_symbols",
+        lambda _snapshot: ["AAPL", "AMZN", "MSFT"],
+    )
+    runtime = type(
+        "_Runtime",
+        (),
+        {
+            "cfg": object(),
+            "execution_candidate_rank": {
+                "GOOGL": 9.0,
+                "NVDA": 8.0,
+                "MSFT": 3.0,
+                "AMZN": 2.0,
+                "AAPL": 1.0,
+            },
+        },
+    )()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["GOOGL", "NVDA", "MSFT", "AMZN", "AAPL"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["AAPL", "AMZN"]
+
+
 def test_pre_rank_execution_candidates_can_explore_unseen_symbols(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "2")
     monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_ENABLED", "1")

@@ -1,8 +1,14 @@
 """Test configuration and shared fixtures."""
 
 import os
+import tempfile
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
+_PYTEST_MODEL_REGISTRY_TMPDIR = tempfile.TemporaryDirectory(
+    prefix="ai-trading-pytest-registry-"
+)
+os.environ["MODEL_REGISTRY_DIR"] = _PYTEST_MODEL_REGISTRY_TMPDIR.name
+os.environ["AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL"] = "0"
 
 import sys as _sys
 

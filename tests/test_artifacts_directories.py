@@ -30,26 +30,30 @@ def test_walkforward_artifacts_directory():
                 del os.environ["ARTIFACTS_DIR"]
 
 
-def test_model_registry_directory():
+def test_model_registry_directory(monkeypatch):
     """Test that model registry creates directory with env override."""
     with tempfile.TemporaryDirectory() as temp_dir:
         # Set custom model registry directory
         custom_registry = os.path.join(temp_dir, "custom_models")
-        os.environ["MODEL_REGISTRY_DIR"] = custom_registry
+        monkeypatch.setenv("MODEL_REGISTRY_DIR", custom_registry)
 
-        try:
-            # Import and create registry
-            from ai_trading.model_registry import ModelRegistry
+        # Import and create registry
+        from ai_trading.model_registry import ModelRegistry
 
-            ModelRegistry()
+        ModelRegistry()
 
-            # Check that directory was created
-            assert os.path.exists(custom_registry), f"Directory {custom_registry} should exist"
+        # Check that directory was created
+        assert os.path.exists(custom_registry), f"Directory {custom_registry} should exist"
 
-        finally:
-            # Clean up environment variable
-            if "MODEL_REGISTRY_DIR" in os.environ:
-                del os.environ["MODEL_REGISTRY_DIR"]
+
+def test_pytest_default_model_registry_is_isolated_from_runtime():
+    from ai_trading.model_registry import ModelRegistry
+    from ai_trading.paths import MODELS_DIR
+
+    registry = ModelRegistry()
+
+    assert registry.base_path != MODELS_DIR.resolve()
+    assert "ai-trading-pytest-registry-" in str(registry.base_path)
 
 
 if __name__ == "__main__":
