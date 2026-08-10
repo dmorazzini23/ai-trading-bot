@@ -261,6 +261,9 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     assert step_names.index("opportunity_markouts") < step_names.index(
         "shadow_markout_replay_input"
     ) < step_names.index("daily_research_pipeline")
+    assert step_names.index("shadow_markout_replay_input") < step_names.index(
+        "counterfactual_execution_replay"
+    ) < step_names.index("trading_day_report_enriched")
     upward = next(step for step in payload["steps"] if step["name"] == "upward_trajectory_report")  # type: ignore[index]
     assert upward["metadata"]["research_only"] is True
     assert upward["metadata"]["live_money_authority"] is False
@@ -272,6 +275,23 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     assert accelerator_command[accelerator_command.index("--symbols") + 1] == (
         "AAPL,AMZN"
     )
+    assert "--research-cost-fallback" in accelerator_command
+    assert "--shadow-markout-jsonl" in accelerator_command
+    assert accelerator["blocked_returncodes"] == [2]
+    live_cost = next(step for step in payload["steps"] if step["name"] == "live_cost_model")
+    live_cost_command = [str(token) for token in live_cost["command"]]
+    assert live_cost_command[live_cost_command.index("--window-sessions") + 1] == "2"
+    counterfactual = next(
+        step
+        for step in payload["steps"]
+        if step["name"] == "counterfactual_execution_replay"
+    )
+    assert "--outcomes-json" in counterfactual["command"]
+    counterfactual_command = [str(token) for token in counterfactual["command"]]
+    decisions_path = counterfactual_command[
+        counterfactual_command.index("--decisions-jsonl") + 1
+    ]
+    assert decisions_path.endswith("runtime/decision_records.jsonl")
     registry_evaluation = next(
         step
         for step in payload["steps"]
@@ -496,6 +516,13 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     assert accelerator_command[accelerator_command.index("--symbols") + 1] == (
         "AAPL,AMZN,MSFT"
     )
+    assert "--research-cost-fallback" in accelerator_command
+    assert accelerator["blocked_returncodes"] == [2]
+    weekly_cost = next(
+        step for step in payload["steps"] if step["name"] == "live_cost_model"
+    )
+    weekly_cost_command = [str(token) for token in weekly_cost["command"]]
+    assert weekly_cost_command[weekly_cost_command.index("--window-sessions") + 1] == "5"
     objective_search = next(
         step
         for step in payload["steps"]
@@ -548,6 +575,15 @@ def test_weekend_saturday_plan_uses_bounded_broad_research_caps(
     assert "15" in broad["command"]
     assert broad["metadata"]["promotion_authority"] is False
     assert broad["metadata"]["manual_approval_required"] is True
+    accelerator = next(
+        step
+        for step in payload["steps"]
+        if step["name"] == "training_accelerator_weekend_broad"
+    )
+    assert "--research-cost-fallback" in accelerator["command"]
+    assert accelerator["blocked_returncodes"] == [2]
+    live_cost = next(step for step in payload["steps"] if step["name"] == "live_cost_model")
+    assert "--window-sessions" in live_cost["command"]
     assert (report_root / "latest" / "weekend_research_latest.json").is_file()
     assert (report_root / "latest" / "weekend_operator_summary.json").is_file()
 

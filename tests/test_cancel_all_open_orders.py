@@ -264,6 +264,9 @@ def test_send_exit_order_replaces_only_unfilled_qty_after_partial_fill(monkeypat
     api = DummyAPI()
     alpaca_client._validate_trading_api(api)
     runtime = _Runtime(api=api)
+    runtime.position_correlation_id = lambda symbol: (
+        "opp-aapl-entry" if symbol == "AAPL" else None
+    )
 
     submissions: list[dict[str, Any]] = []
 
@@ -274,6 +277,7 @@ def test_send_exit_order_replaces_only_unfilled_qty_after_partial_fill(monkeypat
                 "qty": qty,
                 "side": side,
                 "limit_price": price,
+                "metadata": _kwargs.get("metadata"),
             }
         )
         order = SimpleNamespace(id=f"order-{len(submissions)}")
@@ -295,6 +299,14 @@ def test_send_exit_order_replaces_only_unfilled_qty_after_partial_fill(monkeypat
     assert submissions[0]["limit_price"] == 150.0
     assert submissions[1]["qty"] == 3
     assert submissions[1]["limit_price"] is None
+    assert submissions[0]["metadata"] == submissions[1]["metadata"]
+    assert submissions[0]["metadata"] == {
+        "reason": "manual_exit",
+        "closing_position": True,
+        "reduce_only": True,
+        "order_role": "exit",
+        "correlation_id": "opp-aapl-entry",
+    }
 
 
 def test_send_exit_order_uses_raw_positions_snapshot_when_get_position_fails(monkeypatch):

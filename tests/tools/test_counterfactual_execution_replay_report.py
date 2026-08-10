@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from ai_trading.tools import counterfactual_execution_replay_report as report_tool
 
 
@@ -123,3 +126,115 @@ def test_counterfactual_replay_consumes_only_hypothetical_resolved_outcomes() ->
     assert missed["evidence_type"] == "hypothetical"
     assert payload["promotion_authority"] is False
     assert payload["live_money_authority"] is False
+
+
+def test_counterfactual_replay_consumes_canonical_shadow_markout_schema(
+    tmp_path: Path,
+) -> None:
+    outcome = {
+        "outcome_id": "corr-a:shadow_counterfactual:h1:v1",
+        "correlation_id": "corr-a",
+        "symbol": "AAPL",
+        "horizon_bars": 1,
+        "source_timestamp": "2026-05-05T15:00:00Z",
+        "label_status": "resolved",
+        "evidence_type": "shadow_counterfactual",
+        "evidence_partition": "shadow",
+        "research_only": True,
+        "executed": False,
+        "net_markout_bps": 7.5,
+        "fill_based_evidence": False,
+        "promotion_eligible": False,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+    path = tmp_path / "markouts.json"
+    path.write_text(json.dumps({"outcomes": [outcome]}), encoding="utf-8")
+
+    payload = report_tool.build_counterfactual_execution_replay_report(
+        report_date="2026-05-05",
+        decisions=[
+            {
+                "decision_id": "decision-a",
+                "correlation_id": "corr-a",
+                "symbol": "AAPL",
+                "status": "rejected",
+            }
+        ],
+        outcomes=report_tool._read_outcomes(path, report_date="2026-05-05"),
+        min_counterfactual_samples=1,
+    )
+
+    assert payload["summary"]["rejected_counterfactual_samples"] == 1
+    assert payload["summary"]["hypothetical_outcome_samples"] == 1
+    assert payload["summary"]["rejected_decisions_without_linked_outcomes"] == 0
+    assert payload["missed_positive_decisions"][0]["correlation_id"] == "corr-a"
+    assert payload["research_evidence"]["fill_based_evidence"] is False
+
+
+def test_counterfactual_replay_rejects_shadow_rows_with_authority() -> None:
+    payload = report_tool.build_counterfactual_execution_replay_report(
+        report_date="2026-05-05",
+        decisions=[{"correlation_id": "corr-a", "status": "rejected"}],
+        outcomes=[
+            {
+                "correlation_id": "corr-a",
+                "label_status": "resolved",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "research_only": True,
+                "executed": False,
+                "net_markout_bps": 100.0,
+                "fill_based_evidence": False,
+                "promotion_eligible": True,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            }
+        ],
+        min_counterfactual_samples=1,
+    )
+
+    assert payload["summary"]["rejected_counterfactual_samples"] == 0
+
+
+def test_counterfactual_replay_understands_canonical_decision_record() -> None:
+    payload = report_tool.build_counterfactual_execution_replay_report(
+        report_date="2026-05-05",
+        decisions=[
+            {
+                "correlation_id": "corr-decision-record",
+                "symbol": "MSFT",
+                "bar_ts": "2026-05-05T15:00:00Z",
+                "decision_journal": {
+                    "accepted": False,
+                    "submitted": False,
+                    "decision_ts": "2026-05-05T15:00:00Z",
+                },
+                "metrics": {"terminal_reason": "NET_EDGE_FLOOR"},
+            }
+        ],
+        outcomes=[
+            {
+                "correlation_id": "corr-decision-record",
+                "symbol": "MSFT",
+                "horizon_bars": 1,
+                "label_status": "resolved",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "research_only": True,
+                "executed": False,
+                "net_markout_bps": 4.0,
+                "fill_based_evidence": False,
+                "promotion_eligible": False,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            }
+        ],
+        min_counterfactual_samples=1,
+    )
+
+    assert payload["summary"]["rejected_decisions"] == 1
+    assert payload["summary"]["rejected_counterfactual_samples"] == 1

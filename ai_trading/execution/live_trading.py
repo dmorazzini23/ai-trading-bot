@@ -2691,6 +2691,7 @@ class ExecutionEngine:
         self._api_secret: str | None = None
         self._cred_error: Exception | None = None
         self._pending_orders: dict[str, dict[str, Any]] = {}
+        self._position_correlation_ids: dict[str, str | None] = {}
         self._order_signal_meta: dict[str, _SignalMeta] = {}
         self._last_submit_outcome: dict[str, Any] = {}
         self._last_pre_execution_order_check_failure: dict[str, Any] = {}
@@ -8008,10 +8009,10 @@ class ExecutionEngine:
         """Extract raw expected-edge estimate from order payload when available."""
 
         edge_keys = (
-            "expected_net_edge_bps",
             "expected_net_edge_bps_raw",
-            "expected_edge_bps",
             "expected_edge_bps_raw",
+            "expected_net_edge_bps",
+            "expected_edge_bps",
             "edge_bps",
             "alpha_edge_bps",
         )
@@ -8457,6 +8458,18 @@ class ExecutionEngine:
     def _order_expected_edge_bps(self, order: Mapping[str, Any]) -> float | None:
         """Extract expected-edge estimate and apply optional realism calibration."""
 
+        explicit_raw, _raw_source = self._order_numeric_value(
+            order,
+            keys=("expected_net_edge_bps_raw", "expected_edge_bps_raw"),
+        )
+        calibrated, _calibrated_source = self._order_numeric_value(
+            order,
+            keys=("expected_net_edge_bps", "expected_edge_bps"),
+        )
+        # Submit paths intentionally retain raw and calibrated values together.
+        # When both are present, calibration has already occurred exactly once.
+        if explicit_raw is not None and calibrated is not None:
+            return float(calibrated)
         parsed = self._order_expected_edge_bps_raw(order)
         if parsed is None:
             return None
@@ -8466,6 +8479,40 @@ class ExecutionEngine:
                 expected_edge_bps=float(parsed),
             )
         )
+
+    def position_correlation_id(self, symbol: str) -> str | None:
+        """Return the unambiguous entry correlation for an open position."""
+
+        symbol_token = str(symbol or "").strip().upper()
+        store = getattr(self, "_position_correlation_ids", None)
+        if not symbol_token or not isinstance(store, Mapping):
+            return None
+        value = store.get(symbol_token)
+        return str(value).strip() if value not in (None, "") else None
+
+    def _update_position_correlation_from_fill(
+        self,
+        *,
+        symbol: str,
+        correlation_id: str | None,
+        closing_position: bool | None,
+    ) -> None:
+        """Track entry lineage conservatively; disagreement becomes ambiguous."""
+
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token or closing_position is None:
+            return
+        store_raw = getattr(self, "_position_correlation_ids", None)
+        store = dict(store_raw) if isinstance(store_raw, Mapping) else {}
+        if bool(closing_position):
+            store.pop(symbol_token, None)
+        else:
+            correlation_token = str(correlation_id or "").strip() or None
+            if symbol_token not in store:
+                store[symbol_token] = correlation_token
+            elif store.get(symbol_token) != correlation_token:
+                store[symbol_token] = None
+        self._position_correlation_ids = store
 
     @staticmethod
     def _normalize_probability_score(value: Any) -> float | None:
@@ -17659,6 +17706,13 @@ class ExecutionEngine:
                 if value not in (None, ""):
                     fill_record[destination] = value
                     break
+        self._update_position_correlation_from_fill(
+            symbol=symbol,
+            correlation_id=(
+                str(fill_record.get("correlation_id") or "").strip() or None
+            ),
+            closing_position=closing_position,
+        )
         if runtime_payload is not None:
             for text_key, candidates in {
                 "order_type": ("order_type", "submitted_order_type", "type"),

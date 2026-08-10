@@ -95,7 +95,11 @@ def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> 
     runtime = SimpleNamespace(
         api=SimpleNamespace(
             list_positions=lambda: [
-                SimpleNamespace(symbol="AAPL", qty="3"),
+                SimpleNamespace(
+                    symbol="AAPL",
+                    qty="3",
+                    correlation_id="opp-aapl-entry",
+                ),
                 SimpleNamespace(symbol="MSFT", qty="-2"),
             ]
         ),
@@ -114,7 +118,13 @@ def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> 
             "order_type": "market",
             "closing_position": True,
             "reduce_only": True,
-            "metadata": {"reason": "eod_exit"},
+            "metadata": {
+                "reason": "eod_exit",
+                "closing_position": True,
+                "reduce_only": True,
+                "order_role": "exit",
+                "correlation_id": "opp-aapl-entry",
+            },
         },
         {
             "symbol": "MSFT",
@@ -123,7 +133,12 @@ def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> 
             "order_type": "market",
             "closing_position": True,
             "reduce_only": True,
-            "metadata": {"reason": "eod_exit"},
+            "metadata": {
+                "reason": "eod_exit",
+                "closing_position": True,
+                "reduce_only": True,
+                "order_role": "exit",
+            },
         },
     ]
 

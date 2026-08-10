@@ -415,6 +415,42 @@ def paper_sampling_deficit_snapshot(
     }
 
 
+def paper_sampling_reservation_symbols(snapshot: Mapping[str, Any]) -> list[str]:
+    """Return governed symbols that should reserve diagnostic precheck slots.
+
+    Priority symbols intentionally becomes empty when all governed strata are
+    balanced. Candidate selection still needs to reserve those equally
+    underfilled strata before applying its top-N budget, otherwise unrelated
+    symbols can consume every diagnostic slot. The ranked-underfilled field
+    already carries deterministic deficit/session/rotation ordering.
+    """
+
+    if not bool(snapshot.get("active")) or not bool(
+        snapshot.get("fairness_enabled")
+    ):
+        return []
+    configured_raw = snapshot.get("configured_symbols")
+    configured = {
+        str(symbol).strip().upper()
+        for symbol in configured_raw
+        if str(symbol).strip()
+    } if isinstance(configured_raw, Iterable) and not isinstance(
+        configured_raw,
+        (str, bytes),
+    ) else set()
+    ranked_raw = snapshot.get("ranked_underfilled_symbols")
+    if not isinstance(ranked_raw, Iterable) or isinstance(ranked_raw, (str, bytes)):
+        ranked_raw = snapshot.get("priority_symbols")
+    if not isinstance(ranked_raw, Iterable) or isinstance(ranked_raw, (str, bytes)):
+        return []
+    reserved: list[str] = []
+    for raw_symbol in ranked_raw:
+        symbol = str(raw_symbol).strip().upper()
+        if symbol and symbol in configured and symbol not in reserved:
+            reserved.append(symbol)
+    return reserved
+
+
 def evaluate_paper_sampling_order(
     cfg: Any,
     *,
@@ -951,6 +987,7 @@ __all__ = [
     "PaperSamplingDecision",
     "evaluate_paper_sampling_order",
     "paper_sampling_deficit_snapshot",
+    "paper_sampling_reservation_symbols",
     "release_paper_sampling_order",
     "reserve_paper_sampling_order",
     "stale_model_diagnostics_allowed",

@@ -158,6 +158,7 @@ from ai_trading.runtime.quarantine import (
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.paper_sampling import (
     paper_sampling_deficit_snapshot,
+    paper_sampling_reservation_symbols,
     stale_model_diagnostics_allowed,
 )
 from ai_trading.runtime.run_manifest import write_run_manifest
@@ -2616,15 +2617,9 @@ def _pre_rank_execution_candidates(
                 configured_raw,
                 (str, bytes),
             ) else set()
-            priority_raw = sampling_snapshot.get("priority_symbols")
-            priority_candidates = [
-                str(symbol).strip().upper()
-                for symbol in priority_raw
-                if str(symbol).strip()
-            ] if isinstance(priority_raw, Sequence) and not isinstance(
-                priority_raw,
-                (str, bytes),
-            ) else []
+            priority_candidates = paper_sampling_reservation_symbols(
+                sampling_snapshot
+            )
             ranked_set = set(ranked)
             sampling_priority_symbols = [
                 symbol
@@ -2653,7 +2648,7 @@ def _pre_rank_execution_candidates(
                         original_rank[symbol],
                     ),
                 )
-                rank_source = f"{rank_source}+paper_sampling_deficit"
+                rank_source = f"{rank_source}+paper_sampling_reservation"
 
     exploration_enabled = False
     exploration_slots = 0

@@ -267,11 +267,30 @@ def test_trading_day_report_excludes_shadow_outcomes_from_realized_fills():
         gate_rows=[],
         live_cost_model={},
         symbol_scorecard={},
+        counterfactual_execution={
+            "status": "passed",
+            "summary": {
+                "rejected_counterfactual_samples": 3,
+                "hypothetical_outcome_samples": 3,
+                "rejected_decisions_without_linked_outcomes": 1,
+            },
+        },
     )
 
     assert report["realized_fills"]["count"] == 1
     assert report["non_fill_evidence"]["excluded_from_realized_fills"] == 1
     assert report["symbol_trade_flow"]["AAPL"]["fills"] == 1
+    assert report["research_evidence"]["counterfactual_execution"] == {
+        "status": "passed",
+        "rejected_counterfactual_samples": 3,
+        "hypothetical_outcome_samples": 3,
+        "unlinked_rejected_decisions": 1,
+    }
+    assert report["research_evidence"]["fill_based_evidence"] is False
+    assert report["submission_accounting"]["canonical_operator_field"] == (
+        "unique_submitted_decisions"
+    )
+    assert report["submitted_trades"]["compatibility_alias"] is True
 
 
 def test_trading_day_report_counts_only_canonical_parity_shadow_candidates():

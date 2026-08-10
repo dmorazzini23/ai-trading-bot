@@ -42,7 +42,7 @@ def _read_outcomes(path: Path | None, *, report_date: str | None = None) -> list
     except json.JSONDecodeError:
         return _read_jsonl(path, report_date=report_date)
     if isinstance(payload, Mapping):
-        raw_rows = payload.get("resolved_outcomes", [])
+        raw_rows = payload.get("outcomes", payload.get("resolved_outcomes", []))
     else:
         raw_rows = payload
     if not isinstance(raw_rows, list):
@@ -54,11 +54,22 @@ def _read_outcomes(path: Path | None, *, report_date: str | None = None) -> list
 
 
 def _date_match(row: Mapping[str, Any], report_date: str) -> bool:
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
     ts = str(
         row.get("ts")
         or row.get("prediction_ts")
         or row.get("timestamp")
         or row.get("decision_ts")
+        or row.get("source_timestamp")
+        or row.get("decision_timestamp")
+        or row.get("bar_ts")
+        or journal.get("decision_ts")
+        or journal.get("source_timestamp")
+        or metrics.get("decision_ts")
+        or metrics.get("source_timestamp")
         or row.get("filled_at")
         or ""
     )
@@ -93,12 +104,36 @@ def _prediction_id(row: Mapping[str, Any]) -> str:
     return str(row.get("prediction_id") or _decision_id(row)).strip()
 
 
+def _correlation_id(row: Mapping[str, Any]) -> str:
+    return str(row.get("correlation_id") or _prediction_id(row)).strip()
+
+
 def _symbol(row: Mapping[str, Any]) -> str:
     return str(row.get("symbol") or row.get("ticker") or "UNKNOWN").strip().upper() or "UNKNOWN"
 
 
 def _status(row: Mapping[str, Any]) -> str:
-    return str(row.get("status") or row.get("action") or row.get("decision") or "").strip().lower()
+    explicit = str(
+        row.get("status") or row.get("action") or row.get("decision") or ""
+    ).strip().lower()
+    if explicit:
+        return explicit
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    if journal.get("submitted") is True:
+        return "submitted"
+    if journal.get("accepted") is True:
+        return "accepted"
+    if journal.get("accepted") is False:
+        return "rejected"
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    if metrics.get("terminal_reason") not in (None, ""):
+        return "rejected"
+    gates = row.get("gates")
+    if isinstance(gates, Sequence) and not isinstance(gates, (str, bytes)) and gates:
+        return "rejected"
+    return ""
 
 
 def _is_accepted(row: Mapping[str, Any]) -> bool:
@@ -117,13 +152,36 @@ def _select_resolved_outcome(
         return None
     desired_role = str(decision.get("model_role") or "").strip().lower()
     desired_horizon = _safe_float(decision.get("horizon_bars"))
-    eligible = [
-        row
-        for row in candidates
-        if str(row.get("evidence_type") or "hypothetical").strip().lower()
-        == "hypothetical"
-        and not bool(row.get("executed"))
-    ]
+    eligible: list[Mapping[str, Any]] = []
+    for row in candidates:
+        evidence_type = str(
+            row.get("evidence_type") or "hypothetical"
+        ).strip().lower()
+        if bool(row.get("executed")):
+            continue
+        if evidence_type == "hypothetical":
+            eligible.append(row)
+            continue
+        if evidence_type != "shadow_counterfactual":
+            continue
+        if str(row.get("label_status") or "").strip().lower() != "resolved":
+            continue
+        if row.get("research_only") is not True:
+            continue
+        if str(row.get("evidence_partition") or "").strip().lower() != "shadow":
+            continue
+        if any(
+            row.get(field) is not False
+            for field in (
+                "fill_based_evidence",
+                "promotion_eligible",
+                "runtime_authority",
+                "promotion_authority",
+                "live_money_authority",
+            )
+        ):
+            continue
+        eligible.append(row)
     if desired_role:
         role_matches = [
             row
@@ -169,11 +227,15 @@ def build_counterfactual_execution_replay_report(
     min_counterfactual_samples: int = 10,
     max_missed_edge_bps: float = 25.0,
 ) -> dict[str, Any]:
-    fills_by_id = {_decision_id(row): row for row in fills if _decision_id(row)}
+    fills_by_id: dict[str, Mapping[str, Any]] = {}
+    for fill in fills:
+        for identity in {_decision_id(fill), _correlation_id(fill)}:
+            if identity:
+                fills_by_id[identity] = fill
     outcomes_by_id: dict[str, list[Mapping[str, Any]]] = {}
     for outcome in outcomes:
-        if prediction_id := _prediction_id(outcome):
-            outcomes_by_id.setdefault(prediction_id, []).append(outcome)
+        if correlation_id := _correlation_id(outcome):
+            outcomes_by_id.setdefault(correlation_id, []).append(outcome)
     accepted_edges: list[float] = []
     rejected_edges: list[float] = []
     missed_positive: list[dict[str, Any]] = []
@@ -183,6 +245,7 @@ def build_counterfactual_execution_replay_report(
     rejected = 0
     hypothetical_outcome_samples = 0
     executed_outcome_rows_ignored = 0
+    rejected_decisions_without_linked_outcomes = 0
     for row in decisions:
         if _is_accepted(row):
             accepted += 1
@@ -192,9 +255,10 @@ def build_counterfactual_execution_replay_report(
                 "net_edge_bps",
                 "markout_bps",
             )
-            if realized is None and _decision_id(row) in fills_by_id:
+            fill_identity = _correlation_id(row) or _decision_id(row)
+            if realized is None and fill_identity in fills_by_id:
                 realized = _first_float(
-                    fills_by_id[_decision_id(row)],
+                    fills_by_id[fill_identity],
                     "realized_net_edge_bps",
                     "net_edge_bps",
                     "markout_bps",
@@ -211,7 +275,7 @@ def build_counterfactual_execution_replay_report(
             )
             selected_outcome: Mapping[str, Any] | None = None
             if counterfactual is None:
-                candidates = outcomes_by_id.get(_prediction_id(row), [])
+                candidates = outcomes_by_id.get(_correlation_id(row), [])
                 executed_outcome_rows_ignored += sum(
                     1
                     for candidate in candidates
@@ -228,6 +292,8 @@ def build_counterfactual_execution_replay_report(
                     )
                     if counterfactual is not None:
                         hypothetical_outcome_samples += 1
+                if not candidates:
+                    rejected_decisions_without_linked_outcomes += 1
             if counterfactual is None:
                 continue
             rejected_edges.append(float(counterfactual))
@@ -237,6 +303,7 @@ def build_counterfactual_execution_replay_report(
                     {
                         "decision_id": _decision_id(row) or None,
                         "prediction_id": _prediction_id(row) or None,
+                        "correlation_id": _correlation_id(row) or None,
                         "symbol": _symbol(row),
                         "reason": str(row.get("reason") or row.get("gate") or "unknown"),
                         "counterfactual_net_edge_bps": float(counterfactual),
@@ -288,6 +355,9 @@ def build_counterfactual_execution_replay_report(
             "rejected_counterfactual_samples": len(rejected_edges),
             "hypothetical_outcome_samples": hypothetical_outcome_samples,
             "executed_outcome_rows_ignored": executed_outcome_rows_ignored,
+            "rejected_decisions_without_linked_outcomes": (
+                rejected_decisions_without_linked_outcomes
+            ),
             "mean_accepted_realized_edge_bps": (
                 float(sum(accepted_edges) / len(accepted_edges)) if accepted_edges else None
             ),
@@ -305,6 +375,14 @@ def build_counterfactual_execution_replay_report(
             reverse=True,
         )[:25],
         "promotion_authority": False,
+        "research_evidence": {
+            "evidence_partition": "shadow",
+            "fill_based_evidence": False,
+            "promotion_eligible": False,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "live_money_authority": False,
     }
 

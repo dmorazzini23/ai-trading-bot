@@ -103,6 +103,87 @@ def test_training_accelerator_blocks_required_unusable_live_cost(
     assert persisted["live_money_authority"] is False
 
 
+def test_training_accelerator_research_fallback_does_not_use_unready_live_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live_cost = tmp_path / "live_cost.json"
+    live_cost.write_text(
+        json.dumps({"status": {"available": False, "status": "unavailable"}}),
+        encoding="utf-8",
+    )
+    calls: list[argparse.Namespace] = []
+
+    def _fake_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+        calls.append(args)
+        return {"ranked_candidates": [], "lead_candidates": []}
+
+    monkeypatch.setattr(training_accelerator, "run_multi_horizon_pipeline", _fake_pipeline)
+    report = training_accelerator.run_training_accelerator(
+        argparse.Namespace(
+            cadence="daily",
+            data_dir=tmp_path,
+            symbols="AAPL,AMZN,MSFT",
+            output_dir=tmp_path / "out",
+            training_cache_dir=tmp_path / "cache",
+            model_type="logistic",
+            live_cost_model_json=live_cost,
+            use_live_cost_model=True,
+            research_cost_fallback=True,
+            plan_only=False,
+            max_replay_candidates=None,
+        )
+    )
+
+    assert report["status"] == "no_valid_candidates"
+    assert report["cost_evidence"]["fallback_active"] is True
+    assert report["cost_evidence"]["promotion_authority"] is False
+    assert calls[0].use_live_cost_model is False
+
+
+def test_training_accelerator_records_validated_shadow_manifest_without_ingestion(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "shadow_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "artifact_type": "shadow_markout_replay_input_manifest",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "research_only": True,
+                "row_count": 12,
+                "content_sha256": "abc123",
+                "fill_based_evidence": False,
+                "promotion_eligible": False,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = training_accelerator.run_training_accelerator(
+        argparse.Namespace(
+            cadence="daily",
+            data_dir=tmp_path,
+            symbols="AAPL,AMZN,MSFT",
+            output_dir=tmp_path / "out",
+            training_cache_dir=tmp_path / "cache",
+            model_type="logistic",
+            shadow_markout_manifest_json=manifest,
+            shadow_markout_jsonl=tmp_path / "shadow.jsonl",
+            plan_only=True,
+            max_replay_candidates=None,
+        )
+    )
+
+    evidence = report["shadow_markout_evidence"]
+    assert evidence["usable"] is True
+    assert evidence["row_count"] == 12
+    assert evidence["training_ingestion_enabled"] is False
+
+
 def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, monkeypatch) -> None:
     calls: list[argparse.Namespace] = []
 

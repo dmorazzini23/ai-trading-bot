@@ -412,6 +412,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 live_cost,
                 "--window-minutes",
                 "780",
+                "--window-sessions",
+                "2",
                 "--min-samples",
                 "5",
                 "--quote-events-jsonl",
@@ -701,9 +703,11 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "--report-date",
                 config.report_date,
                 "--decisions-jsonl",
-                _runtime_input_path("runtime/gate_effectiveness.jsonl"),
+                _runtime_input_path("runtime/decision_records.jsonl"),
                 "--fills-jsonl",
                 _runtime_input_path("runtime/fill_events.jsonl"),
+                "--outcomes-json",
+                opportunity_markouts,
                 "--output-json",
                 counterfactual_execution,
                 "--latest-json",
@@ -1703,10 +1707,16 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "--live-cost-model-json",
                     live_cost,
                     "--use-live-cost-model",
+                    "--research-cost-fallback",
+                    "--shadow-markout-jsonl",
+                    shadow_markout_replay_input,
+                    "--shadow-markout-manifest-json",
+                    shadow_markout_replay_manifest,
                 ),
                 purpose="Refresh cached lightweight replay-aligned training candidates.",
                 output_path=training_accelerator,
                 skip_if_missing=(config.data_dir,),
+                blocked_returncodes=(2,),
                 metadata={
                     "promotion_authority": False,
                     "uses_cached_training_features": True,
@@ -1869,6 +1879,28 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 },
             ),
         )
+    # Consume the current run's markouts before producing the canonical daily
+    # counterfactual and trading-day artifacts.
+    ordered_names = (
+        "counterfactual_execution_replay",
+        "trading_day_report_enriched",
+    )
+    ordered_steps = {
+        name: next((step for step in steps if step.name == name), None)
+        for name in ordered_names
+    }
+    steps = [step for step in steps if step.name not in ordered_names]
+    anchor = next(
+        (
+            index
+            for index, step in reversed(list(enumerate(steps)))
+            if step.name == "shadow_markout_replay_input"
+        ),
+        len(steps) - 1,
+    )
+    for offset, name in enumerate(ordered_names, start=1):
+        if (step := ordered_steps[name]) is not None:
+            steps.insert(anchor + offset, step)
     return steps
 
 
@@ -1887,6 +1919,8 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 "ai_trading.tools.live_cost_model",
                 "--output-json",
                 live_cost,
+                "--window-sessions",
+                "5",
                 "--quote-events-jsonl",
                 _runtime_input_path("runtime/decision_records.jsonl"),
                 "--prior-min-samples",
@@ -1987,10 +2021,12 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "--live-cost-model-json",
                     live_cost,
                     "--use-live-cost-model",
+                    "--research-cost-fallback",
                 ),
                 purpose="Run the broader cached weekly horizon/objective candidate refresh.",
                 output_path=training_accelerator,
                 skip_if_missing=(config.data_dir,),
+                blocked_returncodes=(2,),
                 metadata={"promotion_authority": False, "uses_cached_training_features": True},
             )
         )
@@ -2213,6 +2249,8 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 "ai_trading.tools.live_cost_model",
                 "--output-json",
                 live_cost,
+                "--window-sessions",
+                "5",
                 "--quote-events-jsonl",
                 _runtime_input_path("runtime/decision_records.jsonl"),
                 "--prior-min-samples",
@@ -2466,12 +2504,14 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                     "--live-cost-model-json",
                     live_cost,
                     "--use-live-cost-model",
+                    "--research-cost-fallback",
                     "--max-replay-candidates",
                     str(caps["max_replay_candidates"]),
                 ),
                 purpose="Run bounded broad weekend candidate refresh with cached features.",
                 output_path=training_accelerator,
                 skip_if_missing=(config.data_dir,),
+                blocked_returncodes=(2,),
                 metadata={
                     "promotion_authority": False,
                     "uses_cached_training_features": bool(caps["cache_enabled"]),
@@ -2579,6 +2619,8 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
                 "ai_trading.tools.live_cost_model",
                 "--output-json",
                 live_cost,
+                "--window-sessions",
+                "5",
                 "--quote-events-jsonl",
                 _runtime_input_path("runtime/decision_records.jsonl"),
                 "--prior-min-samples",
@@ -2897,12 +2939,14 @@ def _weekend_sunday_steps(config: ResearchConfig) -> tuple[list[ResearchStep], l
                     "--live-cost-model-json",
                     live_cost,
                     "--use-live-cost-model",
+                    "--research-cost-fallback",
                     "--max-replay-candidates",
                     str(caps["max_replay_candidates"]),
                 ),
                 purpose="Run bounded Sunday validation refresh for top replay candidates.",
                 output_path=validation_accelerator,
                 skip_if_missing=(config.data_dir,),
+                blocked_returncodes=(2,),
                 metadata={
                     "promotion_authority": False,
                     "research_only": True,

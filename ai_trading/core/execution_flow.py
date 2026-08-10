@@ -4,7 +4,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 """Execution flow helpers decoupled from bot_engine."""
 
 from json import JSONDecodeError
-from typing import Any, cast
+from typing import Any, Mapping, cast
 import time as pytime
 from threading import Thread
 import csv
@@ -377,6 +377,67 @@ def _list_positions_compat(api: Any) -> list[Any]:
     raise AttributeError("broker client missing positions method")
 
 
+def _exit_position_correlation_id(
+    ctx: Any,
+    symbol: str,
+    *,
+    position: Any | None = None,
+) -> str | None:
+    """Resolve one unambiguous entry correlation for a forced exit."""
+
+    candidates: set[str] = set()
+    if position is not None:
+        direct = str(getattr(position, "correlation_id", None) or "").strip()
+        if direct:
+            candidates.add(direct)
+        metadata = getattr(position, "metadata", None)
+        if isinstance(metadata, Mapping):
+            nested = str(metadata.get("correlation_id") or "").strip()
+            if nested:
+                candidates.add(nested)
+    for owner in (
+        ctx,
+        getattr(ctx, "exec_engine", None),
+        getattr(ctx, "execution_engine", None),
+    ):
+        getter = getattr(owner, "position_correlation_id", None)
+        if not callable(getter):
+            continue
+        try:
+            value = getter(symbol)
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            continue
+        token = str(value or "").strip()
+        if token:
+            candidates.add(token)
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _exit_order_metadata(
+    ctx: Any,
+    symbol: str,
+    reason: str,
+    *,
+    position: Any | None = None,
+) -> dict[str, Any]:
+    """Build reduction-only exit metadata with entry lineage when known."""
+
+    metadata: dict[str, Any] = {
+        "reason": reason,
+        "closing_position": True,
+        "reduce_only": True,
+        "order_role": "exit",
+    }
+    correlation_id = _exit_position_correlation_id(
+        ctx,
+        symbol,
+        position=position,
+    )
+    if correlation_id is not None:
+        metadata["correlation_id"] = correlation_id
+    return metadata
+
+
 def send_exit_order(
     ctx: Any,
     symbol: str,
@@ -397,14 +458,17 @@ def send_exit_order(
         logger.info("SKIP_NO_POSITION", extra={"symbol": symbol})
         return
     snapshot_qty = 0
+    position_for_lineage: Any | None = None
     if raw_positions is not None:
         for raw_pos in raw_positions:
             if getattr(raw_pos, "symbol", "") != symbol:
                 continue
             snapshot_qty = _signed_position_qty(raw_pos)
+            position_for_lineage = raw_pos
             break
     try:
         pos = ctx.api.get_position(symbol)
+        position_for_lineage = pos
         held_qty_signed = _signed_position_qty(pos)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         held_qty_signed = snapshot_qty
@@ -418,7 +482,12 @@ def send_exit_order(
         )
         return
     exit_side = "buy_to_cover" if held_qty_signed < 0 else "sell"
-    exit_metadata = {"reason": reason, "closing_position": True, "reduce_only": True}
+    exit_metadata = _exit_order_metadata(
+        ctx,
+        symbol,
+        reason,
+        position=position_for_lineage,
+    )
     if price <= 0.0:
         submit_order(
             ctx,
@@ -827,6 +896,12 @@ def exit_all_positions(ctx: Any) -> None:
                 execute_order = getattr(execution_engine, "execute_order", None)
             if callable(execute_order):
                 side = "sell" if signed_qty > 0 else "buy"
+                exit_metadata = _exit_order_metadata(
+                    ctx,
+                    pos.symbol,
+                    "eod_exit",
+                    position=pos,
+                )
                 execute_order(
                     pos.symbol,
                     side,
@@ -834,7 +909,7 @@ def exit_all_positions(ctx: Any) -> None:
                     order_type="market",
                     closing_position=True,
                     reduce_only=True,
-                    metadata={"reason": "eod_exit"},
+                    metadata=exit_metadata,
                 )
             else:
                 send_exit_order(

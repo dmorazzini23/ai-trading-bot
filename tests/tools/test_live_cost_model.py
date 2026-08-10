@@ -74,6 +74,85 @@ def test_live_cost_model_preserves_zero_cost_samples_and_ignores_stale_rows(
     assert rows[0]["sources"] == {"execution_quality_events": 1}
 
 
+def test_live_cost_model_session_window_includes_friday_on_sunday(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 9, 14, 0, tzinfo=UTC)
+    events_path = tmp_path / "execution_quality_events.jsonl"
+    _write_jsonl(
+        events_path,
+        [
+            {
+                "ts": "2026-08-07T15:00:00+00:00",
+                "event": "submit_outcome",
+                "status": "filled",
+                "symbol": "AAPL",
+                "side": "buy",
+                "total_cost_bps": 2.5,
+            },
+            {
+                "ts": "2026-08-06T15:00:00+00:00",
+                "event": "submit_outcome",
+                "status": "filled",
+                "symbol": "MSFT",
+                "side": "buy",
+                "total_cost_bps": 9.0,
+            },
+            {
+                "ts": "2026-08-08T15:00:00+00:00",
+                "event": "submit_outcome",
+                "status": "filled",
+                "symbol": "AMZN",
+                "side": "buy",
+                "total_cost_bps": 99.0,
+            },
+        ],
+    )
+
+    report = live_cost_model.build_live_cost_model(
+        events_path=events_path,
+        window_sessions=1,
+        min_samples=1,
+        now=now,
+    )
+
+    assert report["window"]["mode"] == "trading_sessions"
+    assert report["window"]["sessions"] == 1
+    assert report["window"]["session_dates"] == ["2026-08-07"]
+    assert report["window"]["sample_count"] == 1
+    assert report["by_symbol_side_session"][0]["symbol"] == "AAPL"
+
+
+def test_live_cost_model_minute_window_contract_remains_compatible(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 9, 14, 0, tzinfo=UTC)
+    events_path = tmp_path / "execution_quality_events.jsonl"
+    _write_jsonl(
+        events_path,
+        [
+            {
+                "ts": (now - timedelta(minutes=5)).isoformat(),
+                "symbol": "AAPL",
+                "side": "buy",
+                "total_cost_bps": 1.0,
+            }
+        ],
+    )
+
+    report = live_cost_model.build_live_cost_model(
+        events_path=events_path,
+        window_minutes=60,
+        min_samples=1,
+        now=now,
+    )
+
+    assert report["window"]["mode"] == "rolling_minutes"
+    assert report["window"]["sessions"] is None
+    assert report["window"]["session_dates"] == []
+    assert report["window"]["sample_count"] == 1
+
+
 def test_live_cost_model_uses_explicit_total_cost_precedence(tmp_path: Path) -> None:
     now = datetime(2026, 5, 1, 15, 30, tzinfo=UTC)
     events_path = tmp_path / "execution_quality_events.jsonl"

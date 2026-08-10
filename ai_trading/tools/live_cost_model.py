@@ -10,10 +10,50 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.utils.market_calendar import (
+    is_trading_day,
+    previous_trading_session,
+    rth_session_utc,
+)
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _research_session_windows(
+    generated_at: datetime,
+    window_sessions: int,
+) -> list[tuple[datetime, datetime]]:
+    """Return the latest bounded NYSE sessions observable at ``generated_at``."""
+
+    local_date = generated_at.astimezone(_ET).date()
+    if is_trading_day(local_date):
+        current_open, _current_close = rth_session_utc(local_date)
+        session_date = (
+            local_date
+            if generated_at >= current_open
+            else previous_trading_session(local_date)
+        )
+    else:
+        session_date = previous_trading_session(local_date)
+    dates = [session_date]
+    for _ in range(max(1, int(window_sessions)) - 1):
+        dates.append(previous_trading_session(dates[-1]))
+    return [rth_session_utc(value) for value in reversed(dates)]
+
+
+def _in_session_windows(
+    timestamp: datetime,
+    windows: Iterable[tuple[datetime, datetime]],
+    *,
+    generated_at: datetime,
+) -> bool:
+    return any(start <= timestamp <= min(end, generated_at) for start, end in windows)
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -587,6 +627,7 @@ def build_live_cost_model(
     tca_path: Path | None = None,
     quote_events_path: Path | None = None,
     window_minutes: int = 390,
+    window_sessions: int | None = None,
     min_samples: int = 5,
     prior_min_samples: int = 1,
     prior_slippage_buffer_bps: float = 2.0,
@@ -598,7 +639,16 @@ def build_live_cost_model(
     """Return a rolling cost-model artifact from recent live execution rows."""
 
     generated_at = now.astimezone(UTC) if now is not None else datetime.now(UTC)
-    cutoff = generated_at - timedelta(minutes=max(1, int(window_minutes)))
+    session_windows = (
+        _research_session_windows(generated_at, max(1, int(window_sessions)))
+        if window_sessions is not None
+        else []
+    )
+    cutoff = (
+        session_windows[0][0]
+        if session_windows
+        else generated_at - timedelta(minutes=max(1, int(window_minutes)))
+    )
     observations: list[dict[str, Any]] = []
     sources = {
         "execution_quality_events": events_path,
@@ -620,6 +670,10 @@ def build_live_cost_model(
                 max_future_skew_seconds=max_future_skew_seconds,
             )
             if observation is not None:
+                if session_windows and not _in_session_windows(
+                    observation["ts"], session_windows, generated_at=generated_at
+                ):
+                    continue
                 observations.append(observation)
                 rows_used += 1
         stats["rows_used"] = rows_used
@@ -638,6 +692,10 @@ def build_live_cost_model(
                 max_future_skew_seconds=max_future_skew_seconds,
             )
             if observation is None or _to_float(observation.get("spread_bps")) is None:
+                continue
+            if session_windows and not _in_session_windows(
+                observation["ts"], session_windows, generated_at=generated_at
+            ):
                 continue
             quote_observations.append(observation)
             quote_rows_used += 1
@@ -735,7 +793,13 @@ def build_live_cost_model(
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
         "source": "runtime_execution_telemetry",
         "window": {
+            "mode": "trading_sessions" if session_windows else "rolling_minutes",
             "minutes": int(max(1, window_minutes)),
+            "sessions": int(max(1, window_sessions)) if window_sessions is not None else None,
+            "session_dates": [
+                start.astimezone(_ET).date().isoformat()
+                for start, _end in session_windows
+            ],
             "cutoff": cutoff.isoformat().replace("+00:00", "Z"),
             "event_count": int(len(observations)),
             "sample_count": int(len(total_costs)),
@@ -830,6 +894,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output-json", default="", help="Output live cost model JSON path.")
     parser.add_argument("--window-minutes", type=int, default=390)
+    parser.add_argument(
+        "--window-sessions",
+        type=int,
+        default=None,
+        help=(
+            "Research-only lookback across the latest N NYSE sessions; when set, "
+            "it takes precedence over --window-minutes."
+        ),
+    )
     parser.add_argument("--min-samples", type=int, default=5)
     parser.add_argument("--prior-min-samples", type=int, default=1)
     parser.add_argument("--prior-slippage-buffer-bps", type=float, default=2.0)
@@ -879,6 +952,11 @@ def main(argv: list[str] | None = None) -> int:
         tca_path=tca_path,
         quote_events_path=quote_events_path,
         window_minutes=max(1, int(args.window_minutes)),
+        window_sessions=(
+            max(1, int(args.window_sessions))
+            if args.window_sessions is not None
+            else None
+        ),
         min_samples=max(1, int(args.min_samples)),
         prior_min_samples=max(1, int(args.prior_min_samples)),
         prior_slippage_buffer_bps=max(0.0, float(args.prior_slippage_buffer_bps)),

@@ -144,6 +144,48 @@ def _live_cost_usability(path: Path | None) -> dict[str, Any]:
     return result
 
 
+def _shadow_markout_manifest(path: Path | None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "requested_path": str(path) if path is not None else None,
+        "usable": False,
+        "reason": "not_requested" if path is None else "unreadable",
+        "training_ingestion_enabled": False,
+    }
+    if path is None:
+        return result
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return result
+    if not isinstance(payload, dict):
+        result["reason"] = "invalid_manifest"
+        return result
+    required_false = (
+        "fill_based_evidence",
+        "promotion_eligible",
+        "runtime_authority",
+        "promotion_authority",
+        "live_money_authority",
+    )
+    valid = bool(
+        payload.get("artifact_type") == "shadow_markout_replay_input_manifest"
+        and payload.get("evidence_type") == "shadow_counterfactual"
+        and payload.get("evidence_partition") == "shadow"
+        and payload.get("research_only") is True
+        and all(payload.get(field) is False for field in required_false)
+    )
+    result.update(
+        {
+            "usable": valid,
+            "reason": "validated_research_only" if valid else "authority_contract_failed",
+            "row_count": int(payload.get("row_count") or 0),
+            "content_sha256": payload.get("content_sha256"),
+            "evidence_partition": payload.get("evidence_partition"),
+        }
+    )
+    return result
+
+
 def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     live_cost_model_json = getattr(args, "live_cost_model_json", None)
     data_excludes: list[Path] = [Path(config["training_cache_dir"])]
@@ -190,6 +232,16 @@ def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> d
             ),
             "live_cost_usability": _live_cost_usability(
                 Path(live_cost_model_json) if live_cost_model_json is not None else None
+            ),
+            "shadow_markout_jsonl": _path_manifest(
+                Path(getattr(args, "shadow_markout_jsonl"))
+                if getattr(args, "shadow_markout_jsonl", None) is not None
+                else None
+            ),
+            "shadow_markout_manifest": _shadow_markout_manifest(
+                Path(getattr(args, "shadow_markout_manifest_json"))
+                if getattr(args, "shadow_markout_manifest_json", None) is not None
+                else None
             ),
         },
     }
@@ -250,6 +302,9 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             else None
         ),
         "use_live_cost_model": getattr(args, "use_live_cost_model", None),
+        "research_cost_fallback": bool(
+            getattr(args, "research_cost_fallback", False)
+        ),
         "min_net_edge_bps": float(getattr(args, "min_net_edge_bps", 0.0)),
         "train_fraction": float(getattr(args, "train_fraction", 0.70)),
         "edge_global_threshold": float(getattr(args, "edge_global_threshold", 0.66)),
@@ -340,7 +395,33 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     required_live_cost_blocked = bool(
         config["use_live_cost_model"] is True
         and not bool(live_cost_status.get("usable"))
+        and not config["research_cost_fallback"]
     )
+    research_cost_fallback_active = bool(
+        config["use_live_cost_model"] is True
+        and not bool(live_cost_status.get("usable"))
+        and config["research_cost_fallback"]
+    )
+    report["cost_evidence"] = {
+        "policy": (
+            "research_static_fallback"
+            if config["research_cost_fallback"]
+            else "fill_model_required"
+        ),
+        "source": (
+            "static_fee_and_slippage_assumptions"
+            if research_cost_fallback_active
+            else "fill_derived_live_cost_model"
+        ),
+        "fallback_active": research_cost_fallback_active,
+        "research_only": research_cost_fallback_active,
+        "promotion_eligible": False if research_cost_fallback_active else None,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+    report["shadow_markout_evidence"] = input_manifest["inputs"][
+        "shadow_markout_manifest"
+    ]
     if required_live_cost_blocked:
         report["status"] = "blocked"
         report["blocked_reasons"] = ["required_live_cost_model_unusable"]
@@ -379,7 +460,9 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             fee_bps=float(config["fee_bps"]),
             slippage_bps=float(config["slippage_bps"]),
             live_cost_model_json=getattr(args, "live_cost_model_json", None),
-            use_live_cost_model=config["use_live_cost_model"],
+            use_live_cost_model=(
+                False if research_cost_fallback_active else config["use_live_cost_model"]
+            ),
             min_net_edge_bps=float(config["min_net_edge_bps"]),
             train_fraction=float(config["train_fraction"]),
             edge_global_threshold=float(config["edge_global_threshold"]),
@@ -494,6 +577,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slippage-bps", type=float, default=2.0)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
     parser.add_argument("--use-live-cost-model", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument(
+        "--research-cost-fallback",
+        action="store_true",
+        help=(
+            "Allow research-only static fee/slippage assumptions when the fill-derived "
+            "cost model is not ready; never grants promotion or runtime authority."
+        ),
+    )
+    parser.add_argument("--shadow-markout-jsonl", type=Path, default=None)
+    parser.add_argument("--shadow-markout-manifest-json", type=Path, default=None)
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--edge-global-threshold", type=float, default=0.66)
@@ -523,7 +616,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     report = run_training_accelerator(args)
     sys.stdout.write(json.dumps({"status": report["status"], "path": report["path"]}, sort_keys=True) + "\n")
-    return 0 if report["status"] in {"planned", "complete", "no_valid_candidates", "skipped_unchanged"} else 1
+    if report["status"] in {"planned", "complete", "no_valid_candidates", "skipped_unchanged"}:
+        return 0
+    if report["status"] == "blocked":
+        return 2
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -19,6 +19,16 @@ EXPECTED_ALPACA_MINIMAL = {
     "base_url": "",
     "paper": False,
     "shadow_mode": False,
+    "preflight": {
+        "available": True,
+        "status": "ready",
+        "failure_kind": None,
+        "last_error": None,
+        "last_failure_at": None,
+        "retry_at": None,
+        "retry_in_seconds": None,
+        "consecutive_failures": 0,
+    },
 }
 
 
@@ -58,9 +68,10 @@ def _assert_payload_structure(payload: dict) -> None:
     assert set(payload) >= {"ok", "alpaca"}
     assert isinstance(payload["ok"], bool)
     assert set(payload["alpaca"]) == alpaca_keys
-    bool_keys = alpaca_keys - {"base_url"}
+    bool_keys = alpaca_keys - {"base_url", "preflight"}
     assert all(isinstance(payload["alpaca"][key], bool) for key in bool_keys)
     assert isinstance(payload["alpaca"]["base_url"], str)
+    assert payload["alpaca"]["preflight"] == EXPECTED_ALPACA_MINIMAL["preflight"]
 
 
 def _assert_fallback_meta(payload: dict, *, used: bool, reasons: tuple[str, ...] = ()) -> None:

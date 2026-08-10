@@ -162,6 +162,56 @@ def test_order_expected_edge_extracts_raw_metadata_key() -> None:
     ) == pytest.approx(6.25)
 
 
+def test_order_expected_edge_raw_prefers_explicit_raw_alias() -> None:
+    engine = _engine_stub()
+
+    assert engine._order_expected_edge_bps_raw(
+        {
+            "expected_net_edge_bps": 12.85,
+            "expected_net_edge_bps_raw": 18.15,
+        }
+    ) == pytest.approx(18.15)
+
+
+def test_order_expected_edge_does_not_recalibrate_explicit_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        engine,
+        "_calibrate_expected_edge_bps",
+        lambda **kwargs: calls.append(kwargs) or 1.0,
+    )
+
+    value = engine._order_expected_edge_bps(
+        {
+            "expected_net_edge_bps_raw": 18.15,
+            "expected_net_edge_bps": 12.85,
+        }
+    )
+
+    assert value == pytest.approx(12.85)
+    assert calls == []
+
+
+def test_order_expected_edge_legacy_value_is_still_calibrated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        engine,
+        "_calibrate_expected_edge_bps",
+        lambda **kwargs: calls.append(kwargs) or 7.5,
+    )
+
+    assert engine._order_expected_edge_bps(
+        {"expected_net_edge_bps": 10.0}
+    ) == pytest.approx(7.5)
+    assert len(calls) == 1
+
+
 @pytest.fixture(autouse=True)
 def _disable_new_global_controls(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_GOVERNOR_ENABLED", "0")

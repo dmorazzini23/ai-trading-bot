@@ -282,7 +282,12 @@ def test_exit_all_positions_uses_runtime_exec_engine_when_execute_order_absent(m
             "order_type": "market",
             "closing_position": True,
             "reduce_only": True,
-            "metadata": {"reason": "eod_exit"},
+            "metadata": {
+                "reason": "eod_exit",
+                "closing_position": True,
+                "reduce_only": True,
+                "order_role": "exit",
+            },
         },
         {
             "symbol": "MSFT",
@@ -291,7 +296,12 @@ def test_exit_all_positions_uses_runtime_exec_engine_when_execute_order_absent(m
             "order_type": "market",
             "closing_position": True,
             "reduce_only": True,
-            "metadata": {"reason": "eod_exit"},
+            "metadata": {
+                "reason": "eod_exit",
+                "closing_position": True,
+                "reduce_only": True,
+                "order_role": "exit",
+            },
         },
     ]
 

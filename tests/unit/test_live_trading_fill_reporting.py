@@ -1,6 +1,32 @@
 from ai_trading.execution import live_trading
 
 
+def test_position_correlation_tracks_only_unambiguous_entry_lineage() -> None:
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine._position_correlation_ids = {}
+
+    engine._update_position_correlation_from_fill(
+        symbol="AAPL",
+        correlation_id="opp-entry-1",
+        closing_position=False,
+    )
+    assert engine.position_correlation_id("aapl") == "opp-entry-1"
+
+    engine._update_position_correlation_from_fill(
+        symbol="AAPL",
+        correlation_id="opp-entry-2",
+        closing_position=False,
+    )
+    assert engine.position_correlation_id("AAPL") is None
+
+    engine._update_position_correlation_from_fill(
+        symbol="AAPL",
+        correlation_id="opp-entry-1",
+        closing_position=True,
+    )
+    assert engine.position_correlation_id("AAPL") is None
+
+
 def test_mark_fill_reported_tracks_reported_quantity():
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
 

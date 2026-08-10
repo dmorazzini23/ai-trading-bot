@@ -11,6 +11,7 @@ from ai_trading.oms.pretrade import OrderIntent, SlidingWindowRateLimiter, safe_
 from ai_trading.runtime.paper_sampling import (
     evaluate_paper_sampling_order,
     paper_sampling_deficit_snapshot,
+    paper_sampling_reservation_symbols,
     release_paper_sampling_order,
     reserve_paper_sampling_order,
     stale_model_diagnostics_allowed,
@@ -713,7 +714,27 @@ def test_paper_sampling_deficit_snapshot_is_governed_read_only_and_deterministic
     assert first["priority_symbols"] == ["MSFT", "AMZN"]
     assert later_session["priority_reason"] == "balanced"
     assert later_session["priority_symbols"] == []
+    assert paper_sampling_reservation_symbols(later_session) == [
+        "MSFT",
+        "AAPL",
+        "AMZN",
+    ]
     assert state_path.read_text(encoding="utf-8") == before
+
+
+def test_paper_sampling_reservation_symbols_requires_active_fairness() -> None:
+    snapshot = {
+        "active": True,
+        "fairness_enabled": True,
+        "configured_symbols": ["AAPL", "AMZN", "MSFT"],
+        "ranked_underfilled_symbols": ["GOOGL", "MSFT", "AAPL", "MSFT"],
+    }
+
+    assert paper_sampling_reservation_symbols(snapshot) == ["MSFT", "AAPL"]
+    assert paper_sampling_reservation_symbols(snapshot | {"active": False}) == []
+    assert paper_sampling_reservation_symbols(
+        snapshot | {"fairness_enabled": False}
+    ) == []
 
 
 def test_paper_sampling_does_not_bypass_oms_order_size_block() -> None:

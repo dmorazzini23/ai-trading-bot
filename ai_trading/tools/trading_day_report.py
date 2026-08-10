@@ -837,6 +837,12 @@ def build_trading_day_report(
     submitted_count = len(
         [row for row in intents if str(row.get("status") or "").upper() in {"SUBMITTED", "FILLED"}]
     )
+    funnel_submitted = execution_funnel.get("stages", {}).get("submitted", {})
+    funnel_submitted_count = int(
+        funnel_submitted.get("count", 0)
+        if isinstance(funnel_submitted, Mapping)
+        else 0
+    )
     rejected_count = len(rejected)
     fill_count = len(fill_rows)
     live_status_payload = live_cost_model.get("status", {})
@@ -854,6 +860,12 @@ def build_trading_day_report(
         if isinstance(registry_payload.get("active_challenger"), Mapping)
         else {}
     )
+    counterfactual_payload = dict(counterfactual_execution or {})
+    counterfactual_summary = (
+        counterfactual_payload.get("summary")
+        if isinstance(counterfactual_payload.get("summary"), Mapping)
+        else {}
+    )
     report = {
         "schema_version": "1.0.0",
         "artifact_type": "trading_day_report",
@@ -866,7 +878,19 @@ def build_trading_day_report(
             "preferred_replacement": "execution_funnel.stages.precheck_candidate",
         },
         "execution_funnel": execution_funnel,
-        "submitted_trades": {"count": submitted_count},
+        "submitted_trades": {
+            "count": submitted_count,
+            "compatibility_alias": True,
+            "definition": "submitted_or_filled_order_intent_events",
+            "preferred_replacement": "submission_accounting.unique_submitted_decisions",
+        },
+        "submission_accounting": {
+            "submit_events": submitted_count,
+            "unique_submitted_decisions": funnel_submitted_count,
+            "event_to_decision_delta": submitted_count - funnel_submitted_count,
+            "reconciled": submitted_count == funnel_submitted_count,
+            "canonical_operator_field": "unique_submitted_decisions",
+        },
         "rejected_trades": {
             "count": rejected_count,
             "reasons": dict(reject_reasons),
@@ -943,7 +967,30 @@ def build_trading_day_report(
             "promotion_authority": False,
             "live_money_authority": False,
         },
-        "counterfactual_execution": dict(counterfactual_execution or {}),
+        "counterfactual_execution": counterfactual_payload,
+        "research_evidence": {
+            "counterfactual_execution": {
+                "status": counterfactual_payload.get("status", "missing"),
+                "rejected_counterfactual_samples": int(
+                    counterfactual_summary.get("rejected_counterfactual_samples") or 0
+                ),
+                "hypothetical_outcome_samples": int(
+                    counterfactual_summary.get("hypothetical_outcome_samples") or 0
+                ),
+                "unlinked_rejected_decisions": int(
+                    counterfactual_summary.get(
+                        "rejected_decisions_without_linked_outcomes"
+                    )
+                    or 0
+                ),
+            },
+            "evidence_partition": "shadow",
+            "fill_based_evidence": False,
+            "promotion_eligible": False,
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
         "portfolio_edge_control": dict(portfolio_edge or {}),
         "decision_receipts": dict(decision_receipts or {}),
         "model_registry": registry_payload,
