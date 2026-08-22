@@ -782,6 +782,19 @@ def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
             "max_age_days": 14,
         },
     )
+    monkeypatch.setattr(
+        health_payload_module,
+        "_latest_training_attempt_snapshot",
+        lambda: {
+            "available": True,
+            "status": "skipped",
+            "reason": "no_qualified_candidate",
+            "generated_at": "2026-08-13T21:00:00Z",
+            "runtime_authority": False,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        },
+    )
 
     payload = health_payload_module.build_runtime_health_payload(
         force_ok_for_pytest=False,
@@ -797,6 +810,9 @@ def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
     assert payload["readiness_gates"]["day_sleeve_model"]["status"] == "required_failed"
     assert payload["day_sleeve_model"]["model_id"] == "ml-edge-shadow"
     assert payload["day_sleeve_model"]["age_days"] == 24.0
+    assert payload["latest_training_attempt"]["status"] == "skipped"
+    assert payload["latest_training_attempt"]["reason"] == "no_qualified_candidate"
+    assert payload["latest_training_attempt"]["runtime_authority"] is False
 
 
 def test_runtime_health_payload_db_requirement_rejects_unconfigured_db(monkeypatch):

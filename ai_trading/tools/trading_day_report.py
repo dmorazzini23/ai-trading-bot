@@ -843,6 +843,8 @@ def build_trading_day_report(
         if isinstance(funnel_submitted, Mapping)
         else 0
     )
+    replacement_submit_events = max(0, submitted_count - funnel_submitted_count)
+    unmatched_submitted_decisions = max(0, funnel_submitted_count - submitted_count)
     rejected_count = len(rejected)
     fill_count = len(fill_rows)
     live_status_payload = live_cost_model.get("status", {})
@@ -888,7 +890,10 @@ def build_trading_day_report(
             "submit_events": submitted_count,
             "unique_submitted_decisions": funnel_submitted_count,
             "event_to_decision_delta": submitted_count - funnel_submitted_count,
-            "reconciled": submitted_count == funnel_submitted_count,
+            "replacement_submit_events": replacement_submit_events,
+            "unmatched_submitted_decisions": unmatched_submitted_decisions,
+            "reconciled": unmatched_submitted_decisions == 0,
+            "reconciliation_basis": "submit_events_cover_unique_decisions",
             "canonical_operator_field": "unique_submitted_decisions",
         },
         "rejected_trades": {

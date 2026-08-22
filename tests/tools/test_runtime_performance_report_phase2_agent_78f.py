@@ -250,13 +250,54 @@ def test_operational_daily_stats_prevent_fifo_gain_from_masking_same_day_loss() 
             "net_pnl": -1.47,
             "slippage_cost": -0.15,
             "operational_pnl_source": "same_day_fill_pairs",
-            "operational_basis": "conservative_min_broker_flat_balanced_same_day",
+            "operational_basis": "conservative_min_balanced_same_day",
             "accounting_net_pnl": 52.28,
             "same_day_fill_net_pnl": -1.47,
         }
     ]
-    assert basis["mode"] == "conservative_current_day"
-    assert basis["selected_pnl_source"] == "same_day_fill_pairs"
+    assert basis["mode"] == "conservative_balanced_days"
+    assert basis["selected_sources"] == {"2026-08-04": "same_day_fill_pairs"}
+
+
+def test_operational_daily_stats_reconcile_every_balanced_day() -> None:
+    rows, basis = rpr._operational_daily_trade_stats(
+        accounting_rows=[
+            {"date": "2026-08-10", "trades": 1, "net_pnl": 0.31},
+            {"date": "2026-08-12", "trades": 2, "net_pnl": -8.55},
+            {"date": "2026-08-13", "trades": 2, "net_pnl": 29.10},
+        ],
+        same_day_rows=[
+            {"date": "2026-08-10", "trades": 1, "net_pnl": 1.12},
+            {"date": "2026-08-12", "trades": 2, "net_pnl": -0.45},
+            {"date": "2026-08-13", "trades": 2, "net_pnl": 0.32},
+        ],
+        same_day_open_positions_by_date={},
+        broker_positions_available=True,
+        broker_positions={},
+    )
+
+    by_date = {row["date"]: row for row in rows}
+    assert by_date["2026-08-10"]["net_pnl"] == pytest.approx(0.31)
+    assert by_date["2026-08-12"]["net_pnl"] == pytest.approx(-8.55)
+    assert by_date["2026-08-13"]["net_pnl"] == pytest.approx(0.32)
+    assert basis["selected_dates"] == ["2026-08-10", "2026-08-12", "2026-08-13"]
+
+
+def test_correlated_round_trip_is_not_paired_with_stale_fifo_lot() -> None:
+    events = rpr._extract_fill_events(
+        [
+            {"symbol": "AAPL", "side": "buy", "qty": 1, "fill_price": 100.0, "ts": "2026-08-01T14:00:00Z"},
+            {"symbol": "AAPL", "side": "buy", "qty": 1, "fill_price": 200.0, "ts": "2026-08-13T14:00:00Z", "correlation_id": "round-trip"},
+            {"symbol": "AAPL", "side": "sell", "qty": 1, "fill_price": 201.0, "ts": "2026-08-13T15:00:00Z", "position_entry_correlation_id": "round-trip"},
+        ]
+    )
+
+    closed, open_positions, _ = rpr._reconstruct_closed_trades(events)
+
+    assert len(closed) == 1
+    assert closed[0]["gross_pnl"] == pytest.approx(1.0)
+    assert closed[0]["correlation_id"] == "round-trip"
+    assert open_positions == {"AAPL": 1.0}
 
 
 @pytest.mark.parametrize(

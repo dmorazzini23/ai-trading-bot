@@ -5772,6 +5772,17 @@ def _evaluate_edge_model_v2_oof(
         and fold.get("mean_net_expectancy_bps") is not None
     ]
     selected_edge = edge[selected_all & np.isfinite(edge)]
+    valid_rank_mask = np.isfinite(oof_conservative) & np.isfinite(edge)
+    rank_scores = oof_conservative[valid_rank_mask]
+    rank_edges = edge[valid_rank_mask]
+    _unused_oriented_scores, ranking_report = _orient_probabilities_for_edge(
+        rank_scores,
+        rank_edges,
+    )
+    direct_ranking_separation = bool(
+        ranking_report.get("orientation") == "direct"
+        and ranking_report.get("ranking_separation_passed", False)
+    )
     fold_expectancies = [
         float(fold["mean_net_expectancy_bps"]) for fold in supported_folds
     ]
@@ -5853,6 +5864,7 @@ def _evaluate_edge_model_v2_oof(
             regime_stability.get("profitable_regime_ratio", 0.0) or 0.0
         )
         >= float(constraint_config["min_profitable_regime_ratio"]),
+        "score_separation": direct_ranking_separation,
     }
     reasons = [name for name, passed in gates.items() if not passed]
     return {
@@ -5873,6 +5885,7 @@ def _evaluate_edge_model_v2_oof(
         "max_drawdown_bps": _max_drawdown_bps(selected_edge),
         "regime_metrics": regime_metrics,
         "regime_stability_report": regime_stability,
+        "ranking_separation_report": ranking_report,
         "gates": gates,
         "folds": fold_reports,
     }
@@ -7090,6 +7103,31 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             },
         )
     selection_weights = _resolved_model_selection_weights()
+    edge_model_v2_bundle, edge_model_v2_report = _fit_edge_model_v2_bundle(
+        dataset,
+        seed=seed,
+        sample_weights=(
+            hard_negative_sample_weights if hard_negative_apply_to_cv else None
+        ),
+    )
+    edge_model_v2_shadow_path: str | None = None
+    if edge_model_v2_bundle:
+        shadow_dir = report_dir / "shadow_models"
+        shadow_path = shadow_dir / (
+            f"edge_model_v2_{now_utc.strftime('%Y%m%d_%H%M%S')}.joblib"
+        )
+        try:
+            shadow_dir.mkdir(parents=True, exist_ok=True)
+            edge_model_v2_shadow_path = str(
+                _dump_model_with_fallback(
+                    edge_model_v2_bundle,
+                    shadow_path,
+                    fallback_dir=None,
+                )
+            )
+        except OSError as exc:
+            edge_model_v2_report["shadow_artifact_error"] = str(exc)
+    edge_model_v2_report["shadow_artifact_path"] = edge_model_v2_shadow_path
     candidate_pool, selection_constraints = _filter_candidates_for_selection(candidate_results)
     logger.info(
         "AFTER_HOURS_SELECTION_CONSTRAINTS",
@@ -7122,6 +7160,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 ),
                 "selection_weights": dict(selection_weights),
                 "selection_constraints": selection_constraints,
+                "edge_model_v2": edge_model_v2_report,
+                "edge_model_v2_shadow_path": edge_model_v2_shadow_path,
             },
         )
     best = max(
@@ -7329,11 +7369,6 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
 
     final_model = _fit_final_model(
         best.name,
-        dataset,
-        seed=seed,
-        sample_weights=combined_sample_weights,
-    )
-    edge_model_v2_bundle, edge_model_v2_report = _fit_edge_model_v2_bundle(
         dataset,
         seed=seed,
         sample_weights=combined_sample_weights,

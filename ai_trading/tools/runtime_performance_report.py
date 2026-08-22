@@ -2041,6 +2041,8 @@ class _FillEvent:
     market_regime: str
     volatility_regime: str
     venue: str | None
+    correlation_id: str | None
+    reservation_root: str | None
 
 
 @dataclass
@@ -2058,6 +2060,8 @@ class _OpenLot:
     market_regime: str
     volatility_regime: str
     venue: str | None
+    correlation_id: str | None
+    reservation_root: str | None
 
 
 @dataclass
@@ -2101,6 +2105,8 @@ def _as_fill_event(
         if _fill_source_priority(lookup_source) > _fill_source_priority(source_hint):
             source_hint = lookup_source
     fill_source = _normalise_fill_source(source_hint)
+    correlation_id = str(row.get("position_entry_correlation_id") or row.get("correlation_id") or "").strip() or None
+    reservation_root = str(row.get("paper_sampling_reservation_root") or row.get("root_client_order_id") or "").strip() or None
     fee_amount = _resolve_fee_amount(row, qty, price)
     slippage_bps = _resolve_slippage_bps(row, side, price)
     return _FillEvent(
@@ -2133,6 +2139,8 @@ def _as_fill_event(
             if row.get("venue") not in (None, "")
             else None
         ),
+        correlation_id=correlation_id,
+        reservation_root=reservation_root,
     )
 
 
@@ -2445,11 +2453,24 @@ def _enrich_direct_trades_with_tca_costs(
 def _reconstruct_closed_trades(
     events: list[_FillEvent],
 ) -> tuple[list[dict[str, Any]], dict[str, float], int]:
-    books: dict[str, list[_OpenLot]] = defaultdict(list)
+    lineage_sides: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for event in events:
+        lineage = event.correlation_id or event.reservation_root
+        if lineage:
+            lineage_sides[(event.symbol, lineage)].add(event.side)
+    linked_lineages = {
+        key for key, sides in lineage_sides.items() if "buy" in sides and "sell" in sides
+    }
+    books: dict[tuple[str, str | None], list[_OpenLot]] = defaultdict(list)
     closed: list[dict[str, Any]] = []
     for event in events:
         remaining = event.qty
-        book = books[event.symbol]
+        lineage = event.correlation_id or event.reservation_root
+        book_key = (
+            event.symbol,
+            lineage if lineage and (event.symbol, lineage) in linked_lineages else None,
+        )
+        book = books[book_key]
         while remaining > 0 and book and book[0].side != event.side:
             lot = book[0]
             close_qty = min(remaining, lot.qty)
@@ -2508,6 +2529,8 @@ def _reconstruct_closed_trades(
             )
             closed[-1]["_fee_source"] = "fifo_reconstructed"
             closed[-1]["_slippage_source"] = "fifo_reconstructed"
+            closed[-1]["correlation_id"] = lot.correlation_id or event.correlation_id
+            closed[-1]["paper_sampling_reservation_root"] = lot.reservation_root or event.reservation_root
             lot.qty -= close_qty
             remaining -= close_qty
             if lot.qty <= 0:
@@ -2529,12 +2552,14 @@ def _reconstruct_closed_trades(
                     market_regime=event.market_regime,
                     volatility_regime=event.volatility_regime,
                     venue=event.venue,
+                    correlation_id=event.correlation_id,
+                    reservation_root=event.reservation_root,
                 )
             )
 
     open_by_symbol: dict[str, float] = {}
     open_lot_count = 0
-    for symbol, lots in books.items():
+    for (symbol, _lineage), lots in books.items():
         net_qty = 0.0
         for lot in lots:
             open_lot_count += 1
@@ -3154,7 +3179,7 @@ def _operational_daily_trade_stats(
     broker_positions_available: bool,
     broker_positions: Mapping[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Build a conservative current-day view without changing accounting history."""
+    """Build a conservative view for every independently balanced trading day."""
 
     operational = [dict(row) for row in accounting_rows]
     basis: dict[str, Any] = {
@@ -3165,76 +3190,87 @@ def _operational_daily_trade_stats(
     if not same_day_rows:
         basis["reason"] = "same_day_rows_unavailable"
         return operational, basis
-    selected_same_day = max(
-        (dict(row) for row in same_day_rows),
-        key=lambda row: str(row.get("date") or ""),
-    )
-    selected_date = str(selected_same_day.get("date") or "").strip()
+    same_day_by_date = _daily_rows_by_date(same_day_rows)
+    selected_date = max(same_day_by_date, default="")
     if not selected_date:
         basis["reason"] = "same_day_date_unavailable"
         return operational, basis
-    if not broker_positions_available:
-        basis["reason"] = "broker_positions_unavailable"
-        return operational, basis
-    if broker_positions:
-        basis["reason"] = "broker_positions_nonflat"
-        return operational, basis
-    if same_day_open_positions_by_date.get(selected_date):
-        basis["reason"] = "same_day_positions_nonflat"
-        return operational, basis
-
     accounting_by_date = _daily_rows_by_date(accounting_rows)
-    selected_accounting = dict(accounting_by_date.get(selected_date, {}))
-    accounting_pnl = _as_float(selected_accounting.get("net_pnl"))
-    same_day_pnl = _as_float(selected_same_day.get("net_pnl"))
-    candidates = [
-        ("accounting", selected_accounting, accounting_pnl),
-        ("same_day_fill_pairs", selected_same_day, same_day_pnl),
-    ]
-    available = [candidate for candidate in candidates if candidate[2] is not None]
-    if not available:
-        basis["reason"] = "net_pnl_unavailable"
-        return operational, basis
-    selected_source, selected_row, _selected_pnl = min(
-        available,
-        key=lambda candidate: float(candidate[2]),
-    )
-    conservative = dict(selected_row)
-    conservative.update(
-        {
-            "date": selected_date,
-            "operational_pnl_source": selected_source,
-            "operational_basis": "conservative_min_broker_flat_balanced_same_day",
-            "accounting_net_pnl": accounting_pnl,
-            "same_day_fill_net_pnl": same_day_pnl,
-        }
-    )
-    slippage_values = [
-        value
-        for row in (selected_accounting, selected_same_day)
-        if (value := _as_float(row.get("slippage_cost"))) is not None
-    ]
-    if slippage_values:
-        conservative["slippage_cost"] = max(slippage_values, key=abs)
-    trade_values = [
-        value
-        for row in (selected_accounting, selected_same_day)
-        if (value := _as_int(row.get("trades"))) is not None
-    ]
-    if trade_values:
-        conservative["trades"] = max(trade_values)
-    operational = [
-        row for row in operational if str(row.get("date") or "") != selected_date
-    ]
-    operational.append(conservative)
+    operational_by_date = _daily_rows_by_date(operational)
+    selected_dates: list[str] = []
+    selected_sources: dict[str, str] = {}
+    skipped_dates: dict[str, str] = {}
+    for date, selected_same_day in sorted(same_day_by_date.items()):
+        if same_day_open_positions_by_date.get(date):
+            skipped_dates[date] = "same_day_positions_nonflat"
+            continue
+        if date == selected_date and (
+            not broker_positions_available or bool(broker_positions)
+        ):
+            skipped_dates[date] = (
+                "broker_positions_unavailable"
+                if not broker_positions_available
+                else "broker_positions_nonflat"
+            )
+            continue
+        selected_accounting = dict(accounting_by_date.get(date, {}))
+        accounting_pnl = _as_float(selected_accounting.get("net_pnl"))
+        same_day_pnl = _as_float(selected_same_day.get("net_pnl"))
+        available = [
+            candidate
+            for candidate in (
+                ("accounting", selected_accounting, accounting_pnl),
+                ("same_day_fill_pairs", selected_same_day, same_day_pnl),
+            )
+            if candidate[2] is not None
+        ]
+        if not available:
+            skipped_dates[date] = "net_pnl_unavailable"
+            continue
+        selected_source, selected_row, _selected_pnl = min(
+            available,
+            key=lambda candidate: float(candidate[2]),
+        )
+        conservative = dict(selected_row)
+        conservative.update(
+            {
+                "date": date,
+                "operational_pnl_source": selected_source,
+                "operational_basis": "conservative_min_balanced_same_day",
+                "accounting_net_pnl": accounting_pnl,
+                "same_day_fill_net_pnl": same_day_pnl,
+            }
+        )
+        slippage_values = [
+            value
+            for row in (selected_accounting, selected_same_day)
+            if (value := _as_float(row.get("slippage_cost"))) is not None
+        ]
+        if slippage_values:
+            conservative["slippage_cost"] = max(slippage_values, key=abs)
+        trade_values = [
+            value
+            for row in (selected_accounting, selected_same_day)
+            if (value := _as_int(row.get("trades"))) is not None
+        ]
+        if trade_values:
+            conservative["trades"] = max(trade_values)
+        operational_by_date[date] = conservative
+        selected_dates.append(date)
+        selected_sources[date] = selected_source
+    operational = [dict(row) for row in operational_by_date.values()]
     operational.sort(key=lambda row: str(row.get("date") or ""))
     basis = {
-        "mode": "conservative_current_day",
-        "reason": "broker_flat_and_same_day_balanced",
+        "mode": "conservative_balanced_days" if selected_dates else "accounting",
+        "reason": (
+            "balanced_same_day_reconciliation"
+            if selected_dates
+            else skipped_dates.get(selected_date, "same_day_safety_unproven")
+        ),
         "selected_date": selected_date,
-        "selected_pnl_source": selected_source,
-        "accounting_net_pnl": accounting_pnl,
-        "same_day_fill_net_pnl": same_day_pnl,
+        "selected_dates": selected_dates,
+        "selected_sources": selected_sources,
+        "skipped_dates": skipped_dates,
     }
     return operational, basis
 

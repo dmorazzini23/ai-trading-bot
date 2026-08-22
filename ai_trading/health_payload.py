@@ -879,6 +879,43 @@ def _runtime_performance_snapshot() -> dict[str, Any]:
     }
 
 
+def _latest_training_attempt_snapshot() -> dict[str, Any]:
+    """Expose research freshness separately from governed serving authority."""
+
+    try:
+        configured = str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH",
+                "runtime/research_reports/after_hours_training_latest.json",
+                cast=str,
+                resolve_aliases=False,
+            )
+            or "runtime/research_reports/after_hours_training_latest.json"
+        ).strip()
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        configured = "runtime/research_reports/after_hours_training_latest.json"
+    payload, resolved = _read_json_mapping_artifact(
+        configured_path=configured,
+        default_relative="runtime/research_reports/after_hours_training_latest.json",
+    )
+    report_raw = payload.get("report")
+    report = dict(report_raw) if isinstance(report_raw, Mapping) else dict(payload)
+    generated_at = payload.get("generated_at") or report.get("timestamp")
+    return {
+        "available": bool(report),
+        "path": str(resolved),
+        "generated_at": generated_at,
+        "age_seconds": _timestamp_age_seconds(generated_at),
+        "status": report.get("status") if report else "unavailable",
+        "reason": report.get("reason") if report else "artifact_unavailable",
+        "rows": report.get("rows"),
+        "governance_status": report.get("governance_status"),
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
 def _execution_quality_governor_snapshot() -> dict[str, Any]:
     try:
         latest_path = str(
@@ -1225,6 +1262,7 @@ def build_runtime_health_payload(
         allow_shadow=allow_shadow_model,
         required=require_day_sleeve_model,
     )
+    latest_training_attempt = _latest_training_attempt_snapshot()
     day_sleeve_model_failure = bool(
         day_sleeve_model.get("enabled", False)
         and not bool(day_sleeve_model.get("ok"))
@@ -1685,6 +1723,7 @@ def build_runtime_health_payload(
         "data_status": data_status,
         "model_liveness": model_liveness,
         "day_sleeve_model": day_sleeve_model,
+        "latest_training_attempt": latest_training_attempt,
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,

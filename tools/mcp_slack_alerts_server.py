@@ -695,18 +695,33 @@ def _extract_report_date(report: dict[str, Any]) -> str:
 def _daily_trade_row_for_report_date(
     trade_history: dict[str, Any], report_date: str
 ) -> dict[str, Any]:
+    for key in ("operational_daily_trade_stats", "daily_trade_stats"):
+        rows = trade_history.get(key)
+        if not isinstance(rows, list):
+            continue
+        if report_date:
+            for row in reversed(rows):
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("date") or "").strip() == report_date:
+                    return {**row, "_report_source": key}
+            continue
+        for row in reversed(rows):
+            if isinstance(row, dict):
+                return {**row, "_report_source": key}
+    return {}
+
+
+def _accounting_daily_trade_row_for_report_date(
+    trade_history: dict[str, Any], report_date: str
+) -> dict[str, Any]:
     rows = trade_history.get("daily_trade_stats")
     if not isinstance(rows, list):
         return {}
-    if report_date:
-        for row in reversed(rows):
-            if not isinstance(row, dict):
-                continue
-            if str(row.get("date") or "").strip() == report_date:
-                return row
-        return {}
     for row in reversed(rows):
-        if isinstance(row, dict):
+        if isinstance(row, dict) and (
+            not report_date or str(row.get("date") or "").strip() == report_date
+        ):
             return row
     return {}
 
@@ -941,6 +956,10 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         execution_capture_ratio = _float_or_none(execution_obj.get("execution_capture_ratio"))
 
     daily_trade_row = _daily_trade_row_for_report_date(trade_history_obj, report_date)
+    accounting_trade_row = _accounting_daily_trade_row_for_report_date(
+        trade_history_obj,
+        report_date,
+    )
     net_pnl = _float_or_none(daily_trade_row.get("net_pnl"))
     if net_pnl is None and observed_trade_kpis_current:
         net_pnl = _float_or_none(observed_obj.get("net_pnl"))
@@ -956,11 +975,12 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     same_day_fill_summary = _same_day_fill_round_trip_summary(args, report_date)
     same_day_net_pnl = _float_or_none(same_day_fill_summary.get("net_pnl"))
     pnl_discrepancy: dict[str, Any] | None = None
-    if net_pnl is not None and same_day_net_pnl is not None:
-        delta = float(net_pnl) - float(same_day_net_pnl)
+    accounting_net_pnl = _float_or_none(accounting_trade_row.get("net_pnl"))
+    if accounting_net_pnl is not None and same_day_net_pnl is not None:
+        delta = float(accounting_net_pnl) - float(same_day_net_pnl)
         pnl_discrepancy = {
             "status": "mismatch" if abs(delta) > 0.01 else "matched",
-            "accounting_net_pnl": float(net_pnl),
+            "accounting_net_pnl": float(accounting_net_pnl),
             "same_day_fill_net_pnl": float(same_day_net_pnl),
             "delta": float(delta),
         }
@@ -970,7 +990,11 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "go_no_go_gate_passed": go_no_go_obj.get("gate_passed"),
         "go_no_go_failed_checks": list(go_no_go_obj.get("failed_checks") or []),
         "net_pnl": net_pnl,
-        "pnl_basis": "fifo_accounting_daily_trade_stats",
+        "pnl_basis": str(
+            daily_trade_row.get("operational_pnl_source")
+            or daily_trade_row.get("_report_source")
+            or "unavailable"
+        ),
         "same_day_fill_summary": same_day_fill_summary,
         "pnl_discrepancy": pnl_discrepancy,
         "profit_factor": profit_factor,
@@ -1820,7 +1844,7 @@ def _eod_message_text(snapshot: dict[str, Any]) -> str:
             ),
             "",
             "💰 Day performance:",
-            f"- Accounting net PnL: {_fmt_currency(snapshot.get('net_pnl'))}",
+            f"- Operational net PnL: {_fmt_currency(snapshot.get('net_pnl'))}",
             f"- Same-day fill PnL: {_fmt_currency(same_day_fill_obj.get('net_pnl'))}",
             f"- PnL check: {pnl_check}",
             f"- Profit factor: {_fmt_num(snapshot.get('profit_factor'), digits=3)}",
@@ -1934,7 +1958,7 @@ def _eod_message_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         _slack_section(
             "*Day performance*",
             fields=[
-                _slack_field("Accounting net PnL", _fmt_currency(snapshot.get("net_pnl"))),
+                _slack_field("Operational net PnL", _fmt_currency(snapshot.get("net_pnl"))),
                 _slack_field("Same-day fill PnL", _fmt_currency(same_day_fill_obj.get("net_pnl"))),
                 _slack_field("PnL check", pnl_check),
                 _slack_field("Closed trades", _fmt_count(snapshot.get("closed_trades"))),

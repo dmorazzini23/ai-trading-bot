@@ -1861,7 +1861,7 @@ def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -
     assert snapshot["top_loss_symbols"] == [{"symbol": "AMZN", "net_pnl": -3.54}]
     message = slack_srv._eod_message_text(snapshot)
     assert "💰 Day performance:" in message
-    assert "- Accounting net PnL: $-0.45" in message
+    assert "- Operational net PnL: $-0.45" in message
     assert "- Closed trades: 24" in message
 
 
@@ -1906,6 +1906,16 @@ def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
                     "daily": [{"date": "2026-05-04"}],
                 },
                 "trade_history": {
+                    "operational_daily_trade_stats": [
+                        {
+                            "date": "2026-05-04",
+                            "net_pnl": -0.19,
+                            "profit_factor": 0.0,
+                            "win_rate": 0.0,
+                            "trades": 1,
+                            "operational_pnl_source": "same_day_fill_pairs",
+                        }
+                    ],
                     "daily_trade_stats": [
                         {
                             "date": "2026-05-04",
@@ -1937,13 +1947,14 @@ def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
 
     snapshot = slack_srv._collect_eod_summary_snapshot({})
 
-    assert snapshot["net_pnl"] == -7.41
+    assert snapshot["net_pnl"] == -0.19
+    assert snapshot["pnl_basis"] == "same_day_fill_pairs"
     assert snapshot["same_day_fill_summary"]["net_pnl"] == -0.18999999999999773
     assert snapshot["same_day_fill_summary"]["closed_trades"] == 1
     assert snapshot["same_day_fill_summary"]["open_qty_by_symbol"] == {}
     assert snapshot["pnl_discrepancy"]["status"] == "mismatch"
     message = slack_srv._eod_message_text(snapshot)
-    assert "- Accounting net PnL: $-7.41" in message
+    assert "- Operational net PnL: $-0.19" in message
     assert "- Same-day fill PnL: $-0.19" in message
     assert "- PnL check: mismatch" in message
 

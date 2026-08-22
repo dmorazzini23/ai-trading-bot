@@ -1441,6 +1441,7 @@ def test_edge_model_v2_oof_is_fold_local_and_qualified_when_stable(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_SUPPORT", "20")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "3")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_MIN_SUPPORT", "10")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", "0")
 
     report = after_hours._evaluate_edge_model_v2_oof(dataset, seed=7)
 
@@ -1490,6 +1491,7 @@ def test_edge_model_v2_negative_worst_fold_remains_unqualified(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_SUPPORT", "20")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "3")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_MIN_SUPPORT", "10")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", "0")
 
     report = after_hours._evaluate_edge_model_v2_oof(dataset, seed=7)
 
@@ -1500,6 +1502,41 @@ def test_edge_model_v2_negative_worst_fold_remains_unqualified(
     assert report["selection_eligible"] is False
     assert report["bundle_attachment_eligible"] is False
     assert "worst_fold" in report["qualification_reasons"]
+
+
+def test_edge_model_v2_flat_ranking_remains_shadow_unqualified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _edge_v2_oof_dataset(final_fold_negative=False)
+
+    class _Splitter:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def split(self, *_args: object, **_kwargs: object):
+            for train_end, test_start in ((80, 82), (120, 122), (160, 162), (200, 202)):
+                yield np.arange(0, train_end), np.arange(test_start, test_start + 20)
+
+    class _Regressor:
+        def fit(self, *_args: object, **_kwargs: object) -> "_Regressor":
+            return self
+
+        def predict(self, features: pd.DataFrame) -> np.ndarray:
+            return np.full(len(features), 2.0, dtype=float)
+
+    monkeypatch.setattr(after_hours, "PurgedGroupTimeSeriesSplit", _Splitter)
+    monkeypatch.setattr(after_hours, "_make_edge_model_v2_regressor", lambda **_kwargs: _Regressor())
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_EDGE_MODEL_V2_OOF_MIN_SUPPORT", "20")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_REGIME_MIN_SUPPORT", "10")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SCORE_ORIENTATION_MIN_DELTA_BPS", "0.5")
+
+    report = after_hours._evaluate_edge_model_v2_oof(dataset, seed=7)
+
+    assert report["gates"]["score_separation"] is False
+    assert report["evidence_qualified"] is False
+    assert "score_separation" in report["qualification_reasons"]
+    assert report["promotion_authority"] is False
 
 
 def test_edge_model_v2_bundle_attachment_requires_oof_qualification(

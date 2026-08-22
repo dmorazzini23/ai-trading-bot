@@ -3483,22 +3483,27 @@ class ExecutionEngine:
                 "replacement": _normalize_order_payload(recovered, requested_qty),
                 "child_client_order_id": child_client_order_id,
             }
-        try:
-            self._cancel_order_alpaca(order_id)
-        except LIVE_TRADING_FALLBACK_EXC as exc:
-            logger.warning(
-                "PAPER_SAMPLING_PASSIVE_REPRICE_CANCEL_FAILED",
-                extra={"symbol": symbol, "order_id": order_id, "error": str(exc)},
-            )
-            return {
-                "action_taken": False,
-                "replaced": False,
-                "action": "none",
-                "reason": "cancel_failed",
-            }
+        cancel_already_requested = (
+            str(context.get("paper_sampling_reprice_phase") or "").strip().lower()
+            == "cancel_requested"
+        )
+        if not cancel_already_requested:
+            try:
+                self._cancel_order_alpaca(order_id)
+            except LIVE_TRADING_FALLBACK_EXC as exc:
+                logger.warning(
+                    "PAPER_SAMPLING_PASSIVE_REPRICE_CANCEL_FAILED",
+                    extra={"symbol": symbol, "order_id": order_id, "error": str(exc)},
+                )
+                return {
+                    "action_taken": False,
+                    "replaced": False,
+                    "action": "none",
+                    "reason": "cancel_failed",
+                }
         status_info: Any | None = None
         status_text = ""
-        deadline = monotonic_time() + 5.0
+        deadline = monotonic_time() + (0.0 if cancel_already_requested else 5.0)
         terminal_statuses = {"canceled", "cancelled", "filled", "expired", "rejected"}
         while monotonic_time() <= deadline:
             try:
@@ -3519,11 +3524,33 @@ class ExecutionEngine:
                 break
             time.sleep(0.25)
         if status_text not in terminal_statuses:
+            pending_entry = dict(context)
+            pending_entry.update(
+                {
+                    "status": status_text or "pending_cancel",
+                    "order_id": order_id,
+                    "client_order_id": client_order_id,
+                    "paper_sampling_reprice_phase": "cancel_requested",
+                    "paper_sampling_pending_generation": generation,
+                    "paper_sampling_pending_child_client_order_id": child_client_order_id,
+                    "paper_sampling_cancel_requested_at": str(
+                        context.get("paper_sampling_cancel_requested_at")
+                        or datetime.now(UTC).isoformat()
+                    ),
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            store = getattr(self, "_pending_orders", None)
+            mutable_store = dict(store) if isinstance(store, Mapping) else {}
+            mutable_store[order_id] = pending_entry
+            self._pending_orders = mutable_store
             return {
                 "action_taken": True,
                 "replaced": False,
-                "action": "cancel",
+                "action": "cancel_pending",
                 "reason": "cancel_not_final",
+                "continuation_pending": True,
+                "child_client_order_id": child_client_order_id,
             }
         filled_qty = max(
             _safe_int(_extract_value(status_info, "filled_qty", "filled_quantity"), 0),
@@ -3769,6 +3796,23 @@ class ExecutionEngine:
         if (policy == "off" and not paper_sampling_reprice_enabled) or max_actions <= 0:
             return False
         open_orders = self._list_open_orders_snapshot()
+        pending_store = getattr(self, "_pending_orders", None)
+        if isinstance(pending_store, Mapping):
+            open_ids = {
+                str(_extract_value(order, "id", "order_id") or "").strip()
+                for order in open_orders
+            }
+            for pending in pending_store.values():
+                if not isinstance(pending, Mapping):
+                    continue
+                if str(pending.get("paper_sampling_reprice_phase") or "").strip().lower() != "cancel_requested":
+                    continue
+                pending_order_id = str(pending.get("order_id") or "").strip()
+                if pending_order_id and pending_order_id not in open_ids:
+                    recovered_pending = dict(pending)
+                    recovered_pending["status"] = "pending_cancel"
+                    open_orders.append(recovered_pending)
+                    open_ids.add(pending_order_id)
         if not open_orders:
             self._pending_new_ladder_replacements = {}
             self._pending_new_replace_last_mono = {}
@@ -3778,7 +3822,14 @@ class ExecutionEngine:
         now_mono = float(monotonic_time())
         actions_taken = 0
         stale_detected = 0
-        stale_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
+        stale_statuses = {
+            "new",
+            "pending_new",
+            "accepted",
+            "acknowledged",
+            "pending_replace",
+            "pending_cancel",
+        }
         replacement_attempts_raw = getattr(self, "_pending_new_ladder_replacements", {}) or {}
         replacement_attempts = (
             replacement_attempts_raw if isinstance(replacement_attempts_raw, dict) else {}
@@ -3944,7 +3995,9 @@ class ExecutionEngine:
                         replacement_attempts[attempt_key] = attempts + 1
                         replacement_last[attempt_key] = now_mono
                         replacements_this_cycle += 1
-                    elif action_success:
+                    elif action_success and not bool(
+                        outcome.get("continuation_pending", False)
+                    ):
                         replacement_attempts.pop(attempt_key, None)
                         replacement_last.pop(attempt_key, None)
                 if not action_success:
@@ -11429,7 +11482,7 @@ class ExecutionEngine:
         """Return normalized default execution-learning state payload."""
 
         return {
-            "version": 2,
+            "version": 3,
             "updated_at": None,
             "global": {
                 "samples": 0,
@@ -11448,6 +11501,11 @@ class ExecutionEngine:
             },
             "buckets": {},
             "symbol_buckets": {},
+            "live_edge_histories": {
+                "symbol": {},
+                "symbol_session": {},
+                "symbol_session_regime": {},
+            },
         }
 
     def _execution_learning_state_path(self) -> Path:
@@ -11955,6 +12013,46 @@ class ExecutionEngine:
                     continue
                 symbol_buckets[key] = entry
         state["symbol_buckets"] = symbol_buckets
+        histories_raw = raw.get("live_edge_histories")
+        history_maxlen = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_HISTORY_MAXLEN",
+            256,
+        )
+        history_maxlen = max(16, min(int(history_maxlen or 256), 4096))
+
+        def _load_histories(name: str) -> dict[str, deque[float]]:
+            if not isinstance(histories_raw, Mapping):
+                return {}
+            values_raw = histories_raw.get(name)
+            if not isinstance(values_raw, Mapping):
+                return {}
+            loaded: dict[str, deque[float]] = {}
+            for key_raw, samples_raw in values_raw.items():
+                key = str(key_raw or "").strip()
+                if not key or not isinstance(samples_raw, Sequence) or isinstance(samples_raw, (str, bytes)):
+                    continue
+                samples = [
+                    float(sample)
+                    for sample in samples_raw
+                    if isinstance(sample, (int, float)) and math.isfinite(float(sample))
+                ]
+                if samples:
+                    loaded[key] = deque(samples[-history_maxlen:], maxlen=history_maxlen)
+            return loaded
+
+        symbol_histories = _load_histories("symbol")
+        session_histories = _load_histories("symbol_session")
+        session_regime_histories = _load_histories("symbol_session_regime")
+        self._symbol_live_edge_bps_history = symbol_histories
+        self._symbol_session_live_edge_bps_history = session_histories
+        self._symbol_session_regime_live_edge_bps_history = session_regime_histories
+        state["live_edge_histories"] = {
+            "symbol": {key: list(values) for key, values in symbol_histories.items()},
+            "symbol_session": {key: list(values) for key, values in session_histories.items()},
+            "symbol_session_regime": {
+                key: list(values) for key, values in session_regime_histories.items()
+            },
+        }
         self._execution_learning_state = state
 
     def _persist_execution_learning_state(self, *, force: bool = False) -> None:
@@ -11997,6 +12095,28 @@ class ExecutionEngine:
         if not isinstance(state_raw, Mapping):
             return
         payload = dict(state_raw)
+        payload["version"] = 3
+        payload["live_edge_histories"] = {
+            "symbol": {
+                str(key): list(values)
+                for key, values in getattr(self, "_symbol_live_edge_bps_history", {}).items()
+                if isinstance(values, deque)
+            },
+            "symbol_session": {
+                str(key): list(values)
+                for key, values in getattr(self, "_symbol_session_live_edge_bps_history", {}).items()
+                if isinstance(values, deque)
+            },
+            "symbol_session_regime": {
+                str(key): list(values)
+                for key, values in getattr(
+                    self,
+                    "_symbol_session_regime_live_edge_bps_history",
+                    {},
+                ).items()
+                if isinstance(values, deque)
+            },
+        }
         payload["updated_at"] = datetime.now(UTC).isoformat()
         path = self._execution_learning_state_path()
         try:
@@ -17706,6 +17826,31 @@ class ExecutionEngine:
                 if value not in (None, ""):
                     fill_record[destination] = value
                     break
+        decision_correlation_id = str(
+            runtime_payload.get("correlation_id") if runtime_payload is not None else ""
+        ).strip()
+        if decision_correlation_id:
+            fill_record["decision_correlation_id"] = decision_correlation_id
+        if closing_position and runtime_payload is not None:
+            position_entry_correlation_id = ""
+            for container_key in ("metadata", "annotations"):
+                nested_lineage = runtime_payload.get(container_key)
+                if not isinstance(nested_lineage, Mapping):
+                    continue
+                position_entry_correlation_id = str(
+                    nested_lineage.get("position_entry_correlation_id")
+                    or nested_lineage.get("correlation_id")
+                    or ""
+                ).strip()
+                if position_entry_correlation_id:
+                    break
+            if position_entry_correlation_id:
+                fill_record["position_entry_correlation_id"] = position_entry_correlation_id
+                fill_record["correlation_id"] = position_entry_correlation_id
+        fill_record["closing_position"] = bool(closing_position)
+        fill_record["order_role"] = "exit" if closing_position else str(
+            fill_record.get("order_role") or "entry"
+        )
         self._update_position_correlation_from_fill(
             symbol=symbol,
             correlation_id=(

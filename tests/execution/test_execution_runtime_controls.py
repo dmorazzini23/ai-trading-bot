@@ -1198,6 +1198,88 @@ def test_passive_sampling_reprice_recovers_existing_child_and_cancels_parent():
     ] == 1
 
 
+def test_passive_sampling_reprice_continues_pending_cancel_next_cycle(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace()
+    now_dt = datetime(2026, 7, 21, 15, 0, tzinfo=UTC)
+    order = SimpleNamespace(
+        id="sampling-order-1",
+        client_order_id="sampling-client-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+    )
+    context = _verified_sampling_pending_entry()
+    engine._pending_orders = {"sampling-order-1": dict(context)}
+    engine._lookup_order_by_client_order_id = lambda *_, **__: None
+    canceled: list[str] = []
+    submitted: list[dict[str, Any]] = []
+    statuses = iter(
+        [
+            {"id": "sampling-order-1", "status": "pending_cancel", "filled_qty": "0"},
+            {"id": "sampling-order-1", "status": "canceled", "filled_qty": "0"},
+        ]
+    )
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._get_order_status_alpaca = lambda _order_id: next(statuses)
+    engine._pre_execution_order_checks = lambda _payload: True
+    engine._record_runtime_order_event = lambda _payload: None
+    engine._submit_order_to_alpaca = lambda payload: (
+        submitted.append(dict(payload))
+        or {
+            "id": "sampling-order-pr1",
+            "client_order_id": payload["client_order_id"],
+            "status": "accepted",
+            "symbol": payload["symbol"],
+            "side": payload["side"],
+            "qty": payload["quantity"],
+        }
+    )
+    times = iter([0.0, 0.0, 6.0, 10.0, 10.0])
+    monkeypatch.setattr(lt, "monotonic_time", lambda: next(times))
+    monkeypatch.setattr(lt.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_, **__: (
+            "broker_nbbo",
+            100.01,
+            100.03,
+            100.02,
+            100.03,
+            now_dt - timedelta(milliseconds=100),
+        ),
+    )
+    config = {"quote_max_age_ms": 500.0, "max_spread_bps": 10.0, "max_notional": 750.0}
+
+    first = engine._replace_paper_sampling_limit_passively(
+        order=order,
+        context=context,
+        config=config,
+        generation=1,
+        now_dt=now_dt,
+    )
+    pending = engine._pending_orders["sampling-order-1"]
+    second = engine._replace_paper_sampling_limit_passively(
+        order=order,
+        context=pending,
+        config=config,
+        generation=1,
+        now_dt=now_dt,
+    )
+
+    assert first["continuation_pending"] is True
+    assert pending["paper_sampling_reprice_phase"] == "cancel_requested"
+    assert second["replaced"] is True
+    assert canceled == ["sampling-order-1"]
+    assert len(submitted) == 1
+    assert submitted[0]["client_order_id"] == "sampling-client-1-pr1"
+
+
 def test_passive_sampling_reprice_cancels_without_submit_on_stale_quote(monkeypatch):
     from ai_trading.core import bot_engine
 
@@ -5106,6 +5188,42 @@ def test_persist_fill_derived_trade_record_preserves_sell_short_side(monkeypatch
     assert tca_calls[-1]["correlation_id"] == "correlation-short-1"
 
 
+def test_closing_fill_preserves_decision_and_position_lineage(monkeypatch):
+    engine = _engine_stub()
+    fill_records: list[dict[str, Any]] = []
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(lt, "record_trade_fill", lambda payload: fill_records.append(dict(payload)))
+    monkeypatch.setattr(engine, "_record_runtime_fill_event", lambda _payload: None)
+    monkeypatch.setattr(engine, "_update_symbol_loss_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_arm_symbol_reentry_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_reconcile_pending_tca_from_fill", lambda **_kwargs: None)
+
+    engine._persist_fill_derived_trade_record(
+        symbol="AMZN",
+        side="sell",
+        filled_qty=1.0,
+        fill_price=268.30,
+        expected_price=268.30,
+        order_id="exit-order",
+        client_order_id="exit-client",
+        order_status="filled",
+        signal=None,
+        timestamp=datetime(2026, 8, 13, tzinfo=UTC),
+        closing_position=True,
+        runtime_payload={
+            "correlation_id": "exit-decision",
+            "metadata": {"correlation_id": "entry-decision", "closing_position": True},
+        },
+    )
+
+    record = fill_records[-1]
+    assert record["decision_correlation_id"] == "exit-decision"
+    assert record["position_entry_correlation_id"] == "entry-decision"
+    assert record["correlation_id"] == "entry-decision"
+    assert record["closing_position"] is True
+    assert record["order_role"] == "exit"
+
+
 def test_live_side_normalizer_preserves_short_open_vocabulary():
     engine = _engine_stub()
     engine._position_tracker = {}
@@ -7985,6 +8103,43 @@ def test_execution_learning_bootstrap_writes_artifacts(
     assert payload["active"] is False
     assert payload["reason"] == "insufficient_samples"
     assert payload["sample_count"] == 0
+
+
+def test_execution_learning_live_edge_histories_survive_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    learning_path = tmp_path / "execution_learning_state.json"
+    monkeypatch.setenv("AI_TRADING_EXECUTION_LEARNING_AUTO_WRITE", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_LEARNING_STATE_PATH", str(learning_path))
+    writer = _engine_stub()
+    writer._execution_learning_state = writer._default_execution_learning_state()
+    writer._execution_learning_updates_since_persist = 1
+    writer._execution_learning_last_persist_mono = 0.0
+    writer._symbol_live_edge_bps_history = {"AAPL": deque([-2.0, 1.0], maxlen=256)}
+    writer._symbol_session_live_edge_bps_history = {
+        "AAPL:opening": deque([-2.0, -1.0], maxlen=256)
+    }
+    writer._symbol_session_regime_live_edge_bps_history = {
+        "AAPL:opening:downtrend": deque([-2.0], maxlen=256)
+    }
+
+    writer._persist_execution_learning_state(force=True)
+    reader = _engine_stub()
+    reader._execution_learning_state = reader._default_execution_learning_state()
+    reader._symbol_live_edge_bps_history = {}
+    reader._symbol_session_live_edge_bps_history = {}
+    reader._symbol_session_regime_live_edge_bps_history = {}
+    reader._load_execution_learning_state()
+
+    assert list(reader._symbol_live_edge_bps_history["AAPL"]) == [-2.0, 1.0]
+    assert list(reader._symbol_session_live_edge_bps_history["AAPL:opening"]) == [-2.0, -1.0]
+    assert list(
+        reader._symbol_session_regime_live_edge_bps_history[
+            "AAPL:opening:downtrend"
+        ]
+    ) == [-2.0]
+    assert reader._execution_learning_state["version"] == 3
 
 
 def test_apply_runtime_execution_capture_derisk_scales_quantity(monkeypatch) -> None:
