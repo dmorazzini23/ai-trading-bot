@@ -92,13 +92,48 @@ def test_upward_trajectory_report_flags_validation_replay_gap() -> None:
 
     assert payload["status"] == "ready"
     assert payload["authority"]["runtime_authority"] is False
-    assert payload["summary"]["feature_count"] == 8
+    assert payload["summary"]["feature_count"] == 9
     assert payload["summary"]["recommended_next_action"] == "debug_validation_replay_gap_before_promotion"
     gap = payload["validation_to_replay_gap_analyzer"]
     assert gap["diagnosis"] == "replay_gap_detected"
     assert gap["classification_counts"]["validation_positive_replay_negative"] == 1
     assert payload["evidence_acceleration_engine"]["diagnostic_sampling_limits"]["paper_only"] is True
     assert payload["active_learning_paper_trades"]["proposal_count"] == 1
+
+
+def test_promotion_milestones_are_concrete_and_fail_closed() -> None:
+    candidate = _candidate("qualified", 5.0, 2.0)
+    candidate["walk_forward"] = {
+        "aggregate": {
+            "trades": 300,
+            "fold_count": 5,
+            "profitable_fold_count": 3,
+            "mean_ranking_high_minus_low_bps": 1.2,
+        }
+    }
+    payload = report_tool.build_upward_trajectory_report(
+        multi_horizon_report={"ranked_candidates": [candidate]},
+        runtime_performance={
+            "oms_lifecycle_parity": {
+                "available": True,
+                "ok": True,
+                "total_violations": 0,
+            },
+            "go_no_go": {
+                "thresholds": {"min_execution_capture_ratio": 0.08},
+                "observed": {
+                    "closed_trades": 149,
+                    "execution_capture_ratio": 0.20,
+                },
+            },
+        },
+    )
+
+    milestones = payload["promotion_milestones"]
+    assert milestones["promotion_ready"] is False
+    assert milestones["checks"]["paper_closed_trades_150"] is False
+    assert milestones["failed_checks"] == ["paper_closed_trades_150"]
+    assert milestones["thresholds"]["min_walk_forward_trades"] == 250
 
 
 def test_upward_trajectory_cli_writes_latest_copies(tmp_path: Path) -> None:

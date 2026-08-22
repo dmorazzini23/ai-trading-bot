@@ -326,6 +326,86 @@ def test_stale_sweep_defers_verified_sampling_order_to_passive_reprice(monkeypat
     assert ownership_checks == [stale_order]
 
 
+def test_full_cleanup_defers_verified_sampling_order_to_passive_reprice(monkeypatch, caplog):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(
+            _paper_sampling_passive_reprice_manages_order=lambda _order: True,
+            _apply_pending_new_timeout_policy=lambda: False,
+        ),
+    )
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("full cleanup must not cancel passive-reprice-owned orders")
+        ),
+    )
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=5),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    order = _order("pending_new", "sampling-owned", symbol="AMZN")
+
+    assert be._handle_pending_orders([order], runtime) is True
+    clock.value = 106.0
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders([order], runtime) is True
+
+    deferred = [
+        record
+        for record in caplog.records
+        if record.message == "PENDING_ORDERS_DEFERRED_TO_PASSIVE_REPRICE"
+    ]
+    assert deferred
+    assert deferred[-1].owned_ids == ["sampling-owned"]
+    assert deferred[-1].cleanup_count == 0
+
+
+def test_full_cleanup_only_cancels_orders_not_owned_by_passive_reprice(monkeypatch):
+    owned = _order("pending_new", "sampling-owned", symbol="AMZN")
+    ordinary = _order("pending_new", "ordinary", symbol="AAPL")
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(
+            _paper_sampling_passive_reprice_manages_order=lambda order: order is owned,
+            _apply_pending_new_timeout_policy=lambda: False,
+        ),
+    )
+    cancelled: list[Any] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: cancelled.extend(orders)
+        or be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=len(orders),
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        ),
+    )
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=5),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+
+    assert be._handle_pending_orders([owned, ordinary], runtime) is True
+    clock.value = 106.0
+    assert be._handle_pending_orders([owned, ordinary], runtime) is True
+    assert cancelled == [ordinary]
+
+
 def test_handle_pending_orders_reads_mapping_order_status_for_stale_sweep(monkeypatch, caplog):
     runtime = types.SimpleNamespace(state={})
     cancel_all_mock = MagicMock()

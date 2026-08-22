@@ -338,3 +338,24 @@ def test_multi_family_halving_confirms_exactly_one_winner(
     assert report["holdout_confirmation"]["status"] == "passed"
     assert report["holdout_confirmation"]["fallback_attempted"] is False
     assert report["config"]["model_types"] == ["hist_gradient", "logistic"]
+
+
+def test_candidate_falsification_stops_negative_or_inverted_signatures() -> None:
+    result = pipeline._candidate_falsification(  # noqa: SLF001
+        {
+            "walk_forward": {
+                "aggregate": {
+                    "qualification_reasons": ["insufficient_ranking_separation:-1.0"],
+                    "mean_post_cost_net_edge_bps": -2.5,
+                    "mean_ranking_high_minus_low_bps": -1.0,
+                    "profitable_fold_ratio": 0.2,
+                }
+            }
+        }
+    )
+
+    assert result["falsified"] is True
+    assert result["repeat_policy"] == "stop_until_input_signature_changes"
+    assert "nonpositive_walk_forward_expectancy" in result["reasons"]
+    assert "inverted_or_flat_score_orientation" in result["reasons"]
+    assert "unstable_walk_forward_folds" in result["reasons"]

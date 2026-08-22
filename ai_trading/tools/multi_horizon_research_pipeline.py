@@ -7,13 +7,25 @@ import json
 import math
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from ai_trading.logging import get_logger
 from ai_trading.tools.offline_replay import run_replay
 from ai_trading.tools.train_replay_aligned_model import train_replay_aligned_model
 
 logger = get_logger(__name__)
+
+_MODEL_TYPES = frozenset(
+    {
+        "logistic",
+        "meta_label",
+        "random_forest",
+        "hist_gradient",
+        "edge_linear",
+        "edge_hist_gradient",
+        "edge_rank",
+    }
+)
 
 
 def _parse_int_list(value: str, *, default: tuple[int, ...]) -> list[int]:
@@ -155,6 +167,34 @@ def _development_eligible(record: Mapping[str, Any]) -> bool:
     )
 
 
+def _candidate_falsification(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe why an experiment signature must stop without new evidence."""
+
+    aggregate = _walk_forward_aggregate(record)
+    reasons = [str(value) for value in aggregate.get("qualification_reasons", [])]
+    mean_edge = aggregate.get("mean_post_cost_net_edge_bps")
+    separation = aggregate.get("mean_ranking_high_minus_low_bps")
+    profitable_ratio = aggregate.get("profitable_fold_ratio")
+    if mean_edge is not None and float(mean_edge) <= 0.0:
+        reasons.append("nonpositive_walk_forward_expectancy")
+    if separation is not None and float(separation) <= 0.0:
+        reasons.append("inverted_or_flat_score_orientation")
+    if profitable_ratio is not None and float(profitable_ratio) < 0.60:
+        reasons.append("unstable_walk_forward_folds")
+    if record.get("error") or record.get("full_evaluation_error"):
+        reasons.append("training_or_evaluation_error")
+    unique_reasons = sorted(set(reasons))
+    return {
+        "falsified": bool(unique_reasons),
+        "reasons": unique_reasons,
+        "repeat_policy": (
+            "stop_until_input_signature_changes"
+            if unique_reasons
+            else "eligible_for_additional_shadow_evidence"
+        ),
+    }
+
+
 def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -166,8 +206,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         str(getattr(args, "model_types", "") or ""),
         default=(str(args.model_type),),
     )
-    allowed_model_types = {"logistic", "random_forest", "hist_gradient"}
-    invalid_model_types = sorted(set(model_types) - allowed_model_types)
+    invalid_model_types = sorted(set(model_types) - _MODEL_TYPES)
     if invalid_model_types:
         raise ValueError(
             "Unsupported model types: " + ",".join(invalid_model_types)
@@ -272,6 +311,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "walk_forward": training_report.get("walk_forward"),
                 "market_regime_policy": training_report.get("market_regime_policy"),
+                "symbol_regime_policy": cast(
+                    Mapping[str, Any], training_report.get("walk_forward", {})
+                ).get("symbol_regime_policy"),
                 "feature_importance": list(
                     training_report.get("feature_importance", [])
                 )[:25],
@@ -356,6 +398,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         record["development_eligibility_reasons"] = list(
             aggregate.get("qualification_reasons") or []
         )
+        record["falsification"] = _candidate_falsification(record)
     eligible_ranked = [
         record for record in development_ranked if record["development_eligible"]
     ]
@@ -477,7 +520,11 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "replay_output": str(replay_path),
                 "replay": _slim_replay_summary(replay_payload),
                 "replay_score_semantics": {
-                    "semantics": "positive_class_probability_rank",
+                    "semantics": (
+                        "continuous_edge_rank_score"
+                        if str(record.get("model_type") or "").startswith("edge_")
+                        else "positive_class_probability_rank"
+                    ),
                     "cutoff_source": "development_only_percentile_selection",
                     "frozen_probability_cutoff": replay_confidence_threshold,
                     "entry_score_threshold": 0.0,
@@ -486,6 +533,22 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
     ranked = list(development_ranked)
     valid_trained = list(screened)
+    falsified_candidates = [
+        {
+            "model_name": record.get("model_name"),
+            "model_type": record.get("model_type"),
+            "horizon_bars": record.get("horizon_bars"),
+            "label_objective": record.get("label_objective"),
+            **dict(record.get("falsification") or _candidate_falsification(record)),
+        }
+        for record in candidates
+        if bool(
+            cast(
+                Mapping[str, Any],
+                record.get("falsification") or _candidate_falsification(record),
+            ).get("falsified")
+        )
+    ]
     max_replay_candidates = int(getattr(args, "max_replay_candidates", 0) or 0)
     report = {
         "schema_version": "2.0.0",
@@ -560,6 +623,11 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 if record.get("halving_status") == "eliminated_after_screening"
             ),
         },
+        "falsification_registry": {
+            "stopping_rule": "do_not_repeat_until_input_signature_changes",
+            "falsified_candidate_count": len(falsified_candidates),
+            "candidates": falsified_candidates,
+        },
         "holdout_confirmation": holdout_confirmation,
         "ranked_candidates": ranked,
         "lead_candidates": [
@@ -605,11 +673,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--lead-horizon-bars", type=int, default=15)
     parser.add_argument("--model-prefix", type=str, default="replay_aligned")
-    parser.add_argument("--model-type", choices=("logistic", "random_forest", "hist_gradient"), default="logistic")
+    parser.add_argument(
+        "--model-type",
+        choices=tuple(sorted(_MODEL_TYPES)),
+        default="meta_label",
+    )
     parser.add_argument(
         "--model-types",
         type=str,
-        default="",
+        default=(
+            "meta_label,hist_gradient,edge_linear,edge_hist_gradient,edge_rank"
+        ),
         help="Optional comma-separated model-family grid; --model-type remains the fallback.",
     )
     parser.add_argument("--max-candidates", type=int, default=24)

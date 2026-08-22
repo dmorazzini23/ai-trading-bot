@@ -465,6 +465,96 @@ def _feature_autopsy(candidates: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _promotion_milestones(
+    *,
+    candidates: Sequence[Mapping[str, Any]],
+    runtime_performance: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Expose one fail-closed promotion contract across research and paper evidence."""
+
+    candidate = candidates[0] if candidates else {}
+    walk_forward = _nested(candidate, "walk_forward", "aggregate")
+    replay = _nested(candidate, "replay")
+    go_no_go = _nested(runtime_performance, "go_no_go")
+    observed = _nested(go_no_go, "observed")
+    thresholds = _nested(go_no_go, "thresholds")
+    lifecycle = _nested(runtime_performance, "oms_lifecycle_parity")
+
+    replay_edge = _safe_float(replay.get("expectancy_bps"))
+    walk_forward_trades = _safe_int(
+        walk_forward.get("trades") or walk_forward.get("selected_candidates")
+    )
+    fold_count = _safe_int(walk_forward.get("fold_count"))
+    profitable_folds = _safe_int(walk_forward.get("profitable_fold_count"))
+    score_separation = _safe_float(
+        walk_forward.get("mean_ranking_high_minus_low_bps")
+    )
+    paper_closed_trades = _safe_int(observed.get("closed_trades"))
+    execution_capture = _safe_float(observed.get("execution_capture_ratio"))
+    min_execution_capture = _safe_float(
+        thresholds.get("min_execution_capture_ratio")
+    )
+    if min_execution_capture is None:
+        min_execution_capture = 0.08
+
+    checks = {
+        "authoritative_lineage_parity": bool(
+            lifecycle.get("available") is True
+            and lifecycle.get("ok") is True
+            and _safe_int(lifecycle.get("total_violations")) == 0
+        ),
+        "positive_cost_adjusted_replay_expectancy": bool(
+            replay_edge is not None and replay_edge > 0.0
+        ),
+        "walk_forward_support_250": walk_forward_trades >= 250,
+        "profitable_folds_3_of_5": bool(
+            fold_count >= 5 and profitable_folds >= 3
+        ),
+        "positive_score_separation": bool(
+            score_separation is not None and score_separation > 0.0
+        ),
+        "paper_closed_trades_150": paper_closed_trades >= 150,
+        "execution_capture": bool(
+            execution_capture is not None
+            and execution_capture >= float(min_execution_capture)
+        ),
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    return {
+        "status": "passed" if not failed else "blocked",
+        "promotion_ready": not failed,
+        "checks": checks,
+        "failed_checks": failed,
+        "thresholds": {
+            "min_replay_expectancy_bps": 0.0,
+            "min_walk_forward_trades": 250,
+            "min_profitable_folds": 3,
+            "required_fold_count": 5,
+            "min_score_separation_bps": 0.0,
+            "min_paper_closed_trades": 150,
+            "min_execution_capture_ratio": float(min_execution_capture),
+            "max_lineage_parity_violations": 0,
+        },
+        "observed": {
+            "candidate_model_name": candidate.get("model_name"),
+            "replay_expectancy_bps": replay_edge,
+            "walk_forward_trades": walk_forward_trades,
+            "fold_count": fold_count,
+            "profitable_fold_count": profitable_folds,
+            "score_separation_bps": score_separation,
+            "paper_closed_trades": paper_closed_trades,
+            "execution_capture_ratio": execution_capture,
+            "lineage_parity_available": lifecycle.get("available"),
+            "lineage_parity_ok": lifecycle.get("ok"),
+            "lineage_parity_violations": _safe_int(
+                lifecycle.get("total_violations")
+            ),
+        },
+        "authority_increase": False,
+        "manual_approval_required": True,
+    }
+
+
 def build_upward_trajectory_report(
     *,
     expected_edge_calibration: Mapping[str, Any] | None = None,
@@ -476,6 +566,7 @@ def build_upward_trajectory_report(
     paper_sampling_state: Mapping[str, Any] | None = None,
     regime_champions: Mapping[str, Any] | None = None,
     live_cost_model: Mapping[str, Any] | None = None,
+    runtime_performance: Mapping[str, Any] | None = None,
     report_date: str | None = None,
     min_bucket_samples: int = 25,
 ) -> dict[str, Any]:
@@ -487,6 +578,7 @@ def build_upward_trajectory_report(
     paper_sampling_state = paper_sampling_state or {}
     regime_champions = regime_champions or {}
     live_cost_model = live_cost_model or {}
+    runtime_performance = runtime_performance or {}
     candidates, multi = _candidate_rows(
         training_accelerator=training_accelerator,
         multi_horizon_report=multi_horizon_report,
@@ -518,6 +610,10 @@ def build_upward_trajectory_report(
         "active_learning_paper_trades": active_learning,
         "regime_champion_escalation": _regime_escalation(regime_champions),
         "feature_attribution_signal_autopsy": _feature_autopsy(candidates),
+        "promotion_milestones": _promotion_milestones(
+            candidates=candidates,
+            runtime_performance=runtime_performance,
+        ),
     }
     attention = [
         name
@@ -596,6 +692,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--paper-sampling-json", type=Path, default=None)
     parser.add_argument("--regime-champions-json", type=Path, default=None)
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
+    parser.add_argument("--runtime-performance-json", type=Path, default=None)
     parser.add_argument("--min-bucket-samples", type=int, default=25)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
@@ -636,6 +733,10 @@ def main(argv: list[str] | None = None) -> int:
         live_cost_model=_read_json(
             args.live_cost_model_json
             or _default_path("runtime/live_cost_model_latest.json")
+        ),
+        runtime_performance=_read_json(
+            args.runtime_performance_json
+            or _default_path("runtime/runtime_performance_report_latest.json")
         ),
         min_bucket_samples=max(1, int(args.min_bucket_samples)),
     )

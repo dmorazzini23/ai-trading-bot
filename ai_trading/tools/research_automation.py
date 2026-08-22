@@ -1141,6 +1141,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 regime_champions,
                 "--live-cost-model-json",
                 live_cost,
+                "--runtime-performance-json",
+                _runtime_input_path("runtime/runtime_performance_report_latest.json"),
                 "--output-json",
                 upward_trajectory,
                 "--latest-json",

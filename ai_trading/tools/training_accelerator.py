@@ -38,7 +38,7 @@ def _default_output_dir(cadence: str) -> Path:
 def _cadence_defaults(cadence: str) -> tuple[str, str, int, int]:
     normalized = str(cadence or "daily").strip().lower()
     if normalized == "daily":
-        return "1,15", "risk_adjusted", 15, 2
+        return "1,3,5,15", "risk_adjusted", 15, 2
     if normalized == "weekly":
         return "1,3,5,15", "net_markout,spread_adjusted,risk_adjusted,mae_mfe", 15, 6
     return "1,3,5,15", "net_markout,spread_adjusted,risk_adjusted,mae_mfe", 15, 4
@@ -565,8 +565,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--label-objectives", default=objectives)
     parser.add_argument("--lead-horizon-bars", type=int, default=lead)
     parser.add_argument("--model-prefix", default="accelerated_replay_aligned")
-    parser.add_argument("--model-type", choices=("logistic", "random_forest", "hist_gradient"), default="logistic")
-    parser.add_argument("--model-types", default="")
+    parser.add_argument(
+        "--model-type",
+        choices=(
+            "logistic",
+            "meta_label",
+            "random_forest",
+            "hist_gradient",
+            "edge_linear",
+            "edge_hist_gradient",
+            "edge_rank",
+        ),
+        default="meta_label",
+    )
+    parser.add_argument(
+        "--model-types",
+        default="meta_label,hist_gradient,edge_linear,edge_hist_gradient,edge_rank",
+    )
     parser.add_argument("--max-candidates", type=int, default=24)
     parser.add_argument("--screening-folds", type=int, default=2)
     parser.add_argument("--halving-eta", type=int, default=2)

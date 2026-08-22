@@ -177,6 +177,39 @@ def _collect_pending_blocked_symbols(orders: Iterable[Any]) -> set[str]:
     return blocked
 
 
+def _partition_passive_reprice_owned_orders(
+    runtime: Any,
+    orders: Iterable[Any],
+) -> tuple[list[Any], list[Any]]:
+    """Separate orders exclusively managed by governed passive repricing."""
+
+    be = _bot_engine()
+    candidates = list(orders)
+    execution_engine = getattr(runtime, "execution_engine", None)
+    ownership_check = getattr(
+        execution_engine,
+        "_paper_sampling_passive_reprice_manages_order",
+        None,
+    )
+    if not callable(ownership_check):
+        return candidates, []
+
+    cleanup_orders: list[Any] = []
+    owned_orders: list[Any] = []
+    for order in candidates:
+        try:
+            owned = bool(ownership_check(order))
+        except AI_TRADING_FALLBACK_EXCEPTIONS:
+            be.logger.warning(
+                "PENDING_CLEANUP_OWNERSHIP_CHECK_FAILED",
+                extra={"order_id": _extract_pending_order_id(order)},
+                exc_info=True,
+            )
+            owned = False
+        (owned_orders if owned else cleanup_orders).append(order)
+    return cleanup_orders, owned_orders
+
+
 def set_pending_blocked_symbols(runtime: Any, symbols: Iterable[str]) -> None:
     """Persist normalized pending-blocked symbols on runtime and global state."""
 
@@ -1027,10 +1060,31 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 return False
             return True
 
+    cleanup_orders, passive_reprice_owned_orders = (
+        _partition_passive_reprice_owned_orders(runtime, confirmed_pending)
+    )
+    if passive_reprice_owned_orders:
+        be.logger.info(
+            "PENDING_ORDERS_DEFERRED_TO_PASSIVE_REPRICE",
+            extra=payload_base
+            | {
+                "age_s": int(max(age, 0)),
+                "owned_count": len(passive_reprice_owned_orders),
+                "owned_ids": [
+                    _extract_pending_order_id(order)
+                    for order in passive_reprice_owned_orders[: be._PENDING_ORDER_SAMPLE_LIMIT]
+                ],
+                "cleanup_count": len(cleanup_orders),
+            },
+        )
+    if not cleanup_orders:
+        tracker[be._PENDING_ORDER_LAST_LOG_KEY] = now
+        return True
+
     try:
         cleanup_result = be._cancel_open_orders_subset(
             runtime,
-            orders=confirmed_pending,
+            orders=cleanup_orders,
             reason_code="PENDING_ORDERS_CLEANUP",
         )
     except be.COMMON_EXC as exc:  # pragma: no cover - network/API failure
@@ -1077,6 +1131,9 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             },
         },
     )
+    if passive_reprice_owned_orders:
+        tracker[be._PENDING_ORDER_LAST_LOG_KEY] = now
+        return True
     tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] = None
     tracker[be._PENDING_ORDER_LAST_LOG_KEY] = None
     runtime_state_map[be._PENDING_BACKLOG_ACTIVE_KEY] = False

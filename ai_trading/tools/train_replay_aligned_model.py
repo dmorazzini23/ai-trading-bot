@@ -14,7 +14,11 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    HistGradientBoostingClassifier,
+    HistGradientBoostingRegressor,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
@@ -86,6 +90,101 @@ _HISTORICAL_AUTHORITY_REQUIRED: dict[str, Any] = {
     "live_money_authority": False,
     "runtime_fill_authority": False,
 }
+
+
+class ContinuousEdgeEstimator:
+    """Fit continuous post-cost edge while exposing replay-compatible scores."""
+
+    def __init__(
+        self,
+        *,
+        family: str,
+        random_state: int,
+        min_net_edge_bps: float = 0.0,
+    ) -> None:
+        self.family = str(family)
+        self.random_state = int(random_state)
+        self.min_net_edge_bps = float(min_net_edge_bps)
+        self.continuous_edge_objective_ = True
+        self.classes_ = np.asarray([0, 1], dtype=int)
+        self._model: Any = None
+        self._score_scale_bps = 1.0
+
+    def _new_model(self) -> Any:
+        if self.family == "edge_linear":
+            from sklearn.linear_model import Ridge
+
+            return Pipeline(
+                steps=[
+                    ("standardscaler", StandardScaler()),
+                    ("ridge", Ridge(alpha=4.0)),
+                ]
+            )
+        if self.family in {"edge_hist_gradient", "edge_rank"}:
+            return HistGradientBoostingRegressor(
+                loss="squared_error",
+                max_iter=250,
+                learning_rate=0.05,
+                l2_regularization=0.10,
+                min_samples_leaf=20,
+                random_state=self.random_state,
+            )
+        raise ValueError(f"Unsupported continuous edge family: {self.family}")
+
+    def fit(
+        self,
+        features: pd.DataFrame,
+        target_edge_bps: pd.Series,
+        *,
+        sample_weight: np.ndarray | None = None,
+    ) -> ContinuousEdgeEstimator:
+        target = pd.to_numeric(target_edge_bps, errors="coerce").to_numpy(dtype=float)
+        if self.family == "edge_rank":
+            target = pd.Series(target).rank(method="average", pct=True).to_numpy(dtype=float)
+        finite = target[np.isfinite(target)]
+        if finite.size == 0:
+            raise ValueError("Continuous edge target has no finite values")
+        self._score_scale_bps = max(
+            float(np.quantile(np.abs(finite - np.median(finite)), 0.75)),
+            1.0e-6,
+        )
+        self._model = self._new_model()
+        weights = (
+            np.asarray(sample_weight, dtype=float)
+            if sample_weight is not None
+            else np.ones(len(target), dtype=float)
+        )
+        if isinstance(self._model, Pipeline):
+            final_step = self._model.steps[-1][0]
+            self._model.fit(
+                features,
+                target,
+                **{f"{final_step}__sample_weight": weights},
+            )
+        else:
+            self._model.fit(features, target, sample_weight=weights)
+        return self
+
+    def predict_edge_bps(self, features: pd.DataFrame) -> np.ndarray:
+        if self._model is None:
+            raise RuntimeError("Continuous edge estimator is not fitted")
+        return np.asarray(self._model.predict(features), dtype=float)
+
+    def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+        prediction = self.predict_edge_bps(features)
+        if self.family == "edge_rank":
+            positive = np.clip(prediction, 0.0, 1.0)
+        else:
+            logits = np.clip(
+                (prediction - self.min_net_edge_bps) / self._score_scale_bps,
+                -40.0,
+                40.0,
+            )
+            positive = 1.0 / (1.0 + np.exp(-logits))
+        return np.column_stack((1.0 - positive, positive))
+
+    def predict(self, features: pd.DataFrame) -> np.ndarray:
+        return (self.predict_proba(features)[:, 1] >= 0.5).astype(int)
 
 
 @dataclass(frozen=True)
@@ -760,9 +859,14 @@ def _training_authority(dataset: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _make_model(model_type: str, *, random_state: int) -> Any:
+def _make_model(
+    model_type: str,
+    *,
+    random_state: int,
+    min_net_edge_bps: float = 0.0,
+) -> Any:
     normalized = str(model_type or "logistic").strip().lower()
-    if normalized == "logistic":
+    if normalized in {"logistic", "meta_label"}:
         return Pipeline(
             steps=[
                 ("standardscaler", StandardScaler()),
@@ -793,7 +897,32 @@ def _make_model(model_type: str, *, random_state: int) -> Any:
             random_state=random_state,
         )
         return CalibratedClassifierCV(estimator=estimator, cv=3)
+    if normalized in {"edge_linear", "edge_hist_gradient", "edge_rank"}:
+        return ContinuousEdgeEstimator(
+            family=normalized,
+            random_state=random_state,
+            min_net_edge_bps=min_net_edge_bps,
+        )
     raise ValueError(f"Unsupported model type: {model_type}")
+
+
+def _make_candidate_model(
+    model_type: str,
+    *,
+    random_state: int,
+    min_net_edge_bps: float,
+) -> Any:
+    if str(model_type).strip().lower() in {
+        "edge_linear",
+        "edge_hist_gradient",
+        "edge_rank",
+    }:
+        return _make_model(
+            model_type,
+            random_state=random_state,
+            min_net_edge_bps=min_net_edge_bps,
+        )
+    return _make_model(model_type, random_state=random_state)
 
 
 def _edge_magnitude_sample_weights(
@@ -865,11 +994,33 @@ def _fit_weighted_binary_model(
     model.fit(features, target, sample_weight=np.asarray(sample_weight, dtype=float))
 
 
+def _fit_replay_model(
+    model: Any,
+    features: pd.DataFrame,
+    dataset: pd.DataFrame,
+    *,
+    sample_weight: np.ndarray,
+) -> None:
+    if isinstance(model, ContinuousEdgeEstimator):
+        model.fit(
+            features,
+            dataset["net_long_bps"].astype(float),
+            sample_weight=sample_weight,
+        )
+        return
+    _fit_weighted_binary_model(
+        model,
+        features,
+        dataset["target"].astype(int),
+        sample_weight=sample_weight,
+    )
+
+
 def _feature_importance(model: Any) -> list[dict[str, Any]]:
     """Return lightweight feature attribution for candidate triage artifacts."""
-    estimator = model
-    if isinstance(model, Pipeline):
-        estimator = model.steps[-1][1] if model.steps else model
+    estimator = model._model if isinstance(model, ContinuousEdgeEstimator) else model
+    if isinstance(estimator, Pipeline):
+        estimator = estimator.steps[-1][1] if estimator.steps else estimator
     raw: Any = None
     if hasattr(estimator, "coef_"):
         coef = np.asarray(getattr(estimator, "coef_"), dtype=float)
@@ -1181,12 +1332,23 @@ def _attach_model_metadata(
     *,
     edge_global_threshold: float | None,
     edge_thresholds_by_regime: Mapping[str, float] | None = None,
+    horizon_bars: int = 1,
+    label_objective: str = "net_markout",
 ) -> None:
+    continuous = isinstance(model, ContinuousEdgeEstimator)
     for name, value in (
         ("edge_score_orientation_", "direct"),
-        ("edge_score_semantics_", "positive_class_probability_rank"),
+        (
+            "edge_score_semantics_",
+            "continuous_edge_rank_score"
+            if continuous
+            else "positive_class_probability_rank",
+        ),
         ("edge_threshold_selection_scope_", "development_only_percentile"),
-        ("replay_aligned_objective_", "one_bar_net_markout"),
+        (
+            "replay_aligned_objective_",
+            f"{max(1, int(horizon_bars))}_bar_{_normalize_label_objective(label_objective)}",
+        ),
         ("replay_label_sides_", np.asarray(["buy"], dtype=object)),
         ("supports_short_scores_", False),
         ("feature_names_in_", np.asarray(REPLAY_ALIGNED_FEATURE_COLUMNS, dtype=object)),
@@ -1452,13 +1614,14 @@ def _aggregate_market_regime_results(
     min_profitable_fold_ratio: float,
     min_mean_net_edge_bps: float,
     min_ranking_separation_bps: float,
+    group_column: str = "market_regime",
 ) -> dict[str, dict[str, Any]]:
-    regime_names = sorted(oos_frame["market_regime"].astype(str).unique().tolist())
+    regime_names = sorted(oos_frame[group_column].astype(str).unique().tolist())
     out: dict[str, dict[str, Any]] = {}
     regime_min_trades = max(25, int(np.ceil(int(min_trades) / max(1, len(regime_names)))))
     for regime in regime_names:
         regime_frame = oos_frame.loc[
-            oos_frame["market_regime"].astype(str) == regime
+            oos_frame[group_column].astype(str) == regime
         ].copy()
         selected_frame = regime_frame.loc[
             regime_frame["walk_forward_selected"].astype(bool)
@@ -1594,9 +1757,10 @@ def _run_fold_local_walk_forward(
             continue
         if nested.fit["target"].nunique() < 2:
             continue
-        selector_model = _make_model(
+        selector_model = _make_candidate_model(
             str(args.model_type),
             random_state=int(args.random_state) + int(fold.fold_index),
+            min_net_edge_bps=min_net_edge_bps,
         )
         nested_fit_features = nested.fit[
             list(REPLAY_ALIGNED_FEATURE_COLUMNS)
@@ -1610,12 +1774,16 @@ def _run_fold_local_walk_forward(
             max_weight=edge_weight_max,
             scaling_quantile=edge_weight_quantile,
         )
-        _fit_weighted_binary_model(
+        _fit_replay_model(
             selector_model,
             nested_fit_features,
-            nested.fit["target"].astype(int),
+            nested.fit,
             sample_weight=selector_weights,
         )
+        if isinstance(selector_model, ContinuousEdgeEstimator):
+            selector_weight_report = selector_weight_report | {
+                "objective": "bounded_continuous_post_cost_edge_weighting"
+            }
         selector_positive_index = _positive_class_index(selector_model)
         selection_probabilities = np.asarray(
             selector_model.predict_proba(nested_selection_features), dtype=float
@@ -1639,9 +1807,10 @@ def _run_fold_local_walk_forward(
         )
         selected_thresholds.append((confidence_threshold, entry_score_threshold))
 
-        model = _make_model(
+        model = _make_candidate_model(
             str(args.model_type),
             random_state=int(args.random_state) + int(fold.fold_index),
+            min_net_edge_bps=min_net_edge_bps,
         )
         train_features = train[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
         test_features = test[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].astype(float)
@@ -1651,12 +1820,16 @@ def _run_fold_local_walk_forward(
             max_weight=edge_weight_max,
             scaling_quantile=edge_weight_quantile,
         )
-        _fit_weighted_binary_model(
+        _fit_replay_model(
             model,
             train_features,
-            train["target"].astype(int),
+            train,
             sample_weight=train_weights,
         )
+        if isinstance(model, ContinuousEdgeEstimator):
+            weight_report = weight_report | {
+                "objective": "bounded_continuous_post_cost_edge_weighting"
+            }
         positive_index = _positive_class_index(model)
         test_probabilities = np.asarray(
             model.predict_proba(test_features), dtype=float
@@ -1716,7 +1889,11 @@ def _run_fold_local_walk_forward(
                 ),
                 "sample_weight": selector_weight_report,
             },
-            "fit_objective": "bounded_post_cost_edge_weighted_binary",
+            "fit_objective": (
+                "continuous_cost_adjusted_realized_edge_bps"
+                if isinstance(model, ContinuousEdgeEstimator)
+                else "bounded_post_cost_edge_weighted_binary"
+            ),
             "sample_weight": weight_report,
             "cost_model": dict(cost_model_identity),
             "validation": _evaluate_probabilities(test["target"], test_probabilities),
@@ -1767,6 +1944,44 @@ def _run_fold_local_walk_forward(
         min_mean_net_edge_bps=min_mean_edge,
         min_ranking_separation_bps=min_separation,
     )
+    aggregate_by_symbol = _aggregate_market_regime_results(
+        oos_frame,
+        min_trades=min_trades,
+        min_profitable_fold_ratio=min_profitable_ratio,
+        min_mean_net_edge_bps=min_mean_edge,
+        min_ranking_separation_bps=min_separation,
+        group_column="symbol",
+    )
+    scoped_oos = oos_frame.copy()
+    scoped_oos["symbol_market_regime"] = (
+        scoped_oos["symbol"].astype(str).str.upper()
+        + "::"
+        + scoped_oos["market_regime"].astype(str).str.lower()
+    )
+    aggregate_by_symbol_market_regime = _aggregate_market_regime_results(
+        scoped_oos,
+        min_trades=min_trades,
+        min_profitable_fold_ratio=min_profitable_ratio,
+        min_mean_net_edge_bps=min_mean_edge,
+        min_ranking_separation_bps=min_separation,
+        group_column="symbol_market_regime",
+    )
+    symbol_regime_policy = {
+        scope: {
+            "action": (
+                "observe" if bool(metrics.get("evidence_qualified")) else "abstain"
+            ),
+            "evidence_qualified": bool(metrics.get("evidence_qualified")),
+            "qualification_reasons": list(metrics.get("qualification_reasons") or []),
+            "support": int(metrics.get("support", 0) or 0),
+            "mean_post_cost_net_edge_bps": metrics.get(
+                "mean_post_cost_net_edge_bps"
+            ),
+            "runtime_authority": False,
+            "live_money_authority": False,
+        }
+        for scope, metrics in sorted(aggregate_by_symbol_market_regime.items())
+    }
     walk_forward_report = {
         "evaluation_type": "expanding_contiguous_walk_forward",
         "market_regime_classifier": MARKET_REGIME_CLASSIFIER_ID,
@@ -1789,15 +2004,26 @@ def _run_fold_local_walk_forward(
         "folds": fold_reports,
         "aggregate": aggregate,
         "by_market_regime": aggregate_by_market_regime,
+        "by_symbol": aggregate_by_symbol,
+        "by_symbol_market_regime": aggregate_by_symbol_market_regime,
+        "symbol_regime_policy": {
+            "default_action": "abstain",
+            "scopes": symbol_regime_policy,
+            "governance_status": "shadow",
+            "promotion_authority": False,
+            "runtime_authority": False,
+            "live_money_authority": False,
+        },
         "governance_status": "shadow",
         "promotion_authority": False,
         "live_money_authority": False,
         "offline_replay_required": True,
     }
     _, _, final_test, final_probabilities = last_bundle
-    model = _make_model(
+    model = _make_candidate_model(
         str(args.model_type),
         random_state=int(args.random_state),
+        min_net_edge_bps=min_net_edge_bps,
     )
     final_train = dataset.copy()
     final_train_features = final_train[
@@ -1809,12 +2035,16 @@ def _run_fold_local_walk_forward(
         max_weight=edge_weight_max,
         scaling_quantile=edge_weight_quantile,
     )
-    _fit_weighted_binary_model(
+    _fit_replay_model(
         model,
         final_train_features,
-        final_train["target"].astype(int),
+        final_train,
         sample_weight=final_weights,
     )
+    if isinstance(model, ContinuousEdgeEstimator):
+        final_weight_report = final_weight_report | {
+            "objective": "bounded_continuous_post_cost_edge_weighting"
+        }
     final_confidence_threshold = float(
         np.median([value[0] for value in selected_thresholds])
         if selected_thresholds
@@ -1835,7 +2065,11 @@ def _run_fold_local_walk_forward(
         "scope": "development_partition_only_after_oos_evaluation",
         "rows": int(len(final_train)),
         "threshold_scope": "nested_inner_validation_only",
-        "fit_objective": "bounded_post_cost_edge_weighted_binary",
+        "fit_objective": (
+            "continuous_cost_adjusted_realized_edge_bps"
+            if isinstance(model, ContinuousEdgeEstimator)
+            else "bounded_post_cost_edge_weighted_binary"
+        ),
         "sample_weight": final_weight_report,
         "promotion_authority": False,
         "live_money_authority": False,
@@ -1988,6 +2222,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         model,
         edge_global_threshold=selected_confidence_threshold,
         edge_thresholds_by_regime=edge_thresholds_by_regime,
+        horizon_bars=int(args.horizon_bars),
+        label_objective=str(getattr(args, "label_objective", "net_markout")),
     )
     feature_importance = _feature_importance(model)
     generated_at = datetime.now(UTC)
@@ -2131,7 +2367,11 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         metadata={
             "strategy": "replay_aligned_markout",
             "feature_columns": list(REPLAY_ALIGNED_FEATURE_COLUMNS),
-            "objective": f"{config.horizon_bars}_bar_{config.label_objective}_binary",
+            "objective": (
+                f"{config.horizon_bars}_bar_{config.label_objective}_continuous_bps"
+                if isinstance(model, ContinuousEdgeEstimator)
+                else f"{config.horizon_bars}_bar_{config.label_objective}_binary"
+            ),
             "config": asdict(config),
             "authority": _training_authority(dataset),
             "acquisition": acquisition,
@@ -2257,7 +2497,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-name", type=str, default="")
     parser.add_argument(
         "--model-type",
-        choices=("logistic", "random_forest", "hist_gradient"),
+        choices=(
+            "logistic",
+            "meta_label",
+            "random_forest",
+            "hist_gradient",
+            "edge_linear",
+            "edge_hist_gradient",
+            "edge_rank",
+        ),
         default="hist_gradient",
     )
     parser.add_argument("--horizon-bars", type=int, default=1)

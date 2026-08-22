@@ -14,6 +14,7 @@ import pytest
 from ai_trading.models.artifacts import verify_artifact
 from ai_trading.models.contracts import infer_day_sleeve_regimes
 from ai_trading.tools.train_replay_aligned_model import (
+    ContinuousEdgeEstimator,
     REPLAY_ALIGNED_FEATURE_COLUMNS,
     _edge_magnitude_sample_weights,
     _symbol_feature_cache_key,
@@ -249,6 +250,38 @@ def test_edge_magnitude_weights_are_bounded_and_use_post_cost_distance() -> None
     assert report["objective"] == "bounded_post_cost_edge_weighted_binary"
     assert report["partition_local"] is True
     assert report["rows"] == len(dataset)
+
+
+@pytest.mark.parametrize(
+    "family",
+    ["edge_linear", "edge_hist_gradient", "edge_rank"],
+)
+def test_continuous_edge_estimators_fit_realized_bps_and_expose_rank_scores(
+    family: str,
+) -> None:
+    rows = 80
+    features = pd.DataFrame(
+        {
+            name: np.linspace(-1.0, 1.0, rows) + index * 0.01
+            for index, name in enumerate(REPLAY_ALIGNED_FEATURE_COLUMNS)
+        }
+    )
+    realized_edge = pd.Series(np.linspace(-12.0, 18.0, rows))
+    model = ContinuousEdgeEstimator(
+        family=family,
+        random_state=7,
+        min_net_edge_bps=0.0,
+    )
+
+    model.fit(features, realized_edge, sample_weight=np.ones(rows))
+    probabilities = model.predict_proba(features)
+
+    assert probabilities.shape == (rows, 2)
+    assert np.all(np.isfinite(probabilities))
+    assert np.allclose(probabilities.sum(axis=1), 1.0)
+    assert float(probabilities[-10:, 1].mean()) > float(
+        probabilities[:10, 1].mean()
+    )
 
 
 def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path: Path) -> None:
@@ -487,6 +520,16 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert walk_forward["evaluation_type"] == "expanding_contiguous_walk_forward"
     assert walk_forward["market_regime_classifier"] == "day_sleeve_past_only_v1"
     assert walk_forward["fold_local_fitting"] is True
+    assert set(walk_forward["by_symbol"]) == {"AAPL", "MSFT"}
+    assert walk_forward["by_symbol_market_regime"]
+    symbol_regime_policy = walk_forward["symbol_regime_policy"]
+    assert symbol_regime_policy["default_action"] == "abstain"
+    assert symbol_regime_policy["promotion_authority"] is False
+    assert all(
+        scope["action"] in {"observe", "abstain"}
+        and scope["runtime_authority"] is False
+        for scope in symbol_regime_policy["scopes"].values()
+    )
     assert len(walk_forward["folds"]) == 5
     for fold in walk_forward["folds"]:
         assert fold["fit_scope"] == "fold_train_only"
@@ -550,6 +593,47 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert policy["promotion_authority"] is False
     assert set(policy["allowed_regimes"]).isdisjoint(policy["abstained_regimes"])
     assert manifest_payload["metadata"]["market_regime_policy"] == policy
+
+
+def test_continuous_edge_training_runs_end_to_end_as_shadow_artifact(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cycle_bars(data_dir / "AAPL.csv", phase=0.0)
+    _write_cycle_bars(data_dir / "MSFT.csv", phase=1.7)
+
+    report = train_replay_aligned_model(
+        argparse.Namespace(
+            data_dir=data_dir,
+            symbols="AAPL,MSFT",
+            timestamp_col="timestamp",
+            output_dir=tmp_path / "out",
+            model_name="continuous_edge_h3",
+            model_type="edge_linear",
+            horizon_bars=3,
+            label_objective="risk_adjusted",
+            fee_bps=1.0,
+            slippage_bps=2.0,
+            min_net_edge_bps=0.0,
+            train_fraction=0.65,
+            edge_global_threshold=0.66,
+            random_state=11,
+            training_cache=True,
+            training_cache_dir=tmp_path / "cache",
+        )
+    )
+
+    model = joblib.load(Path(cast(str, report["model_path"])))
+    assert isinstance(model, ContinuousEdgeEstimator)
+    assert model.replay_aligned_objective_ == "3_bar_risk_adjusted"
+    assert model.edge_score_semantics_ == "continuous_edge_rank_score"
+    assert report["governance_status"] == "shadow"
+    assert report["promotion_authority"] is False
+    assert all(
+        fold["fit_objective"] == "continuous_cost_adjusted_realized_edge_bps"
+        for fold in report["walk_forward"]["folds"]
+    )
 
 
 def test_train_replay_aligned_model_persists_governed_acquisition_lineage(
