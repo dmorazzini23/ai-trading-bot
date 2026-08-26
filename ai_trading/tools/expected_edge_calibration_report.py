@@ -341,6 +341,68 @@ def _calibration_correction(
     }
 
 
+def _symbol_session_calibration(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    min_bucket_samples: int,
+    global_capture_ratio: float | None,
+) -> dict[str, Any]:
+    """Build conservative shadow-only multipliers for symbol/session strata."""
+
+    groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        symbol = str(row.get("symbol") or "UNKNOWN").strip().upper()
+        session = str(row.get("session_bucket") or "unknown").strip().lower()
+        groups[f"{symbol}:{session}"].append(row)
+    prior = max(0.0, min(float(global_capture_ratio or 0.0), 1.0))
+    buckets: dict[str, dict[str, Any]] = {}
+    for key, bucket_rows in sorted(groups.items()):
+        expected = [float(row["expected_net_edge_bps"]) for row in bucket_rows]
+        realized = [float(row["realized_net_edge_bps"]) for row in bucket_rows]
+        capture = _capture_ratio(expected, realized)
+        sufficient = len(bucket_rows) >= max(1, int(min_bucket_samples))
+        raw_multiplier = (
+            max(0.0, min(float(capture), 1.0))
+            if capture is not None
+            else None
+        )
+        if sufficient and raw_multiplier is not None:
+            weight = len(bucket_rows) / (
+                len(bucket_rows) + max(1, int(min_bucket_samples))
+            )
+            multiplier = float(weight * raw_multiplier + (1.0 - weight) * prior)
+            action = (
+                "shadow_abstain"
+                if capture is not None and capture <= 0.0
+                else "shadow_apply_shrunk_multiplier"
+            )
+        else:
+            weight = 0.0
+            multiplier = None
+            action = "collect_more_bucket_samples"
+        buckets[key] = {
+            "samples": len(bucket_rows),
+            "min_samples": max(1, int(min_bucket_samples)),
+            "sufficient": sufficient,
+            "capture_ratio": capture,
+            "raw_multiplier": raw_multiplier,
+            "shrinkage_weight": float(weight),
+            "expected_edge_multiplier": multiplier,
+            "recommended_action": action,
+            "runtime_authority": False,
+        }
+    return {
+        "method": "empirical_capture_shrunk_to_global",
+        "min_bucket_samples": max(1, int(min_bucket_samples)),
+        "global_prior_multiplier": prior,
+        "buckets": buckets,
+        "research_only": True,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+
+
 def _exit_quality_diagnostics(rows: Sequence[Mapping[str, Any]], min_samples: int) -> dict[str, Any]:
     exit_rows = [row for row in rows if str(row.get("side") or "").lower() == "sell"]
     if not exit_rows:
@@ -388,6 +450,7 @@ def build_expected_edge_calibration_report(
     candidates: Sequence[Mapping[str, Any]] = (),
     gate_rows: Sequence[Mapping[str, Any]] = (),
     min_samples: int = 25,
+    min_bucket_samples: int = 5,
 ) -> dict[str, Any]:
     realized_rows: list[dict[str, Any]] = []
     fill_evidence = [row for row in fills if is_fill_based_execution_evidence(row)]
@@ -409,6 +472,9 @@ def build_expected_edge_calibration_report(
             "expected_edge_bucket": _edge_bucket(expected),
             "attribution": _classify_attribution({**dict(row), **execution_metadata}),
         }
+        normalized["symbol_session"] = (
+            f"{normalized['symbol']}:{normalized['session_bucket']}"
+        )
         realized_rows.append(normalized)
 
     rejected_rows: list[dict[str, Any]] = []
@@ -499,6 +565,10 @@ def build_expected_edge_calibration_report(
         "bucketed_by_symbol": _bucket_summary(realized_rows, "symbol"),
         "bucketed_by_side": _bucket_summary(realized_rows, "side"),
         "bucketed_by_session": _bucket_summary(realized_rows, "session_bucket"),
+        "bucketed_by_symbol_session": _bucket_summary(
+            realized_rows,
+            "symbol_session",
+        ),
         "bucketed_by_spread": _bucket_summary(realized_rows, "spread_bucket"),
         "bucketed_by_quote_age": _bucket_summary(realized_rows, "quote_age_bucket"),
         "bucketed_by_regime": _bucket_summary(realized_rows, "regime"),
@@ -515,6 +585,11 @@ def build_expected_edge_calibration_report(
             realized_values=realized_values,
             rows=realized_rows,
             min_samples=int(min_samples),
+        ),
+        "symbol_session_calibration": _symbol_session_calibration(
+            realized_rows,
+            min_bucket_samples=int(min_bucket_samples),
+            global_capture_ratio=_capture_ratio(expected_values, realized_values),
         ),
         "exit_quality_diagnostics": _exit_quality_diagnostics(
             realized_rows,
@@ -548,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidates-jsonl", type=Path, default=None)
     parser.add_argument("--gate-jsonl", type=Path, default=None)
     parser.add_argument("--min-samples", type=int, default=25)
+    parser.add_argument("--min-bucket-samples", type=int, default=5)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -561,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
         candidates=_read_jsonl(args.candidates_jsonl, report_date=str(args.report_date)),
         gate_rows=_read_jsonl(args.gate_jsonl, report_date=str(args.report_date)),
         min_samples=int(args.min_samples),
+        min_bucket_samples=int(args.min_bucket_samples),
     )
     for path in (output_json, latest_json):
         path.parent.mkdir(parents=True, exist_ok=True)

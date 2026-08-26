@@ -97,7 +97,16 @@ def _first_float(row: Mapping[str, Any], *keys: str) -> float | None:
 
 
 def _decision_id(row: Mapping[str, Any]) -> str:
-    return str(row.get("decision_id") or row.get("intent_id") or row.get("client_order_id") or "").strip()
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    return str(
+        row.get("decision_id")
+        or row.get("intent_id")
+        or row.get("client_order_id")
+        or journal.get("decision_id")
+        or journal.get("intent_id")
+        or ""
+    ).strip()
 
 
 def _prediction_id(row: Mapping[str, Any]) -> str:
@@ -105,7 +114,91 @@ def _prediction_id(row: Mapping[str, Any]) -> str:
 
 
 def _correlation_id(row: Mapping[str, Any]) -> str:
-    return str(row.get("correlation_id") or _prediction_id(row)).strip()
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    return str(
+        row.get("correlation_id")
+        or row.get("decision_correlation_id")
+        or row.get("opportunity_id")
+        or journal.get("correlation_id")
+        or journal.get("decision_correlation_id")
+        or metrics.get("correlation_id")
+        or _prediction_id(row)
+    ).strip()
+
+
+def _identity_candidates(row: Mapping[str, Any]) -> set[str]:
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    values = {
+        _decision_id(row),
+        _prediction_id(row),
+        _correlation_id(row),
+        str(row.get("decision_trace_id") or "").strip(),
+        str(row.get("root_client_order_id") or "").strip(),
+        str(journal.get("decision_trace_id") or "").strip(),
+        str(metrics.get("decision_trace_id") or "").strip(),
+    }
+    return {value for value in values if value}
+
+
+def _decision_timestamp(row: Mapping[str, Any]) -> str:
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    raw = (
+        row.get("decision_timestamp")
+        or row.get("decision_ts")
+        or row.get("source_timestamp")
+        or row.get("bar_ts")
+        or journal.get("decision_ts")
+        or journal.get("source_timestamp")
+        or metrics.get("decision_ts")
+        or metrics.get("source_timestamp")
+    )
+    if raw in (None, ""):
+        return ""
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(
+            UTC
+        ).isoformat()
+    except ValueError:
+        return str(raw).strip()
+
+
+def _rejection_reason(row: Mapping[str, Any]) -> str:
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    journal = row.get("decision_journal")
+    journal = journal if isinstance(journal, Mapping) else {}
+    for value in (
+        row.get("reason"),
+        row.get("gate"),
+        metrics.get("terminal_reason"),
+        metrics.get("reason"),
+        journal.get("terminal_reason"),
+        journal.get("reason"),
+    ):
+        if str(value or "").strip():
+            return str(value).strip()
+    gates = row.get("gates")
+    if isinstance(gates, Sequence) and not isinstance(gates, (str, bytes)):
+        reasons: list[str] = []
+        for gate in gates:
+            if isinstance(gate, Mapping):
+                value = gate.get("reason") or gate.get("name") or gate.get("gate")
+            else:
+                value = gate
+            if str(value or "").strip():
+                reasons.append(str(value).strip())
+        if reasons:
+            return "+".join(sorted(set(reasons)))
+    return "unknown"
 
 
 def _symbol(row: Mapping[str, Any]) -> str:
@@ -226,6 +319,7 @@ def build_counterfactual_execution_replay_report(
     outcomes: Sequence[Mapping[str, Any]] = (),
     min_counterfactual_samples: int = 10,
     max_missed_edge_bps: float = 25.0,
+    min_filter_ablation_samples: int = 5,
 ) -> dict[str, Any]:
     fills_by_id: dict[str, Mapping[str, Any]] = {}
     for fill in fills:
@@ -233,9 +327,17 @@ def build_counterfactual_execution_replay_report(
             if identity:
                 fills_by_id[identity] = fill
     outcomes_by_id: dict[str, list[Mapping[str, Any]]] = {}
+    outcomes_by_symbol_timestamp: dict[
+        tuple[str, str], list[Mapping[str, Any]]
+    ] = {}
     for outcome in outcomes:
-        if correlation_id := _correlation_id(outcome):
-            outcomes_by_id.setdefault(correlation_id, []).append(outcome)
+        for identity in _identity_candidates(outcome):
+            outcomes_by_id.setdefault(identity, []).append(outcome)
+        timestamp = _decision_timestamp(outcome)
+        if timestamp:
+            outcomes_by_symbol_timestamp.setdefault(
+                (_symbol(outcome), timestamp), []
+            ).append(outcome)
     accepted_edges: list[float] = []
     rejected_edges: list[float] = []
     missed_positive: list[dict[str, Any]] = []
@@ -246,6 +348,8 @@ def build_counterfactual_execution_replay_report(
     hypothetical_outcome_samples = 0
     executed_outcome_rows_ignored = 0
     rejected_decisions_without_linked_outcomes = 0
+    outcome_join_methods: Counter[str] = Counter()
+    edges_by_rejection_reason: dict[str, list[float]] = {}
     for row in decisions:
         if _is_accepted(row):
             accepted += 1
@@ -267,7 +371,8 @@ def build_counterfactual_execution_replay_report(
                 accepted_edges.append(float(realized))
         elif _is_rejected(row):
             rejected += 1
-            rejection_reasons[str(row.get("reason") or row.get("gate") or "unknown")] += 1
+            reason = _rejection_reason(row)
+            rejection_reasons[reason] += 1
             counterfactual = _first_float(
                 row,
                 "counterfactual_net_edge_bps",
@@ -275,7 +380,26 @@ def build_counterfactual_execution_replay_report(
             )
             selected_outcome: Mapping[str, Any] | None = None
             if counterfactual is None:
-                candidates = outcomes_by_id.get(_correlation_id(row), [])
+                candidates: list[Mapping[str, Any]] = []
+                seen_candidates: set[str] = set()
+                for identity in _identity_candidates(row):
+                    for candidate in outcomes_by_id.get(identity, []):
+                        candidate_key = str(
+                            candidate.get("outcome_id")
+                            or candidate.get("replay_row_id")
+                            or id(candidate)
+                        )
+                        if candidate_key not in seen_candidates:
+                            seen_candidates.add(candidate_key)
+                            candidates.append(candidate)
+                join_method = "identity" if candidates else "unmatched"
+                if not candidates and (timestamp := _decision_timestamp(row)):
+                    candidates = list(
+                        outcomes_by_symbol_timestamp.get((_symbol(row), timestamp), [])
+                    )
+                    if candidates:
+                        join_method = "symbol_decision_timestamp"
+                outcome_join_methods[join_method] += 1
                 executed_outcome_rows_ignored += sum(
                     1
                     for candidate in candidates
@@ -297,15 +421,22 @@ def build_counterfactual_execution_replay_report(
             if counterfactual is None:
                 continue
             rejected_edges.append(float(counterfactual))
+            edges_by_rejection_reason.setdefault(reason, []).append(
+                float(counterfactual)
+            )
             if counterfactual > 0.0:
                 evidence = selected_outcome or row
                 missed_positive.append(
                     {
                         "decision_id": _decision_id(row) or None,
                         "prediction_id": _prediction_id(row) or None,
-                        "correlation_id": _correlation_id(row) or None,
+                        "correlation_id": (
+                            _correlation_id(row)
+                            or _correlation_id(evidence)
+                            or None
+                        ),
                         "symbol": _symbol(row),
-                        "reason": str(row.get("reason") or row.get("gate") or "unknown"),
+                        "reason": reason,
                         "counterfactual_net_edge_bps": float(counterfactual),
                         "evidence_type": (
                             str(evidence.get("evidence_type") or "hypothetical")
@@ -335,6 +466,42 @@ def build_counterfactual_execution_replay_report(
     else:
         status = "needs_review"
         action = "review_filters_blocking_positive_counterfactual_edge"
+    filter_ablations: list[dict[str, Any]] = []
+    for reason, values in sorted(edges_by_rejection_reason.items()):
+        positive_values = [value for value in values if value > 0.0]
+        negative_values = [value for value in values if value <= 0.0]
+        positive_edge = float(sum(positive_values))
+        avoided_negative_edge = float(abs(sum(negative_values)))
+        mean_edge = float(sum(values) / len(values))
+        enough = len(values) >= max(1, int(min_filter_ablation_samples))
+        if not enough:
+            disposition = "collect_more_shadow_evidence"
+        elif (
+            mean_edge > 0.0
+            and positive_edge > avoided_negative_edge
+            and len(positive_values) / len(values) >= 0.60
+        ):
+            disposition = "eligible_for_bounded_shadow_ablation"
+        elif mean_edge <= 0.0:
+            disposition = "keep_filter"
+        else:
+            disposition = "observe_filter"
+        filter_ablations.append(
+            {
+                "rejection_reason": reason,
+                "samples": len(values),
+                "min_samples": max(1, int(min_filter_ablation_samples)),
+                "sufficient_evidence": enough,
+                "positive_count": len(positive_values),
+                "avoided_negative_count": len(negative_values),
+                "positive_rate": float(len(positive_values) / len(values)),
+                "mean_counterfactual_net_edge_bps": mean_edge,
+                "missed_positive_edge_bps": positive_edge,
+                "avoided_negative_edge_bps": avoided_negative_edge,
+                "disposition": disposition,
+                "runtime_filter_change_authorized": False,
+            }
+        )
     return {
         "schema_version": "1.1.0",
         "artifact_type": "counterfactual_execution_replay_report",
@@ -358,6 +525,7 @@ def build_counterfactual_execution_replay_report(
             "rejected_decisions_without_linked_outcomes": (
                 rejected_decisions_without_linked_outcomes
             ),
+            "outcome_join_methods": dict(sorted(outcome_join_methods.items())),
             "mean_accepted_realized_edge_bps": (
                 float(sum(accepted_edges) / len(accepted_edges)) if accepted_edges else None
             ),
@@ -369,6 +537,20 @@ def build_counterfactual_execution_replay_report(
             "missed_positive_edge_bps": float(missed_edge),
         },
         "rejection_reasons": dict(sorted(rejection_reasons.items())),
+        "filter_ablations": {
+            "status": (
+                "shadow_candidates_available"
+                if any(
+                    row["disposition"]
+                    == "eligible_for_bounded_shadow_ablation"
+                    for row in filter_ablations
+                )
+                else "no_shadow_relaxation_candidate"
+            ),
+            "rows": filter_ablations,
+            "research_only": True,
+            "runtime_filter_change_authorized": False,
+        },
         "missed_positive_decisions": sorted(
             missed_positive,
             key=lambda item: float(item["counterfactual_net_edge_bps"]),
@@ -410,6 +592,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--min-counterfactual-samples", type=int, default=10)
     parser.add_argument("--max-missed-edge-bps", type=float, default=25.0)
+    parser.add_argument("--min-filter-ablation-samples", type=int, default=5)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -423,6 +606,7 @@ def main(argv: list[str] | None = None) -> int:
         outcomes=_read_outcomes(args.outcomes_json, report_date=str(args.report_date)),
         min_counterfactual_samples=int(args.min_counterfactual_samples),
         max_missed_edge_bps=float(args.max_missed_edge_bps),
+        min_filter_ablation_samples=int(args.min_filter_ablation_samples),
     )
     for path in (output_json, latest_json):
         path.parent.mkdir(parents=True, exist_ok=True)

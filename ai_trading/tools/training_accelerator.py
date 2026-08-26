@@ -38,7 +38,7 @@ def _default_output_dir(cadence: str) -> Path:
 def _cadence_defaults(cadence: str) -> tuple[str, str, int, int]:
     normalized = str(cadence or "daily").strip().lower()
     if normalized == "daily":
-        return "1,3,5,15", "risk_adjusted", 15, 2
+        return "1,3,5,15", "net_markout,risk_adjusted", 15, 4
     if normalized == "weekly":
         return "1,3,5,15", "net_markout,spread_adjusted,risk_adjusted,mae_mfe", 15, 6
     return "1,3,5,15", "net_markout,spread_adjusted,risk_adjusted,mae_mfe", 15, 4
@@ -144,7 +144,10 @@ def _live_cost_usability(path: Path | None) -> dict[str, Any]:
     return result
 
 
-def _shadow_markout_manifest(path: Path | None) -> dict[str, Any]:
+def _shadow_markout_manifest(
+    path: Path | None,
+    jsonl_path: Path | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {
         "requested_path": str(path) if path is not None else None,
         "usable": False,
@@ -174,16 +177,101 @@ def _shadow_markout_manifest(path: Path | None) -> dict[str, Any]:
         and payload.get("research_only") is True
         and all(payload.get(field) is False for field in required_false)
     )
+    content_hash_matches = False
+    output_path_matches = False
+    if valid and jsonl_path is not None:
+        try:
+            resolved_jsonl = jsonl_path.expanduser().resolve()
+            declared = Path(str(payload.get("output_jsonl") or "")).expanduser()
+            declared = (
+                declared.resolve()
+                if declared.is_absolute()
+                else (path.parent / declared).resolve()
+            )
+            output_path_matches = declared == resolved_jsonl
+            expected_hash = str(payload.get("content_sha256") or "").strip().lower()
+            content_hash_matches = bool(
+                expected_hash
+                and resolved_jsonl.is_file()
+                and _file_sha256(resolved_jsonl) == expected_hash
+            )
+        except OSError:
+            content_hash_matches = False
+            output_path_matches = False
+    usable = bool(valid and content_hash_matches and output_path_matches)
     result.update(
         {
-            "usable": valid,
-            "reason": "validated_research_only" if valid else "authority_contract_failed",
+            "usable": usable,
+            "reason": (
+                "validated_research_only"
+                if usable
+                else (
+                    "authority_contract_failed"
+                    if not valid
+                    else "evidence_content_mismatch"
+                )
+            ),
             "row_count": int(payload.get("row_count") or 0),
             "content_sha256": payload.get("content_sha256"),
             "evidence_partition": payload.get("evidence_partition"),
+            "jsonl_path": str(jsonl_path) if jsonl_path is not None else None,
+            "content_hash_matches": content_hash_matches,
+            "output_path_matches": output_path_matches,
+            "training_ingestion_enabled": usable,
         }
     )
     return result
+
+
+def _select_shadow_markout_paths(
+    args: argparse.Namespace,
+) -> tuple[Path | None, Path | None, dict[str, Any]]:
+    requested = (
+        (
+            Path(args.shadow_markout_jsonl)
+            if getattr(args, "shadow_markout_jsonl", None) is not None
+            else None
+        ),
+        (
+            Path(args.shadow_markout_manifest_json)
+            if getattr(args, "shadow_markout_manifest_json", None) is not None
+            else None
+        ),
+    )
+    fallback = (
+        (
+            Path(args.shadow_markout_fallback_jsonl)
+            if getattr(args, "shadow_markout_fallback_jsonl", None) is not None
+            else None
+        ),
+        (
+            Path(args.shadow_markout_fallback_manifest_json)
+            if getattr(args, "shadow_markout_fallback_manifest_json", None)
+            is not None
+            else None
+        ),
+    )
+    primary = _shadow_markout_manifest(requested[1], requested[0])
+    if primary.get("usable"):
+        return requested[0], requested[1], {
+            "source": "current_run",
+            "fallback_used": False,
+            "primary": primary,
+        }
+    fallback_status = _shadow_markout_manifest(fallback[1], fallback[0])
+    if fallback_status.get("usable"):
+        return fallback[0], fallback[1], {
+            "source": "latest_verified",
+            "fallback_used": True,
+            "primary": primary,
+            "fallback": fallback_status,
+        }
+    return requested[0], requested[1], {
+        "source": "unavailable",
+        "fallback_used": False,
+        "primary": primary,
+        "fallback": fallback_status,
+    }
 
 
 def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
@@ -241,7 +329,10 @@ def _accelerator_manifest(args: argparse.Namespace, config: dict[str, Any]) -> d
             "shadow_markout_manifest": _shadow_markout_manifest(
                 Path(getattr(args, "shadow_markout_manifest_json"))
                 if getattr(args, "shadow_markout_manifest_json", None) is not None
-                else None
+                else None,
+                Path(getattr(args, "shadow_markout_jsonl"))
+                if getattr(args, "shadow_markout_jsonl", None) is not None
+                else None,
             ),
         },
     }
@@ -267,6 +358,13 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir or _default_output_dir(str(args.cadence)))
     output_dir.mkdir(parents=True, exist_ok=True)
     training_cache_dir = Path(args.training_cache_dir) if args.training_cache_dir else output_dir / "feature_cache"
+    (
+        selected_shadow_jsonl,
+        selected_shadow_manifest,
+        shadow_markout_selection,
+    ) = _select_shadow_markout_paths(args)
+    args.shadow_markout_jsonl = selected_shadow_jsonl
+    args.shadow_markout_manifest_json = selected_shadow_manifest
     config = {
         "data_dir": str(args.data_dir),
         "symbols": _governed_symbols(str(getattr(args, "symbols", "") or "")),
@@ -318,6 +416,14 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         "trailing_stop_bps": float(getattr(args, "trailing_stop_bps", 15.0)),
         "training_cache_dir": str(training_cache_dir),
         "max_replay_candidates": int(getattr(args, "max_replay_candidates", None) or replay_top_n),
+        "shadow_markout_jsonl": (
+            str(selected_shadow_jsonl) if selected_shadow_jsonl is not None else None
+        ),
+        "shadow_markout_manifest_json": (
+            str(selected_shadow_manifest)
+            if selected_shadow_manifest is not None
+            else None
+        ),
     }
     input_manifest = _accelerator_manifest(args, config)
     input_signature = _stable_signature(input_manifest)
@@ -390,6 +496,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             ),
         },
         "timing": {"started_at": started_at},
+        "shadow_markout_selection": shadow_markout_selection,
     }
     live_cost_status = input_manifest["inputs"]["live_cost_usability"]
     required_live_cost_blocked = bool(
@@ -477,6 +584,8 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             training_cache=True,
             training_cache_dir=training_cache_dir,
             max_replay_candidates=int(config["max_replay_candidates"]),
+            shadow_markout_jsonl=selected_shadow_jsonl,
+            shadow_markout_manifest_json=selected_shadow_manifest,
         )
         pipeline_report = run_multi_horizon_pipeline(pipeline_args)
         report["timing"]["pipeline_duration_seconds"] = round(perf_counter() - pipeline_started, 6)
@@ -602,6 +711,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--shadow-markout-jsonl", type=Path, default=None)
     parser.add_argument("--shadow-markout-manifest-json", type=Path, default=None)
+    parser.add_argument("--shadow-markout-fallback-jsonl", type=Path, default=None)
+    parser.add_argument(
+        "--shadow-markout-fallback-manifest-json", type=Path, default=None
+    )
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--edge-global-threshold", type=float, default=0.66)

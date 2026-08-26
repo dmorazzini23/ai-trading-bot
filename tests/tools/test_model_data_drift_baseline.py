@@ -91,6 +91,32 @@ def test_governed_baseline_rejects_incomplete_category_coverage() -> None:
         )
 
 
+def test_shadow_baseline_candidate_keeps_incomplete_evidence_non_authoritative() -> None:
+    now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
+    fills, tca = _rows(now, count=10)
+    evidence = model_data_drift_baseline.build_model_data_drift_evidence(
+        fills=fills,
+        tca_rows=tca,
+        generated_at=now,
+        min_samples=25,
+        model_id="fifteen-bar-shadow",
+        model_hash="hash-15",
+    )
+
+    candidate = model_data_drift_baseline.build_shadow_drift_baseline_candidate(
+        evidence,
+        baseline_id="fifteen-bar-shadow-20260718",
+    )
+
+    assert candidate["status"] == "insufficient_evidence"
+    assert candidate["model"]["model_id"] == "fifteen-bar-shadow"
+    assert candidate["approval"]["governed_baseline_mutation"] is False
+    assert candidate["research_only"] is True
+    assert candidate["promotion_authority"] is False
+    assert candidate["live_money_authority"] is False
+    assert len(candidate["candidate_sha256"]) == 64
+
+
 def test_baseline_cli_records_sources_and_refuses_overwrite(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     fills, tca = _rows(now)

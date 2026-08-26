@@ -305,6 +305,206 @@ def _canonical_sha256(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _load_shadow_markout_overrides(
+    *,
+    jsonl_path: Path | None,
+    manifest_path: Path | None,
+    horizon_bars: int,
+) -> tuple[dict[tuple[str, pd.Timestamp], dict[str, Any]], dict[str, Any]]:
+    """Load strictly research-only markouts keyed to governed bar timestamps."""
+
+    diagnostics: dict[str, Any] = {
+        "requested": bool(jsonl_path is not None or manifest_path is not None),
+        "usable": False,
+        "training_ingestion_enabled": False,
+        "matched_rows": 0,
+        "reason": "not_requested",
+        "evidence_partition": "shadow",
+        "promotion_eligible": False,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+    if jsonl_path is None and manifest_path is None:
+        return {}, diagnostics
+    if jsonl_path is None or manifest_path is None:
+        diagnostics["reason"] = "incomplete_request"
+        return {}, diagnostics
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        diagnostics["reason"] = "manifest_unreadable"
+        return {}, diagnostics
+    required_false = (
+        "fill_based_evidence",
+        "promotion_eligible",
+        "runtime_authority",
+        "promotion_authority",
+        "live_money_authority",
+    )
+    if not (
+        isinstance(manifest, Mapping)
+        and manifest.get("artifact_type")
+        == "shadow_markout_replay_input_manifest"
+        and manifest.get("schema_version") == "1.0.0"
+        and manifest.get("evidence_type") == "shadow_counterfactual"
+        and manifest.get("evidence_partition") == "shadow"
+        and manifest.get("research_only") is True
+        and all(manifest.get(field) is False for field in required_false)
+    ):
+        diagnostics["reason"] = "manifest_authority_contract_failed"
+        return {}, diagnostics
+    try:
+        expected_output = _resolve_manifest_path(
+            manifest.get("output_jsonl"), relative_to=manifest_path.parent
+        ).resolve()
+        resolved_jsonl = jsonl_path.expanduser().resolve()
+        expected_hash = str(manifest.get("content_sha256") or "").strip().lower()
+        if expected_output != resolved_jsonl:
+            diagnostics["reason"] = "manifest_output_path_mismatch"
+            return {}, diagnostics
+        if not expected_hash or _file_sha256(resolved_jsonl) != expected_hash:
+            diagnostics["reason"] = "content_hash_mismatch"
+            return {}, diagnostics
+    except (OSError, ValueError):
+        diagnostics["reason"] = "evidence_unreadable"
+        return {}, diagnostics
+
+    overrides: dict[tuple[str, pd.Timestamp], dict[str, Any]] = {}
+    outcome_ids: set[str] = set()
+    parsed_rows = 0
+    try:
+        with resolved_jsonl.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                parsed_rows += 1
+                if not isinstance(row, Mapping):
+                    raise ValueError(f"invalid shadow row {line_number}")
+                if not (
+                    row.get("schema_version") == "1.0.0"
+                    and row.get("evidence_type") == "shadow_counterfactual"
+                    and row.get("evidence_partition") == "shadow"
+                    and row.get("research_only") is True
+                    and all(row.get(field) is False for field in required_false)
+                ):
+                    raise ValueError(
+                        f"shadow authority contract failed at row {line_number}"
+                    )
+                if int(row.get("horizon_bars") or 0) != int(horizon_bars):
+                    continue
+                symbol = str(row.get("symbol") or "").strip().upper()
+                if symbol not in _GOVERNED_HISTORICAL_SYMBOLS:
+                    raise ValueError(f"ungoverned shadow symbol at row {line_number}")
+                timestamp = pd.to_datetime(
+                    row.get("decision_timestamp"), errors="coerce", utc=True
+                )
+                label_end = pd.to_datetime(
+                    row.get("label_end_timestamp"), errors="coerce", utc=True
+                )
+                edge = float(row.get("net_markout_bps"))
+                outcome_id = str(row.get("outcome_id") or "").strip()
+                if pd.isna(timestamp) or pd.isna(label_end) or not np.isfinite(edge):
+                    raise ValueError(f"invalid shadow label at row {line_number}")
+                if not outcome_id or outcome_id in outcome_ids:
+                    raise ValueError(f"duplicate shadow outcome at row {line_number}")
+                outcome_ids.add(outcome_id)
+                key = (symbol, cast(pd.Timestamp, timestamp))
+                if key in overrides:
+                    raise ValueError(f"duplicate shadow timestamp at row {line_number}")
+                overrides[key] = {
+                    "label_score_bps": edge,
+                    "label_end_timestamp": label_end,
+                    "outcome_id": outcome_id,
+                }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        diagnostics.update(
+            {"reason": "row_contract_failed", "error_type": type(exc).__name__}
+        )
+        return {}, diagnostics
+    if parsed_rows != int(manifest.get("row_count") or -1):
+        diagnostics.update(
+            {
+                "reason": "row_count_mismatch",
+                "manifest_rows": int(manifest.get("row_count") or 0),
+                "parsed_rows": parsed_rows,
+            }
+        )
+        return {}, diagnostics
+    diagnostics.update(
+        {
+            "usable": True,
+            "training_ingestion_enabled": bool(overrides),
+            "reason": "validated_research_only",
+            "manifest_path": str(manifest_path),
+            "jsonl_path": str(resolved_jsonl),
+            "content_sha256": expected_hash,
+            "row_count": parsed_rows,
+            "horizon_rows": len(overrides),
+        }
+    )
+    return overrides, diagnostics
+
+
+def _apply_shadow_markout_overrides(
+    dataset: pd.DataFrame,
+    *,
+    jsonl_path: Path | None,
+    manifest_path: Path | None,
+    horizon_bars: int,
+    label_objective: str,
+    min_net_edge_bps: float,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    overrides, diagnostics = _load_shadow_markout_overrides(
+        jsonl_path=jsonl_path,
+        manifest_path=manifest_path,
+        horizon_bars=horizon_bars,
+    )
+    if _normalize_label_objective(label_objective) != "net_markout":
+        diagnostics.update(
+            {
+                "training_ingestion_enabled": False,
+                "reason": (
+                    "objective_not_compatible"
+                    if diagnostics.get("usable")
+                    else diagnostics.get("reason")
+                ),
+            }
+        )
+        return dataset, diagnostics
+    if not overrides:
+        return dataset, diagnostics
+    result = dataset.copy()
+    result["label_source"] = "historical_bar_cost_adjusted"
+    result["shadow_outcome_id"] = None
+    matched = 0
+    for index, row in result.iterrows():
+        timestamp = pd.to_datetime(row.get("timestamp"), errors="coerce", utc=True)
+        key = (str(row.get("symbol") or "").strip().upper(), timestamp)
+        override = overrides.get(key)
+        if override is None:
+            continue
+        edge = float(override["label_score_bps"])
+        result.at[index, "net_long_bps"] = edge
+        result.at[index, "label_score_bps"] = edge
+        result.at[index, "label_end_timestamp"] = override["label_end_timestamp"]
+        result.at[index, "target"] = int(edge > float(min_net_edge_bps))
+        result.at[index, "label_source"] = "shadow_counterfactual"
+        result.at[index, "shadow_outcome_id"] = override["outcome_id"]
+        matched += 1
+    result.attrs.update(dataset.attrs)
+    diagnostics.update(
+        {
+            "matched_rows": matched,
+            "training_ingestion_enabled": matched > 0,
+            "reason": "ingested" if matched > 0 else "no_timestamp_matches",
+        }
+    )
+    result.attrs["shadow_markout_evidence"] = diagnostics
+    return result, diagnostics
+
+
 def _validated_historical_authority(
     payload: Mapping[str, Any],
     *,
@@ -2149,6 +2349,22 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             getattr(args, "allow_research_synthetic_timestamps", False)
         ),
     )
+    dataset, shadow_markout_evidence = _apply_shadow_markout_overrides(
+        dataset,
+        jsonl_path=(
+            Path(getattr(args, "shadow_markout_jsonl"))
+            if getattr(args, "shadow_markout_jsonl", None) is not None
+            else None
+        ),
+        manifest_path=(
+            Path(getattr(args, "shadow_markout_manifest_json"))
+            if getattr(args, "shadow_markout_manifest_json", None) is not None
+            else None
+        ),
+        horizon_bars=int(args.horizon_bars),
+        label_objective=str(getattr(args, "label_objective", "net_markout")),
+        min_net_edge_bps=float(args.min_net_edge_bps),
+    )
     if dataset.empty:
         raise RuntimeError("Replay-aligned training dataset is empty")
     if dataset["target"].nunique() < 2:
@@ -2401,6 +2617,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         "dataset": {
             "dataset_hash": acquisition["dataset_hash"],
             "load_reports": dataset.attrs.get("load_reports", {}),
+            "shadow_markout_evidence": shadow_markout_evidence,
             "rows": int(len(dataset)),
             "train_rows": int(len(train)),
             "validation_rows": int(len(oos_frame)),
@@ -2533,6 +2750,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Use AI_TRADING_LIVE_COST_MODEL_PATH for training labels when no explicit artifact is provided.",
     )
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
+    parser.add_argument("--shadow-markout-jsonl", type=Path, default=None)
+    parser.add_argument("--shadow-markout-manifest-json", type=Path, default=None)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--walk-forward-folds", type=int, default=5)
     parser.add_argument(

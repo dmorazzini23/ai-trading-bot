@@ -16,6 +16,7 @@ from ai_trading.models.contracts import infer_day_sleeve_regimes
 from ai_trading.tools.train_replay_aligned_model import (
     ContinuousEdgeEstimator,
     REPLAY_ALIGNED_FEATURE_COLUMNS,
+    _apply_shadow_markout_overrides,
     _edge_magnitude_sample_weights,
     _symbol_feature_cache_key,
     build_training_dataset,
@@ -28,6 +29,79 @@ from ai_trading.tools.train_replay_aligned_model import (
     train_replay_aligned_model,
 )
 from ai_trading.tools import train_replay_aligned_model as trainer
+
+
+def test_shadow_markout_overrides_are_hash_gated_and_research_only(
+    tmp_path: Path,
+) -> None:
+    timestamp = pd.Timestamp("2026-08-24T13:30:00Z")
+    label_end = pd.Timestamp("2026-08-24T13:31:00Z")
+    dataset = pd.DataFrame(
+        {
+            "symbol": ["AMZN"],
+            "timestamp": [timestamp],
+            "label_end_timestamp": [label_end],
+            "net_long_bps": [-5.0],
+            "label_score_bps": [-5.0],
+            "target": [0],
+        }
+    )
+    row = {
+        "schema_version": "1.0.0",
+        "evidence_type": "shadow_counterfactual",
+        "evidence_partition": "shadow",
+        "research_only": True,
+        "fill_based_evidence": False,
+        "promotion_eligible": False,
+        "runtime_authority": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+        "horizon_bars": 1,
+        "symbol": "AMZN",
+        "decision_timestamp": timestamp.isoformat(),
+        "label_end_timestamp": label_end.isoformat(),
+        "net_markout_bps": 12.5,
+        "outcome_id": "opp-a:shadow_counterfactual:h1:v1",
+    }
+    jsonl_path = tmp_path / "shadow.jsonl"
+    jsonl_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "artifact_type": "shadow_markout_replay_input_manifest",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "research_only": True,
+                "fill_based_evidence": False,
+                "promotion_eligible": False,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+                "row_count": 1,
+                "content_sha256": hashlib.sha256(jsonl_path.read_bytes()).hexdigest(),
+                "output_jsonl": str(jsonl_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result, diagnostics = _apply_shadow_markout_overrides(
+        dataset,
+        jsonl_path=jsonl_path,
+        manifest_path=manifest_path,
+        horizon_bars=1,
+        label_objective="net_markout",
+        min_net_edge_bps=0.0,
+    )
+
+    assert diagnostics["training_ingestion_enabled"] is True
+    assert diagnostics["matched_rows"] == 1
+    assert result.loc[0, "label_score_bps"] == 12.5
+    assert result.loc[0, "target"] == 1
+    assert result.loc[0, "label_source"] == "shadow_counterfactual"
+    assert diagnostics["promotion_authority"] is False
 
 
 def _write_cycle_bars(csv_path: Path, *, periods: int = 260, phase: float = 0.0) -> None:

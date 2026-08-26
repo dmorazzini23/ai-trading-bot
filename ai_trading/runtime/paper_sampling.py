@@ -344,12 +344,22 @@ def paper_sampling_deficit_snapshot(
         state = _load_state(path)
     current_state = state if str(state.get("date") or "") == today else {}
     raw_counts = _count_map(current_state, "by_symbol")
+    if current_state:
+        prior_counts = _count_map(current_state, "prior_day_by_symbol")
+        prior_date = str(current_state.get("prior_date") or "")
+    else:
+        prior_counts = _count_map(state, "by_symbol")
+        prior_date = str(state.get("date") or "")
     raw_session_counts = _count_map(
         current_state,
         "observed_by_symbol_session",
     )
     counts = {
         symbol: int(raw_counts.get(symbol, 0))
+        for symbol in configured_symbols
+    }
+    rolling_counts = {
+        symbol: counts[symbol] + int(prior_counts.get(symbol, 0))
         for symbol in configured_symbols
     }
     session_counts = {
@@ -371,6 +381,7 @@ def paper_sampling_deficit_snapshot(
     ranked_underfilled = sorted(
         underfilled,
         key=lambda symbol: (
+            rolling_counts[symbol],
             -deficits[symbol],
             session_counts[symbol],
             rotation_index[symbol],
@@ -380,7 +391,18 @@ def paper_sampling_deficit_snapshot(
     priority_reason = "balanced"
     if underfilled:
         distinct_deficits = {deficits[symbol] for symbol in underfilled}
-        if len(distinct_deficits) > 1:
+        distinct_rolling_counts = {
+            rolling_counts[symbol] for symbol in underfilled
+        }
+        if len(distinct_rolling_counts) > 1:
+            minimum_rolling_count = min(distinct_rolling_counts)
+            priority_symbols = [
+                symbol
+                for symbol in ranked_underfilled
+                if rolling_counts[symbol] == minimum_rolling_count
+            ]
+            priority_reason = "rolling_symbol_deficit"
+        if not priority_symbols and len(distinct_deficits) > 1:
             maximum_deficit = max(distinct_deficits)
             priority_symbols = [
                 symbol
@@ -388,7 +410,7 @@ def paper_sampling_deficit_snapshot(
                 if deficits[symbol] == maximum_deficit
             ]
             priority_reason = "symbol_deficit"
-        else:
+        if not priority_symbols:
             distinct_session_counts = {
                 session_counts[symbol] for symbol in underfilled
             }
@@ -403,6 +425,12 @@ def paper_sampling_deficit_snapshot(
 
     return base | {
         "counts": counts,
+        "prior_date": prior_date or None,
+        "prior_counts": {
+            symbol: int(prior_counts.get(symbol, 0))
+            for symbol in configured_symbols
+        },
+        "rolling_counts": rolling_counts,
         "session_counts": session_counts,
         "targets": {
             symbol: int(targets.get(symbol, 0))
@@ -582,6 +610,15 @@ def reserve_paper_sampling_order(
                 details,
             )
         current_state = state if state_date == today else {}
+        if current_state:
+            prior_date = str(current_state.get("prior_date") or "")
+            prior_day_by_symbol = _count_map(
+                current_state,
+                "prior_day_by_symbol",
+            )
+        else:
+            prior_date = state_date
+            prior_day_by_symbol = _count_map(state, "by_symbol")
         by_symbol = _count_map(current_state, "by_symbol")
         by_side = _count_map(current_state, "by_side")
         by_session = _count_map(current_state, "by_session")
@@ -786,6 +823,8 @@ def reserve_paper_sampling_order(
             "schema_version": "2.0.0",
             "artifact_type": "paper_sampling_state",
             "date": today,
+            "prior_date": prior_date or None,
+            "prior_day_by_symbol": prior_day_by_symbol,
             "count": next_count,
             "by_symbol": next_by_symbol,
             "by_side": next_by_side,

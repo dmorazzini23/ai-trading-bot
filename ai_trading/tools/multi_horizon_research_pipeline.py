@@ -158,13 +158,27 @@ def _candidate_training_rank_key(
     )
 
 
-def _development_eligible(record: Mapping[str, Any]) -> bool:
+def _development_eligibility_reasons(record: Mapping[str, Any]) -> list[str]:
     aggregate = _walk_forward_aggregate(record)
-    return bool(
-        aggregate.get("evidence_qualified")
-        and int(aggregate.get("trades") or 0) > 0
-        and float(aggregate.get("mean_post_cost_net_edge_bps") or 0.0) > 0.0
-    )
+    reasons = [str(value) for value in aggregate.get("qualification_reasons", [])]
+    if not bool(aggregate.get("evidence_qualified")):
+        reasons.append("walk_forward_evidence_not_qualified")
+    if int(aggregate.get("trades") or 0) <= 0:
+        reasons.append("no_walk_forward_trades")
+    if float(aggregate.get("mean_post_cost_net_edge_bps") or 0.0) <= 0.0:
+        reasons.append("nonpositive_walk_forward_expectancy")
+    if float(aggregate.get("profitable_fold_ratio") or 0.0) < 0.60:
+        reasons.append("unstable_walk_forward_folds")
+    if float(aggregate.get("stability_score") or 0.0) < 0.50:
+        reasons.append("weak_walk_forward_stability")
+    separation = aggregate.get("mean_ranking_high_minus_low_bps")
+    if separation is None or float(separation) <= 0.0:
+        reasons.append("nonpositive_ranking_separation")
+    return sorted(set(reasons))
+
+
+def _development_eligible(record: Mapping[str, Any]) -> bool:
+    return not _development_eligibility_reasons(record)
 
 
 def _candidate_falsification(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -175,12 +189,15 @@ def _candidate_falsification(record: Mapping[str, Any]) -> dict[str, Any]:
     mean_edge = aggregate.get("mean_post_cost_net_edge_bps")
     separation = aggregate.get("mean_ranking_high_minus_low_bps")
     profitable_ratio = aggregate.get("profitable_fold_ratio")
+    stability = aggregate.get("stability_score")
     if mean_edge is not None and float(mean_edge) <= 0.0:
         reasons.append("nonpositive_walk_forward_expectancy")
     if separation is not None and float(separation) <= 0.0:
         reasons.append("inverted_or_flat_score_orientation")
     if profitable_ratio is not None and float(profitable_ratio) < 0.60:
         reasons.append("unstable_walk_forward_folds")
+    if stability is None or float(stability) < 0.50:
+        reasons.append("weak_walk_forward_stability")
     if record.get("error") or record.get("full_evaluation_error"):
         reasons.append("training_or_evaluation_error")
     unique_reasons = sorted(set(reasons))
@@ -292,6 +309,10 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             + sum(ord(char) for char in str(record["model_type"])),
             training_cache=getattr(args, "training_cache", None),
             training_cache_dir=getattr(args, "training_cache_dir", None),
+            shadow_markout_jsonl=getattr(args, "shadow_markout_jsonl", None),
+            shadow_markout_manifest_json=getattr(
+                args, "shadow_markout_manifest_json", None
+            ),
         )
 
     def _merge_training_report(
@@ -393,11 +414,11 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         reverse=True,
     )
     for record in development_ranked:
-        aggregate = _walk_forward_aggregate(record)
         record["development_eligible"] = _development_eligible(record)
-        record["development_eligibility_reasons"] = list(
-            aggregate.get("qualification_reasons") or []
+        record["development_eligibility_reasons"] = (
+            _development_eligibility_reasons(record)
         )
+        record["shadow_only"] = not record["development_eligible"]
         record["falsification"] = _candidate_falsification(record)
     eligible_ranked = [
         record for record in development_ranked if record["development_eligible"]
@@ -639,6 +660,16 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "one_bar_challengers": [
             record for record in candidates if int(record.get("horizon_bars", 0)) == 1
         ],
+        "shadow_only_candidates": [
+            {
+                "model_name": record.get("model_name"),
+                "horizon_bars": record.get("horizon_bars"),
+                "label_objective": record.get("label_objective"),
+                "reasons": record.get("development_eligibility_reasons", []),
+            }
+            for record in development_ranked
+            if bool(record.get("shadow_only"))
+        ],
         "governance_status": "shadow",
         "promotion_authority": False,
         "live_money_authority": False,
@@ -694,6 +725,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
     parser.add_argument("--use-live-cost-model", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
+    parser.add_argument("--shadow-markout-jsonl", type=Path, default=None)
+    parser.add_argument("--shadow-markout-manifest-json", type=Path, default=None)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--walk-forward-folds", type=int, default=5)
     parser.add_argument("--walk-forward-embargo-bars", type=int, default=1)

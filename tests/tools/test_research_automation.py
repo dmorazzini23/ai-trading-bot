@@ -147,6 +147,9 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert ordered_step_names.index(
         "model_data_drift_current_evidence"
     ) < ordered_step_names.index("model_data_drift_monitor")
+    assert ordered_step_names.index(
+        "model_data_drift_current_evidence"
+    ) < ordered_step_names.index("model_data_drift_shadow_baseline_candidate")
     current_command = [str(token) for token in current_drift["command"]]
     monitor_command = [str(token) for token in drift_monitor["command"]]
     registry_output = str(registry["output_path"])
@@ -162,6 +165,13 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "expected_edge_calibration.json" not in monitor_command
     assert current_drift["metadata"]["baseline_mutation"] is False
     assert drift_monitor["metadata"]["baseline_mutation"] is False
+    shadow_baseline = next(
+        step
+        for step in payload["steps"]  # type: ignore[index]
+        if step["name"] == "model_data_drift_shadow_baseline_candidate"
+    )
+    assert shadow_baseline["metadata"]["baseline_mutation"] is False
+    assert shadow_baseline["metadata"]["research_only"] is True
 
 
 def test_hf_research_api_requires_second_explicit_toggle(
@@ -260,7 +270,10 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     )
     assert step_names.index("opportunity_markouts") < step_names.index(
         "shadow_markout_replay_input"
-    ) < step_names.index("daily_research_pipeline")
+    ) < step_names.index("training_accelerator_daily")
+    assert step_names.index("training_accelerator_daily") < step_names.index(
+        "daily_research_pipeline"
+    )
     assert step_names.index("shadow_markout_replay_input") < step_names.index(
         "counterfactual_execution_replay"
     ) < step_names.index("trading_day_report_enriched")
@@ -277,6 +290,7 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     )
     assert "--research-cost-fallback" in accelerator_command
     assert "--shadow-markout-jsonl" in accelerator_command
+    assert "--shadow-markout-fallback-manifest-json" in accelerator_command
     assert accelerator["blocked_returncodes"] == [2]
     live_cost = next(step for step in payload["steps"] if step["name"] == "live_cost_model")
     live_cost_command = [str(token) for token in live_cost["command"]]

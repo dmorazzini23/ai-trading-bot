@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -140,19 +141,23 @@ def test_training_accelerator_research_fallback_does_not_use_unready_live_cost(
     assert calls[0].use_live_cost_model is False
 
 
-def test_training_accelerator_records_validated_shadow_manifest_without_ingestion(
+def test_training_accelerator_ingests_validated_shadow_manifest(
     tmp_path: Path,
 ) -> None:
     manifest = tmp_path / "shadow_manifest.json"
+    shadow_jsonl = tmp_path / "shadow.jsonl"
+    shadow_jsonl.write_text('{"evidence_type":"shadow_counterfactual"}\n', encoding="utf-8")
     manifest.write_text(
         json.dumps(
             {
+                "schema_version": "1.0.0",
                 "artifact_type": "shadow_markout_replay_input_manifest",
                 "evidence_type": "shadow_counterfactual",
                 "evidence_partition": "shadow",
                 "research_only": True,
                 "row_count": 12,
-                "content_sha256": "abc123",
+                "content_sha256": hashlib.sha256(shadow_jsonl.read_bytes()).hexdigest(),
+                "output_jsonl": str(shadow_jsonl),
                 "fill_based_evidence": False,
                 "promotion_eligible": False,
                 "runtime_authority": False,
@@ -172,7 +177,7 @@ def test_training_accelerator_records_validated_shadow_manifest_without_ingestio
             training_cache_dir=tmp_path / "cache",
             model_type="logistic",
             shadow_markout_manifest_json=manifest,
-            shadow_markout_jsonl=tmp_path / "shadow.jsonl",
+            shadow_markout_jsonl=shadow_jsonl,
             plan_only=True,
             max_replay_candidates=None,
         )
@@ -181,7 +186,58 @@ def test_training_accelerator_records_validated_shadow_manifest_without_ingestio
     evidence = report["shadow_markout_evidence"]
     assert evidence["usable"] is True
     assert evidence["row_count"] == 12
-    assert evidence["training_ingestion_enabled"] is False
+    assert evidence["training_ingestion_enabled"] is True
+    assert report["shadow_markout_selection"]["source"] == "current_run"
+
+
+def test_training_accelerator_falls_back_to_latest_verified_shadow_manifest(
+    tmp_path: Path,
+) -> None:
+    fallback_jsonl = tmp_path / "latest.jsonl"
+    fallback_jsonl.write_text("{}\n", encoding="utf-8")
+    fallback_manifest = tmp_path / "latest_manifest.json"
+    fallback_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "artifact_type": "shadow_markout_replay_input_manifest",
+                "evidence_type": "shadow_counterfactual",
+                "evidence_partition": "shadow",
+                "research_only": True,
+                "row_count": 1,
+                "content_sha256": hashlib.sha256(
+                    fallback_jsonl.read_bytes()
+                ).hexdigest(),
+                "output_jsonl": str(fallback_jsonl),
+                "fill_based_evidence": False,
+                "promotion_eligible": False,
+                "runtime_authority": False,
+                "promotion_authority": False,
+                "live_money_authority": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = training_accelerator.run_training_accelerator(
+        argparse.Namespace(
+            cadence="daily",
+            data_dir=tmp_path,
+            symbols="AAPL,AMZN,MSFT",
+            output_dir=tmp_path / "out",
+            training_cache_dir=tmp_path / "cache",
+            model_type="logistic",
+            shadow_markout_manifest_json=tmp_path / "missing_manifest.json",
+            shadow_markout_jsonl=tmp_path / "missing.jsonl",
+            shadow_markout_fallback_manifest_json=fallback_manifest,
+            shadow_markout_fallback_jsonl=fallback_jsonl,
+            plan_only=True,
+            max_replay_candidates=None,
+        )
+    )
+
+    assert report["shadow_markout_selection"]["fallback_used"] is True
+    assert report["shadow_markout_evidence"]["usable"] is True
 
 
 def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, monkeypatch) -> None:

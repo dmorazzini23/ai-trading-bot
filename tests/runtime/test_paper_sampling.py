@@ -737,6 +737,54 @@ def test_paper_sampling_reservation_symbols_requires_active_fairness() -> None:
     ) == []
 
 
+def test_paper_sampling_deficit_snapshot_prioritizes_prior_day_starvation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_max_trades_per_day=12,
+        paper_sampling_stratified_fairness_enabled=True,
+    )
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.0.0",
+                "artifact_type": "paper_sampling_state",
+                "date": "2026-07-20",
+                "count": 8,
+                "by_symbol": {"AAPL": 4, "AMZN": 4},
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_day = datetime(2026, 7, 21, 17, 0, tzinfo=UTC)
+
+    snapshot = paper_sampling_deficit_snapshot(cfg, now=next_day)
+
+    assert snapshot["prior_date"] == "2026-07-20"
+    assert snapshot["prior_counts"] == {"AAPL": 4, "AMZN": 4, "MSFT": 0}
+    assert snapshot["rolling_counts"] == {"AAPL": 4, "AMZN": 4, "MSFT": 0}
+    assert snapshot["priority_reason"] == "rolling_symbol_deficit"
+    assert snapshot["priority_symbols"] == ["MSFT"]
+    assert paper_sampling_reservation_symbols(snapshot)[0] == "MSFT"
+
+    reserved = reserve_paper_sampling_order(
+        cfg,
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=next_day,
+    )
+    assert reserved.allowed is True
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["prior_date"] == "2026-07-20"
+    assert persisted["prior_day_by_symbol"] == {"AAPL": 4, "AMZN": 4}
+
+
 def test_paper_sampling_does_not_bypass_oms_order_size_block() -> None:
     cfg = _cfg(max_order_dollars=50.0)
     sampling = evaluate_paper_sampling_order(

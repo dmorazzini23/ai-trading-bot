@@ -15,6 +15,9 @@ def test_development_eligibility_requires_qualified_positive_supported_edge() ->
                 "evidence_qualified": True,
                 "trades": 250,
                 "mean_post_cost_net_edge_bps": 0.1,
+                "profitable_fold_ratio": 0.8,
+                "stability_score": 0.75,
+                "mean_ranking_high_minus_low_bps": 1.0,
             }
         }
     }
@@ -24,6 +27,9 @@ def test_development_eligibility_requires_qualified_positive_supported_edge() ->
         {"trades": 0},
         {"mean_post_cost_net_edge_bps": 0.0},
         {"mean_post_cost_net_edge_bps": -0.1},
+        {"profitable_fold_ratio": 0.4},
+        {"stability_score": 0.2},
+        {"mean_ranking_high_minus_low_bps": 0.0},
     ):
         aggregate = dict(base["walk_forward"]["aggregate"], **override)
         record = {"walk_forward": {"aggregate": aggregate}}
@@ -58,6 +64,7 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
                         0.8 if int(args.horizon_bars) == 1 else 0.4
                     ),
                     "stability_score": 0.75,
+                    "mean_ranking_high_minus_low_bps": 1.0,
                     "trades": 300,
                 }
             },
@@ -175,6 +182,7 @@ def test_multi_horizon_pipeline_replays_only_top_training_candidates(
                     }[int(args.horizon_bars)],
                     "profitable_fold_ratio": 0.8,
                     "stability_score": 0.7,
+                    "mean_ranking_high_minus_low_bps": 1.0,
                     "trades": 300,
                 }
             },
@@ -268,6 +276,7 @@ def test_multi_family_halving_confirms_exactly_one_winner(
                     "mean_post_cost_net_edge_bps": edge,
                     "profitable_fold_ratio": 0.8,
                     "stability_score": 0.8,
+                    "mean_ranking_high_minus_low_bps": 1.0,
                     "trades": 300,
                 }
             },

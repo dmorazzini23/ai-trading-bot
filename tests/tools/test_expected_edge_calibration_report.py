@@ -91,6 +91,30 @@ def test_expected_edge_calibration_reports_sell_exit_quality() -> None:
     assert payload["calibration_correction"]["side_multipliers"]["sell"]["expected_edge_multiplier"] == 0.0
 
 
+def test_expected_edge_calibration_builds_shrunk_symbol_session_multipliers() -> None:
+    fills = _rows(5, expected=10.0, realized=5.0, symbol="AAPL") + [
+        {**row, "session_regime": "closing"}
+        for row in _rows(2, expected=10.0, realized=-2.0, symbol="MSFT")
+    ]
+
+    payload = report_tool.build_expected_edge_calibration_report(
+        report_date="2026-05-05",
+        fills=fills,
+        min_samples=5,
+        min_bucket_samples=5,
+    )
+
+    calibration = payload["symbol_session_calibration"]
+    aapl = calibration["buckets"]["AAPL:midday"]
+    msft = calibration["buckets"]["MSFT:closing"]
+    assert aapl["recommended_action"] == "shadow_apply_shrunk_multiplier"
+    assert 0.0 < aapl["expected_edge_multiplier"] < 1.0
+    assert msft["recommended_action"] == "collect_more_bucket_samples"
+    assert msft["expected_edge_multiplier"] is None
+    assert calibration["runtime_authority"] is False
+    assert calibration["live_money_authority"] is False
+
+
 def test_expected_edge_calibration_enriches_exact_tca_metadata_without_changing_gate() -> None:
     fill = {
         "ts": "2026-05-05T14:00:03Z",

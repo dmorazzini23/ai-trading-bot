@@ -363,6 +363,45 @@ def build_drift_baseline_proposal(
     return proposal
 
 
+def build_shadow_drift_baseline_candidate(
+    evidence: Mapping[str, Any],
+    *,
+    baseline_id: str,
+) -> dict[str, Any]:
+    """Bind current evidence to a shadow candidate without granting authority."""
+
+    if evidence.get("artifact_type") != "model_data_drift_evidence":
+        raise ValueError("baseline_evidence_contract_invalid")
+    if evidence.get("evidence_contract_version") != EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("baseline_evidence_contract_incompatible")
+    identifier = str(baseline_id or "").strip()
+    if not identifier:
+        raise ValueError("baseline_id_required")
+    coverage = evidence.get("coverage")
+    complete = isinstance(coverage, Mapping) and bool(coverage.get("complete"))
+    candidate = dict(evidence)
+    candidate.update(
+        {
+            "schema_version": "1.0.0",
+            "artifact_type": "model_data_drift_shadow_baseline_candidate",
+            "baseline_id": identifier,
+            "candidate_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "status": "ready_for_review" if complete else "insufficient_evidence",
+            "approval": {
+                "approved": False,
+                "automatic_roll_forward": False,
+                "governed_baseline_mutation": False,
+                "separate_approval_artifact_required": True,
+            },
+            "research_only": True,
+            "promotion_authority": False,
+            "live_money_authority": False,
+        }
+    )
+    candidate["candidate_sha256"] = _canonical_sha256(candidate)
+    return candidate
+
+
 def build_governed_drift_baseline(
     proposal: Mapping[str, Any],
     *,
@@ -461,7 +500,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline-id", default="")
     parser.add_argument("--approved-by", default="")
     parser.add_argument("--approve-proposal-json", type=Path, default=None)
+    parser.add_argument("--shadow-candidate-from-evidence-json", type=Path, default=None)
     args = parser.parse_args(argv)
+
+    if args.shadow_candidate_from_evidence_json is not None:
+        if not str(args.baseline_id or "").strip():
+            parser.error("--baseline-id is required with --shadow-candidate-from-evidence-json")
+        try:
+            evidence = json.loads(
+                args.shadow_candidate_from_evidence_json.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"drift evidence is unreadable: {exc}")
+        if not isinstance(evidence, Mapping):
+            parser.error("drift evidence must contain a JSON object")
+        shadow_payload = build_shadow_drift_baseline_candidate(
+            evidence,
+            baseline_id=str(args.baseline_id),
+        )
+        if args.output_json.exists():
+            parser.error(f"refusing to overwrite immutable drift artifact: {args.output_json}")
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(
+            json.dumps(shadow_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return 0
 
     if args.approve_proposal_json is not None:
         if not str(args.approved_by or "").strip():

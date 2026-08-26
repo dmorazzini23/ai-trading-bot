@@ -352,6 +352,7 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     regime_champions = config.run_dir / "regime_champion_models.json"
     adversarial_failure = config.run_dir / "adversarial_failure_simulation.json"
     current_drift_evidence = config.run_dir / "model_data_drift_current.json"
+    shadow_drift_baseline = config.run_dir / "model_data_drift_shadow_baseline_candidate.json"
     drift_monitor = config.run_dir / "model_data_drift_monitor.json"
     operator_control = config.run_dir / "operator_control_plane.json"
     hf_discovery = config.run_dir / "hf_discovery.json"
@@ -972,6 +973,27 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             output_path=drift_monitor,
             metadata={
                 "baseline_mutation": False,
+                "live_money_authority": False,
+            },
+        ),
+        ResearchStep(
+            name="model_data_drift_shadow_baseline_candidate",
+            command=_python_module(
+                "ai_trading.tools.model_data_drift_baseline",
+                "--shadow-candidate-from-evidence-json",
+                current_drift_evidence,
+                "--baseline-id",
+                f"shadow-challenger-{config.report_date}",
+                "--output-json",
+                shadow_drift_baseline,
+            ),
+            purpose="Create a model-bound shadow drift candidate for review without mutating the governed baseline.",
+            output_path=shadow_drift_baseline,
+            skip_if_missing=(current_drift_evidence,),
+            metadata={
+                "baseline_mutation": False,
+                "research_only": True,
+                "promotion_authority": False,
                 "live_money_authority": False,
             },
         ),
@@ -1714,6 +1736,14 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     shadow_markout_replay_input,
                     "--shadow-markout-manifest-json",
                     shadow_markout_replay_manifest,
+                    "--shadow-markout-fallback-jsonl",
+                    config.report_root
+                    / "latest"
+                    / "shadow_markout_replay_input_latest.jsonl",
+                    "--shadow-markout-fallback-manifest-json",
+                    config.report_root
+                    / "latest"
+                    / "shadow_markout_replay_input_manifest_latest.json",
                 ),
                 purpose="Refresh cached lightweight replay-aligned training candidates.",
                 output_path=training_accelerator,
@@ -1829,6 +1859,31 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 },
             ),
         )
+    # The accelerator must consume the current run's verified shadow export.
+    # Keep every direct accelerator consumer behind that export as one ordered
+    # chain so later insertions cannot silently restore the stale ordering.
+    accelerator_chain_names = (
+        "training_accelerator_daily",
+        "regime_champion_models",
+        "upward_trajectory_report",
+        "operator_control_plane",
+    )
+    accelerator_chain = [
+        step for name in accelerator_chain_names for step in steps if step.name == name
+    ]
+    if accelerator_chain and any(
+        step.name == "shadow_markout_replay_input" for step in steps
+    ):
+        steps = [
+            step for step in steps if step.name not in accelerator_chain_names
+        ]
+        shadow_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step.name == "shadow_markout_replay_input"
+        )
+        for offset, step in enumerate(accelerator_chain, start=1):
+            steps.insert(shadow_index + offset, step)
     accelerator_step_index = next(
         (
             index
