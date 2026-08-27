@@ -134,6 +134,7 @@ def build_shadow_markout_replay_rows(
                 "source_timestamp": outcome.get("source_timestamp"),
                 "decision_timestamp": outcome.get("decision_timestamp"),
                 "label_end_timestamp": outcome.get("label_end_timestamp"),
+                "label_status": "resolved",
                 "horizon_bars": horizon,
                 "bar_timeframe": "1Min",
                 "entry_price": entry_price,

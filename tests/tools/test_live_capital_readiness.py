@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 from ai_trading.tools import live_capital_readiness
 
@@ -18,6 +20,37 @@ def _healthy_payload() -> dict[str, object]:
         "replay_live_parity_gate": {"ok": True},
         "data_provider": {"status": "healthy"},
     }
+
+
+def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
+    body = json.dumps(
+        {
+            "ok": False,
+            "status": "healthy",
+            "broker": {"connected": True},
+            "database": {"ok": True},
+            "readiness_failures": ["required_model_stale"],
+        }
+    ).encode("utf-8")
+
+    def raise_http_error(*_args, **_kwargs):
+        raise HTTPError(
+            url="http://127.0.0.1:9001/healthz",
+            code=503,
+            msg="Service Unavailable",
+            hdrs={},
+            fp=BytesIO(body),
+        )
+
+    monkeypatch.setattr(live_capital_readiness, "urlopen", raise_http_error)
+
+    payload = live_capital_readiness._health_from_endpoint(
+        "http://127.0.0.1:9001/healthz"
+    )
+
+    assert payload["broker"] == {"connected": True}
+    assert payload["database"] == {"ok": True}
+    assert payload["readiness_failures"] == ["required_model_stale"]
 
 
 def test_live_capital_readiness_blocks_without_live_cost(monkeypatch):

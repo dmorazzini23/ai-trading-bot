@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -16,6 +16,13 @@ from ai_trading.execution import production_engine as pe
 
 def _coordinator(monkeypatch) -> pe.ProductionExecutionCoordinator:
     coordinator = pe.ProductionExecutionCoordinator(account_equity=100_000.0)
+
+    async def _inline_to_thread(
+        func: Callable[..., Any], /, *args: Any, **kwargs: Any
+    ) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(pe.asyncio, "to_thread", _inline_to_thread)
     monkeypatch.setattr(
         coordinator.alert_manager,
         "send_trading_alert",

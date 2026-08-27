@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from ai_trading.analytics.opportunity_markouts import resolve_opportunity_markouts
+from ai_trading.tools import counterfactual_execution_replay_report
 from ai_trading.tools.shadow_markout_replay_input import (
     build_shadow_markout_replay_rows,
     main,
@@ -83,6 +84,7 @@ def test_build_research_rows_is_resolved_only_deterministic_and_bounded() -> Non
     assert {row["horizon_bars"] for row in rows} == {1, 3, 5}
     assert {row["submitted"] for row in rows} == {False, True}
     assert all(row["bar_timeframe"] == "1Min" for row in rows)
+    assert all(row["label_status"] == "resolved" for row in rows)
     assert all(row["research_only"] is True for row in rows)
     assert all(row["fill_based_evidence"] is False for row in rows)
     assert all(row["promotion_eligible"] is False for row in rows)
@@ -96,6 +98,31 @@ def test_build_research_rows_is_resolved_only_deterministic_and_bounded() -> Non
             source_report_sha256="a" * 64,
             max_rows=5,
         )
+
+
+def test_exported_rows_round_trip_into_counterfactual_replay() -> None:
+    rows = build_shadow_markout_replay_rows(
+        _markout_report(),
+        source_report_sha256="a" * 64,
+        max_rows=6,
+    )
+
+    payload = counterfactual_execution_replay_report.build_counterfactual_execution_replay_report(
+        report_date="2026-07-21",
+        decisions=[
+            {
+                "correlation_id": "opp-not-submitted",
+                "symbol": "AAPL",
+                "status": "rejected",
+            }
+        ],
+        outcomes=rows,
+        min_counterfactual_samples=1,
+    )
+
+    assert payload["summary"]["rejected_counterfactual_samples"] == 1
+    assert payload["summary"]["rejected_decisions_without_linked_outcomes"] == 0
+    assert payload["summary"]["outcome_join_methods"] == {"identity": 1}
 
 
 def test_research_input_writer_is_atomic_and_publishes_manifest(

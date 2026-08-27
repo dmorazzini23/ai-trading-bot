@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from ai_trading.config.launch_profiles import launch_profile_payload, resolve_launch_profile
@@ -26,12 +28,26 @@ def _read_json(path: Path | None) -> dict[str, Any]:
 
 
 def _health_from_endpoint(url: str) -> dict[str, Any]:
-    try:
-        with urlopen(url, timeout=5.0) as response:  # nosec B310 - local operator health endpoint
-            parsed = json.loads(response.read().decode("utf-8"))
-    except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    for attempt in range(3):
+        try:
+            with urlopen(url, timeout=5.0) as response:  # nosec B310 - local operator health endpoint
+                parsed = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            try:
+                parsed = json.loads(exc.read().decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+            if attempt < 2:
+                time.sleep(0.25)
+            continue
+        except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
+            if attempt < 2:
+                time.sleep(0.25)
+            continue
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _nested(payload: Mapping[str, Any], *keys: str) -> Mapping[str, Any]:

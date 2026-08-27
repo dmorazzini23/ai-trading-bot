@@ -1,9 +1,41 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 from ai_trading.tools import daily_research_pipeline
+
+
+def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
+    body = json.dumps(
+        {
+            "ok": False,
+            "status": "healthy",
+            "data_provider": {"status": "warming_up"},
+            "readiness_failures": ["required_model_stale"],
+        }
+    ).encode("utf-8")
+
+    def raise_http_error(*_args, **_kwargs):
+        raise HTTPError(
+            url="http://127.0.0.1:9001/healthz",
+            code=503,
+            msg="Service Unavailable",
+            hdrs={},
+            fp=BytesIO(body),
+        )
+
+    monkeypatch.setattr(daily_research_pipeline, "urlopen", raise_http_error)
+
+    payload = daily_research_pipeline._health_from_endpoint(
+        "http://127.0.0.1:9001/healthz"
+    )
+
+    assert payload["status"] == "healthy"
+    assert payload["data_provider"] == {"status": "warming_up"}
+    assert payload["readiness_failures"] == ["required_model_stale"]
 
 
 def test_daily_research_report_blocks_live_profile_without_promotion(monkeypatch):
