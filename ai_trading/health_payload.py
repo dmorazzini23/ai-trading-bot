@@ -1584,6 +1584,18 @@ def build_runtime_health_payload(
         overall_ok = False
     if not overall_ok:
         degraded = True
+    paper_evidence_operational_ok = bool(
+        broker_healthy
+        and provider_authority_ok
+        and not service_degraded_for_health
+        and not replay_gate_readiness_failure
+        and (not require_database_ready or database_ok)
+        and (not require_oms_invariants or not oms_invariants_failure)
+        and (
+            not require_oms_lifecycle_parity
+            or not oms_lifecycle_parity_failure
+        )
+    )
     readiness_failures: list[str] = []
     if require_database_ready and not database_ok:
         readiness_failures.append("database_unhealthy")
@@ -1678,7 +1690,13 @@ def build_runtime_health_payload(
         "replay_gate_ok": replay_gate_ok,
         "replay_gate_required": bool(require_replay_live_parity_gate),
         "replay_gate_enforced": replay_gate_enforced_for_mode,
-        "paper_evidence_allowed": bool(paper_evidence_mode and overall_ok),
+        # Replay/model promotion failures must remain visible and keep live
+        # capital disabled, but they are monitor-only for conservative paper
+        # evidence.  Operational, provider, broker, DB, and OMS failures still
+        # fail paper collection closed.
+        "paper_evidence_allowed": bool(
+            paper_evidence_mode and paper_evidence_operational_ok
+        ),
         "live_new_exposure_allowed": bool(
             live_execution_mode
             and not replay_gate_failure

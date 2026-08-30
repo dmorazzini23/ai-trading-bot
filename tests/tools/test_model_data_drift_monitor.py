@@ -156,6 +156,62 @@ def test_model_data_drift_monitor_accepts_approved_compatible_baseline() -> None
     assert report["contract"]["baseline_coverage"]["complete"] is True
 
 
+def test_governed_identity_keeps_immutable_baseline_fresh_until_model_changes() -> None:
+    baseline_at = datetime(2026, 7, 1, tzinfo=UTC)
+    now = datetime(2026, 8, 1, tzinfo=UTC)
+    evidence = _governed_evidence(baseline_at)
+    evidence["model"]["dataset_hash"] = "dataset-1"
+    proposal = model_data_drift_baseline.build_drift_baseline_proposal(
+        evidence,
+        baseline_id="shadow-1-dataset-1",
+    )
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        proposal,
+        approved_by="operator",
+        approved_at=baseline_at,
+    )
+    current = _governed_evidence(now)
+    current["model"]["dataset_hash"] = "dataset-1"
+
+    report = model_data_drift_monitor.build_model_data_drift_monitor(
+        baseline=baseline,
+        current=current,
+        max_baseline_age_hours=24.0,
+        now=now,
+    )
+
+    assert "baseline_stale" not in report["reasons"]
+    assert report["freshness"]["baseline"]["freshness_basis"] == (
+        "governed_model_dataset_identity"
+    )
+
+
+def test_governed_baseline_rejects_dataset_identity_change() -> None:
+    now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
+    evidence = _governed_evidence(now)
+    evidence["model"]["dataset_hash"] = "dataset-1"
+    proposal = model_data_drift_baseline.build_drift_baseline_proposal(
+        evidence,
+        baseline_id="shadow-1-dataset-1",
+    )
+    baseline = model_data_drift_baseline.build_governed_drift_baseline(
+        proposal,
+        approved_by="operator",
+        approved_at=now,
+    )
+    current = dict(evidence)
+    current["model"] = dict(evidence["model"])
+    current["model"]["dataset_hash"] = "dataset-2"
+
+    report = model_data_drift_monitor.build_model_data_drift_monitor(
+        baseline=baseline,
+        current=current,
+        now=now,
+    )
+
+    assert "dataset_hash_mismatch" in report["reasons"]
+
+
 def test_model_data_drift_monitor_rejects_unapproved_or_mismatched_evidence() -> None:
     now = datetime(2026, 7, 18, 5, 0, tzinfo=UTC)
     current = _governed_evidence(now, model_id="shadow-2")

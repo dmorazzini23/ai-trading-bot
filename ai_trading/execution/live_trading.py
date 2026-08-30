@@ -17847,6 +17847,11 @@ class ExecutionEngine:
             if position_entry_correlation_id:
                 fill_record["position_entry_correlation_id"] = position_entry_correlation_id
                 fill_record["correlation_id"] = position_entry_correlation_id
+        if closing_position and not str(fill_record.get("correlation_id") or "").strip():
+            position_entry_correlation_id = self.position_correlation_id(symbol)
+            if position_entry_correlation_id:
+                fill_record["position_entry_correlation_id"] = position_entry_correlation_id
+                fill_record["correlation_id"] = position_entry_correlation_id
         fill_record["closing_position"] = bool(closing_position)
         fill_record["order_role"] = "exit" if closing_position else str(
             fill_record.get("order_role") or "entry"
@@ -28499,6 +28504,51 @@ class ExecutionEngine:
             and str(provider_state.get("data_status") or "").strip().lower()
             not in {"degraded", "empty"}
         )
+        primary_probe_requested = False
+        primary_probe_symbols: list[str] = []
+        if not provider_ready and bool(provider_state.get("using_backup")):
+            probe_enabled = _resolve_bool_env(
+                "AI_TRADING_EXECUTION_PREOPEN_PRIMARY_RECOVERY_PROBE_ENABLED"
+            )
+            if probe_enabled is None:
+                probe_enabled = True
+            probe_cooldown = _config_float(
+                "AI_TRADING_EXECUTION_PREOPEN_PRIMARY_RECOVERY_PROBE_COOLDOWN_SEC",
+                60.0,
+            )
+            probe_cooldown = max(5.0, float(probe_cooldown or 60.0))
+            now_mono = float(monotonic_time())
+            last_probe_mono = float(
+                getattr(self, "_preopen_primary_recovery_probe_mono", 0.0) or 0.0
+            )
+            if bool(probe_enabled) and (
+                last_probe_mono <= 0.0
+                or (now_mono - last_probe_mono) >= probe_cooldown
+            ):
+                configured_symbols = str(
+                    _runtime_env(
+                        "AI_TRADING_PAPER_SAMPLING_SYMBOLS",
+                        "AAPL,AMZN,MSFT",
+                    )
+                    or "AAPL,AMZN,MSFT"
+                )
+                primary_probe_symbols = [
+                    symbol.strip().upper()
+                    for symbol in configured_symbols.split(",")
+                    if symbol.strip()
+                ]
+                try:
+                    from ai_trading.data.fetch import request_primary_recovery_probe
+
+                    primary_probe_requested = bool(
+                        request_primary_recovery_probe(primary_probe_symbols)
+                    )
+                except LIVE_TRADING_FALLBACK_EXC:
+                    logger.warning(
+                        "PREOPEN_PRIMARY_RECOVERY_PROBE_REQUEST_FAILED",
+                        exc_info=True,
+                    )
+                self._preopen_primary_recovery_probe_mono = now_mono
 
         broker_state = runtime_state.observe_broker_status()
         broker_status = str(broker_state.get("status") or "").strip().lower()
@@ -28646,6 +28696,8 @@ class ExecutionEngine:
             "minute_of_day": int(current_minute),
             "provider_status": provider_status or "unknown",
             "provider_ready": bool(provider_ready),
+            "primary_probe_requested": bool(primary_probe_requested),
+            "primary_probe_symbols": primary_probe_symbols,
             "broker_status": broker_status or "unknown",
             "broker_ready": bool(broker_ready),
             "capture_ratio": float(capture_ratio) if capture_ratio is not None else None,

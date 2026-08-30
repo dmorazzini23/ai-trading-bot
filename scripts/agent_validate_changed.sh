@@ -186,6 +186,7 @@ run_full_validation() {
 
 if [[ "$MODE" == "full" ]]; then
   run_full_validation
+  run ./venv/bin/python -m ai_trading.tools.full_validation_artifact
   echo "agent_validate_changed: full validation passed"
   exit 0
 fi

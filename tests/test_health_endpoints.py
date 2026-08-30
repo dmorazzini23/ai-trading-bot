@@ -764,6 +764,8 @@ def test_runtime_health_payload_db_requirement_marks_degraded(monkeypatch):
 def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
     monkeypatch,
 ):
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL", "1")
     monkeypatch.setattr(
         health_payload_module,
@@ -813,6 +815,7 @@ def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
     assert payload["latest_training_attempt"]["status"] == "skipped"
     assert payload["latest_training_attempt"]["reason"] == "no_qualified_candidate"
     assert payload["latest_training_attempt"]["runtime_authority"] is False
+    assert payload["entry_control"]["paper_evidence_allowed"] is True
 
 
 def test_runtime_health_payload_db_requirement_rejects_unconfigured_db(monkeypatch):

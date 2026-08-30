@@ -321,6 +321,37 @@ def test_emit_cycle_slo_alerts_suppresses_fallback_alert_when_provider_telemetry
     assert "ALERT_PRIMARY_FEED_FALLBACK_PROLONGED" not in emitted
 
 
+def test_emit_cycle_slo_alerts_suppresses_market_closed_fallback_and_resets_streak(
+    monkeypatch,
+) -> None:
+    main._PRIMARY_FALLBACK_STREAK_SINCE_TS = 10.0
+    main._PRIMARY_FALLBACK_LAST_ALERT_TS = 20.0
+    monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", "999999")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_WARN_SEC", "0")
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "updated": datetime.now(UTC).isoformat(),
+            "active": "yahoo",
+            "reason": "market_closed",
+            "status": "degraded",
+            "using_backup": True,
+            "timeframes": {"1Min": True},
+        },
+    )
+    emitted: list[str] = []
+    monkeypatch.setattr(main, "emit_runtime_alert", lambda name, **_kwargs: emitted.append(name))
+
+    main._emit_cycle_slo_alerts(cycle_index=1, compute_ms=10.0, closed=True)
+
+    assert "ALERT_PRIMARY_FEED_FALLBACK_PROLONGED" not in emitted
+    assert main._PRIMARY_FALLBACK_STREAK_SINCE_TS is None
+    assert main._PRIMARY_FALLBACK_LAST_ALERT_TS == 0.0
+
+
 def test_emit_cycle_slo_alerts_applies_provider_telemetry_stale_alert_cooldown(
     monkeypatch,
 ) -> None:

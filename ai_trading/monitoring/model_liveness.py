@@ -150,6 +150,50 @@ def _severity_for_metric(metric: str) -> str:
     return "warning"
 
 
+def _parse_artifact_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _latest_after_hours_artifact_timestamp() -> datetime | None:
+    """Return the durable timestamp of the latest completed training attempt."""
+
+    path = _resolve_liveness_runtime_path(
+        "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH",
+        "runtime/research_reports/after_hours_training_latest.json",
+        for_write=False,
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    report = payload.get("report")
+    report_payload = report if isinstance(report, dict) else payload
+    timestamp = _parse_artifact_timestamp(
+        report_payload.get("timestamp")
+        or report_payload.get("generated_at")
+        or payload.get("generated_at")
+    )
+    if timestamp is not None:
+        return timestamp
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return None
+
+
 def _ml_liveness_expected_default() -> bool:
     """Return whether ML signal heartbeat should be enforced by default."""
 
@@ -236,6 +280,14 @@ class _ModelLivenessMonitor:
                 60.0,
                 _env_float("AI_TRADING_AFTER_HOURS_TRAINING_MAX_AGE_SECONDS", 129600.0),
             )
+
+        if _METRIC_AFTER_HOURS in thresholds:
+            artifact_timestamp = _latest_after_hours_artifact_timestamp()
+            if artifact_timestamp is not None and artifact_timestamp <= now_utc:
+                with self._lock:
+                    recorded = self._last_seen.get(_METRIC_AFTER_HOURS)
+                    if recorded is None or artifact_timestamp > recorded:
+                        self._last_seen[_METRIC_AFTER_HOURS] = artifact_timestamp
 
         breaches: list[_LivenessBreach] = []
         with self._lock:

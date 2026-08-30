@@ -9340,6 +9340,59 @@ def test_runtime_preopen_readiness_blocks_when_broker_unready(
     assert "broker_not_ready" in context["failed_checks"]
 
 
+def test_runtime_preopen_readiness_requests_primary_probe_and_fails_closed_on_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PREOPEN_PRIMARY_RECOVERY_PROBE_ENABLED", "1")
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 100.0)
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "status": "degraded",
+            "using_backup": True,
+            "active": "yahoo",
+            "data_status": "ready",
+        },
+    )
+    monkeypatch.setattr(
+        runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "connected", "connected": True},
+    )
+    from ai_trading.data import fetch as data_fetch
+
+    requested: list[list[str]] = []
+    monkeypatch.setattr(
+        data_fetch,
+        "request_primary_recovery_probe",
+        lambda symbols: requested.append(list(symbols)) or len(symbols),
+    )
+
+    class _OpenWindowDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            base = datetime(2026, 3, 30, 9, 20, tzinfo=ZoneInfo("America/New_York"))
+            if tz is None:
+                return base.astimezone(UTC).replace(tzinfo=None)
+            return base.astimezone(tz)
+
+    monkeypatch.setattr(lt, "datetime", _OpenWindowDateTime)
+    allowed, context = engine._runtime_preopen_readiness_allows_openings(
+        report={"execution_vs_alpha": {"execution_capture_ratio": 0.2}},
+        thresholds={"min_execution_capture_ratio": 0.08, "max_slippage_drag_bps": 18.0},
+    )
+
+    assert allowed is False
+    assert context["provider_ready"] is False
+    assert context["primary_probe_requested"] is True
+    assert context["primary_probe_symbols"] == ["AAPL", "AMZN", "MSFT"]
+    assert requested == [["AAPL", "AMZN", "MSFT"]]
+
+
 def test_runtime_preopen_readiness_blocks_on_stale_runtime_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

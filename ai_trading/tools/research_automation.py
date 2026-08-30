@@ -1404,6 +1404,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 live_cost,
                 "--promotion-report-json",
                 config.report_root / "latest" / "promotion_report_latest.json",
+                "--validation-json",
+                _runtime_input_path("runtime/full_validation_green_latest.json"),
                 "--canary-plan-json",
                 daily_research,
                 "--edge-calibration-json",

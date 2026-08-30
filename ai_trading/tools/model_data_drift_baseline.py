@@ -458,7 +458,9 @@ def _source_descriptor(path: Path) -> dict[str, Any]:
 def model_identity_from_registry(registry: Mapping[str, Any]) -> dict[str, str | None]:
     """Read the governed active identity without granting promotion authority."""
 
-    for role in ("challenger", "champion"):
+    # A governed champion is the serving identity. A viable challenger is only
+    # a fallback when no champion has been registered yet.
+    for role in ("champion", "challenger"):
         raw_model = registry.get(f"active_{role}")
         if not isinstance(raw_model, Mapping):
             raw_model = registry.get(role)

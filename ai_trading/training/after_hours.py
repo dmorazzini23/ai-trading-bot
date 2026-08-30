@@ -1036,6 +1036,16 @@ def _regime_stability_summary(
     profitable_ratio = (
         float(profitable_count / supported_count) if supported_count > 0 else 0.0
     )
+    allowed_regimes = sorted(
+        regime
+        for regime, metrics in supported.items()
+        if float(metrics["expectancy_bps"]) > 0.0
+    )
+    abstention_regimes = sorted(
+        regime
+        for regime, metrics in supported.items()
+        if float(metrics["expectancy_bps"]) <= 0.0
+    )
     return {
         "regime_min_support": int(min_support),
         "supported_regime_count": int(supported_count),
@@ -1051,6 +1061,9 @@ def _regime_stability_summary(
             float(np.std(expectancy_values)) if expectancy_values else 0.0
         ),
         "supported_regimes": supported,
+        "recommended_trade_regimes": allowed_regimes,
+        "recommended_abstention_regimes": abstention_regimes,
+        "abstention_required": bool(abstention_regimes),
     }
 
 

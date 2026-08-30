@@ -24,6 +24,7 @@ def test_agent_validate_changed_script_runs_core_validation_commands() -> None:
     assert "./venv/bin/mypy" in text
     assert "scripts/typecheck_strict.sh" in text
     assert "py_compile" in text
+    assert "ai_trading.tools.full_validation_artifact" in text
 
 
 def test_agent_validate_changed_script_keeps_runtime_smoke_checks() -> None:

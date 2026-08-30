@@ -632,7 +632,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         ),
         promotion_report=_read_json(args.promotion_report_json),
-        validation=_read_json(args.validation_json),
+        validation=_read_json(
+            args.validation_json
+            or resolve_runtime_artifact_path(
+                "runtime/full_validation_green_latest.json",
+                default_relative="runtime/full_validation_green_latest.json",
+            )
+        ),
         canary_plan=_read_json(args.canary_plan_json),
         edge_calibration=_read_json(args.edge_calibration_json),
         execution_capture=_read_json(args.execution_capture_json),

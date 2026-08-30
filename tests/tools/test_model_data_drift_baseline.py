@@ -220,3 +220,23 @@ def test_current_evidence_cli_binds_viable_shadow_registry_identity(
     assert len(payload["sources"]) == 3
     assert payload["promotion_authority"] is False
     assert payload["live_money_authority"] is False
+
+
+def test_model_identity_prefers_governed_champion_over_shadow_challenger() -> None:
+    identity = model_data_drift_baseline.model_identity_from_registry(
+        {
+            "active_champion": {
+                "model_id": "champion-1",
+                "model_hash": "champion-hash",
+                "dataset_hash": "champion-data",
+            },
+            "active_challenger": {
+                "model_id": "shadow-2",
+                "model_hash": "shadow-hash",
+                "dataset_hash": "shadow-data",
+            },
+        }
+    )
+
+    assert identity["model_id"] == "champion-1"
+    assert identity["registry_role"] == "champion"

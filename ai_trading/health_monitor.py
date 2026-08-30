@@ -15,6 +15,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -128,9 +129,20 @@ class HealthChecker:
                 check_result = await asyncio.wait_for(self.check_func(), timeout=self.timeout_seconds)
             else:
                 loop = asyncio.get_running_loop()
-                check_result = await asyncio.wait_for(
-                    loop.run_in_executor(None, self.check_func), timeout=self.timeout_seconds
+                # Do not attach health checks to the loop's default executor.
+                # asyncio.Runner.close() waits for that executor indefinitely,
+                # which can hang suite shutdown after a timed-out sync check.
+                executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix=f"health-{self.name}",
                 )
+                try:
+                    check_result = await asyncio.wait_for(
+                        loop.run_in_executor(executor, self.check_func),
+                        timeout=self.timeout_seconds,
+                    )
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
             response_time = (time.time() - start_time) * 1000
             if isinstance(check_result, bool):
                 status = HealthStatus.HEALTHY if check_result else HealthStatus.CRITICAL

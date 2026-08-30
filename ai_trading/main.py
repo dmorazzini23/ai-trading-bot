@@ -1265,6 +1265,13 @@ def _emit_cycle_slo_alerts(
     )
     if not fallback_alerts_enabled:
         return
+    # A backup historical provider is expected while the market is closed and
+    # cannot affect execution.  Do not carry that off-hours streak into the
+    # next session or page operators for an intentionally dormant primary.
+    if closed:
+        _PRIMARY_FALLBACK_STREAK_SINCE_TS = None
+        _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
+        return
     # Fallback severity should only be evaluated when provider telemetry is fresh.
     if provider_state_stale:
         _PRIMARY_FALLBACK_STREAK_SINCE_TS = None

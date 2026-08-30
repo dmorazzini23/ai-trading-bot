@@ -99,11 +99,14 @@ def _derived_coverage(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _model_identity(payload: Mapping[str, Any]) -> tuple[str | None, str | None]:
+def _model_identity(
+    payload: Mapping[str, Any],
+) -> tuple[str | None, str | None, str | None]:
     model = _mapping(payload, "model")
     model_id = str(model.get("model_id") or "").strip() or None
     model_hash = str(model.get("model_hash") or "").strip() or None
-    return model_id, model_hash
+    dataset_hash = str(model.get("dataset_hash") or "").strip() or None
+    return model_id, model_hash, dataset_hash
 
 
 def _contract_reasons(
@@ -137,12 +140,18 @@ def _contract_reasons(
     if current and not bool(current_coverage["complete"]):
         reasons.append("current_coverage_incomplete")
 
-    baseline_model_id, baseline_model_hash = _model_identity(baseline)
-    current_model_id, current_model_hash = _model_identity(current)
+    baseline_model_id, baseline_model_hash, baseline_dataset_hash = _model_identity(baseline)
+    current_model_id, current_model_hash, current_dataset_hash = _model_identity(current)
     if baseline_model_id and current_model_id and baseline_model_id != current_model_id:
         reasons.append("model_id_mismatch")
     if baseline_model_hash and current_model_hash and baseline_model_hash != current_model_hash:
         reasons.append("model_hash_mismatch")
+    if (
+        baseline_dataset_hash
+        and current_dataset_hash
+        and baseline_dataset_hash != current_dataset_hash
+    ):
+        reasons.append("dataset_hash_mismatch")
     return reasons, {
         "expected_contract_version": EVIDENCE_CONTRACT_VERSION,
         "baseline_contract_version": baseline_contract,
@@ -153,6 +162,8 @@ def _contract_reasons(
         "current_model_id": current_model_id,
         "baseline_model_hash": baseline_model_hash,
         "current_model_hash": current_model_hash,
+        "baseline_dataset_hash": baseline_dataset_hash,
+        "current_dataset_hash": current_dataset_hash,
         "baseline_coverage": baseline_coverage,
         "current_coverage": current_coverage,
     }
@@ -299,6 +310,21 @@ def build_model_data_drift_monitor(
     baseline_freshness = _freshness(baseline, max_age_hours=max_baseline_age_hours, now=generated)
     current_freshness = _freshness(current, max_age_hours=max_current_age_hours, now=generated)
     reasons: list[str] = []
+    baseline_approval = _mapping(baseline, "approval")
+    baseline_identity = _model_identity(baseline)
+    current_identity = _model_identity(current)
+    governed_identity_match = bool(
+        baseline.get("artifact_type") == "model_data_drift_baseline"
+        and baseline.get("status") == "approved"
+        and baseline_approval.get("approved") is True
+        and all(baseline_identity)
+        and baseline_identity == current_identity
+    )
+    if governed_identity_match and not baseline_freshness["fresh"]:
+        baseline_freshness = dict(baseline_freshness)
+        baseline_freshness["fresh"] = True
+        baseline_freshness["freshness_basis"] = "governed_model_dataset_identity"
+        baseline_freshness["wall_clock_fresh"] = False
     if not baseline:
         reasons.append("baseline_missing")
     elif not baseline_freshness["fresh"]:

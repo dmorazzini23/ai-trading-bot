@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 import sys
 import types
 
@@ -55,6 +56,40 @@ def test_after_hours_training_liveness_ignores_signal_market_gates(monkeypatch) 
     assert breaches[0]["event"] == "AFTER_HOURS_TRAINING_COMPLETE"
     assert breaches[0]["market_open"] is False
     assert breaches[0]["signals_expected_now"] is False
+
+
+def test_after_hours_training_liveness_seeds_from_durable_artifact(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _set_liveness_defaults(monkeypatch)
+    _install_bot_engine_module(monkeypatch, use_ml=True)
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MAX_AGE_SECONDS", "60")
+    artifact = tmp_path / "after_hours_training_latest.json"
+    now = datetime.now(UTC)
+    artifact.write_text(
+        json.dumps(
+            {
+                "report": {
+                    "status": "skipped",
+                    "reason": "no_qualified_candidate",
+                    "timestamp": (now - timedelta(seconds=10)).isoformat(),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH", str(artifact))
+    model_liveness._reset_model_liveness_state_for_tests()
+
+    breaches = model_liveness.check_model_liveness(
+        market_open=False,
+        signals_expected_now=False,
+        now=now,
+    )
+
+    assert breaches == []
 
 
 def test_liveness_does_not_enforce_ml_when_model_disabled(monkeypatch) -> None:

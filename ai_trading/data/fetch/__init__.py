@@ -21,7 +21,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from threading import Lock, Semaphore
 from types import GeneratorType, SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING, cast
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -2712,6 +2712,32 @@ def _backup_primary_probe_due(symbol: str, timeframe: str) -> bool:
             return False
     _BACKUP_PRIMARY_PROBE_AT[key] = now_dt + interval
     return True
+
+
+def request_primary_recovery_probe(
+    symbols: Iterable[str],
+    *,
+    timeframe: str = "1Min",
+) -> int:
+    """Make the next eligible backup-routed fetch probe Alpaca first.
+
+    This only expires local fallback skip timers. Provider health, credentials,
+    safe mode, and the normal bounded fetch retry policy remain authoritative.
+    """
+
+    timeframe_key = str(timeframe or "1Min").strip() or "1Min"
+    now_dt = datetime.now(tz=UTC)
+    scheduled = 0
+    _clear_global_backup_skip(timeframe_key)
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            continue
+        key = (symbol, timeframe_key)
+        _BACKUP_SKIP_UNTIL.pop(key, None)
+        _BACKUP_PRIMARY_PROBE_AT[key] = now_dt
+        scheduled += 1
+    return scheduled
 
 
 def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tuple[str, set[tuple[str, str]]]:

@@ -321,6 +321,43 @@ def test_persist_fill_derived_trade_record_includes_execution_attribution(monkey
     assert payload["spread_bps"] > 0.0
 
 
+def test_closing_fill_inherits_open_position_correlation_id(monkeypatch) -> None:
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine._position_correlation_ids = {"AMZN": "opp-entry-amzn"}
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(live_trading, "record_trade_fill", lambda _payload: None)
+    monkeypatch.setattr(
+        engine,
+        "_record_runtime_fill_event",
+        lambda payload: captured.update({"payload": dict(payload)}),
+    )
+    monkeypatch.setattr(engine, "_update_symbol_loss_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_arm_symbol_reentry_cooldown_from_fill", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_reconcile_pending_tca_from_fill", lambda **_kwargs: None)
+
+    engine._persist_fill_derived_trade_record(
+        symbol="AMZN",
+        side="sell",
+        filled_qty=1.0,
+        fill_price=225.0,
+        expected_price=225.0,
+        order_id="exit-order",
+        client_order_id="exit-client",
+        order_status="filled",
+        signal=None,
+        timestamp=live_trading.datetime.now(live_trading.UTC),
+        runtime_payload={"source": "session_close"},
+        closing_position=True,
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["correlation_id"] == "opp-entry-amzn"
+    assert payload["position_entry_correlation_id"] == "opp-entry-amzn"
+    assert engine.position_correlation_id("AMZN") is None
+
+
 def test_persist_fill_derived_trade_record_includes_lineage_fields(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
     captured: dict[str, object] = {}
