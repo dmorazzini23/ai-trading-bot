@@ -488,6 +488,7 @@ def evaluate_paper_sampling_order(
     price: float,
     consumes_daily_slot: bool = True,
     role: str | None = None,
+    regime: str | None = None,
 ) -> PaperSamplingDecision:
     """Apply diagnostic paper-sampling narrowing without bypassing hard gates."""
 
@@ -504,10 +505,12 @@ def evaluate_paper_sampling_order(
     symbol_key = str(symbol).strip().upper()
     side_key = str(side).strip().lower()
     role_key = _sampling_role(role, consumes_daily_slot=consumes_daily_slot)
+    regime_key = str(regime or "unknown").strip().lower() or "unknown"
     details: dict[str, Any] = {
         "symbol": symbol_key,
         "side": side_key,
         "role": role_key,
+        "regime": regime_key,
         "mode": "paper_sampling",
         "consumes_daily_slot": bool(consumes_daily_slot),
     }
@@ -569,6 +572,7 @@ def reserve_paper_sampling_order(
     now: datetime | None = None,
     consumes_daily_slot: bool = True,
     role: str | None = None,
+    regime: str | None = None,
 ) -> PaperSamplingDecision:
     """Reserve a diagnostic paper-sampling daily slot after upstream gates pass."""
 
@@ -580,6 +584,7 @@ def reserve_paper_sampling_order(
         price=price,
         consumes_daily_slot=consumes_daily_slot,
         role=role,
+        regime=regime,
     )
     if not decision.enabled or not decision.allowed:
         return decision
@@ -590,6 +595,7 @@ def reserve_paper_sampling_order(
     symbol_key = str(symbol).strip().upper()
     side_key = str(side).strip().lower()
     role_key = _sampling_role(role, consumes_daily_slot=consumes_daily_slot)
+    regime_key = str(regime or "unknown").strip().lower() or "unknown"
     if not consumes_daily_slot and symbol_key not in _allowed_symbols(cfg):
         return decision
     path = _state_path()
@@ -622,6 +628,7 @@ def reserve_paper_sampling_order(
         by_symbol = _count_map(current_state, "by_symbol")
         by_side = _count_map(current_state, "by_side")
         by_session = _count_map(current_state, "by_session")
+        by_regime = _count_map(current_state, "by_regime")
 
         symbol_quota = _cfg_int(cfg, "paper_sampling_max_trades_per_symbol_per_day", 4)
         if (
@@ -636,6 +643,25 @@ def reserve_paper_sampling_order(
                 count=int(by_symbol.get(symbol_key, 0)),
                 quota=symbol_quota,
                 quota_key=f"symbol:{symbol_key}",
+            )
+
+        regime_quota = _cfg_int(
+            cfg,
+            "paper_sampling_max_trades_per_regime_per_day",
+            0,
+        )
+        if (
+            consumes_daily_slot
+            and regime_quota > 0
+            and int(by_regime.get(regime_key, 0)) >= regime_quota
+        ):
+            return _quota_block(
+                decision=decision,
+                reason="PAPER_SAMPLING_REGIME_DAILY_QUOTA_BLOCK",
+                today=today,
+                count=int(by_regime.get(regime_key, 0)),
+                quota=regime_quota,
+                quota_key=f"regime:{regime_key}",
             )
 
         side_quota = _cfg_int(cfg, "paper_sampling_max_trades_per_side_per_day", 6)
@@ -774,15 +800,20 @@ def reserve_paper_sampling_order(
         observed_by_side = _count_map(current_state, "observed_by_side")
         observed_by_role = _count_map(current_state, "observed_by_role")
         observed_by_session = _count_map(current_state, "observed_by_session")
+        observed_by_regime = _count_map(current_state, "observed_by_regime")
         observed_by_side_role = _count_map(current_state, "observed_by_side_role")
         observed_by_symbol_session = _count_map(
             current_state,
             "observed_by_symbol_session",
         )
         observed_by_stratum = _count_map(current_state, "observed_by_stratum")
+        observed_by_regime_stratum = _count_map(
+            current_state, "observed_by_regime_stratum"
+        )
         side_role_key = f"{side_key}:{role_key}"
         symbol_session_key = f"{symbol_key}:{session}"
         stratum_key = f"{symbol_key}:{side_key}:{role_key}:{session}"
+        regime_stratum_key = f"{stratum_key}:{regime_key}"
         reservation_token = uuid4().hex
         reservations = _reservation_rows(current_state)
         reservations.append(
@@ -792,6 +823,7 @@ def reserve_paper_sampling_order(
                 "side": side_key,
                 "role": role_key,
                 "session_bucket": session,
+                "regime": regime_key,
                 "consumes_daily_slot": bool(consumes_daily_slot),
                 "reserved_at": (now or datetime.now(UTC)).isoformat(),
             }
@@ -812,6 +844,11 @@ def reserve_paper_sampling_order(
             if consumes_daily_slot
             else by_session
         )
+        next_by_regime = (
+            _increment_count(by_regime, regime_key)
+            if consumes_daily_slot
+            else by_regime
+        )
         symbol_deficits = {
             candidate: max(
                 0,
@@ -829,6 +866,7 @@ def reserve_paper_sampling_order(
             "by_symbol": next_by_symbol,
             "by_side": next_by_side,
             "by_session": next_by_session,
+            "by_regime": next_by_regime,
             "observed_count": int(current_state.get("observed_count", 0) or 0) + 1,
             "observed_by_symbol": _increment_count(
                 observed_by_symbol,
@@ -839,6 +877,10 @@ def reserve_paper_sampling_order(
             "observed_by_session": _increment_count(
                 observed_by_session,
                 session,
+            ),
+            "observed_by_regime": _increment_count(
+                observed_by_regime,
+                regime_key,
             ),
             "observed_by_side_role": _increment_count(
                 observed_by_side_role,
@@ -851,6 +893,10 @@ def reserve_paper_sampling_order(
             "observed_by_stratum": _increment_count(
                 observed_by_stratum,
                 stratum_key,
+            ),
+            "observed_by_regime_stratum": _increment_count(
+                observed_by_regime_stratum,
+                regime_stratum_key,
             ),
             "symbol_targets": symbol_targets,
             "symbol_deficits": symbol_deficits,
@@ -867,6 +913,7 @@ def reserve_paper_sampling_order(
             "count": next_count,
             "max_trades_per_day": max_trades,
             "session_bucket": session,
+            "regime": regime_key,
             "role": role_key,
             "reservation_token": reservation_token,
             "symbol_targets": symbol_targets,
@@ -954,6 +1001,7 @@ def release_paper_sampling_order(
         reserved_session = str(
             reservation.get("session_bucket") or _session_bucket(now)
         ).strip().lower()
+        reserved_regime = str(reservation.get("regime") or "unknown").strip().lower()
         reserved_consumes = bool(reservation.get("consumes_daily_slot"))
 
         if reserved_consumes:
@@ -970,12 +1018,17 @@ def release_paper_sampling_order(
                 _count_map(state, "by_session"),
                 reserved_session,
             )
+            state["by_regime"] = _decrement_count(
+                _count_map(state, "by_regime"),
+                reserved_regime,
+            )
 
         side_role_key = f"{reserved_side}:{reserved_role}"
         symbol_session_key = f"{reserved_symbol}:{reserved_session}"
         stratum_key = (
             f"{reserved_symbol}:{reserved_side}:{reserved_role}:{reserved_session}"
         )
+        regime_stratum_key = f"{stratum_key}:{reserved_regime}"
         state["observed_count"] = max(
             0,
             int(state.get("observed_count", 0) or 0) - 1,
@@ -996,6 +1049,10 @@ def release_paper_sampling_order(
             _count_map(state, "observed_by_session"),
             reserved_session,
         )
+        state["observed_by_regime"] = _decrement_count(
+            _count_map(state, "observed_by_regime"),
+            reserved_regime,
+        )
         state["observed_by_side_role"] = _decrement_count(
             _count_map(state, "observed_by_side_role"),
             side_role_key,
@@ -1007,6 +1064,10 @@ def release_paper_sampling_order(
         state["observed_by_stratum"] = _decrement_count(
             _count_map(state, "observed_by_stratum"),
             stratum_key,
+        )
+        state["observed_by_regime_stratum"] = _decrement_count(
+            _count_map(state, "observed_by_regime_stratum"),
+            regime_stratum_key,
         )
         targets = _count_map(state, "symbol_targets")
         current_by_symbol = _count_map(state, "by_symbol")

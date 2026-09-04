@@ -273,6 +273,9 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             live_cost_model_json=getattr(args, "live_cost_model_json", None),
             use_live_cost_model=getattr(args, "use_live_cost_model", None),
             min_net_edge_bps=float(args.min_net_edge_bps),
+            max_training_invalid_rate=float(
+                getattr(args, "max_training_invalid_rate", 0.02)
+            ),
             train_fraction=float(args.train_fraction),
             walk_forward_folds=total_folds,
             evaluation_folds=evaluation_folds,
@@ -338,6 +341,12 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "feature_importance": list(
                     training_report.get("feature_importance", [])
                 )[:25],
+                "heldout_feature_autopsy": training_report.get(
+                    "heldout_feature_autopsy"
+                ),
+                "dataset_quality": cast(
+                    Mapping[str, Any], training_report.get("dataset", {})
+                ).get("quality"),
                 "live_cost_model": training_report.get("live_cost_model"),
                 "holdout_evaluation": training_report.get("holdout_evaluation"),
             }
@@ -475,7 +484,35 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             )
             winner["holdout_confirmation_status"] = "error"
 
-    replay_selected = [winner] if winner is not None else []
+    max_replay_candidates = int(getattr(args, "max_replay_candidates", 0) or 0)
+    promotion_exit_criteria = {
+        "required": {
+            "walk_forward_trades": int(
+                getattr(args, "walk_forward_min_trades", 250) or 250
+            ),
+            "walk_forward_mean_post_cost_net_edge_bps_gt": 0.0,
+            "walk_forward_edge_95pct_lower_bound_bps_gt": 0.0,
+            "profitable_fold_ratio_gte": float(
+                getattr(args, "walk_forward_min_profitable_fold_ratio", 0.60)
+                or 0.60
+            ),
+            "ranking_separation_bps_gt": 0.0,
+            "replay_expectancy_bps_gt": 0.0,
+            "replay_profit_factor_gte": 1.0,
+            "replay_invariant_violations": 0,
+            "chronological_holdout": "passed",
+            "manual_promotion_approval": True,
+        },
+        "current_status": "shadow_only",
+        "automatic_promotion": False,
+        "promotion_authority": False,
+        "live_money_authority": False,
+    }
+    replay_selected = (
+        development_ranked[:max_replay_candidates]
+        if max_replay_candidates > 0
+        else ([winner] if winner is not None else [])
+    )
     for record in replay_selected:
         record_id = (
             int(record.get("horizon_bars", 0) or 0),
@@ -494,6 +531,11 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "confidence_threshold", args.replay_confidence_threshold
             )
         )
+        replay_entry_score_threshold = float(
+            selected_threshold.get(
+                "entry_score_threshold", args.replay_entry_score_threshold
+            )
+        )
         replay_path = output_dir / f"{model_name}_replay.json"
         replay_argv = [
             "--data-dir",
@@ -507,7 +549,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "--confidence-threshold",
             str(replay_confidence_threshold),
             "--entry-score-threshold",
-            "0.0",
+            str(replay_entry_score_threshold),
             "--min-hold-bars",
             str(args.min_hold_bars),
             "--max-hold-bars",
@@ -535,11 +577,36 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             record["replay_error"] = {"type": type(exc).__name__, "message": str(exc)}
             replay_errors.append(dict(record["replay_error"]) | {"model_name": model_name})
             continue
+        replay_summary = _slim_replay_summary(replay_payload)
+        replay_trades = int(replay_summary.get("total_trades") or 0)
+        replay_expectancy = float(replay_summary.get("expectancy_bps") or 0.0)
+        replay_profit_factor = replay_summary.get("profit_factor")
+        replay_violations = int(replay_summary.get("violation_count") or 0)
+        replay_gate_reasons: list[str] = []
+        if replay_trades < int(getattr(args, "walk_forward_min_trades", 250) or 250):
+            replay_gate_reasons.append("insufficient_replay_support")
+        if replay_expectancy <= 0.0:
+            replay_gate_reasons.append("nonpositive_replay_expectancy")
+        if replay_profit_factor is None or float(replay_profit_factor) < 1.0:
+            replay_gate_reasons.append("replay_profit_factor_below_one")
+        if replay_violations > 0:
+            replay_gate_reasons.append("replay_invariant_violations")
         record.update(
             {
                 "replay_status": "complete",
                 "replay_output": str(replay_path),
-                "replay": _slim_replay_summary(replay_payload),
+                "replay": replay_summary,
+                "replay_gate": {
+                    "passed": not replay_gate_reasons,
+                    "reasons": replay_gate_reasons,
+                    "minimum_trades": int(
+                        getattr(args, "walk_forward_min_trades", 250) or 250
+                    ),
+                    "minimum_expectancy_bps": 0.0,
+                    "minimum_profit_factor": 1.0,
+                    "maximum_invariant_violations": 0,
+                    "promotion_authority": False,
+                },
                 "replay_score_semantics": {
                     "semantics": (
                         "continuous_edge_rank_score"
@@ -548,7 +615,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                     "cutoff_source": "development_only_percentile_selection",
                     "frozen_probability_cutoff": replay_confidence_threshold,
-                    "entry_score_threshold": 0.0,
+                    "entry_score_threshold": replay_entry_score_threshold,
                 },
             }
         )
@@ -570,7 +637,6 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ).get("falsified")
         )
     ]
-    max_replay_candidates = int(getattr(args, "max_replay_candidates", 0) or 0)
     report = {
         "schema_version": "2.0.0",
         "artifact_type": "multi_horizon_research_report",
@@ -614,12 +680,16 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         },
         "candidates": candidates,
         "replay_selection": {
-            "strategy": "one_winner_after_successive_halving",
+            "strategy": (
+                "top_n_development_candidates_shadow_replay"
+                if max_replay_candidates > 0
+                else "one_eligible_winner_after_successive_halving"
+            ),
             "max_replay_candidates": max_replay_candidates,
             "trained_candidate_count": len(valid_trained),
-            "replayed_candidate_count": int(
-                winner is not None
-                and str(winner.get("replay_status") or "") == "complete"
+            "replayed_candidate_count": sum(
+                str(record.get("replay_status") or "") == "complete"
+                for record in replay_selected
             ),
             "skipped_candidate_count": len(
                 [
@@ -650,6 +720,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "candidates": falsified_candidates,
         },
         "holdout_confirmation": holdout_confirmation,
+        "promotion_exit_criteria": promotion_exit_criteria,
         "ranked_candidates": ranked,
         "lead_candidates": [
             record
@@ -700,7 +771,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--label-objectives",
         type=str,
         default="net_markout,risk_adjusted",
-        help="Comma-separated objectives: net_markout, spread_adjusted, risk_adjusted, mae_mfe.",
+        help=(
+            "Comma-separated objectives: net_markout, spread_adjusted, risk_adjusted, "
+            "mae_mfe, execution_adjusted."
+        ),
     )
     parser.add_argument("--lead-horizon-bars", type=int, default=15)
     parser.add_argument("--model-prefix", type=str, default="replay_aligned")
@@ -725,6 +799,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--live-cost-model-json", type=Path, default=None)
     parser.add_argument("--use-live-cost-model", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--min-net-edge-bps", type=float, default=0.0)
+    parser.add_argument("--max-training-invalid-rate", type=float, default=0.02)
     parser.add_argument("--shadow-markout-jsonl", type=Path, default=None)
     parser.add_argument("--shadow-markout-manifest-json", type=Path, default=None)
     parser.add_argument("--train-fraction", type=float, default=0.70)

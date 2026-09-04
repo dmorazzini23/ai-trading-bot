@@ -461,6 +461,60 @@ def test_paper_sampling_symbol_side_and_session_quotas(monkeypatch, tmp_path) ->
     assert side_block.details["quota_key"] == "side:buy"
 
 
+def test_paper_sampling_balances_market_regime_quota(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    cfg = _cfg(
+        paper_sampling_max_trades_per_day=8,
+        paper_sampling_max_trades_per_symbol_per_day=8,
+        paper_sampling_max_trades_per_side_per_day=8,
+        paper_sampling_max_midday_trades_per_day=8,
+        paper_sampling_max_trades_per_regime_per_day=1,
+        paper_sampling_stratified_fairness_enabled=False,
+    )
+    midday = datetime(2026, 5, 8, 17, 0, tzinfo=UTC)
+
+    first = reserve_paper_sampling_order(
+        cfg,
+        symbol="AAPL",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=midday,
+        regime="sideways",
+    )
+    blocked = reserve_paper_sampling_order(
+        cfg,
+        symbol="AMZN",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=midday,
+        regime="sideways",
+    )
+    different_regime = reserve_paper_sampling_order(
+        cfg,
+        symbol="MSFT",
+        side="buy",
+        qty=1,
+        price=100.0,
+        now=midday,
+        regime="uptrend",
+    )
+
+    assert first.allowed is True
+    assert blocked.allowed is False
+    assert blocked.reason == "PAPER_SAMPLING_REGIME_DAILY_QUOTA_BLOCK"
+    assert blocked.details["quota_key"] == "regime:sideways"
+    assert different_regime.allowed is True
+    state_path = tmp_path / "runtime" / "paper_sampling_state_latest.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["by_regime"] == {"sideways": 1, "uptrend": 1}
+    assert payload["observed_by_regime_stratum"] == {
+        "AAPL:buy:entry:midday:sideways": 1,
+        "MSFT:buy:entry:midday:uptrend": 1,
+    }
+
+
 def test_paper_sampling_stratified_fairness_prevents_four_msft_entries(
     monkeypatch,
     tmp_path,

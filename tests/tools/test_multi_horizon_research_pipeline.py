@@ -235,15 +235,17 @@ def test_multi_horizon_pipeline_replays_only_top_training_candidates(
         )
     )
 
-    assert len(replayed) == 1
+    assert len(replayed) == 2
     assert any("_h1_" in path for path in replayed)
+    assert any("_h3_" in path for path in replayed)
     assert not any("_h15_" in path for path in replayed)
     assert report["replay_selection"]["strategy"] == (
-        "one_winner_after_successive_halving"
+        "top_n_development_candidates_shadow_replay"
     )
     assert report["replay_selection"]["trained_candidate_count"] == 4
-    assert report["replay_selection"]["replayed_candidate_count"] == 1
+    assert report["replay_selection"]["replayed_candidate_count"] == 2
     assert report["replay_selection"]["skipped_candidate_count"] == 2
+    assert report["promotion_exit_criteria"]["automatic_promotion"] is False
 
 
 def test_multi_family_halving_confirms_exactly_one_winner(

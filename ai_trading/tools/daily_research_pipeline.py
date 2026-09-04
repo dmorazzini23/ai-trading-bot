@@ -512,6 +512,26 @@ def build_daily_research_report(
             "bad_buckets": _nested(execution_capture_improvement, "bad_buckets"),
             "edge_haircuts": _nested(execution_capture_improvement, "edge_haircuts"),
             "training_labels": _nested(execution_capture_improvement, "training_labels"),
+            "evidence_integrity": _nested(
+                execution_capture_improvement, "evidence_integrity"
+            ),
+            "model_training_eligible": bool(
+                _nested(
+                    execution_capture_improvement, "evidence_integrity"
+                ).get("join_coverage_sufficient")
+            ),
+            "model_training_blocked_reasons": (
+                []
+                if bool(
+                    _nested(
+                        execution_capture_improvement, "evidence_integrity"
+                    ).get("join_coverage_sufficient")
+                )
+                else ["execution_evidence_join_coverage_low"]
+            ),
+            "attribution_layers": _nested(
+                execution_capture_improvement, "attribution_layers"
+            ),
             "runtime_authority": False,
             "promotion_authority": False,
             "live_money_authority": False,

@@ -922,6 +922,11 @@ def submit_order_runtime(
         qty=int(qty),
         price=price,
         consumes_daily_slot=consumes_sampling_slot,
+        regime=str(
+            annotations.get("market_regime")
+            or submit_snapshot.get("market_regime")
+            or "unknown"
+        ),
     )
     if sampling_reservation.enabled and not sampling_reservation.allowed:
         sampling_telemetry["reservation_reason"] = str(sampling_reservation.reason)

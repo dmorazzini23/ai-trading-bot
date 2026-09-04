@@ -14,7 +14,7 @@ import json
 import math
 import sys
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -94,6 +94,56 @@ def _read_jsonl(path: Path | None, *, report_date: str | None = None) -> list[di
                 continue
             rows.append(parsed)
     return rows
+
+
+def select_recent_sessions(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    report_date: str,
+    lookback_sessions: int,
+) -> list[dict[str, Any]]:
+    """Select the latest observed UTC sessions ending at ``report_date``.
+
+    Research evidence is sparse by design.  Using observed sessions rather than
+    calendar days keeps calibration/capture reports useful without weakening any
+    runtime gate or treating shadow rows as fill evidence.
+    """
+
+    try:
+        cutoff = date.fromisoformat(str(report_date))
+    except ValueError:
+        return []
+    dated: list[tuple[date, dict[str, Any]]] = []
+    for source in rows:
+        row = dict(source)
+        timestamp = _event_timestamp(row)
+        if timestamp is None or timestamp.date() > cutoff:
+            continue
+        dated.append((timestamp.date(), row))
+    sessions = sorted({session for session, _ in dated}, reverse=True)[
+        : max(1, int(lookback_sessions))
+    ]
+    selected = set(sessions)
+    return [row for session, row in dated if session in selected]
+
+
+def select_matching_sessions(
+    rows: Sequence[Mapping[str, Any]],
+    anchor_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select rows whose UTC session is represented by the anchor evidence."""
+
+    session_dates = {
+        timestamp.date()
+        for row in anchor_rows
+        if (timestamp := _event_timestamp(row)) is not None
+    }
+    return [
+        dict(row)
+        for row in rows
+        if (timestamp := _event_timestamp(row)) is not None
+        and timestamp.date() in session_dates
+    ]
 
 
 def _date_match(row: Mapping[str, Any], report_date: str) -> bool:
@@ -471,7 +521,11 @@ def _field_source(row: Mapping[str, Any], *keys: str) -> str:
     return "unknown"
 
 
-def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def build_metadata_quality(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    min_join_coverage: float = 0.95,
+) -> dict[str, Any]:
     fields = (*_REQUIRED_METADATA_FIELDS, "execution_profile")
     diagnostics: dict[str, dict[str, Any]] = {}
     predominantly_unknown: list[str] = []
@@ -492,6 +546,25 @@ def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if field in _REQUIRED_METADATA_FIELDS and unknown > known:
             predominantly_unknown.append(field)
     join_methods = Counter(str(row.get("metadata_join_method") or "unknown") for row in rows)
+    unmatched_methods = {
+        "unknown",
+        "unavailable",
+        "tca_unavailable",
+        "correlation_id_unmatched",
+        "correlation_order_id_unmatched",
+        "unmatched_id",
+        "fallback_keys_missing",
+        "ambiguous_correlation_id",
+        "ambiguous_correlation_and_order_id",
+        "ambiguous_exact_id",
+        "ambiguous_legacy_exact_id",
+        "ambiguous_symbol_side_time",
+        "no_match",
+    }
+    joined_count = sum(
+        count for method, count in join_methods.items() if method not in unmatched_methods
+    )
+    join_coverage_rate = float(joined_count / sample_count) if sample_count else 0.0
     missing_reason_counts: Counter[str] = Counter()
     for row in rows:
         reasons = row.get("metadata_missing_reasons")
@@ -501,7 +574,7 @@ def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             missing_reason_counts[f"{field}:{reason}"] += 1
     if not rows:
         status = "no_samples"
-    elif predominantly_unknown:
+    elif predominantly_unknown or join_coverage_rate < float(min_join_coverage):
         status = "metadata_incomplete"
     else:
         status = "complete"
@@ -512,6 +585,12 @@ def build_metadata_quality(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "fields": diagnostics,
         "predominantly_unknown_fields": predominantly_unknown,
         "join_method_counts": dict(sorted(join_methods.items())),
+        "joined_count": int(joined_count),
+        "join_coverage_rate": join_coverage_rate,
+        "min_join_coverage_rate": float(min_join_coverage),
+        "join_coverage_sufficient": bool(
+            sample_count > 0 and join_coverage_rate >= float(min_join_coverage)
+        ),
         "missing_reason_counts": dict(sorted(missing_reason_counts.items())),
         "warnings": ["metadata_incomplete"] if status == "metadata_incomplete" else [],
     }
@@ -863,6 +942,14 @@ def build_execution_capture_improvement_report(
             "adverse_selection_count": overall.get("adverse_selection_count"),
             "nonfill_count": overall.get("nonfill_count"),
         },
+        "evidence_integrity": {
+            "join_coverage_rate": metadata_quality["join_coverage_rate"],
+            "min_join_coverage_rate": metadata_quality["min_join_coverage_rate"],
+            "join_coverage_sufficient": metadata_quality[
+                "join_coverage_sufficient"
+            ],
+            "promotion_eligible": False,
+        },
         "bad_buckets": {
             "by_symbol": _worst_buckets(by_symbol),
             "by_symbol_side_session": _worst_buckets(by_symbol_side_session),
@@ -894,6 +981,24 @@ def build_execution_capture_improvement_report(
             "cancel_faster_when": ["quote_deteriorates", "nonfill_pressure"],
             "paper_only": True,
             "manual_review_required_before_live": True,
+        },
+        "attribution_layers": {
+            "alpha_quality": {
+                "status": "requires_post_exit_markout_evidence",
+                "measured_by_this_report": False,
+                "reason": "fill_execution_edge_is_not_strategy_alpha",
+            },
+            "execution_quality": {
+                "status": status,
+                "measured_by_this_report": True,
+                "metrics": [
+                    "slippage_bps",
+                    "spread_bps",
+                    "quote_age_ms",
+                    "fill_ratio",
+                    "fill_latency_ms",
+                ],
+            },
         },
         "training_labels": {
             "recommended_targets": [
@@ -931,16 +1036,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tca-jsonl", type=Path, default=None)
     parser.add_argument("--min-bucket-samples", type=int, default=3)
     parser.add_argument("--min-capture-ratio", type=float, default=0.35)
+    parser.add_argument("--lookback-sessions", type=int, default=5)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
     output_json, latest_json = _default_paths(str(args.report_date))
     output_json = args.output_json or output_json
     latest_json = args.latest_json or latest_json
+    fill_rows = select_recent_sessions(
+        _read_jsonl(args.fills_jsonl),
+        report_date=str(args.report_date),
+        lookback_sessions=int(args.lookback_sessions),
+    )
+    tca_rows = select_matching_sessions(_read_jsonl(args.tca_jsonl), fill_rows)
     report = build_execution_capture_improvement_report(
         report_date=str(args.report_date),
-        fills=_read_jsonl(args.fills_jsonl, report_date=str(args.report_date)),
-        tca_rows=_read_jsonl(args.tca_jsonl, report_date=str(args.report_date)),
+        fills=fill_rows,
+        tca_rows=tca_rows,
         min_bucket_samples=int(args.min_bucket_samples),
         min_capture_ratio=float(args.min_capture_ratio),
     )

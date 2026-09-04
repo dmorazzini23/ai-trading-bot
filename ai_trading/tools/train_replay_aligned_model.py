@@ -19,6 +19,7 @@ from sklearn.ensemble import (
     HistGradientBoostingRegressor,
     RandomForestClassifier,
 )
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
@@ -196,6 +197,7 @@ class ReplayAlignedTrainingConfig:
     fee_bps: float
     slippage_bps: float
     min_net_edge_bps: float
+    max_training_invalid_rate: float
     train_fraction: float
     model_type: str
     edge_global_threshold: float | None
@@ -774,9 +776,17 @@ def _normalize_label_objective(value: str) -> str:
         "risk_adjusted_markout": "risk_adjusted",
         "excursion": "mae_mfe",
         "mae_mfe_markout": "mae_mfe",
+        "execution": "execution_adjusted",
+        "execution_aware": "execution_adjusted",
     }
     normalized = aliases.get(normalized, normalized)
-    allowed = {"net_markout", "spread_adjusted", "risk_adjusted", "mae_mfe"}
+    allowed = {
+        "net_markout",
+        "spread_adjusted",
+        "risk_adjusted",
+        "mae_mfe",
+        "execution_adjusted",
+    }
     if normalized not in allowed:
         raise ValueError(
             "Unsupported label objective: "
@@ -815,12 +825,19 @@ def _label_score(
     max_adverse_excursion_bps: pd.Series,
     max_favorable_excursion_bps: pd.Series,
     round_trip_cost_bps: pd.Series,
+    execution_adjusted_long_bps: pd.Series | None = None,
 ) -> pd.Series:
     normalized = _normalize_label_objective(objective)
     if normalized == "net_markout":
         return net_long_bps
     if normalized == "spread_adjusted":
         return spread_adjusted_long_bps
+    if normalized == "execution_adjusted":
+        return (
+            execution_adjusted_long_bps
+            if execution_adjusted_long_bps is not None
+            else net_long_bps
+        )
     adverse_penalty = max_adverse_excursion_bps.clip(upper=0.0).abs()
     favorable_credit = max_favorable_excursion_bps.clip(lower=0.0)
     if normalized == "risk_adjusted":
@@ -922,6 +939,20 @@ def _build_symbol_dataset(
         max_favorable_excursion_bps=max_favorable_excursion_bps,
         round_trip_cost_bps=round_trip_cost_bps,
     )
+    next_low = (
+        pd.to_numeric(frame["low"], errors="coerce").shift(-1)
+        if "low" in frame.columns
+        else future_close
+    )
+    passive_limit = close * (1.0 - (spread_cost_bps / 20000.0))
+    passive_fill_probability_proxy = (next_low <= passive_limit).astype(float)
+    passive_fill_probability_proxy.loc[next_low.isna()] = np.nan
+    opportunity_cost_bps = net_long_bps.clip(lower=0.0) * (
+        1.0 - passive_fill_probability_proxy
+    )
+    execution_adjusted_net_bps = (
+        net_long_bps * passive_fill_probability_proxy
+    ) - opportunity_cost_bps
     normalized_objective = _normalize_label_objective(label_objective)
     label_score_bps = _label_score(
         objective=normalized_objective,
@@ -930,6 +961,7 @@ def _build_symbol_dataset(
         max_adverse_excursion_bps=max_adverse_excursion_bps,
         max_favorable_excursion_bps=max_favorable_excursion_bps,
         round_trip_cost_bps=round_trip_cost_bps,
+        execution_adjusted_long_bps=execution_adjusted_net_bps,
     )
     out = features.copy()
     out["close"] = close.to_numpy(dtype=float)
@@ -945,22 +977,63 @@ def _build_symbol_dataset(
     out["exit_slippage_bps"] = exit_slippage.to_numpy(dtype=float)
     out["round_trip_cost_bps"] = round_trip_cost_bps.to_numpy(dtype=float)
     out["net_long_bps"] = net_long_bps.to_numpy(dtype=float)
+    out["net_edge_after_cost_bps"] = net_long_bps.to_numpy(dtype=float)
+    out["spread_adjusted_markout_bps"] = spread_adjusted_long_bps.to_numpy(dtype=float)
     out["max_adverse_excursion_bps"] = max_adverse_excursion_bps.to_numpy(dtype=float)
     out["max_favorable_excursion_bps"] = max_favorable_excursion_bps.to_numpy(dtype=float)
+    out["mae_bps"] = max_adverse_excursion_bps.to_numpy(dtype=float)
+    out["mfe_bps"] = max_favorable_excursion_bps.to_numpy(dtype=float)
+    out["passive_fill_probability_proxy"] = passive_fill_probability_proxy.to_numpy(dtype=float)
+    out["opportunity_cost_bps"] = opportunity_cost_bps.to_numpy(dtype=float)
+    out["execution_adjusted_net_bps"] = execution_adjusted_net_bps.to_numpy(dtype=float)
+    out["live_cost_adjusted_net_edge_bps"] = (
+        net_long_bps.to_numpy(dtype=float)
+        if live_cost_model is not None
+        else np.full(len(out), np.nan, dtype=float)
+    )
     out["risk_adjusted_net_bps"] = risk_adjusted_net_bps.to_numpy(dtype=float)
     out["label_score_bps"] = label_score_bps.to_numpy(dtype=float)
     out["label_objective"] = normalized_objective
     out["target"] = (out["label_score_bps"] > float(min_net_edge_bps)).astype(int)
-    out = out.replace([np.inf, -np.inf], np.nan).dropna(
-        subset=[
+    required_columns = [
             *REPLAY_ALIGNED_FEATURE_COLUMNS,
             "timestamp",
             "label_end_timestamp",
             "net_long_bps",
             "label_score_bps",
             "target",
-        ]
-    )
+    ]
+    out = out.replace([np.inf, -np.inf], np.nan)
+    expected_rows = max(0, len(out) - int(horizon_bars))
+    eligible = out.iloc[:expected_rows] if expected_rows else out.iloc[0:0]
+    invalid_mask = eligible[required_columns].isna().any(axis=1)
+    invalid_rows = int(invalid_mask.sum())
+    quality_report = {
+        "symbol": symbol,
+        "raw_rows": int(len(out)),
+        "expected_labeled_rows": int(expected_rows),
+        "valid_labeled_rows": int(expected_rows - invalid_rows),
+        "quarantined_rows": invalid_rows,
+        "unexpected_invalid_rate": (
+            float(invalid_rows / expected_rows) if expected_rows else 0.0
+        ),
+        "missing_rate_by_required_column": {
+            column: float(eligible[column].isna().mean()) if expected_rows else 0.0
+            for column in required_columns
+        },
+        "zero_rate_by_feature": {
+            column: float((pd.to_numeric(eligible[column], errors="coerce") == 0.0).mean())
+            if expected_rows
+            else 0.0
+            for column in REPLAY_ALIGNED_FEATURE_COLUMNS
+        },
+        "quarantine_examples": [
+            str(value)
+            for value in eligible.loc[invalid_mask, "timestamp"].head(10).tolist()
+        ],
+    }
+    out = out.dropna(subset=required_columns)
+    out.attrs["quality_report"] = quality_report
     return cast(pd.DataFrame, out)
 
 
@@ -980,6 +1053,7 @@ def build_training_dataset(
     allow_research_synthetic_timestamps: bool = False,
 ) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
+    quality_reports: dict[str, dict[str, Any]] = {}
     load_reports: dict[str, HistoricalBarLoadReport] = {}
     setattr(_build_symbol_dataset, "_load_reports", load_reports)
     cache_enabled = _env_bool(
@@ -1002,6 +1076,9 @@ def build_training_dataset(
                 training_cache_dir=training_cache_dir,
                 allow_research_synthetic_timestamps=allow_research_synthetic_timestamps,
             )
+            quality = symbol_rows.attrs.get("quality_report")
+            if isinstance(quality, Mapping):
+                quality_reports[symbol] = dict(quality)
             if not symbol_rows.empty:
                 rows.append(symbol_rows)
     finally:
@@ -1019,6 +1096,24 @@ def build_training_dataset(
     dataset.attrs["load_reports"] = {
         symbol: report.as_dict()
         for symbol, report in sorted(load_reports.items())
+    }
+    total_expected = sum(
+        int(report.get("expected_labeled_rows", 0) or 0)
+        for report in quality_reports.values()
+    )
+    total_quarantined = sum(
+        int(report.get("quarantined_rows", 0) or 0)
+        for report in quality_reports.values()
+    )
+    dataset.attrs["quality_report"] = {
+        "status": "complete",
+        "symbols": quality_reports,
+        "expected_labeled_rows": total_expected,
+        "valid_labeled_rows": total_expected - total_quarantined,
+        "quarantined_rows": total_quarantined,
+        "unexpected_invalid_rate": (
+            float(total_quarantined / total_expected) if total_expected else 0.0
+        ),
     }
     return cast(pd.DataFrame, dataset)
 
@@ -1244,6 +1339,67 @@ def _feature_importance(model: Any) -> list[dict[str, Any]]:
     ]
     rows.sort(key=lambda item: cast(float, item["importance"]), reverse=True)
     return rows
+
+
+def _heldout_feature_autopsy(
+    model: Any,
+    features: pd.DataFrame,
+    target: pd.Series,
+    *,
+    random_state: int,
+) -> dict[str, Any]:
+    """Measure feature usefulness only on untouched chronological holdout rows."""
+
+    if features.empty or target.nunique() < 2:
+        return {
+            "status": "insufficient_support",
+            "rows": int(len(features)),
+            "features": [],
+        }
+    def _roc_auc_scorer(estimator: Any, values: pd.DataFrame, labels: pd.Series) -> float:
+        probabilities = np.asarray(estimator.predict_proba(values), dtype=float)
+        return float(roc_auc_score(labels, probabilities[:, _positive_class_index(estimator)]))
+
+    measured = permutation_importance(
+        model,
+        features,
+        target.astype(int),
+        scoring=_roc_auc_scorer,
+        n_repeats=5,
+        random_state=int(random_state),
+        n_jobs=1,
+    )
+    rows = [
+        {
+            "feature": feature,
+            "importance_mean": float(mean),
+            "importance_std": float(std),
+            "helpful_on_holdout": bool(mean > 0.0),
+        }
+        for feature, mean, std in zip(
+            REPLAY_ALIGNED_FEATURE_COLUMNS,
+            measured.importances_mean,
+            measured.importances_std,
+            strict=True,
+        )
+    ]
+    rows.sort(
+        key=lambda item: abs(cast(float, item["importance_mean"])),
+        reverse=True,
+    )
+    return {
+        "status": "complete",
+        "method": "chronological_holdout_permutation_importance",
+        "scoring": "roc_auc",
+        "repeats": 5,
+        "rows": int(len(features)),
+        "features": rows,
+        "nonpositive_feature_count": sum(
+            not bool(row["helpful_on_holdout"]) for row in rows
+        ),
+        "selection_authority": False,
+        "promotion_authority": False,
+    }
 
 
 def _live_cost_request_metadata(
@@ -1750,6 +1906,13 @@ def _walk_forward_qualification(
     mean_separation = (
         float(np.mean(separation_values)) if separation_values else None
     )
+    edge_confidence_lower_bound = None
+    if fold_edges:
+        edge_confidence_lower_bound = float(np.mean(fold_edges))
+        if len(fold_edges) > 1:
+            edge_confidence_lower_bound -= float(
+                1.96 * np.std(fold_edges, ddof=1) / np.sqrt(len(fold_edges))
+            )
     reasons: list[str] = []
     if len(folds) < int(required_folds):
         reasons.append(f"insufficient_folds:{len(folds)}<{int(required_folds)}")
@@ -1758,6 +1921,14 @@ def _walk_forward_qualification(
     if mean_edge is None or mean_edge <= float(min_mean_net_edge_bps):
         reasons.append(
             f"nonpositive_or_below_minimum_net_edge:{mean_edge}"
+        )
+    if (
+        edge_confidence_lower_bound is None
+        or edge_confidence_lower_bound <= float(min_mean_net_edge_bps)
+    ):
+        reasons.append(
+            "net_edge_confidence_lower_bound_below_minimum:"
+            f"{edge_confidence_lower_bound}"
         )
     if profitable_ratio < float(min_profitable_fold_ratio):
         reasons.append(
@@ -1789,6 +1960,8 @@ def _walk_forward_qualification(
         "mean_post_cost_net_edge_bps": mean_edge,
         "total_post_cost_net_edge_bps": float(total_edge),
         "fold_edge_std_bps": edge_std,
+        "fold_edge_confidence_lower_bound_bps": edge_confidence_lower_bound,
+        "confidence_level": 0.95,
         "stability_score": stability_score,
         "mean_ranking_high_minus_low_bps": mean_separation,
         "worst_fold": (
@@ -2152,6 +2325,14 @@ def _run_fold_local_walk_forward(
         min_ranking_separation_bps=min_separation,
         group_column="symbol",
     )
+    aggregate_by_session_regime = _aggregate_market_regime_results(
+        oos_frame,
+        min_trades=min_trades,
+        min_profitable_fold_ratio=min_profitable_ratio,
+        min_mean_net_edge_bps=min_mean_edge,
+        min_ranking_separation_bps=min_separation,
+        group_column="session_regime",
+    )
     scoped_oos = oos_frame.copy()
     scoped_oos["symbol_market_regime"] = (
         scoped_oos["symbol"].astype(str).str.upper()
@@ -2165,6 +2346,19 @@ def _run_fold_local_walk_forward(
         min_mean_net_edge_bps=min_mean_edge,
         min_ranking_separation_bps=min_separation,
         group_column="symbol_market_regime",
+    )
+    scoped_oos["symbol_session_regime"] = (
+        scoped_oos["symbol"].astype(str).str.upper()
+        + "::"
+        + scoped_oos["session_regime"].astype(str).str.lower()
+    )
+    aggregate_by_symbol_session_regime = _aggregate_market_regime_results(
+        scoped_oos,
+        min_trades=min_trades,
+        min_profitable_fold_ratio=min_profitable_ratio,
+        min_mean_net_edge_bps=min_mean_edge,
+        min_ranking_separation_bps=min_separation,
+        group_column="symbol_session_regime",
     )
     symbol_regime_policy = {
         scope: {
@@ -2205,7 +2399,9 @@ def _run_fold_local_walk_forward(
         "aggregate": aggregate,
         "by_market_regime": aggregate_by_market_regime,
         "by_symbol": aggregate_by_symbol,
+        "by_session_regime": aggregate_by_session_regime,
         "by_symbol_market_regime": aggregate_by_symbol_market_regime,
+        "by_symbol_session_regime": aggregate_by_symbol_session_regime,
         "symbol_regime_policy": {
             "default_action": "abstain",
             "scopes": symbol_regime_policy,
@@ -2323,6 +2519,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
     data_dir, acquisition = _resolve_training_input(args)
     output_dir = _resolve_output_dir(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    model_name = str(args.model_name or f"replay_aligned_{args.model_type}").strip()
     live_cost_model = _load_live_cost_replay_model(
         argparse.Namespace(
             live_cost_model_json=getattr(args, "live_cost_model_json", None),
@@ -2365,6 +2562,32 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         label_objective=str(getattr(args, "label_objective", "net_markout")),
         min_net_edge_bps=float(args.min_net_edge_bps),
     )
+    dataset_quality = dict(dataset.attrs.get("quality_report") or {})
+    invalid_rate = float(dataset_quality.get("unexpected_invalid_rate", 0.0) or 0.0)
+    max_invalid_rate = float(
+        np.clip(
+            float(getattr(args, "max_training_invalid_rate", 0.02)),
+            0.0,
+            1.0,
+        )
+    )
+    dataset_quality.update(
+        {
+            "maximum_allowed_unexpected_invalid_rate": max_invalid_rate,
+            "quality_gate_passed": invalid_rate <= max_invalid_rate,
+        }
+    )
+    dataset_quality_path = output_dir / f"{model_name}_dataset_quality.json"
+    dataset_quality_path.write_text(
+        json.dumps(dataset_quality, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    if invalid_rate > max_invalid_rate:
+        raise RuntimeError(
+            "Replay-aligned training data quality gate failed: "
+            f"unexpected_invalid_rate={invalid_rate:.6f} "
+            f"> maximum={max_invalid_rate:.6f}; "
+            f"see {dataset_quality_path}"
+        )
     if dataset.empty:
         raise RuntimeError("Replay-aligned training dataset is empty")
     if dataset["target"].nunique() < 2:
@@ -2426,8 +2649,17 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             if str(value).strip()
         }
     )
+    session_regime_results = cast(
+        Mapping[str, Mapping[str, Any]],
+        walk_forward_report.get("by_session_regime", {}),
+    )
     edge_thresholds_by_regime = {
-        regime: selected_confidence_threshold for regime in observed_session_regimes
+        regime: (
+            selected_confidence_threshold
+            if bool(session_regime_results.get(regime, {}).get("evidence_qualified"))
+            else 1.0
+        )
+        for regime in observed_session_regimes
     }
     validation_report = _evaluate_probabilities(oos_frame["target"], oos_probabilities)
     threshold_report = _threshold_report(oos_frame, oos_probabilities)
@@ -2512,9 +2744,14 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "policy_source": "development_walk_forward_only",
             "policy_allowed_rows": int(np.sum(policy_allowed)),
             "policy_abstained_rows": int(np.sum(~policy_allowed)),
+            "feature_autopsy": _heldout_feature_autopsy(
+                model,
+                holdout_features,
+                holdout["target"],
+                random_state=int(args.random_state),
+            ),
         }
 
-    model_name = str(args.model_name or f"replay_aligned_{args.model_type}").strip()
     model_path = output_dir / f"{model_name}.joblib"
     joblib.dump(model, model_path)
     config = ReplayAlignedTrainingConfig(
@@ -2527,6 +2764,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         fee_bps=float(args.fee_bps),
         slippage_bps=float(args.slippage_bps),
         min_net_edge_bps=float(args.min_net_edge_bps),
+        max_training_invalid_rate=max_invalid_rate,
         train_fraction=float(args.train_fraction),
         model_type=str(args.model_type),
         edge_global_threshold=edge_global_threshold,
@@ -2595,6 +2833,9 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "thresholds_by_regime": edge_thresholds_by_regime,
             "threshold_scope": "nested_inner_validation_only",
             "feature_importance": feature_importance[:25],
+            "heldout_feature_autopsy": holdout_report.get("feature_autopsy", {}),
+            "dataset_quality": dataset_quality,
+            "dataset_quality_path": str(dataset_quality_path),
             "live_cost_model": live_cost_metadata,
             "walk_forward": walk_forward_report,
             "market_regime_policy": market_regime_policy,
@@ -2618,6 +2859,8 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "dataset_hash": acquisition["dataset_hash"],
             "load_reports": dataset.attrs.get("load_reports", {}),
             "shadow_markout_evidence": shadow_markout_evidence,
+            "quality": dataset_quality,
+            "quality_report_path": str(dataset_quality_path),
             "rows": int(len(dataset)),
             "train_rows": int(len(train)),
             "validation_rows": int(len(oos_frame)),
@@ -2634,6 +2877,13 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             "mean_max_favorable_excursion_bps": float(dataset["max_favorable_excursion_bps"].mean()),
             "mean_risk_adjusted_net_bps": float(dataset["risk_adjusted_net_bps"].mean()),
             "mean_label_score_bps": float(dataset["label_score_bps"].mean()),
+            "mean_execution_adjusted_net_bps": float(
+                dataset["execution_adjusted_net_bps"].mean()
+            ),
+            "passive_fill_probability_proxy": float(
+                dataset["passive_fill_probability_proxy"].mean()
+            ),
+            "mean_opportunity_cost_bps": float(dataset["opportunity_cost_bps"].mean()),
             "split_purge": {
                 "method": "per_fold_label_end_timestamp_purge_plus_embargo",
                 "folds": [
@@ -2665,6 +2915,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         },
         "live_cost_model": live_cost_metadata,
         "feature_importance": feature_importance[:25],
+        "heldout_feature_autopsy": holdout_report.get("feature_autopsy", {}),
         "validation": validation_report,
         "threshold_sweep": threshold_report,
         "threshold_sweep_by_regime": threshold_report_by_regime,
@@ -2728,12 +2979,25 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--horizon-bars", type=int, default=1)
     parser.add_argument(
         "--label-objective",
-        choices=("net_markout", "spread_adjusted", "risk_adjusted", "mae_mfe"),
+        choices=(
+            "net_markout",
+            "spread_adjusted",
+            "risk_adjusted",
+            "mae_mfe",
+            "execution_adjusted",
+        ),
         default="net_markout",
         help=(
             "Training label objective. net_markout and spread_adjusted use cost-adjusted "
-            "future markout; risk_adjusted and mae_mfe include adverse/favorable excursion."
+            "future markout; risk_adjusted and mae_mfe include adverse/favorable excursion; "
+            "execution_adjusted also penalizes passive non-fill opportunity cost."
         ),
+    )
+    parser.add_argument(
+        "--max-training-invalid-rate",
+        type=float,
+        default=0.02,
+        help="Fail training when unexpected invalid labeled rows exceed this fraction.",
     )
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)

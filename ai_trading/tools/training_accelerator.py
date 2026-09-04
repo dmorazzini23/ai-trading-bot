@@ -38,10 +38,25 @@ def _default_output_dir(cadence: str) -> Path:
 def _cadence_defaults(cadence: str) -> tuple[str, str, int, int]:
     normalized = str(cadence or "daily").strip().lower()
     if normalized == "daily":
-        return "1,3,5,15", "net_markout,risk_adjusted", 15, 4
+        return (
+            "1,3,5,15",
+            "net_markout,spread_adjusted,risk_adjusted,mae_mfe,execution_adjusted",
+            15,
+            4,
+        )
     if normalized == "weekly":
-        return "1,3,5,15", "net_markout,spread_adjusted,risk_adjusted,mae_mfe", 15, 6
-    return "1,3,5,15", "net_markout,spread_adjusted,risk_adjusted,mae_mfe", 15, 4
+        return (
+            "1,3,5,15",
+            "net_markout,spread_adjusted,risk_adjusted,mae_mfe,execution_adjusted",
+            15,
+            6,
+        )
+    return (
+        "1,3,5,15",
+        "net_markout,spread_adjusted,risk_adjusted,mae_mfe,execution_adjusted",
+        15,
+        4,
+    )
 
 
 def _artifact_timestamp() -> str:

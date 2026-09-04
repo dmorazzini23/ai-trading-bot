@@ -218,6 +218,8 @@ and the end-of-day window fail closed to cancellation.
 Relevant conservative defaults are documented in `.env.example`:
 
 - `AI_TRADING_PAPER_SAMPLING_STRATIFIED_FAIRNESS_ENABLED=1`
+- `AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_REGIME_PER_DAY=4` prevents one
+  observed market regime from consuming the daily diagnostic budget.
 - `AI_TRADING_PAPER_SAMPLING_RESERVED_{OPENING,MIDDAY,CLOSING}_TRADES_PER_DAY=1`
 - `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_ENABLED=0`
 - `AI_TRADING_PAPER_SAMPLING_PASSIVE_REPRICE_TIMEOUT_SEC=45`

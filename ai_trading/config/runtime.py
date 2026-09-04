@@ -1034,6 +1034,17 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=0,
     ),
     ConfigSpec(
+        field="paper_sampling_max_trades_per_regime_per_day",
+        env=("AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_REGIME_PER_DAY",),
+        cast="int",
+        default=4,
+        description=(
+            "Maximum diagnostic paper-sampling opening orders allowed per observed "
+            "market regime per UTC day."
+        ),
+        min_value=0,
+    ),
+    ConfigSpec(
         field="paper_sampling_max_opening_trades_per_day",
         env=("AI_TRADING_PAPER_SAMPLING_MAX_OPENING_TRADES_PER_DAY",),
         cast="int",

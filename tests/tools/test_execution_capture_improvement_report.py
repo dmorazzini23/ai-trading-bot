@@ -8,6 +8,7 @@ from ai_trading.tools.execution_capture_improvement_report import (
     build_execution_capture_improvement_report,
     is_fill_based_execution_evidence,
     main,
+    select_recent_sessions,
 )
 
 
@@ -96,11 +97,29 @@ def test_execution_capture_enriches_unique_bounded_fallback_and_derives_spread()
     assert report["metadata_quality"]["join_method_counts"] == {
         "unique_symbol_side_time": 1
     }
+    assert report["evidence_integrity"]["join_coverage_sufficient"] is True
     assert report["metadata_status"] == "metadata_incomplete"
     assert report["warnings"] == ["metadata_incomplete"]
     assert report["metadata_quality"]["predominantly_unknown_fields"] == [
         "quote_age_ms"
     ]
+
+
+def test_select_recent_sessions_backfills_only_observed_days() -> None:
+    rows = [
+        {"ts": "2026-07-01T15:30:00Z", "value": 1},
+        {"ts": "2026-07-03T15:30:00Z", "value": 2},
+        {"ts": "2026-07-06T15:30:00Z", "value": 3},
+        {"ts": "2026-07-07T15:30:00Z", "value": 4},
+    ]
+
+    selected = select_recent_sessions(
+        rows,
+        report_date="2026-07-07",
+        lookback_sessions=2,
+    )
+
+    assert [row["value"] for row in selected] == [3, 4]
 
 
 def test_execution_capture_enriches_exact_broker_order_id_alias() -> None:

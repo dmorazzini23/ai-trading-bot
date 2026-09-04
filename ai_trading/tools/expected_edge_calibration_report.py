@@ -17,6 +17,8 @@ from ai_trading.tools.execution_capture_improvement_report import (
     enrich_fills_with_tca,
     is_fill_based_execution_evidence,
     normalize_execution_metadata,
+    select_matching_sessions,
+    select_recent_sessions,
 )
 
 
@@ -624,18 +626,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gate-jsonl", type=Path, default=None)
     parser.add_argument("--min-samples", type=int, default=25)
     parser.add_argument("--min-bucket-samples", type=int, default=5)
+    parser.add_argument("--lookback-sessions", type=int, default=5)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
     output_json, latest_json = _default_report_paths(str(args.report_date))
     output_json = args.output_json or output_json
     latest_json = args.latest_json or latest_json
+    fill_rows = select_recent_sessions(
+        _read_jsonl(args.fills_jsonl),
+        report_date=str(args.report_date),
+        lookback_sessions=int(args.lookback_sessions),
+    )
+    tca_rows = select_matching_sessions(_read_jsonl(args.tca_jsonl), fill_rows)
+    candidate_rows = select_matching_sessions(
+        _read_jsonl(args.candidates_jsonl), fill_rows
+    )
+    gate_rows = select_matching_sessions(_read_jsonl(args.gate_jsonl), fill_rows)
     report = build_expected_edge_calibration_report(
         report_date=str(args.report_date),
-        fills=_read_jsonl(args.fills_jsonl, report_date=str(args.report_date)),
-        tca_rows=_read_jsonl(args.tca_jsonl, report_date=str(args.report_date)),
-        candidates=_read_jsonl(args.candidates_jsonl, report_date=str(args.report_date)),
-        gate_rows=_read_jsonl(args.gate_jsonl, report_date=str(args.report_date)),
+        fills=fill_rows,
+        tca_rows=tca_rows,
+        candidates=candidate_rows,
+        gate_rows=gate_rows,
         min_samples=int(args.min_samples),
         min_bucket_samples=int(args.min_bucket_samples),
     )

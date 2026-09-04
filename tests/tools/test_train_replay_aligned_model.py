@@ -205,6 +205,13 @@ def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -
         "session_regime",
         "gross_long_bps",
         "net_long_bps",
+        "net_edge_after_cost_bps",
+        "spread_adjusted_markout_bps",
+        "mae_bps",
+        "mfe_bps",
+        "passive_fill_probability_proxy",
+        "opportunity_cost_bps",
+        "execution_adjusted_net_bps",
         "target",
     }.issubset(dataset.columns)
     assert dataset["target"].nunique() == 2
@@ -212,6 +219,7 @@ def test_build_training_dataset_uses_future_net_markout_target(tmp_path: Path) -
     assert bool((dataset["target"] == (dataset["net_long_bps"] > 0.0).astype(int)).all())
     assert "label_end_timestamp" in dataset.columns
     assert bool(dataset["label_end_timestamp"].ge(dataset["timestamp"]).all())
+    assert dataset.attrs["quality_report"]["status"] == "complete"
 
 
 def test_split_train_validation_purges_overlapping_label_horizon() -> None:
@@ -379,6 +387,24 @@ def test_build_training_dataset_supports_risk_adjusted_excursion_labels(tmp_path
         "label_objective",
     }.issubset(dataset.columns)
     assert set(dataset["label_objective"].unique()) == {"risk_adjusted"}
+
+
+def test_build_training_dataset_supports_execution_adjusted_labels(tmp_path: Path) -> None:
+    _write_cycle_bars(tmp_path / "AAPL.csv", periods=180)
+
+    dataset = build_training_dataset(
+        data_dir=tmp_path,
+        horizon_bars=1,
+        label_objective="execution_adjusted",
+        fee_bps=0.0,
+        slippage_bps=0.0,
+    )
+
+    assert not dataset.empty
+    assert set(dataset["label_objective"].unique()) == {"execution_adjusted"}
+    assert dataset["passive_fill_probability_proxy"].between(0.0, 1.0).all()
+    assert dataset["opportunity_cost_bps"].ge(0.0).all()
+    assert dataset["label_score_bps"].equals(dataset["execution_adjusted_net_bps"])
     assert not bool(dataset["label_score_bps"].equals(dataset["net_long_bps"]))
     assert bool(
         (dataset["target"] == (dataset["label_score_bps"] > 0.0).astype(int)).all()
@@ -584,6 +610,10 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     ] is True
     assert persisted["holdout_evaluation"]["consumed"] is True
     assert persisted["holdout_evaluation"]["selection_authority"] is False
+    assert persisted["heldout_feature_autopsy"]["status"] == "complete"
+    assert persisted["heldout_feature_autopsy"]["features"]
+    assert persisted["dataset"]["quality"]["quality_gate_passed"] is True
+    assert Path(persisted["dataset"]["quality_report_path"]).is_file()
     assert persisted["validation"]["rows"] == persisted["dataset"]["validation_rows"]
     assert persisted["threshold_sweep"]
     assert persisted["recommendation"] == "evaluate_candidate_in_shadow_with_governed_offline_replay"
@@ -596,6 +626,8 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert walk_forward["fold_local_fitting"] is True
     assert set(walk_forward["by_symbol"]) == {"AAPL", "MSFT"}
     assert walk_forward["by_symbol_market_regime"]
+    assert walk_forward["by_session_regime"]
+    assert walk_forward["by_symbol_session_regime"]
     symbol_regime_policy = walk_forward["symbol_regime_policy"]
     assert symbol_regime_policy["default_action"] == "abstain"
     assert symbol_regime_policy["promotion_authority"] is False
@@ -641,6 +673,7 @@ def test_train_replay_aligned_model_writes_verified_artifact_and_report(tmp_path
     assert aggregate["live_money_authority"] is False
     assert "profitable_fold_ratio" in aggregate
     assert "stability_score" in aggregate
+    assert "fold_edge_confidence_lower_bound_bps" in aggregate
     assert "worst_fold" in aggregate
     aggregate_regimes = walk_forward["by_market_regime"]
     assert aggregate_regimes

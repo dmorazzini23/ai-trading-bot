@@ -144,17 +144,27 @@ def build_execution_capture_classification_report(
     *,
     report_date: str,
     fills: Sequence[Mapping[str, Any]],
+    tca_rows: Sequence[Mapping[str, Any]] = (),
     min_samples: int = 10,
     min_capture_ratio: float = 0.25,
 ) -> dict[str, Any]:
+    # Imported lazily because the improvement report reuses the classifier.
+    from ai_trading.tools.execution_capture_improvement_report import (
+        build_metadata_quality,
+        enrich_fills_with_tca,
+        normalize_execution_metadata,
+    )
+
     rows: list[dict[str, Any]] = []
-    for row in fills:
+    for row in enrich_fills_with_tca(fills, tca_rows):
         expected = _first_float(row, "expected_net_edge_bps", "expected_edge_bps", "predicted_net_edge_bps")
         realized = _first_float(row, "realized_net_edge_bps", "net_edge_bps", "markout_bps")
         if expected is None or realized is None:
             continue
+        execution_metadata = normalize_execution_metadata(row)
         rows.append(
             {
+                **execution_metadata,
                 "symbol": _symbol(row),
                 "side": _token(row, "side", "order_side"),
                 "session_bucket": _token(row, "session_bucket", "session_regime", "session"),
@@ -169,6 +179,7 @@ def build_execution_capture_classification_report(
     positive_expected = sum(value for value in expected_values if value > 0.0)
     capture_ratio = float(sum(realized_values) / positive_expected) if positive_expected > 0.0 else None
     counts = Counter(str(row["classification"]) for row in rows)
+    metadata_quality = build_metadata_quality(rows)
     if len(rows) < int(min_samples):
         status = "insufficient_samples"
         action = "collect_more_execution_capture_samples"
@@ -196,6 +207,15 @@ def build_execution_capture_classification_report(
             "execution_capture_ratio": capture_ratio,
             "classification_counts": dict(sorted(counts.items())),
         },
+        "metadata_quality": metadata_quality,
+        "evidence_integrity": {
+            "join_coverage_rate": metadata_quality["join_coverage_rate"],
+            "min_join_coverage_rate": metadata_quality["min_join_coverage_rate"],
+            "join_coverage_sufficient": metadata_quality[
+                "join_coverage_sufficient"
+            ],
+            "promotion_eligible": False,
+        },
         "by_symbol": _bucket_summary(rows, "symbol"),
         "by_session": _bucket_summary(rows, "session_bucket"),
         "by_order_type": _bucket_summary(rows, "order_type"),
@@ -218,17 +238,31 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-date", default=datetime.now(UTC).strftime("%Y-%m-%d"))
     parser.add_argument("--fills-jsonl", type=Path, default=None)
+    parser.add_argument("--tca-jsonl", type=Path, default=None)
+    parser.add_argument("--lookback-sessions", type=int, default=5)
     parser.add_argument("--min-samples", type=int, default=10)
     parser.add_argument("--min-capture-ratio", type=float, default=0.25)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     args = parser.parse_args(argv)
+    from ai_trading.tools.execution_capture_improvement_report import (
+        select_matching_sessions,
+        select_recent_sessions,
+    )
+
     output_json, latest_json = _default_report_paths(str(args.report_date))
     output_json = args.output_json or output_json
     latest_json = args.latest_json or latest_json
+    fill_rows = select_recent_sessions(
+        _read_jsonl(args.fills_jsonl),
+        report_date=str(args.report_date),
+        lookback_sessions=int(args.lookback_sessions),
+    )
+    tca_rows = select_matching_sessions(_read_jsonl(args.tca_jsonl), fill_rows)
     report = build_execution_capture_classification_report(
         report_date=str(args.report_date),
-        fills=_read_jsonl(args.fills_jsonl, report_date=str(args.report_date)),
+        fills=fill_rows,
+        tca_rows=tca_rows,
         min_samples=int(args.min_samples),
         min_capture_ratio=float(args.min_capture_ratio),
     )
