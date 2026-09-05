@@ -536,6 +536,38 @@ def _resolve_manifest_path(raw: Any, *, relative_to: Path) -> Path:
     return path if path.is_absolute() else (relative_to / path).resolve()
 
 
+def _local_training_coverage(
+    symbol_paths: dict[str, Path], *, timestamp_col: str,
+) -> dict[str, Any]:
+    """Describe actual input coverage before fitting; never infer quality from hashes."""
+    coverage: dict[str, Any] = {}
+    for symbol, path in sorted(symbol_paths.items()):
+        frame, load_report = load_historical_bars(
+            path, timestamp_col=timestamp_col, require_timestamp=True,
+        )
+        index = pd.DatetimeIndex(frame.index)
+        local_dates = index.tz_convert("America/New_York").date
+        deltas = index.to_series().diff().dt.total_seconds()
+        same_date = pd.Series(local_dates, index=index).eq(
+            pd.Series(local_dates, index=index).shift()
+        )
+        within_day = deltas[same_date & deltas.gt(0)]
+        cadence = float(within_day.median()) if not within_day.empty else None
+        coverage[symbol] = {
+            "start": index.min().isoformat(),
+            "end": index.max().isoformat(),
+            "rows": len(frame),
+            "observed_session_dates": sorted({str(day) for day in local_dates}),
+            "observed_session_count": len(set(local_dates)),
+            "median_intraday_cadence_seconds": cadence,
+            "intraday_gap_count": int(within_day.gt(cadence * 1.5).sum()) if cadence else 0,
+            "max_intraday_gap_seconds": float(within_day.max()) if not within_day.empty else None,
+            "regime_distribution": dict(pd.Series(infer_day_sleeve_regimes(frame["close"])).value_counts().items()),
+            "load_diagnostics": load_report.as_dict(),
+        }
+    return coverage
+
+
 def _resolve_training_input(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     acquisition_raw = getattr(args, "acquisition_manifest_json", None)
     symbols_text = str(getattr(args, "symbols", "") or "")
@@ -552,6 +584,12 @@ def _resolve_training_input(args: argparse.Namespace) -> tuple[Path, dict[str, A
             )
         data_dir = _resolve_input_dir(data_dir_raw)
         symbol_paths = _resolve_symbol_paths(data_dir, symbols_text)
+        missing_symbols = requested_symbols - set(symbol_paths)
+        if missing_symbols:
+            raise ValueError(f"historical training symbols missing: {','.join(sorted(missing_symbols))}")
+        coverage = _local_training_coverage(
+            symbol_paths, timestamp_col=str(getattr(args, "timestamp_col", "timestamp")),
+        )
         local_identities: list[dict[str, Any]] = [
             {
                 "symbol": symbol,
@@ -561,7 +599,10 @@ def _resolve_training_input(args: argparse.Namespace) -> tuple[Path, dict[str, A
         ]
         return data_dir, {
             "mode": "local_historical_csv",
-            "quality_passed": True,
+            "quality_passed": False,
+            "quality_status": "unverified_completeness",
+            "quality_reason": "acquisition_manifest_missing",
+            "coverage": coverage,
             "dataset_hash": _canonical_sha256(local_identities),
             "symbols": sorted(symbol_paths),
             "authority": dict(_HISTORICAL_AUTHORITY_REQUIRED),

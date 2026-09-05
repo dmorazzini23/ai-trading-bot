@@ -16,6 +16,7 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.multi_horizon_research_pipeline import run_multi_horizon_pipeline
 from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
+    _resolve_training_input,
 )
 
 _GOVERNED_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
@@ -382,6 +383,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     args.shadow_markout_manifest_json = selected_shadow_manifest
     config = {
         "data_dir": str(args.data_dir),
+        "require_validated_data": bool(getattr(args, "require_validated_data", False)),
         "symbols": _governed_symbols(str(getattr(args, "symbols", "") or "")),
         "timestamp_col": str(getattr(args, "timestamp_col", "timestamp")),
         "horizons": str(getattr(args, "horizons", "") or horizons),
@@ -544,7 +546,21 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     report["shadow_markout_evidence"] = input_manifest["inputs"][
         "shadow_markout_manifest"
     ]
-    if required_live_cost_blocked:
+    input_blocked = False
+    resolved_data_dir = Path(args.data_dir)
+    if not args.plan_only and config["require_validated_data"]:
+        try:
+            resolved_data_dir, provenance = _resolve_training_input(args)
+            report["data_provenance"] = provenance
+            input_blocked = provenance.get("quality_passed") is not True
+        except (OSError, ValueError) as exc:
+            input_blocked = True
+            report["data_provenance"] = {"quality_passed": False, "error": str(exc)}
+    if input_blocked:
+        report["status"] = "blocked"
+        report["blocked_reasons"] = ["training_data_completeness_unverified"]
+        report["candidates"] = []
+    elif required_live_cost_blocked:
         report["status"] = "blocked"
         report["blocked_reasons"] = ["required_live_cost_model_unusable"]
         report["live_cost_usability"] = live_cost_status
@@ -555,10 +571,11 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         report["previous_report_path"] = previous_state.get("report_path") if previous_state else None
         report["ranked_candidate_count"] = int(previous_state.get("ranked_candidate_count", 0)) if previous_state else 0
         report["lead_candidate_count"] = int(previous_state.get("lead_candidate_count", 0)) if previous_state else 0
+        report["candidates"] = previous_state.get("candidates", []) if previous_state else []
     else:
         pipeline_started = perf_counter()
         pipeline_args = argparse.Namespace(
-            data_dir=Path(args.data_dir),
+            data_dir=resolved_data_dir,
             acquisition_manifest_json=getattr(
                 args, "acquisition_manifest_json", None
             ),
@@ -612,6 +629,19 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         )
         report["ranked_candidate_count"] = len(pipeline_report.get("ranked_candidates", []))
         report["lead_candidate_count"] = len(pipeline_report.get("lead_candidates", []))
+        report["candidates"] = [
+            {
+                "model_id": row.get("model_name"),
+                "regime": "default",
+                "requested_authority": "shadow",
+                "development_eligible": row.get("development_eligible") is True,
+                "sample_count": ((row.get("walk_forward") or {}).get("aggregate") or {}).get("trades", 0),
+                "cost_adjusted_expectancy_bps": ((row.get("walk_forward") or {}).get("aggregate") or {}).get("mean_post_cost_net_edge_bps"),
+                "replay": row.get("replay", {}),
+                "acquisition": row.get("acquisition"),
+            }
+            for row in pipeline_report.get("ranked_candidates", [])
+        ]
         report["holdout_confirmation"] = pipeline_report.get(
             "holdout_confirmation"
         )
@@ -633,6 +663,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
                 "status": report["status"],
                 "ranked_candidate_count": int(report.get("ranked_candidate_count", 0)),
                 "lead_candidate_count": int(report.get("lead_candidate_count", 0)),
+                "candidates": report.get("candidates", []),
                 "holdout_confirmation": report.get("holdout_confirmation"),
                 "forced_repeat_holdout": bool(
                     report.get("cache", {}).get("forced_repeat_holdout", False)
@@ -683,6 +714,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--acquisition-manifest-json", type=Path, default=None)
+    parser.add_argument("--require-validated-data", action="store_true")
     parser.add_argument("--timestamp-col", default="timestamp")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--horizons", default=horizons)

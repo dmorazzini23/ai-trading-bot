@@ -13,6 +13,26 @@ import pytest
 
 from ai_trading.models.artifacts import verify_artifact
 from ai_trading.models.contracts import infer_day_sleeve_regimes
+from ai_trading.tools.train_replay_aligned_model import _resolve_training_input
+
+
+def test_local_training_input_reports_coverage_without_claiming_completeness(tmp_path: Path) -> None:
+    pd.DataFrame({
+        "timestamp": ["2026-09-03T13:30:00Z", "2026-09-03T13:31:00Z", "2026-09-03T13:32:00Z", "2026-09-03T13:36:00Z"],
+        "open": [100.0] * 4, "high": [101.0] * 4,
+        "low": [99.0] * 4, "close": [100.0] * 4,
+    }).to_csv(tmp_path / "AAPL.csv", index=False)
+    args = argparse.Namespace(data_dir=tmp_path, symbols="AAPL", timestamp_col="timestamp")
+    _, provenance = _resolve_training_input(args)
+    assert provenance["quality_passed"] is False
+    coverage = provenance["coverage"]["AAPL"]
+    assert coverage["observed_session_count"] == 1
+    assert coverage["intraday_gap_count"] == 1
+    assert sum(coverage["regime_distribution"].values()) == 4
+    args.symbols = "AAPL,MSFT"
+    with pytest.raises(ValueError, match="symbols missing: MSFT"):
+        _resolve_training_input(args)
+
 from ai_trading.tools.train_replay_aligned_model import (
     ContinuousEdgeEstimator,
     REPLAY_ALIGNED_FEATURE_COLUMNS,

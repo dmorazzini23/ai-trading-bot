@@ -369,16 +369,28 @@ def _observation_from_row(
     cutoff: datetime,
     generated_at: datetime,
     max_future_skew_seconds: float,
+    rejection_counts: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
+    def reject(reason: str) -> None:
+        if rejection_counts is not None:
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+
     ts = _timestamp(row)
-    if ts is None or ts < cutoff:
+    if ts is None:
+        reject("timestamp_missing_or_invalid")
+        return None
+    if ts < cutoff:
+        reject("before_window")
         return None
     if ts > generated_at + timedelta(seconds=max(0.0, float(max_future_skew_seconds))):
+        reject("future_timestamp")
         return None
     if _is_non_executed_terminal(row, source=source):
+        reject("non_executed_terminal")
         return None
     symbol = _text_metric(row, "symbol", "asset_symbol", default="").upper()
     if not symbol:
+        reject("symbol_missing")
         return None
     side = _normalize_side(_text_metric(row, "side", "order_side", default="unknown"))
     session_regime = _session_regime(row, ts)
@@ -417,6 +429,7 @@ def _observation_from_row(
         and slippage_bps is None
         and explicit_total_cost_bps is None
     ):
+        reject("cost_metrics_missing_or_invalid")
         return None
     half_spread_bps = None if spread_bps is None else max(float(spread_bps), 0.0) / 2.0
     adverse_slippage_bps = (
@@ -661,28 +674,40 @@ def build_live_cost_model(
             continue
         rows, stats = _read_jsonl_with_diagnostics(path)
         rows_used = 0
+        rejections: dict[str, int] = {}
+        seen: set[str] = set()
         for row in rows:
+            identity = json.dumps(row, sort_keys=True)
+            if identity in seen:
+                rejections["duplicate_record"] = rejections.get("duplicate_record", 0) + 1
+                continue
+            seen.add(identity)
             observation = _observation_from_row(
                 row,
                 source=source,
                 cutoff=cutoff,
                 generated_at=generated_at,
                 max_future_skew_seconds=max_future_skew_seconds,
+                rejection_counts=rejections,
             )
             if observation is not None:
                 if session_windows and not _in_session_windows(
                     observation["ts"], session_windows, generated_at=generated_at
                 ):
+                    rejections["outside_session"] = rejections.get("outside_session", 0) + 1
                     continue
                 observations.append(observation)
                 rows_used += 1
         stats["rows_used"] = rows_used
+        stats["rejection_counts"] = rejections
+        stats["rows_rejected"] = len(rows) - rows_used
         source_diagnostics[source] = stats
 
     quote_observations: list[dict[str, Any]] = []
     if quote_events_path is not None:
         quote_rows, quote_stats = _read_jsonl_with_diagnostics(quote_events_path)
         quote_rows_used = 0
+        quote_rejections: dict[str, int] = {}
         for row in quote_rows:
             observation = _observation_from_row(
                 row,
@@ -690,16 +715,23 @@ def build_live_cost_model(
                 cutoff=cutoff,
                 generated_at=generated_at,
                 max_future_skew_seconds=max_future_skew_seconds,
+                rejection_counts=quote_rejections,
             )
-            if observation is None or _to_float(observation.get("spread_bps")) is None:
+            if observation is None:
+                continue
+            if _to_float(observation.get("spread_bps")) is None:
+                quote_rejections["spread_missing_or_invalid"] = quote_rejections.get("spread_missing_or_invalid", 0) + 1
                 continue
             if session_windows and not _in_session_windows(
                 observation["ts"], session_windows, generated_at=generated_at
             ):
+                quote_rejections["outside_session"] = quote_rejections.get("outside_session", 0) + 1
                 continue
             quote_observations.append(observation)
             quote_rows_used += 1
         quote_stats["rows_used"] = quote_rows_used
+        quote_stats["rejection_counts"] = quote_rejections
+        quote_stats["rows_rejected"] = len(quote_rows) - quote_rows_used
         source_diagnostics["quote_events"] = quote_stats
 
     buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)

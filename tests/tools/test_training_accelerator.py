@@ -9,6 +9,24 @@ from typing import Any
 import pytest
 
 from ai_trading.tools import training_accelerator
+from ai_trading.tools.regime_champion_models import build_regime_champion_report
+
+
+def test_scheduled_training_blocks_unverified_input(tmp_path: Path, monkeypatch) -> None:
+    def unexpected_training(args):
+        raise AssertionError("unverified data must not reach fitting")
+
+    monkeypatch.setattr(training_accelerator, "run_multi_horizon_pipeline", unexpected_training)
+    report = training_accelerator.run_training_accelerator(argparse.Namespace(
+        cadence="daily", data_dir=tmp_path, symbols="AAPL",
+        output_dir=tmp_path / "out", training_cache_dir=tmp_path / "cache",
+        model_type="logistic", plan_only=False, max_replay_candidates=None,
+        require_validated_data=True,
+    ))
+    assert report["blocked_reasons"] == ["training_data_completeness_unverified"]
+    selection = build_regime_champion_report(candidates=report)
+    assert selection["decisions"] == []
+    assert selection["reason"] == "no_candidate_records"
 
 
 def test_training_accelerator_plan_writes_report(tmp_path: Path) -> None:
@@ -248,7 +266,11 @@ def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, m
         output = Path(args.output_dir)
         output.mkdir(parents=True, exist_ok=True)
         (output / "multi_horizon_research_report.json").write_text("{}", encoding="utf-8")
-        return {"ranked_candidates": [{"model_path": "m"}], "lead_candidates": [{"model_path": "m"}]}
+        return {"ranked_candidates": [{
+            "model_path": "m", "model_name": "challenger",
+            "development_eligible": False,
+            "walk_forward": {"aggregate": {"trades": 42, "mean_post_cost_net_edge_bps": -2.0}},
+        }], "lead_candidates": [{"model_path": "m"}]}
 
     monkeypatch.setattr(training_accelerator, "run_multi_horizon_pipeline", _fake_pipeline)
 
@@ -294,6 +316,12 @@ def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, m
     assert calls[0].training_cache_dir == tmp_path / "cache"
     assert calls[0].horizons == "1,3"
     assert calls[0].max_replay_candidates == 3
+    selection = build_regime_champion_report(candidates=report)
+    decision = selection["decisions"][0]
+    assert decision["candidate_model_id"] == "challenger"
+    assert decision["samples"] == 42
+    assert "development_evidence_not_qualified" in decision["reasons"]
+    assert "candidate_model_id_missing" not in decision["reasons"]
 
     skipped = training_accelerator.run_training_accelerator(
         argparse.Namespace(
@@ -333,6 +361,7 @@ def test_training_accelerator_invokes_multi_horizon_with_cache(tmp_path: Path, m
     assert skipped["cache"]["previous_report_exists"] is True
     assert skipped["cache"]["hit_reason"] == "unchanged_successful_signature"
     assert skipped["ranked_candidate_count"] == 1
+    assert skipped["candidates"] == report["candidates"]
     assert len(calls) == 1
 
     Path(str(skipped["previous_report_path"])).unlink()

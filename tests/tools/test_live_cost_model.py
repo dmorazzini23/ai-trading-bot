@@ -15,6 +15,29 @@ def _write_jsonl(path: Path, rows: list[object]) -> None:
     )
 
 
+def test_cost_rejections_reconcile_all_input_rows(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 4, 15, tzinfo=UTC)
+    good = {"ts": now.isoformat(), "symbol": "AAPL", "slippage_bps": 1.0}
+    path = tmp_path / "cost.jsonl"
+    _write_jsonl(path, [
+        good, good,
+        {**good, "ts": "bad"},
+        {**good, "ts": (now + timedelta(days=1)).isoformat()},
+        {**good, "symbol": ""},
+        {"ts": now.isoformat(), "symbol": "AAPL"},
+    ])
+    report = live_cost_model.build_live_cost_model(events_path=path, now=now)
+    stats = report["sources"]["execution_quality_events"]
+    assert stats["rows_used"] == 1
+    assert stats["rows_rejected"] == 5
+    assert stats["rejection_counts"] == {
+        "duplicate_record": 1, "timestamp_missing_or_invalid": 1,
+        "future_timestamp": 1, "symbol_missing": 1,
+        "cost_metrics_missing_or_invalid": 1,
+    }
+    assert stats["rows_read"] == stats["rows_used"] + sum(stats["rejection_counts"].values())
+
+
 def test_live_cost_model_preserves_zero_cost_samples_and_ignores_stale_rows(
     tmp_path: Path,
 ) -> None:
@@ -64,6 +87,7 @@ def test_live_cost_model_preserves_zero_cost_samples_and_ignores_stale_rows(
     assert report["window"]["sample_count"] == 1
     assert report["sources"]["execution_quality_events"]["rows_used"] == 1
     assert report["sources"]["execution_quality_events"]["invalid_rows"] == 2
+    assert report["sources"]["execution_quality_events"]["rejection_counts"] == {"before_window": 1}
     assert report["observed"]["mean_total_cost_bps"] == 0.0
     rows = report["by_symbol_side_session"]
     assert len(rows) == 1

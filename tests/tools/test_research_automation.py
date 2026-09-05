@@ -289,6 +289,7 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
         "AAPL,AMZN"
     )
     assert "--research-cost-fallback" in accelerator_command
+    assert "--require-validated-data" in accelerator_command
     assert "--shadow-markout-jsonl" in accelerator_command
     assert "--shadow-markout-fallback-manifest-json" in accelerator_command
     assert accelerator["blocked_returncodes"] == [2]

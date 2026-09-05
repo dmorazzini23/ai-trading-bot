@@ -455,3 +455,31 @@ cleared intentionally.
 
 For the current control matrix, scenario drills, and operator cadence, see
 [docs/ROBUSTNESS_AUDIT.md](/home/aiuser/ai-trading-bot/docs/ROBUSTNESS_AUDIT.md).
+# Research evidence validation
+
+Scheduled daily accelerator runs require validated historical input via
+`--require-validated-data`. When the historical workflow is enabled, automation
+passes its current-run acquisition manifest to the accelerator. The resolved
+dataset directory is used for both training and replay. Missing or failed
+completeness evidence blocks the accelerator with
+`training_data_completeness_unverified`; it does not fall back to legacy CSVs.
+Weekly and weekend accelerator runs use the latest published historical
+acquisition manifest and enforce the same validation gate.
+
+Direct local-CSV research remains available, but reports
+`quality_status=unverified_completeness`, with per-symbol date coverage,
+observed local session dates, cadence, intraday gaps, regime counts, and loader
+cleanup counts. Observed dates and median-cadence gaps do not certify exchange
+calendar completeness. Use the governed acquisition manifest for that check.
+
+Cost model source diagnostics include `rows_used`, `rows_rejected`, and
+`rejection_counts`. Each parsed rejected row has one primary reason; malformed
+JSON rows remain in `invalid_rows`. Exact duplicate records within an execution
+source are excluded. This does not perform cross-source order/fill joins or
+certify correlation integrity.
+
+Accelerator reports and successful cache states carry explicit `candidates`
+records for regime evaluation. Walk-forward counts remain research evidence;
+they do not create shadow-fill evidence or grant promotion authority. An empty
+candidate collection produces `no_candidate_records` rather than treating the
+accelerator summary as an unnamed candidate.

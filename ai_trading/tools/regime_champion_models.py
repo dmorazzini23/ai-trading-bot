@@ -72,6 +72,8 @@ def _candidate_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         if isinstance(rows, list):
             return [dict(row) for row in rows if isinstance(row, Mapping)]
     if payload:
+        if payload.get("artifact_type") == "training_accelerator_report":
+            return []
         return [dict(payload)]
     return []
 
@@ -320,6 +322,8 @@ def build_regime_champion_report(
             else {"approved": True, "reason": "authority_not_increased"}
         )
         reasons: list[str] = []
+        if candidate.get("development_eligible") is False:
+            reasons.append("development_evidence_not_qualified")
         if not model_id:
             reasons.append("candidate_model_id_missing")
         if samples < min_samples:
@@ -368,6 +372,7 @@ def build_regime_champion_report(
         "artifact_type": "regime_champion_models",
         "generated_at": generated.isoformat().replace("+00:00", "Z"),
         "status": "ready" if decisions and not blocked else "blocked",
+        "reason": "no_candidate_records" if not decisions else None,
         "thresholds": {
             "min_samples": int(min_samples),
             "min_cost_adjusted_expectancy_bps": float(min_cost_adjusted_expectancy_bps),

@@ -328,6 +328,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "manifest_path": training_report.get("manifest_path"),
                 "training_report_path": training_report.get("report_path"),
                 "dataset": training_report.get("dataset"),
+                "acquisition": training_report.get("acquisition"),
                 "validation": training_report.get("validation"),
                 "threshold_sweep": list(training_report.get("threshold_sweep", []))[:10],
                 "threshold_sweep_by_regime": training_report.get(
