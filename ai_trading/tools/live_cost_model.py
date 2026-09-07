@@ -346,6 +346,8 @@ _NON_EXECUTED_STATUSES = {
 
 
 def _is_non_executed_terminal(row: Mapping[str, Any], *, source: str) -> bool:
+    if row.get("pending_event") or row.get("pending_terminal_nonfill"):
+        return True
     status = _text_metric(
         row,
         "status",
@@ -425,7 +427,6 @@ def _observation_from_row(
     )
     if (
         spread_bps is None
-        and quote_age_ms is None
         and slippage_bps is None
         and explicit_total_cost_bps is None
     ):
@@ -461,6 +462,7 @@ def _observation_from_row(
         "half_spread_bps": half_spread_bps,
         "commission_bps": commission_component,
         "modeled_total_cost_bps": modeled_total_cost_bps,
+        "fill_derived": slippage_bps is not None or explicit_total_cost_bps is not None,
     }
 
 
@@ -509,6 +511,10 @@ def _summary_row(
         "session_regime": session_regime,
         "event_count": int(len(observations)),
         "sample_count": int(sample_count),
+        "fill_derived_sample_count": sum(bool(obs.get("fill_derived")) for obs in observations),
+        "p90_fill_derived_cost_bps": _percentile(
+            [float(obs["modeled_total_cost_bps"]) for obs in observations if obs.get("fill_derived")], 0.90
+        ),
         "sufficient_samples": bool(sample_count >= int(min_samples)),
         "sources": dict(
             sorted(Counter(str(obs.get("source") or "unknown") for obs in observations).items())
@@ -669,12 +675,28 @@ def build_live_cost_model(
         "tca_records": tca_path,
     }
     source_diagnostics: dict[str, dict[str, Any]] = {}
+    source_rows = {
+        source: _read_jsonl_with_diagnostics(path)
+        for source, path in sources.items() if path is not None
+    }
+    def correlation_keys(row: Mapping[str, Any]) -> set[tuple[str, str]]:
+        return {
+            (key, value) for key in ("correlation_id", "order_id", "client_order_id", "fill_id")
+            if (value := _text_metric(row, key))
+        }
+
+    source_keys = {
+        source: set().union(*(correlation_keys(row) for row in rows))
+        for source, (rows, _stats) in source_rows.items()
+    }
     for source, path in sources.items():
         if path is None:
             continue
-        rows, stats = _read_jsonl_with_diagnostics(path)
+        rows, stats = source_rows[source]
         rows_used = 0
         rejections: dict[str, int] = {}
+        correlations: Counter[str] = Counter()
+        other_keys = set().union(*(keys for name, keys in source_keys.items() if name != source))
         seen: set[str] = set()
         for row in rows:
             identity = json.dumps(row, sort_keys=True)
@@ -682,6 +704,12 @@ def build_live_cost_model(
                 rejections["duplicate_record"] = rejections.get("duplicate_record", 0) + 1
                 continue
             seen.add(identity)
+            keys = correlation_keys(row)
+            correlation_status = (
+                "missing_identifier" if not keys else
+                "matched_other_source" if keys & other_keys else "unmatched_identifier"
+            )
+            correlations[correlation_status] += 1
             observation = _observation_from_row(
                 row,
                 source=source,
@@ -698,9 +726,22 @@ def build_live_cost_model(
                     continue
                 observations.append(observation)
                 rows_used += 1
+            else:
+                correlations[f"rejected_{correlation_status}"] += 1
         stats["rows_used"] = rows_used
         stats["rejection_counts"] = rejections
         stats["rows_rejected"] = len(rows) - rows_used
+        stats["correlation_counts"] = dict(correlations)
+        stats["correlation_policy"] = "diagnostic_only_self_contained_costs_do_not_require_join"
+        stats["rejection_summary"] = {
+            "age": rejections.get("before_window", 0) + rejections.get("outside_session", 0),
+            "duplicates": rejections.get("duplicate_record", 0),
+            "invalid_fields": int(stats["invalid_rows"]) + sum(
+                value for key, value in rejections.items()
+                if key in {"timestamp_missing_or_invalid", "future_timestamp", "symbol_missing", "cost_metrics_missing_or_invalid"}
+            ),
+            "missing_correlations": correlations["rejected_missing_identifier"] + correlations["rejected_unmatched_identifier"],
+        }
         source_diagnostics[source] = stats
 
     quote_observations: list[dict[str, Any]] = []
@@ -708,7 +749,13 @@ def build_live_cost_model(
         quote_rows, quote_stats = _read_jsonl_with_diagnostics(quote_events_path)
         quote_rows_used = 0
         quote_rejections: dict[str, int] = {}
+        quote_seen: set[str] = set()
         for row in quote_rows:
+            identity = json.dumps(row, sort_keys=True)
+            if identity in quote_seen:
+                quote_rejections["duplicate_record"] = quote_rejections.get("duplicate_record", 0) + 1
+                continue
+            quote_seen.add(identity)
             observation = _observation_from_row(
                 row,
                 source="quote_events",

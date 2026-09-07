@@ -1,0 +1,96 @@
+{
+  "protocol_id": "aapl_intraday_reversal_20260906_v1",
+  "recorded_before_new_horizon_results": true,
+  "research_only": true,
+  "promotion_authority": false,
+  "universe": [
+    "AAPL"
+  ],
+  "hypothesis": "Temporary selling pressure can move price below its short-term equilibrium; buying after a large negative intraday shock may capture a reversal sufficient to cover costs.",
+  "economic_failure_conditions": [
+    "Negative shocks continue rather than reverse",
+    "Reversal is too small to cover costs",
+    "Support or stability is inadequate"
+  ],
+  "session_timezone": "America/New_York",
+  "entry_start": "11:00",
+  "flat_by": "15:00",
+  "side": "long_only",
+  "entry_rule": "15-minute log close return <= -2 * sqrt(15) * sample standard deviation of the preceding 60 one-minute log returns, excluding the 15-minute shock. Require all 76 closes contiguous within the same New York session. No fitting or threshold search.",
+  "entry_price_assumption": "next available minute open; reject missing expected timestamps rather than fill them",
+  "exit_rule": "fixed horizon at minute open, with no trade crossing the session cutoff",
+  "overlapping_positions": false,
+  "horizons_minutes": [
+    15,
+    60
+  ],
+  "primary_horizon_minutes": 15,
+  "reference_horizon_minutes": 60,
+  "controls": [
+    "cash",
+    "always_long_on_same_entry_grid"
+  ],
+  "one_way_cost_scenarios_bps": [
+    0,
+    3,
+    6,
+    10,
+    20
+  ],
+  "quote_stress": "add the previously observed 32.58272830737331 bps one-way quote scenario; diagnostic only, not calibrated fill evidence",
+  "retrospective_intervals": [
+    {
+      "name": "development",
+      "start": "2025-07-21",
+      "end": "2025-12-31"
+    },
+    {
+      "name": "validation_q1",
+      "start": "2026-01-01",
+      "end": "2026-03-31"
+    },
+    {
+      "name": "validation_q2",
+      "start": "2026-04-01",
+      "end": "2026-06-30"
+    },
+    {
+      "name": "validation_recent",
+      "start": "2026-07-01",
+      "end": "2026-09-04"
+    }
+  ],
+  "retrospective_independence_warning": "These dates may have been used in prior project research; they are generalization diagnostics, not a certified untouched final test. This hypothesis was chosen after a failed continuation study on these same dates; results are explicitly exploratory.",
+  "untouched_final_period": {
+    "start": "2026-09-08",
+    "end": "2026-10-30",
+    "status": "reserved_future_data",
+    "consume_only_if_retrospective_criteria_pass": true
+  },
+  "acceptance": {
+    "minimum_validation_sessions_per_interval": 40,
+    "minimum_completed_validation_trades": 250,
+    "primary_one_way_cost_bps": 6,
+    "net_expectancy_bps_gt": 0,
+    "positive_validation_intervals_required": 3,
+    "mean_daily_improvement_over_matched_always_long_gt": 0,
+    "familywise_alpha": 0.05,
+    "predeclared_horizon_trials": 2,
+    "bootstrap_block_sessions": 5,
+    "bootstrap_replicates": 10000,
+    "bootstrap_seed": 20260906,
+    "simultaneous_bounds": 12,
+    "uncertainty_method": "Paired five-session block bootstrap; 12 simultaneous bounds conservatively include the prior four horizons and these two, two metrics per horizon. Does not correct unknown earlier project searches.",
+    "confidence_lower_bound_gt": 0,
+    "final_confirmation_required_for_continue": true
+  },
+  "decision_rules": {
+    "retire": "Close each supported variant that fails the fixed criteria. Close under-supported trials as inconclusive; no parameter expansion.",
+    "revise": "some evidence survives but coverage, stability, cost robustness, or execution reconciliation remains inadequate; record a new hypothesis before another experiment",
+    "continue": "a frozen winner passes retrospective criteria and subsequent untouched confirmation with independently adequate execution evidence"
+  },
+  "stopping_rule": "Evaluate the two fixed horizons once on retrospective data. Close both trials after reporting; do not lower support, cost, or significance thresholds. Future holdout stays unused.",
+  "data_policy": "verify source content hashes and recompute AAPL calendar completeness; retain the older parent dataset failure and per-symbol quality distinction; overlapping timestamps use the dataset with the latest acquisition end date and conflicting closes are counted",
+  "execution_policy": "artifact-only reconciliation; no new orders or promotion to manufacture evidence",
+  "signal_rule": "negative_15m_shock_2sigma_prior60"
+}

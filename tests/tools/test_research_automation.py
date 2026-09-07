@@ -36,6 +36,10 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     payload = _read(report_path)
     assert payload["artifact_type"] == "research_automation_report"
     assert payload["status"] == "planned"
+    evidence = next(step for step in payload["steps"] if step["name"] == "paper_evidence_review")
+    assert "ai_trading.tools.paper_evidence_review" in evidence["command"]
+    assert evidence["metadata"]["orders_sent"] == 0
+    assert evidence["output_path"].endswith("paper_evidence_review.json")
     assert payload["safety"] == {
         "automated_runtime_mutations": False,
         "live_money_cutover": "manual_only",
@@ -479,6 +483,11 @@ def test_daily_plan_does_not_backfill_during_market_hours(
     assert "historical_replay_aligned_training" not in names
     assert "opportunity_markouts" not in names
     assert "shadow_markout_replay_input" not in names
+    accelerator = next(step for step in payload["steps"] if step["name"] == "training_accelerator_daily")
+    command = accelerator["command"]
+    assert command[command.index("--acquisition-manifest-json") + 1] == str(
+        report_root / "latest" / "historical_training_backfill_latest.json"
+    )
 
 
 def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(

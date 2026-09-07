@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import math
 import random
+from hashlib import sha256
 from typing import Any, Mapping
 
 
@@ -46,7 +47,8 @@ class SimulatedBroker:
         max_fill_delay_ms: int = 2500,
         cancel_reject_probability: float = 0.0,
     ) -> None:
-        self._rng = random.Random(int(seed))
+        self._seed = int(seed)
+        self._order_random: dict[str, random.Random] = {}
         self._fill_probability = max(0.0, min(1.0, float(fill_probability)))
         self._partial_fill_probability = max(
             0.0, min(1.0, float(partial_fill_probability))
@@ -60,6 +62,13 @@ class SimulatedBroker:
         self._orders: dict[str, dict[str, Any]] = {}
         self._events: deque[dict[str, Any]] = deque()
         self._scheduled: list[_ScheduledFill] = []
+
+    def _rng_for(self, order: Mapping[str, Any]) -> random.Random:
+        identity = str(order.get("client_order_id") or order.get("id"))
+        if identity not in self._order_random:
+            digest = sha256(f"{self._seed}|{identity}".encode()).digest()
+            self._order_random[identity] = random.Random(int.from_bytes(digest, "big"))
+        return self._order_random[identity]
 
     def submit_order(
         self,
@@ -98,21 +107,22 @@ class SimulatedBroker:
             "volatility_pct": float(volatility_pct),
         }
         self._orders[order_id] = model_order
+        rng = self._rng_for(model_order)
 
         base_delay_ms = 150 + int(abs(spread_bps) * 20.0)
         vol_delay_ms = int(max(0.0, volatility_pct) * 10_000)
-        jitter_ms = self._rng.randint(0, 750)
+        jitter_ms = rng.randint(0, 750)
         delay_ms = base_delay_ms + vol_delay_ms + jitter_ms
         delay_ms = max(self._min_fill_delay_ms, min(self._max_fill_delay_ms, delay_ms))
         due_at = now + timedelta(milliseconds=delay_ms)
 
-        if self._rng.random() > self._fill_probability:
+        if rng.random() > self._fill_probability:
             # No fill scheduled; order stays accepted/open.
             return dict(model_order)
 
         fill_ratio = 1.0
-        if self._rng.random() < self._partial_fill_probability:
-            fill_ratio = min(0.95, max(0.1, self._rng.uniform(0.25, 0.75)))
+        if rng.random() < self._partial_fill_probability:
+            fill_ratio = min(0.95, max(0.1, rng.uniform(0.25, 0.75)))
         self._scheduled.append(
             _ScheduledFill(due_at=due_at, order_id=order_id, fill_ratio=fill_ratio)
         )
@@ -129,7 +139,7 @@ class SimulatedBroker:
         if status in {"filled", "canceled", "rejected"}:
             return False
         now = _to_utc(timestamp)
-        if self._rng.random() < self._cancel_reject_probability:
+        if self._rng_for(model_order).random() < self._cancel_reject_probability:
             self._events.append(
                 {
                     "event_type": "cancel_rejected",
@@ -203,7 +213,18 @@ class SimulatedBroker:
                 raw_market = market_price_by_symbol.get(symbol)
                 if raw_market is not None:
                     market_px = float(raw_market)
+            is_limit = model_order.get("type") == "limit"
+            if is_limit:
+                limit = model_order.get("limit_price")
+                if market_px is None or not math.isfinite(market_px) or market_px <= 0 or limit is None:
+                    self._scheduled.append(item)
+                    continue
+                if (model_order.get("side") == "buy" and market_px > float(limit)) or (model_order.get("side") == "sell" and market_px < float(limit)):
+                    self._scheduled.append(item)
+                    continue
             fill_price = self._resolve_fill_price(model_order, market_px)
+            if is_limit:
+                fill_price = min(fill_price, float(limit)) if model_order.get("side") == "buy" else max(fill_price, float(limit))
             qty = float(model_order.get("qty", 0.0) or 0.0)
             filled_qty = float(model_order.get("filled_qty", 0.0) or 0.0)
             remaining = max(0.0, qty - filled_qty)
@@ -221,7 +242,7 @@ class SimulatedBroker:
                 avg_price = total_value / max(1e-9, previous_qty + fill_qty)
             model_order["filled_qty"] = new_filled
             model_order["filled_avg_price"] = avg_price
-            model_order["updated_at"] = item.due_at.isoformat()
+            model_order["updated_at"] = current.isoformat()
             if new_filled >= qty - 1e-9:
                 model_order["status"] = "filled"
             else:
@@ -236,9 +257,10 @@ class SimulatedBroker:
                 "fill_price": fill_price,
                 "filled_qty": new_filled,
                 "status": model_order["status"],
-                "ts": item.due_at.isoformat(),
+                "ts": current.isoformat(),
             }
             self._events.append(event)
+        self._scheduled.sort(key=lambda item: item.due_at)
         while self._events:
             drained.append(self._events.popleft())
         return drained
@@ -265,8 +287,9 @@ class SimulatedBroker:
         spread_bps = float(order.get("spread_bps", 8.0) or 8.0)
         spread_component = base * (spread_bps / 10_000.0)
         vol_pct = float(order.get("volatility_pct", 0.01) or 0.01)
-        vol_component = base * max(0.0, vol_pct) * self._rng.uniform(0.0, 0.35)
-        jitter = base * self._rng.uniform(-0.0008, 0.0008)
+        rng = self._rng_for(order)
+        vol_component = base * max(0.0, vol_pct) * rng.uniform(0.0, 0.35)
+        jitter = base * rng.uniform(-0.0008, 0.0008)
         if side == "buy":
             return float(base + spread_component * 0.5 + vol_component + jitter)
         return float(base - spread_component * 0.5 - vol_component + jitter)

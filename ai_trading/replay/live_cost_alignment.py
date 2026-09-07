@@ -7,6 +7,55 @@ from datetime import UTC, datetime
 from typing import Any, Iterable, Mapping
 
 
+def evaluate_cost_scenarios(
+    *,
+    gross_returns_bps: Iterable[float],
+    turnover: Iterable[float],
+    scenario_costs_bps: Iterable[float] = (0.0, 3.0, 6.0, 10.0),
+    evidence_type: str = "research_assumption",
+) -> dict[str, Any]:
+    """Evaluate chronological OOS P&L at constant one-way execution costs.
+
+    Gross returns are portfolio basis points; turnover is traded notional /
+    equity per observation (two for an equal-notional round trip).
+    """
+    gross = list(gross_returns_bps)
+    traded = list(turnover)
+    costs = list(scenario_costs_bps)
+    if len(gross) != len(traded):
+        raise ValueError("gross_returns_bps and turnover must have equal lengths")
+    if any(_finite_float(value) is None for value in [*gross, *traded, *costs]):
+        raise ValueError("cost scenario inputs must be finite")
+    if any(float(value) < 0 for value in [*traded, *costs]):
+        raise ValueError("turnover and scenario costs must be nonnegative")
+    total_turnover = sum(float(value) for value in traded)
+    scenarios = []
+    for cost in sorted({float(value) for value in costs}):
+        net = [float(g) - cost * float(t) for g, t in zip(gross, traded, strict=True)]
+        mean = sum(net) / len(net) if net else None
+        scenarios.append({
+            "cost_bps": cost,
+            "net_edge_bps": mean,
+            "net_edge_std_bps": (
+                math.sqrt(sum((value - mean) ** 2 for value in net) / len(net))
+                if mean is not None else None
+            ),
+            "positive_fraction": sum(value > 0 for value in net) / len(net) if net else None,
+        })
+    return {
+        "sample_count": len(gross),
+        "total_turnover": total_turnover,
+        "break_even_execution_cost_bps": (
+            sum(float(value) for value in gross) / total_turnover if total_turnover > 0 else None
+        ),
+        "cost_units": "one_way_bps_per_traded_notional",
+        "turnover_units": "traded_notional_divided_by_equity",
+        "scenarios": scenarios,
+        "evidence_type": evidence_type,
+        "promotion_eligible": False,
+    }
+
+
 def _finite_float(value: Any) -> float | None:
     try:
         parsed = float(value)
@@ -66,6 +115,9 @@ def _normalize_bucket(value: Any) -> str:
 
 
 def _live_cost_value(row: Mapping[str, Any], metric: str) -> tuple[float | None, str | None]:
+    if "fill_derived_sample_count" in row:
+        value = _finite_float(row.get("p90_fill_derived_cost_bps"))
+        return (value, "p90_fill_derived_cost_bps") if value is not None and value >= 0 else (None, None)
     metric_keys = (
         metric,
         "p90_total_cost_bps",
@@ -373,7 +425,7 @@ def resolve_live_cost_alignment(
         observed, metric = _live_cost_value(row, cost_metric)
         if observed is None or metric is None:
             continue
-        ranked.append((float(observed), row, metric, _finite_int(row.get("sample_count"))))
+        ranked.append((float(observed), row, metric, _finite_int(row.get("fill_derived_sample_count", row.get("sample_count")))))
     if not ranked:
         row = matches[0]
         return {
@@ -521,6 +573,7 @@ def resolve_live_cost_alignments(
 
 
 __all__ = [
+    "evaluate_cost_scenarios",
     "resolve_live_cost_alignment",
     "resolve_live_cost_alignments",
 ]

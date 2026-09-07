@@ -433,6 +433,8 @@ def day_sleeve_model_readiness_snapshot(
             "status": "unavailable",
             "reason": "required_model_unavailable",
             "allow_shadow": bool(allow_shadow),
+            "serving_decision": "abstain",
+            "model_new_exposure_allowed": False,
         }
 
     model_id, registry_meta = selected
@@ -452,6 +454,9 @@ def day_sleeve_model_readiness_snapshot(
         "governance_status": governance_status,
         "serving_authority": serving_authority,
         "allow_shadow": bool(allow_shadow),
+        "serving_decision": "abstain",
+        "model_new_exposure_allowed": False,
+        "fallback_policy": "no_automatic_substitution_for_invalid_or_stale_selected_model",
     }
     try:
         freshness = _active_model_freshness_snapshot(registry_meta)
@@ -488,6 +493,8 @@ def day_sleeve_model_readiness_snapshot(
         "ok": True,
         "status": "ready",
         "reason": "required_model_ready",
+        "serving_decision": "serve_governed_model",
+        "model_new_exposure_allowed": True,
     }
 
 

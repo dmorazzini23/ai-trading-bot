@@ -330,6 +330,36 @@ def test_best_thresholds_ignore_zero_candidate_rows() -> None:
     assert _best_thresholds_by_regime(reports) == {"regular": 0.58}
 
 
+def test_quote_scenarios_keep_research_authority_and_reject_stale_buckets(tmp_path: Path) -> None:
+    now = pd.Timestamp(trainer.datetime.now(trainer.UTC))
+    path = tmp_path / "cost.json"
+    prior = {"evidence_type": "quote_derived_research_prior", "by_symbol_side_session": [
+        {"symbol": "AAPL", "last_observed_at": now.isoformat(), "sufficient_samples": True, "p90_prior_cost_bps": 7.5},
+        {"symbol": "AAPL", "last_observed_at": (now - pd.Timedelta(days=8)).isoformat(), "sufficient_samples": True, "p90_prior_cost_bps": 100.0},
+    ]}
+    path.write_text(json.dumps({"research_cost_prior": prior}), encoding="utf-8")
+    costs, evidence = trainer._research_cost_scenarios(argparse.Namespace(live_cost_model_json=path, symbols="AAPL"))
+    assert 7.5 in costs and 100.0 not in costs
+    assert evidence["runtime_fill_authority"] is False
+    assert evidence["bucket_count"] == 1
+    prior["runtime_fill_authority"] = True
+    path.write_text(json.dumps({"research_cost_prior": prior}), encoding="utf-8")
+    _, rejected = trainer._research_cost_scenarios(argparse.Namespace(live_cost_model_json=path, symbols="AAPL"))
+    assert rejected["available"] is False
+
+
+def test_abstention_distinguishes_cost_drag_from_missing_support() -> None:
+    frame = pd.DataFrame({"gross_long_bps": [2.0] * 100, "round_trip_cost_bps": [6.0] * 100, "net_long_bps": [-4.0] * 100})
+    scores = np.linspace(0.1, 0.9, 100)
+    selection = trainer._select_nested_threshold(frame, scores, min_support=25, fixed_confidence_threshold=None)
+    diagnostics = trainer._abstention_diagnostics(frame, scores, min_support=25, selected_threshold=selection)
+    assert diagnostics["status"] == "abstained"
+    assert diagnostics["rejected_threshold_counts"]["costs_exceed_positive_gross_edge"] == 4
+    assert diagnostics["rejected_threshold_counts"]["insufficient_support"] == 3
+    assert all(row["mean_gross_markout_bps"] == 2.0 for row in diagnostics["tested_percentiles"])
+    assert diagnostics["policy_changed"] is False
+
+
 def test_edge_magnitude_weights_are_bounded_and_use_post_cost_distance() -> None:
     dataset = pd.DataFrame(
         {
@@ -1020,11 +1050,14 @@ def test_fold_local_walk_forward_never_fits_on_oos_rows(monkeypatch) -> None:
         cost_model_identity={"version": "test_cost_v1"},
     )
 
-    assert len(trackers) == 11
+    assert len(trackers) == 21
     assert len(report["folds"]) == 5
     for fold_index, fold in enumerate(report["folds"]):
-        selector = trackers[fold_index * 2]
-        outer = trackers[(fold_index * 2) + 1]
+        selector = trackers[fold_index * 4]
+        outer = trackers[(fold_index * 4) + 1]
+        for ablation_model in trackers[fold_index * 4 + 2:fold_index * 4 + 4]:
+            assert len(ablation_model.predict_indexes) == 1
+            assert max(ablation_model.fit_index) < min(ablation_model.predict_indexes[0])
         assert len(selector.predict_indexes) == 1
         assert set(selector.fit_index).isdisjoint(selector.predict_indexes[0])
         assert max(selector.fit_index) < min(selector.predict_indexes[0])
@@ -1045,6 +1078,10 @@ def test_fold_local_walk_forward_never_fits_on_oos_rows(monkeypatch) -> None:
     assert report["final_fit"]["rows"] == len(dataset)
     assert report["final_fit"]["threshold_scope"] == "nested_inner_validation_only"
     assert report["final_fit"]["promotion_authority"] is False
+    comparisons = report["controlled_comparisons"]
+    assert {row["name"] for row in comparisons["variants"]} == {
+        "candidate", "cash", "always_long", "momentum", "abstain_volatile", "remove_macd_signal_gap",
+    }
 
 
 def test_wfa_market_regimes_use_canonical_per_symbol_history_with_constant_atr() -> None:

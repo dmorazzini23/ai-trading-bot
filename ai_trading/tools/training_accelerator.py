@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Any
 
 from ai_trading.config.management import get_env
+from ai_trading.data.training_provenance import validate_training_provenance
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.multi_horizon_research_pipeline import run_multi_horizon_pipeline
 from ai_trading.tools.train_replay_aligned_model import (
@@ -384,6 +385,15 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     config = {
         "data_dir": str(args.data_dir),
         "require_validated_data": bool(getattr(args, "require_validated_data", False)),
+        "min_training_sessions": int(getattr(args, "min_training_sessions", 20)),
+        "max_training_missing_ratio": float(getattr(args, "max_training_missing_ratio", 0.02)),
+        "research_experiments": bool(getattr(args, "research_experiments", True)),
+        "experiment_ledger_json": str(getattr(args, "experiment_ledger_json", None) or training_cache_dir / "research_experiment_state.json"),
+        "experiment_max_failures": int(getattr(args, "experiment_max_failures", 2)),
+        "cost_scenarios_bps": str(getattr(args, "cost_scenarios_bps", "0,3,6,10,20")),
+        "experiment_feature_removals": str(getattr(args, "experiment_feature_removals", "macd_signal_gap")),
+        "walk_forward_embargo_bars": int(getattr(args, "walk_forward_embargo_bars", 1)),
+        "walk_forward_embargo_percent": float(getattr(args, "walk_forward_embargo_percent", 0.0)),
         "symbols": _governed_symbols(str(getattr(args, "symbols", "") or "")),
         "timestamp_col": str(getattr(args, "timestamp_col", "timestamp")),
         "horizons": str(getattr(args, "horizons", "") or horizons),
@@ -553,6 +563,16 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
             resolved_data_dir, provenance = _resolve_training_input(args)
             report["data_provenance"] = provenance
             input_blocked = provenance.get("quality_passed") is not True
+            if not input_blocked:
+                representative = validate_training_provenance(
+                    resolved_data_dir, symbols=config["symbols"].split(","),
+                    dataset_identity=provenance.get("dataset_identity", {}),
+                    min_sessions=config["min_training_sessions"],
+                    max_missing_ratio=config["max_training_missing_ratio"],
+                    timestamp_col=config["timestamp_col"],
+                )
+                report["data_provenance"]["representativeness"] = representative
+                input_blocked = representative["quality_passed"] is not True
         except (OSError, ValueError) as exc:
             input_blocked = True
             report["data_provenance"] = {"quality_passed": False, "error": str(exc)}
@@ -575,6 +595,13 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
     else:
         pipeline_started = perf_counter()
         pipeline_args = argparse.Namespace(
+            research_experiments=config["research_experiments"],
+            experiment_ledger_json=Path(config["experiment_ledger_json"]),
+            experiment_max_failures=config["experiment_max_failures"],
+            cost_scenarios_bps=config["cost_scenarios_bps"],
+            experiment_feature_removals=config["experiment_feature_removals"],
+            walk_forward_embargo_bars=config["walk_forward_embargo_bars"],
+            walk_forward_embargo_percent=config["walk_forward_embargo_percent"],
             data_dir=resolved_data_dir,
             acquisition_manifest_json=getattr(
                 args, "acquisition_manifest_json", None
@@ -715,6 +742,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--acquisition-manifest-json", type=Path, default=None)
     parser.add_argument("--require-validated-data", action="store_true")
+    parser.add_argument("--min-training-sessions", type=int, default=20)
+    parser.add_argument("--max-training-missing-ratio", type=float, default=0.02)
+    parser.add_argument("--research-experiments", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--experiment-ledger-json", type=Path, default=None)
+    parser.add_argument("--experiment-max-failures", type=int, default=2)
+    parser.add_argument("--cost-scenarios-bps", default="0,3,6,10,20")
+    parser.add_argument("--experiment-feature-removals", default="macd_signal_gap")
+    parser.add_argument("--walk-forward-embargo-bars", type=int, default=1)
+    parser.add_argument("--walk-forward-embargo-percent", type=float, default=0.0)
     parser.add_argument("--timestamp-col", default="timestamp")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--horizons", default=horizons)

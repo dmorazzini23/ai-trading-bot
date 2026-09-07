@@ -7,6 +7,18 @@ from ai_trading.tools.replay_live_cost_alignment_report import (
 )
 
 
+def test_ready_model_with_unmatched_replay_bucket_is_not_acceptable() -> None:
+    report = build_replay_live_cost_alignment_report(
+        live_cost_model={"generated_at": "2026-05-08T12:00:00Z", "status": {"status": "ready"}},
+        replay_report={"replay_cost_rows": [{"symbol": "AAPL", "fallback_cost_bps": 3}]},
+        fallback_cost_bps=3, min_samples=5, max_age_seconds=3600,
+        now=datetime(2026, 5, 8, 12, tzinfo=UTC),
+    )
+    assert report["cost_realism"]["acceptable"] is False
+    assert report["cost_realism"]["status"] == "missing_fill_evidence"
+    assert report["summary"]["missing_comparison_count"] == 1
+
+
 def test_replay_live_cost_alignment_report_clamps_cheaper_live_cost() -> None:
     live_cost = {
         "generated_at": "2026-05-08T12:00:00Z",

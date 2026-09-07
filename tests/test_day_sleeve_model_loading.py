@@ -268,6 +268,8 @@ def test_day_sleeve_readiness_snapshot_exposes_stale_governed_artifact(
     assert snapshot["ok"] is False
     assert snapshot["status"] == "stale"
     assert snapshot["reason"] == "required_model_stale"
+    assert snapshot["serving_decision"] == "abstain"
+    assert snapshot["model_new_exposure_allowed"] is False
     assert snapshot["model_id"] == model_id
     assert snapshot["governance_status"] == "shadow"
     assert snapshot["serving_authority"] == "paper_only"

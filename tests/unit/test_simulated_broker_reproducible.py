@@ -27,7 +27,7 @@ def _run(seed: int) -> tuple[dict, list[dict], dict | None]:
     )
     events = broker.process_until(
         now=submitted_at + timedelta(minutes=10),
-        market_price_by_symbol={"AAPL": 191.0},
+        market_price_by_symbol={"AAPL": 189.0},
     )
     snapshot = broker.get_order(order["id"])
     return order, events, snapshot
@@ -100,3 +100,31 @@ def test_simulated_broker_emits_single_fill_event_per_schedule() -> None:
     fills = [event for event in events if event.get("event_type") == "fill"]
     assert len(fills) == 1
     assert fills[0]["order_id"] == order["id"]
+
+
+def test_limit_waits_for_market_and_never_fills_through_limit():
+    for side, unreachable in [("buy", 101.0), ("sell", 99.0)]:
+        broker = SimulatedBroker(fill_probability=1, partial_fill_probability=0, min_fill_delay_ms=0, max_fill_delay_ms=0)
+        start = datetime(2026, 2, 18, 15, tzinfo=UTC)
+        broker.submit_order({"symbol": "AAPL", "side": side, "qty": 2, "type": "limit", "limit_price": 100, "client_order_id": side}, timestamp=start)
+        assert broker.process_until(now=start, market_price_by_symbol={}) == []
+        assert broker.process_until(now=start, market_price_by_symbol={"AAPL": unreachable}) == []
+        later = start + timedelta(minutes=1)
+        fills = broker.process_until(now=later, market_price_by_symbol={"AAPL": 100})
+        assert len(fills) == 1
+        assert fills[0]["fill_price"] <= 100 if side == "buy" else fills[0]["fill_price"] >= 100
+        assert fills[0]["ts"] == later.isoformat()
+
+
+def test_unrelated_removed_order_does_not_change_retained_order_randomness():
+    results = []
+    start = datetime(2026, 2, 18, 15, tzinfo=UTC)
+    for extra in [True, False]:
+        broker = SimulatedBroker(seed=42, fill_probability=1)
+        if extra:
+            broker.submit_order({"symbol": "MSFT", "side": "buy", "qty": 5, "type": "market", "price": 200, "client_order_id": "removed"}, timestamp=start)
+        broker.submit_order({"symbol": "AAPL", "side": "buy", "qty": 10, "type": "market", "price": 100, "client_order_id": "retained"}, timestamp=start)
+        events = broker.process_until(now=start + timedelta(minutes=1), market_price_by_symbol={"AAPL": 100, "MSFT": 200})
+        retained = next(row for row in events if row["client_order_id"] == "retained")
+        results.append({key: retained[key] for key in ["fill_qty", "fill_price", "ts"]})
+    assert results[0] == results[1]

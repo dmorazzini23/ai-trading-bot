@@ -132,12 +132,22 @@ def build_replay_live_cost_alignment_report(
     optimism_count = _to_int(summary.get("optimism_count"))
     count = _to_int(summary.get("count"))
     model_status = str((live_cost_model.get("status") or {}).get("status") or live_cost_model.get("status") or "missing")
-    acceptable = bool(count > 0 and model_status in {"ready", "ok"} and stale_count == 0)
+    items = alignment.get("items", [])
+    comparable_count = sum(
+        bool(item.get("sufficient_samples")) and bool((item.get("freshness") or {}).get("fresh"))
+        and item.get("observed_live_cost_bps") is not None
+        for item in items
+    )
+    summary["comparable_count"] = comparable_count
+    summary["missing_comparison_count"] = count - comparable_count
+    acceptable = bool(count > 0 and comparable_count == count and model_status in {"ready", "ok"})
     realism = "acceptable"
     if count <= 0:
         realism = "unavailable"
     elif stale_count > 0:
         realism = "stale"
+    elif comparable_count < count:
+        realism = "missing_fill_evidence"
     elif optimism_count > 0:
         realism = "conservative_fallback_clamped_optimism"
     return {
@@ -148,6 +158,10 @@ def build_replay_live_cost_alignment_report(
         "source": source,
         "cost_realism": {
             "acceptable": acceptable,
+            "missing_evidence_reason": (
+                "replay_cost_rows_missing" if not count else
+                "fresh_sufficient_fill_buckets_required" if comparable_count < count else None
+            ),
             "status": realism,
             "model_status": model_status,
             "fallback_cost_bps": float(max(0.0, fallback_cost_bps)),

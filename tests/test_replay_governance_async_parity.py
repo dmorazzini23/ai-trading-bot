@@ -166,6 +166,8 @@ def test_replay_non_regression_failure_writes_current_failed_artifact(
     assert payload["schema_version"] == "3.0.0"
     assert payload["policy_hash"] == "policy-test"
     assert payload["counterfactual"]["passed"] is False
+    assert payload["loss_attribution"]["components"]["exits"]["status"] == "not_identifiable"
+    assert "replay_cost_rows" in payload
 
 
 def test_replay_governance_enforced_invariants_raise(

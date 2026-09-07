@@ -8,6 +8,51 @@ from typing import Any
 from ai_trading.tools import multi_horizon_research_pipeline as pipeline
 
 
+def test_zero_net_edge_ranks_above_losses_and_missing_evidence() -> None:
+    records = [{"walk_forward": {"aggregate": {"mean_post_cost_net_edge_bps": edge}}} for edge in (None, -1.0, 0.0, 1.0)]
+    for key in (pipeline._candidate_rank_key, pipeline._candidate_training_rank_key):
+        assert sorted(records, key=key, reverse=True) == list(reversed(records))
+
+
+def test_pipeline_stops_repeated_and_retired_experiments(tmp_path: Path, monkeypatch) -> None:
+    bars = tmp_path / "bars"
+    bars.mkdir()
+    source = bars / "AAPL.csv"
+    source.write_text("evidence-one", encoding="utf-8")
+    calls = []
+
+    def train(args):
+        calls.append(args)
+        return {"walk_forward": {"aggregate": {
+            "trades": 300, "mean_post_cost_net_edge_bps": -1.0,
+            "evidence_qualified": False, "profitable_fold_ratio": 0.2,
+            "stability_score": 0.2,
+        }}}
+
+    monkeypatch.setattr(pipeline, "train_replay_aligned_model", train)
+    args = pipeline._build_parser().parse_args([
+        "--data-dir", str(bars), "--output-dir", str(tmp_path / "out"),
+        "--model-types", "logistic", "--horizons", "1",
+        "--label-objectives", "net_markout", "--symbols", "AAPL",
+    ])
+    first = pipeline.run_multi_horizon_pipeline(args)
+    assert len(calls) == 2
+    repeat = pipeline.run_multi_horizon_pipeline(args)
+    assert len(calls) == 2
+    assert repeat["experiment_lifecycle"]["skipped"]
+    assert repeat["ranked_candidates"] == []
+    assert repeat["candidate_evaluations"][0]["experiment_permission"]["reason"] == "evidence_already_evaluated"
+    source.write_text("evidence-two", encoding="utf-8")
+    second = pipeline.run_multi_horizon_pipeline(args)
+    assert len(calls) == 4
+    assert second["experiment_lifecycle"]["retired_count"] == 1
+    source.write_text("evidence-three", encoding="utf-8")
+    retired = pipeline.run_multi_horizon_pipeline(args)
+    assert len(calls) == 4
+    assert retired["experiment_lifecycle"]["skipped"]
+    assert first["experiment_lifecycle"]["retired_count"] == 0
+
+
 def test_development_eligibility_requires_qualified_positive_supported_edge() -> None:
     base = {
         "walk_forward": {
@@ -135,6 +180,7 @@ def test_multi_horizon_pipeline_ranks_candidates_and_keeps_lead_horizon(
     assert report["lead_candidates"]
     assert report["one_bar_challengers"]
     assert report["successive_halving"]["screened_candidate_count"] == 4
+    assert len(report["candidate_evaluations"]) == 4
     assert report["successive_halving"]["survivor_count"] == 2
     assert report["successive_halving"]["fully_evaluated_count"] == 2
     assert report["holdout_confirmation"]["fallback_attempted"] is False

@@ -39836,6 +39836,7 @@ def _replay_summary_metrics(
 
     edge_bps: list[float] = []
     execution_cost_bps: list[float] = []
+    markout_observations: list[dict[str, Any]] = []
     max_horizon_seconds = max(0.0, float(max_markout_hours)) * 3600.0
     if isinstance(events, list):
         for event in events:
@@ -39891,10 +39892,30 @@ def _replay_summary_metrics(
                     cost = ((reference_price - fill_price) / reference_price) * 10_000.0
                 if math.isfinite(cost):
                     execution_cost_bps.append(float(cost))
+            if reference_price > 0.0 and math.isfinite(reference_price) and math.isfinite(edge):
+                sign = 1.0 if side == "buy" else -1.0
+                gross_edge = sign * (markout_price - reference_price) / reference_price * 10_000.0
+                markout_observations.append({
+                    "client_order_id": str(order.get("client_order_id") or order_id),
+                    "symbol": symbol,
+                    "fill_qty": float(event.get("fill_qty", 0.0) or 0.0),
+                    "side": side,
+                    "session_bucket": _session_bucket_from_ts(fill_ts),
+                    "order_type": str(order.get("type") or "unknown"),
+                    "volatility_bucket": "unknown",
+                    "fallback_cost_bps": float(cost),
+                    "fill_price": fill_price,
+                    "reference_price": reference_price,
+                    "markout_price": markout_price,
+                    "net_edge_bps": float(edge),
+                    "gross_edge_bps": float(gross_edge),
+                    "execution_drag_bps": float(gross_edge - edge),
+                })
 
     if not edge_bps:
         return {
             "sample_count": 0,
+            "markout_observations": markout_observations,
             "net_edge_bps": 0.0,
             "max_drawdown_pct": 0.0,
             "execution_cost_bps": (
@@ -39915,6 +39936,7 @@ def _replay_summary_metrics(
         max_drawdown = max(max_drawdown, peak - cumulative)
     return {
         "sample_count": len(edge_bps),
+        "markout_observations": markout_observations,
         "net_edge_bps": float(sum(edge_bps) / len(edge_bps)),
         "max_drawdown_pct": float(max_drawdown),
         "execution_cost_bps": (
@@ -40467,6 +40489,14 @@ def _run_replay_governance(
         market_rows=normalized_bars,
         max_markout_hours=markout_horizon_hours,
     )
+    from ai_trading.replay.loss_attribution import build_loss_attribution
+
+    loss_attribution = build_loss_attribution(
+        baseline=baseline,
+        candidate=first,
+        baseline_summary=baseline_summary,
+        candidate_summary=replay_summary,
+    )
     replay_symbol_summary = _replay_symbol_summary_metrics(first)
     replay_bucket_summary = _replay_bucket_summary_metrics(
         first,
@@ -40569,6 +40599,8 @@ def _run_replay_governance(
                     )
                 ),
                 "baseline_summary": baseline_summary,
+                "loss_attribution": loss_attribution,
+                "replay_cost_rows": replay_summary.get("markout_observations", []),
                 "replay_summary": replay_summary,
                 "replay_symbol_summary": replay_symbol_summary,
                 "replay_bucket_summary": replay_bucket_summary,

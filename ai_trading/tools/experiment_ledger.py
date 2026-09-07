@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import fcntl
 import json
 import sys
 from datetime import UTC, datetime
@@ -11,11 +12,72 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.runtime.atomic_io import atomic_write_text
 
 _ARTIFACT_TYPE = "experiment_ledger"
 _SCHEMA_VERSION = "1.0.0"
 _DEFAULT_OUTPUT_DIR = "runtime/research_reports/experiment_ledger"
 _ALLOWED_STATUSES = {"success", "failed", "blocked", "dry-run"}
+
+
+def experiment_identity(contract: Mapping[str, Any]) -> str:
+    """Identify a hypothesis independently of new data or output locations."""
+    return _canonical_hash(contract)
+
+
+def experiment_permission(
+    ledger: Mapping[str, Any], *, experiment_id: str, evidence_signature: str,
+    max_failures: int = 2,
+) -> dict[str, Any]:
+    state = ledger.get("experiments", {}).get(experiment_id, {})
+    if int(state.get("failed_evaluations", 0)) >= max(1, max_failures):
+        return {"allowed": False, "reason": "experiment_retired", "state": state}
+    if evidence_signature in state.get("evaluated_signatures", []):
+        return {"allowed": False, "reason": "evidence_already_evaluated", "state": state}
+    return {"allowed": True, "reason": "new_evidence", "state": state}
+
+
+def read_experiment_state(path: Path) -> dict[str, Any]:
+    """Fail closed on corrupt retirement state rather than silently restarting."""
+    if not path.exists():
+        return {"experiments": {}}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("experiments"), dict):
+        raise ValueError(f"Invalid experiment state: {path}")
+    return payload
+
+
+def record_research_experiments(
+    path: Path, *, evidence_signature: str, outcomes: list[dict[str, Any]],
+    max_failures: int = 2,
+) -> dict[str, Any]:
+    """Record each independent evidence set once, persisting failures across data refreshes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(path.suffix + ".lock").open("a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        ledger = read_experiment_state(path)
+        for outcome in outcomes:
+            contract = outcome["contract"]
+            key = experiment_identity(contract)
+            permission = experiment_permission(
+                ledger, experiment_id=key, evidence_signature=evidence_signature,
+                max_failures=max_failures,
+            )
+            if not permission["allowed"] or outcome.get("conclusive") is not True:
+                continue
+            previous = permission["state"]
+            failures = int(previous.get("failed_evaluations", 0)) + int(outcome.get("accepted") is not True)
+            ledger["experiments"][key] = {
+                "contract": contract,
+                "failed_evaluations": failures,
+                "evaluated_signatures": [*previous.get("evaluated_signatures", []), evidence_signature],
+                "status": "retired" if failures >= max(1, max_failures) else "active",
+                "latest_outcome": outcome,
+                "updated_at": _iso(_utc_now()),
+            }
+        ledger.update({"artifact_type": "research_experiment_state", "schema_version": "1.0.0"})
+        atomic_write_text(path, json.dumps(ledger, indent=2, sort_keys=True) + "\n")
+    return ledger
 
 
 def _utc_now() -> datetime:

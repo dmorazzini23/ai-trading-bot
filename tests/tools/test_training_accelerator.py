@@ -12,6 +12,40 @@ from ai_trading.tools import training_accelerator
 from ai_trading.tools.regime_champion_models import build_regime_champion_report
 
 
+def test_real_training_pipeline_candidate_reaches_registry_selector(tmp_path: Path) -> None:
+    import numpy as np
+    import pandas as pd
+
+    bars = tmp_path / "bars"
+    bars.mkdir()
+    x = np.linspace(0, 100, 1600)
+    close = 100 + 2 * np.sin(x) + 0.3 * np.sin(0.3 * x)
+    pd.DataFrame({
+        "timestamp": pd.date_range("2026-08-03T13:30:00Z", periods=len(x), freq="min"),
+        "open": close, "high": close + 0.1, "low": close - 0.1,
+        "close": close, "volume": 12000 + 500 * np.cos(x),
+    }).to_csv(bars / "AAPL.csv", index=False)
+    report = training_accelerator.run_training_accelerator(argparse.Namespace(
+        cadence="daily", data_dir=bars, symbols="AAPL", output_dir=tmp_path / "out",
+        training_cache_dir=tmp_path / "cache", model_type="logistic", model_types="logistic",
+        horizons="1", label_objectives="net_markout", lead_horizon_bars=1,
+        max_candidates=1, screening_folds=2, walk_forward_folds=2,
+        fee_bps=0.0, slippage_bps=0.0, plan_only=False,
+        max_replay_candidates=0, research_experiments=False,
+    ))
+    assert report["ranked_candidate_count"] == 1
+    candidate = report["candidates"][0]
+    assert candidate["model_id"]
+    assert list((tmp_path / "out" / "multi_horizon" / "models").glob("*.joblib"))
+    selection = build_regime_champion_report(candidates=report)
+    assert len(selection["decisions"]) == 1
+    decision = selection["decisions"][0]
+    assert decision["candidate_model_id"] == candidate["model_id"]
+    assert decision["samples"] == candidate["sample_count"]
+    assert candidate["sample_count"] > 0
+    assert "candidate_model_id_missing" not in decision["reasons"]
+
+
 def test_scheduled_training_blocks_unverified_input(tmp_path: Path, monkeypatch) -> None:
     def unexpected_training(args):
         raise AssertionError("unverified data must not reach fitting")

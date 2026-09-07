@@ -4351,6 +4351,7 @@ class ExecutionEngine:
                 else:
                     slippage_bps = ((expected_price - price) / expected_price) * 10000.0
 
+            fee_source = "broker_payload" if fee_amount is not None else "missing"
             fee_bps = float(
                 get_env("AI_TRADING_ESTIMATED_FEE_BPS", "0.0", cast=float)
             )
@@ -4362,6 +4363,7 @@ class ExecutionEngine:
             ):
                 notional = abs(float(delta_qty) * price)
                 fee_amount = notional * (fee_bps / 10000.0)
+                fee_source = "configured_estimate"
             signal_tags = getattr(signal, "signal_tags", None) or getattr(signal, "tags", "")
             try:
                 confidence = float(getattr(signal, "confidence", 0.0))
@@ -4383,6 +4385,7 @@ class ExecutionEngine:
                     "slippage_bps": slippage_bps,
                     "fee_amount": fee_amount,
                     "fee_bps": fee_bps if fee_bps > 0 else None,
+                    "fee_source": fee_source,
                 }
             )
             # Log realized slippage to CSV and update EWMA feedback (best-effort)

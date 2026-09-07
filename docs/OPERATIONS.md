@@ -483,3 +483,97 @@ records for regime evaluation. Walk-forward counts remain research evidence;
 they do not create shadow-fill evidence or grant promotion authority. An empty
 candidate collection produces `no_candidate_records` rather than treating the
 accelerator summary as an unnamed candidate.
+
+### Controlled research and completion evidence
+
+The subsequent focused research cycle is documented in
+[FOCUSED_RESEARCH_DECISION.md](FOCUSED_RESEARCH_DECISION.md), with its frozen
+scope and acceptance criteria in
+[FOCUSED_RESEARCH_PROTOCOL.json](FOCUSED_RESEARCH_PROTOCOL.json). Its tools are
+`python -m ai_trading.research.focused_cycle` and
+`python -m ai_trading.tools.execution_evidence_reconciliation`; both write
+research/audit artifacts and confer no trading or promotion authority.
+
+Scheduled accelerator training recomputes exchange-calendar coverage from the
+acquired CSVs before fitting. The defaults require at least 20 observed sessions
+per requested symbol and no more than 2% missing regular-session minute bars.
+Use `--min-training-sessions` and `--max-training-missing-ratio` to set an explicit
+research coverage policy. Reports retain date coverage, missing sessions/bars,
+symbol coverage, and past-only regime distributions. Calendar completeness does
+not establish balanced regime support; assess the reported distribution before
+claiming generalization to a regime. Daily automation uses the latest acquisition
+manifest when it is not running a new acquisition.
+
+Training reports include `cost_sensitivity`: frozen out-of-sample selections are
+evaluated at `--cost-scenarios-bps` (default `0,3,6,10,20`). Costs are per one-way
+execution; an equal-notional round trip has turnover two. Break-even cost is
+gross markout divided by turnover. These are research markouts, not portfolio
+returns or evidence of queue position or market impact. A fresh, sufficient
+quote prior adds a labeled quote-derived stress scenario. Quote observations do
+not supply fill-validation authority. With no selected trades, net edge and
+break-even cost remain unavailable rather than being reported as profitable.
+
+`--research-experiments` runs feature removal (configured with
+`--experiment-feature-removals`), volatile-regime abstention, cash, always-long,
+and simple momentum controls on the same outer folds. Feature-removal thresholds
+are selected inside the purged inner partition. Reports rank the controls by
+net edge per common opportunity and fold stability, recording hypotheses,
+acceptance criteria, and paired fold improvements. Horizon/model candidates
+retain the existing out-of-sample qualification and holdout controls.
+
+The accelerator passes a stable `--experiment-ledger-json` under its training
+cache. Distinct failed evidence signatures accumulate across data refreshes;
+`--experiment-max-failures` defaults to two. Already evaluated evidence is not
+repeated, and retired experiments are skipped before fitting. Inconclusive
+control comparisons do not count toward retirement. A substantive hypothesis
+or protocol change must have a distinct experiment contract; changing an output
+directory or model display name does not constitute a new hypothesis. Direct
+pipeline invocations should explicitly reuse the same ledger path across runs.
+
+Governance writes `loss_attribution` even when non-regression fails. Its
+components reconcile the capped-minus-uncapped mean fill markout into retained
+order selection, fill mix/timing, and execution-price drag. Separate dollar
+markout accounting measures quantity resizing while holding baseline fills
+fixed. The comparison uses identical recorded decisions, so entry-selection
+change is zero. Linked exits are not present in this metric and are explicitly
+reported as not identifiable; zero contribution must not be interpreted as
+evidence that exit behavior is harmless. Sequential accounting is sensitive to
+component order and includes downstream simulator interactions.
+
+The governance artifact also carries observed replay cost rows for
+`ai_trading.tools.replay_live_cost_alignment_report`. The report lists comparison
+items even when fresh fill buckets are absent, and requires sufficient fresh
+fill-derived evidence for every item before reporting acceptable realism.
+`status=ready` indicates report construction succeeded; inspect
+`cost_realism.acceptable` for the execution-validation result.
+
+Read-only verification outputs from this implementation are under
+`artifacts/research_completion/`. The September 6, 2026 cost refresh rejects all
+7,384 fills and 18,697 TCA rows as older than the three-session window. The
+validated historical dataset covers 126 sessions for AAPL, AMZN, and MSFT.
+The real training run reaches the registry selector with an identified model;
+it remains economically unqualified, rather than failing with a missing model
+ID. The governed replay still fails non-regression, but its -0.649113 bps
+difference reconciles to -0.371026 bps retained-order effects, +0.079471 bps
+fill effects, and -0.357558 bps execution-price effects. Its 3,360 cost comparison
+items lack fresh fill validation. These artifacts grant no promotion authority.
+
+Both evaluated horizons also include a 32.582728 bps one-way quote-derived
+stress scenario from nine recent sufficient buckets, alongside the five
+configured assumptions. Neither selects an out-of-sample trade in this run;
+their break-even execution cost is consequently null. The candidate comparison
+report now retains `candidate_evaluations` for screened-out and stopped
+experiments as well as ranked survivors. Zero measured net edge ranks above
+negative edge; missing/non-finite evidence ranks last.
+
+Validation for this change: `bash scripts/agent_validate_changed.sh
+--skip-runtime-smoke` passed lint, type, compile, forbidden-pattern checks and
+590 related tests. After the final candidate-report/ranking changes, the seven
+pipeline tests and targeted lint/type/compile checks passed again. The default
+validation command reached its health smoke step but could not access the
+service from the sandbox. A separate read-only health request outside the
+sandbox succeeded, as did the non-sending incident snapshot. The service still
+reports model-staleness and replay-parity attention flags; these research
+changes do not remove those gates. To roll back, revert this patch's source and
+test changes and retain the research artifacts and retirement ledger for audit;
+no service unit or trading-authority configuration was changed.

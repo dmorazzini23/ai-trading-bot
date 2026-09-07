@@ -1733,7 +1733,8 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                     "--data-dir",
                     config.data_dir,
                     "--require-validated-data",
-                    *(["--acquisition-manifest-json", str(historical_backfill)] if historical_workflow_enabled else []),
+                    "--acquisition-manifest-json",
+                    historical_backfill if historical_workflow_enabled else config.report_root / "latest" / "historical_training_backfill_latest.json",
                     "--symbols",
                     _governed_accelerator_symbols(config.symbols),
                     "--output-dir",
@@ -1970,6 +1971,20 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     for offset, name in enumerate(ordered_names, start=1):
         if (step := ordered_steps[name]) is not None:
             steps.insert(anchor + offset, step)
+    steps.append(
+        ResearchStep(
+            name="paper_evidence_review",
+            command=_python_module(
+                "ai_trading.tools.paper_evidence_review",
+                "--runtime-dir", _runtime_input_path("runtime/decision_records.jsonl").parent,
+                "--replay-report", replay,
+                "--output", config.run_dir / "paper_evidence_review.json",
+            ),
+            purpose="Audit the latest completed paper session and paired execution costs without placing orders.",
+            output_path=config.run_dir / "paper_evidence_review.json",
+            metadata={"promotion_authority": False, "orders_sent": 0},
+        )
+    )
     return steps
 
 
@@ -3425,6 +3440,9 @@ def _artifact_status(payload: Mapping[str, Any], default: str = "missing") -> st
 
 def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     latest = config.report_root / "latest"
+    paper_evidence = _read_json(latest / "paper_evidence_review_latest.json")
+    paper_session = paper_evidence.get("session_audit") or {}
+    paper_costs = paper_evidence.get("execution_cost_comparison") or {}
     daily = _read_json(latest / "daily_readiness_latest.json")
     trading_day = _read_json(latest / "trading_day_latest.json")
     live_readiness = _read_json(latest / "live_capital_readiness_latest.json")
@@ -3457,6 +3475,17 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     weekend_research = _read_json(latest / "weekend_research_latest.json")
     weekend_summary = _read_json(latest / "weekend_operator_summary.json")
     return {
+        "paper_execution_evidence": {
+            "status": _artifact_status(paper_evidence),
+            "session_date": paper_evidence.get("session_date"),
+            "session_audit_status": paper_session.get("status"),
+            "session_gaps": paper_session.get("session_gaps", []),
+            "accepted_unique_fills": paper_session.get("accepted_unique_fills", 0),
+            "execution_cost_comparison": {
+                key: value for key, value in paper_costs.items()
+                if key not in {"pairs", "limitations"}
+            },
+        },
         "daily_research": {
             "status": _artifact_status(daily),
             "trade_allowed": daily.get("trade_allowed"),
@@ -3726,6 +3755,8 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
+        elif name == "paper_evidence_review":
+            targets.append(latest_dir / "paper_evidence_review_latest.json")
         elif name == "replay_live_cost_alignment":
             targets.extend(
                 [

@@ -34,6 +34,7 @@ from ai_trading.features.indicators import (
     compute_vwap,
 )
 from ai_trading.logging import get_logger
+from ai_trading.replay.live_cost_alignment import evaluate_cost_scenarios
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_BAR_TIMEFRAME,
@@ -731,6 +732,10 @@ def _resolve_training_input(args: argparse.Namespace) -> tuple[Path, dict[str, A
         "quality_passed": True,
         "symbols": sorted(acquired_symbols),
         "completeness": completeness,
+        "coverage": _local_training_coverage(
+            _resolve_symbol_paths(data_dir, symbols_text),
+            timestamp_col=str(getattr(args, "timestamp_col", "timestamp")),
+        ),
         "dataset_identity": dict(dataset_manifest.get("dataset_identity") or {}),
         "authority": authority,
     }
@@ -1665,6 +1670,47 @@ def _select_nested_threshold(
     )
 
 
+def _abstention_diagnostics(
+    dataset: pd.DataFrame, probabilities: np.ndarray, *, min_support: int,
+    selected_threshold: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Explain the existing threshold decision without changing its selection policy."""
+    scores = np.asarray(probabilities, dtype=float)
+    finite = np.isfinite(scores)
+    if not finite.all():
+        return {"status": "invalid_scores", "rows": len(dataset), "invalid_scores": int((~finite).sum())}
+    rows = _threshold_report(dataset, scores)
+    gross = pd.to_numeric(dataset["gross_long_bps"], errors="coerce").to_numpy(dtype=float) if "gross_long_bps" in dataset else None
+    costs = pd.to_numeric(dataset["round_trip_cost_bps"], errors="coerce").to_numpy(dtype=float) if "round_trip_cost_bps" in dataset else None
+    reason_counts: dict[str, int] = {}
+    for row in rows:
+        mask = scores >= float(row["probability_cutoff"])
+        selected_gross = gross[mask] if gross is not None else np.asarray([], dtype=float)
+        selected_costs = costs[mask] if costs is not None else np.asarray([], dtype=float)
+        gross_mean = float(np.mean(selected_gross)) if len(selected_gross) and np.isfinite(selected_gross).all() else None
+        cost_mean = float(np.mean(selected_costs)) if len(selected_costs) and np.isfinite(selected_costs).all() else None
+        net_mean = row["mean_net_markout_bps"]
+        reasons = []
+        if int(row["candidates"]) < min_support:
+            reasons.append("insufficient_support")
+        if net_mean is None or not np.isfinite(float(net_mean)):
+            reasons.append("net_edge_unavailable")
+        elif float(net_mean) <= 0:
+            reasons.append("costs_exceed_positive_gross_edge" if gross_mean is not None and gross_mean > 0 else "gross_edge_nonpositive" if gross_mean is not None else "net_edge_nonpositive")
+        for reason in reasons:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        row.update({"mean_gross_markout_bps": gross_mean, "mean_round_trip_cost_bps": cost_mean, "rejection_reasons": reasons})
+    return {
+        "status": "threshold_selected" if selected_threshold else "abstained",
+        "rows": len(dataset), "minimum_support": min_support,
+        "score_quantiles": {str(q): float(np.quantile(scores, q)) for q in (0, 0.5, 0.9, 0.95, 1)} if len(scores) else {},
+        "tested_percentiles": rows, "rejected_threshold_counts": reason_counts,
+        "rejection_counts_overlap": True,
+        "selected_threshold": dict(selected_threshold or {}),
+        "scope": "inner_validation_only", "policy_changed": False,
+    }
+
+
 def _threshold_report_by_regime(
     dataset: pd.DataFrame,
     probabilities: np.ndarray,
@@ -2108,6 +2154,134 @@ def _aggregate_market_regime_results(
     return out
 
 
+def _research_cost_scenarios(args: argparse.Namespace) -> tuple[list[float], dict[str, Any]]:
+    costs = [float(value) for value in str(getattr(args, "cost_scenarios_bps", "0,3,6,10,20")).split(",")]
+    path = getattr(args, "live_cost_model_json", None)
+    evidence: dict[str, Any] = {"available": False, "reason": "quote_prior_missing", "runtime_fill_authority": False}
+    if path is None:
+        return costs, evidence
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    prior = payload.get("research_cost_prior", {})
+    if prior.get("evidence_type") != "quote_derived_research_prior":
+        return costs, evidence
+    if any(prior.get(key) for key in ("runtime_fill_authority", "promotion_eligible", "promotion_authority", "live_money_authority")):
+        return costs, {**evidence, "reason": "quote_prior_authority_invalid"}
+    now = datetime.now(UTC)
+    values = []
+    symbols = {value.strip().upper() for value in str(getattr(args, "symbols", "")).split(",") if value.strip()}
+    for row in prior.get("by_symbol_side_session", []):
+        if symbols and row.get("symbol") not in symbols:
+            continue
+        timestamp = pd.to_datetime(row.get("last_observed_at"), utc=True, errors="coerce")
+        if pd.isna(timestamp) or not -300 <= (now - timestamp).total_seconds() <= 96 * 3600:
+            continue
+        value = row.get("p90_prior_cost_bps")
+        if row.get("sufficient_samples") and value is not None and np.isfinite(float(value)) and float(value) >= 0:
+            values.append(float(value))
+    if not values:
+        return costs, {**evidence, "reason": "fresh_sufficient_quote_buckets_missing"}
+    estimate = float(np.median(values))
+    return [*costs, estimate], {
+        "available": True, "source_path": str(path), "source_sha256": _file_sha256(Path(path)),
+        "evidence_type": "quote_derived_research_prior", "aggregation": "median_of_recent_bucket_p90_costs",
+        "cost_bps": estimate, "bucket_count": len(values), "max_age_hours": 96,
+        "runtime_fill_authority": False, "promotion_authority": False,
+        "limitation": "constant research stress scenario, not historical fill calibration or candidate-weighted costs",
+    }
+
+
+def _controlled_fold_comparisons(
+    *, args: argparse.Namespace, train: pd.DataFrame, test: pd.DataFrame,
+    nested_fit: pd.DataFrame, nested_selection: pd.DataFrame,
+    candidate_selected: np.ndarray, market_regimes: np.ndarray,
+    fold_index: int,
+) -> list[dict[str, Any]]:
+    """Predeclared controls use identical outer tests and inner-only threshold selection."""
+    disabled = set(getattr(args, "disabled_experiments", ()))
+    min_edge = float(getattr(args, "min_net_edge_bps", 0.0))
+    masks = {
+        "candidate": candidate_selected,
+        "always_long": np.ones(len(test), dtype=bool),
+        "cash": np.zeros(len(test), dtype=bool),
+        "momentum": test["sma_spread"].to_numpy(dtype=float) > 0.0,
+        "abstain_volatile": candidate_selected & (market_regimes != "volatile"),
+    }
+    removals = [value.strip() for value in str(getattr(args, "experiment_feature_removals", "macd_signal_gap")).split(",") if value.strip()]
+    invalid = set(removals) - set(REPLAY_ALIGNED_FEATURE_COLUMNS)
+    if invalid:
+        raise ValueError(f"Unknown experiment features: {sorted(invalid)}")
+    for feature in removals:
+        name = f"remove_{feature}"
+        if name in disabled:
+            continue
+        columns = [column for column in REPLAY_ALIGNED_FEATURE_COLUMNS if column != feature]
+        model = _make_candidate_model(
+            str(args.model_type), random_state=int(args.random_state) + fold_index,
+            min_net_edge_bps=min_edge,
+        )
+        weights, _ = _edge_magnitude_sample_weights(
+            nested_fit, min_net_edge_bps=min_edge,
+            max_weight=float(getattr(args, "edge_weight_max", 5.0)),
+            scaling_quantile=float(getattr(args, "edge_weight_quantile", 0.9)),
+        )
+        _fit_replay_model(model, nested_fit[columns].astype(float), nested_fit, sample_weight=weights)
+        probabilities = np.asarray(model.predict_proba(nested_selection[columns].astype(float)))[:, _positive_class_index(model)]
+        threshold = _select_nested_threshold(
+            nested_selection, probabilities,
+            min_support=min(int(getattr(args, "nested_min_support", 25)), max(1, len(nested_selection) // 4)),
+            fixed_confidence_threshold=_optional_threshold(getattr(args, "edge_global_threshold", None)),
+        )
+        weights, _ = _edge_magnitude_sample_weights(
+            train, min_net_edge_bps=min_edge,
+            max_weight=float(getattr(args, "edge_weight_max", 5.0)),
+            scaling_quantile=float(getattr(args, "edge_weight_quantile", 0.9)),
+        )
+        model = _make_candidate_model(
+            str(args.model_type), random_state=int(args.random_state) + fold_index,
+            min_net_edge_bps=min_edge,
+        )
+        _fit_replay_model(model, train[columns].astype(float), train, sample_weight=weights)
+        probabilities = np.asarray(model.predict_proba(test[columns].astype(float)))[:, _positive_class_index(model)]
+        masks[name] = probabilities >= float(threshold["confidence_threshold"]) if threshold else np.zeros(len(test), dtype=bool)
+    net = test["net_long_bps"].to_numpy(dtype=float)
+    return [
+        {
+            "name": name, "fold_index": fold_index,
+            "opportunities": len(test), "trades": int(mask.sum()),
+            "total_net_edge_bps": float(net[mask].sum()),
+            "mean_net_edge_bps": float(net[mask].mean()) if mask.any() else None,
+            "net_edge_per_opportunity_bps": float(net[mask].sum() / len(test)),
+        }
+        for name, mask in masks.items() if name not in disabled or name == "candidate"
+    ]
+
+
+def _summarize_controlled_comparisons(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    candidate = {row["fold_index"]: row for row in rows if row["name"] == "candidate"}
+    results = []
+    for name in sorted({row["name"] for row in rows}):
+        folds = [row for row in rows if row["name"] == name]
+        edges = np.asarray([row["net_edge_per_opportunity_bps"] for row in folds])
+        deltas = np.asarray([row["net_edge_per_opportunity_bps"] - candidate[row["fold_index"]]["net_edge_per_opportunity_bps"] for row in folds])
+        opportunities = sum(row["opportunities"] for row in folds)
+        total = sum(row["total_net_edge_bps"] for row in folds)
+        profitable = float(np.mean(edges > 0.0))
+        improvement = float(np.mean(deltas))
+        accepted = bool(len(folds) >= 2 and total > 0.0 and improvement > 0.0 and profitable >= 0.60 and float(np.mean(deltas > 0.0)) >= 0.60)
+        results.append({
+            "name": name, "hypothesis": f"{name} improves net edge per common opportunity over the candidate without reducing fold consistency",
+            "acceptance_criterion": {"minimum_folds": 2, "net_edge_bps_gt": 0.0, "paired_improvement_bps_gt": 0.0, "profitable_fold_ratio_gte": 0.60, "improving_fold_ratio_gte": 0.60},
+            "folds": folds, "opportunities": opportunities,
+            "trades": sum(row["trades"] for row in folds),
+            "net_edge_per_opportunity_bps": total / opportunities if opportunities else None,
+            "mean_paired_improvement_bps": improvement,
+            "profitable_fold_ratio": profitable, "fold_edge_std_bps": float(np.std(edges)),
+            "accepted": accepted, "conclusive": len(folds) >= 2,
+        })
+    results.sort(key=lambda row: (row["net_edge_per_opportunity_bps"], -row["fold_edge_std_bps"]), reverse=True)
+    return {"scope": "development_outer_folds_only", "selection_scope": "nested_inner_validation_only", "metric": "equal_notional_markout_per_common_opportunity_not_portfolio_return", "variants": results, "promotion_authority": False}
+
+
 def _run_fold_local_walk_forward(
     dataset: pd.DataFrame,
     *,
@@ -2158,6 +2332,7 @@ def _run_fold_local_walk_forward(
         1, int(getattr(args, "nested_min_support", 25) or 25)
     )
     selected_thresholds: list[tuple[float, float]] = []
+    comparison_rows: list[dict[str, Any]] = []
     for fold, train, test in splits:
         if train["target"].nunique() < 2:
             continue
@@ -2207,6 +2382,11 @@ def _run_fold_local_walk_forward(
             selection_probabilities,
             min_support=min(nested_min_support, max(1, len(nested.selection) // 4)),
             fixed_confidence_threshold=edge_global_threshold,
+        )
+        abstention = _abstention_diagnostics(
+            nested.selection, selection_probabilities,
+            min_support=min(nested_min_support, max(1, len(nested.selection) // 4)),
+            selected_threshold=best_nested_threshold,
         )
         threshold_feasible = best_nested_threshold is not None
         confidence_threshold = float(
@@ -2261,6 +2441,12 @@ def _run_fold_local_walk_forward(
         ].copy()
         market_regimes, regime_definition = _fold_market_regimes(regime_history, test)
         regime_test["market_regime"] = market_regimes
+        if bool(getattr(args, "research_experiments", True)):
+            comparison_rows.extend(_controlled_fold_comparisons(
+                args=args, train=train, test=test, nested_fit=nested.fit,
+                nested_selection=nested.selection, candidate_selected=selected,
+                market_regimes=market_regimes, fold_index=int(fold.fold_index),
+            ))
         regime_source, by_regime = _regime_post_cost_metrics(
             regime_test,
             test_probabilities,
@@ -2286,6 +2472,7 @@ def _run_fold_local_walk_forward(
             "fit_scope": "fold_train_only",
             "threshold_scope": "nested_inner_validation_only",
             "threshold_feasible": bool(threshold_feasible),
+            "abstention_diagnostics": abstention,
             "threshold_selection": {
                 "scope": "nested_inner_validation_only",
                 "fit_rows": int(len(nested.fit)),
@@ -2314,6 +2501,14 @@ def _run_fold_local_walk_forward(
             "regime_source": regime_source,
             "regime_definition": regime_definition,
             "by_market_regime": by_regime,
+            "opportunity_funnel": {
+                "outer_test_rows": len(test),
+                "finite_scores": int(np.isfinite(test_probabilities).sum()),
+                "nested_threshold_feasible": threshold_feasible,
+                "selected_by_frozen_threshold": int(selected.sum()),
+                "reason": "no_supported_profitable_inner_threshold" if not threshold_feasible else "frozen_threshold_applied",
+                "scope": "model_selection_before_replay_execution_gates",
+            },
             **metrics,
         }
         fold_reports.append(fold_report)
@@ -2511,6 +2706,7 @@ def _run_fold_local_walk_forward(
         "promotion_authority": False,
         "live_money_authority": False,
     }
+    walk_forward_report["controlled_comparisons"] = _summarize_controlled_comparisons(comparison_rows)
     return (
         walk_forward_report,
         model,
@@ -2671,6 +2867,20 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
         edge_global_threshold=edge_global_threshold,
         cost_model_identity=cost_model_identity,
     )
+    selected_oos = oos_frame.loc[oos_frame["walk_forward_selected"].astype(bool)]
+    scenario_costs, quote_cost_evidence = _research_cost_scenarios(args)
+    cost_sensitivity = evaluate_cost_scenarios(
+        gross_returns_bps=selected_oos["gross_long_bps"].to_numpy(dtype=float),
+        turnover=np.full(len(selected_oos), 2.0), scenario_costs_bps=scenario_costs,
+        evidence_type="historical_research_markout",
+    )
+    cost_sensitivity.update({
+        "quote_research_evidence": quote_cost_evidence,
+        "scope": "frozen_outer_fold_selections", "cost_unit": "bps_per_one_way_execution",
+        "return_unit": "equal_notional_round_trip_markout_bps_not_portfolio_return",
+        "assumptions": "two executions per selected trade; replaces all modeled round-trip costs; no queue or impact validation",
+        "configured_mean_round_trip_cost_bps": float(selected_oos["round_trip_cost_bps"].mean()) if len(selected_oos) else None,
+    })
     selected_threshold = cast(
         Mapping[str, Any], walk_forward_report.get("selected_threshold", {})
     )
@@ -2955,6 +3165,7 @@ def train_replay_aligned_model(args: argparse.Namespace) -> dict[str, Any]:
             },
         },
         "live_cost_model": live_cost_metadata,
+        "cost_sensitivity": cost_sensitivity,
         "feature_importance": feature_importance[:25],
         "heldout_feature_autopsy": holdout_report.get("feature_autopsy", {}),
         "validation": validation_report,
@@ -3059,6 +3270,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shadow-markout-manifest-json", type=Path, default=None)
     parser.add_argument("--train-fraction", type=float, default=0.70)
     parser.add_argument("--walk-forward-folds", type=int, default=5)
+    parser.add_argument("--research-experiments", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--experiment-feature-removals", default="macd_signal_gap")
+    parser.add_argument("--cost-scenarios-bps", default="0,3,6,10,20")
     parser.add_argument(
         "--evaluation-folds",
         type=int,

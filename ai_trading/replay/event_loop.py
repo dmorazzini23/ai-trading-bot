@@ -107,6 +107,17 @@ class ReplayEventLoop:
         """Execute replay loop and enforce parity invariants."""
 
         ordered = sorted((dict(bar) for bar in bars), key=lambda row: _to_utc(row.get("ts")))
+        prices_by_timestamp: dict[datetime, dict[str, float]] = {}
+        for bar in ordered:
+            ts = _to_utc(bar.get("ts"))
+            symbol = str(bar.get("symbol", "")).upper()
+            close = float(bar.get("close", 0.0) or 0.0)
+            if close <= 0:
+                continue
+            prices = prices_by_timestamp.setdefault(ts, {})
+            if symbol in prices and prices[symbol] != close:
+                raise ValueError("conflicting same-timestamp symbol prices in replay")
+            prices[symbol] = close
         intents: list[dict[str, Any]] = []
         orders: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
@@ -119,11 +130,11 @@ class ReplayEventLoop:
             close = float(bar.get("close", 0.0) or 0.0)
             if close <= 0:
                 continue
-            self._last_price_by_symbol[symbol] = close
+            self._last_price_by_symbol.update(prices_by_timestamp[ts])
 
             fill_events = self.broker.process_until(
                 now=ts,
-                market_price_by_symbol={symbol: close},
+                market_price_by_symbol=prices_by_timestamp[ts],
             )
             for event in fill_events:
                 events.append(event)

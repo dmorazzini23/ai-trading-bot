@@ -8,6 +8,29 @@ from pathlib import Path
 from ai_trading.tools import experiment_ledger
 
 
+def test_retirement_persists_across_new_data_and_deduplicates_repeats(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    outcome = {"contract": {"hypothesis": "remove macd", "version": 1}, "accepted": False, "conclusive": True}
+    key = experiment_ledger.experiment_identity(outcome["contract"])
+    for signature in ("first", "first", "second"):
+        state = experiment_ledger.record_research_experiments(path, evidence_signature=signature, outcomes=[outcome])
+    assert state["experiments"][key]["failed_evaluations"] == 2
+    assert state["experiments"][key]["evaluated_signatures"] == ["first", "second"]
+    permission = experiment_ledger.experiment_permission(state, experiment_id=key, evidence_signature="third")
+    assert permission["allowed"] is False
+    assert permission["reason"] == "experiment_retired"
+    revised = experiment_ledger.experiment_identity({"hypothesis": "remove macd and add volatility", "version": 1})
+    assert experiment_ledger.experiment_permission(state, experiment_id=revised, evidence_signature="third")["allowed"] is True
+
+
+def test_inconclusive_evidence_does_not_retire_experiment(tmp_path: Path) -> None:
+    state = experiment_ledger.record_research_experiments(
+        tmp_path / "state.json", evidence_signature="first",
+        outcomes=[{"contract": {"hypothesis": "test"}, "accepted": False, "conclusive": False}],
+    )
+    assert state["experiments"] == {}
+
+
 def test_success_run_records_hashes_and_completion(tmp_path: Path) -> None:
     input_path = tmp_path / "shadow.jsonl"
     input_path.write_text('{"symbol":"AAPL"}\n', encoding="utf-8")

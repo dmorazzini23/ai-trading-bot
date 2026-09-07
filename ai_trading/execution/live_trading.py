@@ -16326,6 +16326,9 @@ class ExecutionEngine:
             account = None
         self._cycle_account = account
         self._cycle_account_fetched = True
+        account_id = _extract_value(account, "id", "account_id") if account is not None else None
+        if account_id:
+            self._evidence_account_id = str(account_id)
         return account
 
     def _capacity_broker(self, broker_client: Any | None) -> Any | None:
@@ -16718,10 +16721,13 @@ class ExecutionEngine:
 
         if not self._runtime_exec_event_persistence_enabled():
             return
+        row = dict(payload)
+        row.setdefault("account_id", getattr(self, "_evidence_account_id", None))
+        row.setdefault("trading_mode", str(getattr(self, "execution_mode", "") or "").lower())
         self._append_runtime_jsonl(
             env_key="AI_TRADING_ORDER_EVENTS_PATH",
             default_relative="runtime/order_events.jsonl",
-            payload=payload,
+            payload=row,
             failure_log="ORDER_EVENT_WRITE_FAILED",
         )
 
@@ -17384,15 +17390,18 @@ class ExecutionEngine:
                 slippage_bps = None
 
         fee_amount: float | None = None
+        fee_source = "missing"
         if runtime_payload is not None:
             for key in ("fee_amount", "fee", "fees", "commission", "commission_amount"):
                 candidate = _safe_float(runtime_payload.get(key))
                 if candidate is not None:
                     fee_amount = abs(candidate)
+                    fee_source = str(runtime_payload.get("fee_source") or "broker_payload")
                     break
         fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
         if fee_amount is None and fee_bps > 0:
             fee_amount = abs(float(qty_value) * float(fill_price) * (float(fee_bps) / 10000.0))
+            fee_source = "configured_estimate"
         parsed_expected_net_edge_bps = _safe_float(expected_net_edge_bps)
         if parsed_expected_net_edge_bps is None and runtime_payload is not None:
             for key in (
@@ -17753,8 +17762,15 @@ class ExecutionEngine:
             if fill_id_raw not in (None, ""):
                 fill_id = str(fill_id_raw)
         if fill_id is None:
-            fill_id = f"{order_id or client_order_id or symbol}:{int(qty_value)}:{order_status or 'filled'}"
+            identity = f"{order_id or client_order_id or symbol}|{timestamp.isoformat()}|{qty_value}|{fill_price}|{order_status}"
+            fill_id = "derived-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
+        account = getattr(self, "_cycle_account", None)
+        account_id = _extract_value(account, "id", "account_id") if account is not None else None
         fill_record = {
+            "ts": timestamp.isoformat(),
+            "fill_id_source": "derived_execution_fields" if fill_id.startswith("derived-") else "broker_payload",
+            "account_id": str(account_id) if account_id else getattr(self, "_evidence_account_id", None),
+            "trading_mode": str(getattr(self, "execution_mode", "") or "").lower(),
             "symbol": symbol,
             "entry_time": timestamp,
             "fill_price": float(fill_price),
@@ -17771,6 +17787,7 @@ class ExecutionEngine:
             "expected_price": expected_price,
             "slippage_bps": slippage_bps,
             "fee_amount": fee_amount,
+            "fee_source": fee_source,
             "fee_bps": float(fee_bps) if fee_bps > 0 else None,
             "status": order_status,
             "client_order_id": client_order_id,
@@ -17794,6 +17811,7 @@ class ExecutionEngine:
                 if isinstance(pending_lineage, Mapping):
                     lineage_sources.append(pending_lineage)
         lineage_aliases: dict[str, tuple[str, ...]] = {
+            "decision_id": ("decision_id",),
             "correlation_id": ("correlation_id", "opportunity_correlation_id"),
             "source_timestamp": ("source_timestamp", "source_ts"),
             "decision_ts": ("decision_ts", "decision_timestamp"),
@@ -17827,7 +17845,7 @@ class ExecutionEngine:
                     fill_record[destination] = value
                     break
         decision_correlation_id = str(
-            runtime_payload.get("correlation_id") if runtime_payload is not None else ""
+            (runtime_payload.get("correlation_id") if runtime_payload is not None else None) or ""
         ).strip()
         if decision_correlation_id:
             fill_record["decision_correlation_id"] = decision_correlation_id
@@ -34894,6 +34912,38 @@ class ExecutionEngine:
 
         open_orders_tuple = tuple(open_orders or ())
         positions_tuple = tuple(positions or ())
+        if positions is not None and self._runtime_exec_event_persistence_enabled():
+            account = getattr(self, "_cycle_account", None)
+            if account is None and not getattr(self, "_evidence_account_id", None):
+                account = self._get_account_snapshot()
+            account_id = _extract_value(account, "id", "account_id") if account is not None else None
+            quantities: dict[str, float] = {}
+            invalid_positions = 0
+            for position in positions_tuple:
+                symbol = str(_extract_value(position, "symbol") or "").strip().upper()
+                qty = _safe_float(_extract_value(position, "qty", "quantity"))
+                if not symbol or qty is None or not math.isfinite(qty) or symbol in quantities:
+                    invalid_positions += 1
+                    continue
+                side = str(_extract_value(position, "side") or "").lower()
+                quantities[symbol] = -abs(qty) if side in {"short", "sell"} else qty
+            mode = str(getattr(self, "execution_mode", "") or "").lower()
+            self._append_runtime_jsonl(
+                env_key="AI_TRADING_BROKER_POSITION_BOUNDARIES_PATH",
+                default_relative="runtime/broker_position_boundaries.jsonl",
+                payload={
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "account_id": str(account_id) if account_id else getattr(self, "_evidence_account_id", None),
+                    "trading_mode": mode,
+                    "positions": quantities,
+                    "positions_complete": invalid_positions == 0,
+                    "invalid_positions": invalid_positions,
+                    "identity_verified": bool(account_id or getattr(self, "_evidence_account_id", None)) and mode in {"paper", "live"},
+                    "source": "broker_sync",
+                    "boundary_semantics": "observed_response_time_not_atomic_with_fill_stream",
+                },
+                failure_log="BROKER_POSITION_BOUNDARY_WRITE_FAILED",
+            )
         buy_index: dict[str, float] = {}
         sell_index: dict[str, float] = {}
 

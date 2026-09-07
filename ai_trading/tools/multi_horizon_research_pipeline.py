@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from datetime import UTC, datetime
@@ -10,6 +11,12 @@ from pathlib import Path
 from typing import Any, Mapping, cast
 
 from ai_trading.logging import get_logger
+from ai_trading.tools.experiment_ledger import (
+    experiment_identity,
+    experiment_permission,
+    read_experiment_state,
+    record_research_experiments,
+)
 from ai_trading.tools.offline_replay import run_replay
 from ai_trading.tools.train_replay_aligned_model import train_replay_aligned_model
 
@@ -103,6 +110,12 @@ def _walk_forward_aggregate(record: Mapping[str, Any]) -> Mapping[str, Any]:
     return aggregate if isinstance(aggregate, Mapping) else {}
 
 
+def _rank_net_edge(aggregate: Mapping[str, Any]) -> float:
+    raw = aggregate.get("mean_post_cost_net_edge_bps")
+    value = float(raw) if raw is not None else -math.inf
+    return value if math.isfinite(value) else -math.inf
+
+
 def _candidate_rank_key(
     record: Mapping[str, Any],
 ) -> tuple[int, float, float, float, int, float]:
@@ -116,7 +129,7 @@ def _candidate_rank_key(
         replay_expectancy = float(raw_expectancy) if raw_expectancy is not None else 0.0
         trades = int(raw_trades) if raw_trades is not None else 0
     qualified = int(bool(walk_forward.get("evidence_qualified")))
-    mean_edge = float(walk_forward.get("mean_post_cost_net_edge_bps") or -1e12)
+    mean_edge = _rank_net_edge(walk_forward)
     profitable_ratio = float(walk_forward.get("profitable_fold_ratio") or 0.0)
     stability = float(walk_forward.get("stability_score") or 0.0)
     support = int(walk_forward.get("trades") or 0)
@@ -150,7 +163,7 @@ def _candidate_training_rank_key(
                     continue
     return (
         int(bool(walk_forward.get("evidence_qualified"))),
-        float(walk_forward.get("mean_post_cost_net_edge_bps") or -1e12),
+        _rank_net_edge(walk_forward),
         float(walk_forward.get("profitable_fold_ratio") or 0.0),
         float(walk_forward.get("stability_score") or 0.0),
         int(walk_forward.get("trades") or 0),
@@ -249,6 +262,20 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     halving_eta = max(2, int(getattr(args, "halving_eta", 2) or 2))
+    ledger_path = Path(getattr(args, "experiment_ledger_json", None) or output_dir / "research_experiment_state.json")
+    ledger = read_experiment_state(ledger_path)
+    max_failures = max(1, int(getattr(args, "experiment_max_failures", 2)))
+    evidence = hashlib.sha256()
+    for source in sorted(Path(args.data_dir).glob("*.csv")):
+        evidence.update(source.name.encode())
+        with source.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                evidence.update(chunk)
+    for input_name in ("live_cost_model_json", "shadow_markout_jsonl", "acquisition_manifest_json"):
+        source_path = getattr(args, input_name, None)
+        if source_path is not None:
+            evidence.update(Path(source_path).read_bytes())
+    evidence_signature = evidence.hexdigest()
 
     def _training_args(
         record: Mapping[str, Any],
@@ -266,6 +293,10 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             output_dir=model_dir,
             model_name=str(record["model_name"]),
             model_type=str(record["model_type"]),
+            research_experiments=bool(getattr(args, "research_experiments", True)),
+            experiment_feature_removals=str(getattr(args, "experiment_feature_removals", "macd_signal_gap")),
+            cost_scenarios_bps=str(getattr(args, "cost_scenarios_bps", "0,3,6,10,20")),
+            disabled_experiments=record.get("disabled_experiments", []),
             horizon_bars=int(record["horizon_bars"]),
             label_objective=str(record["label_objective"]),
             fee_bps=float(args.fee_bps),
@@ -349,6 +380,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     Mapping[str, Any], training_report.get("dataset", {})
                 ).get("quality"),
                 "live_cost_model": training_report.get("live_cost_model"),
+                "cost_sensitivity": training_report.get("cost_sensitivity"),
                 "holdout_evaluation": training_report.get("holdout_evaluation"),
             }
         )
@@ -366,6 +398,29 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "live_money_authority": False,
             "replay_status": "pending_selection",
         }
+        contract: dict[str, Any] = {
+            "version": "controlled_research_v1", "model_type": model_type,
+            "label_objective": objective, "horizon_bars": int(horizon),
+            "hypothesis": "This horizon and model yield positive stable out-of-sample net edge",
+            "acceptance": "qualified positive net edge, >=60% profitable folds, stability >=0.5, positive score separation",
+            "feature_removals": str(getattr(args, "experiment_feature_removals", "macd_signal_gap")),
+            "research_experiments": bool(getattr(args, "research_experiments", True)),
+            "cost_scenarios_bps": str(getattr(args, "cost_scenarios_bps", "0,3,6,10,20")),
+            "quote_stress_protocol": "median_fresh_bucket_p90_96h_v1",
+            "fee_bps": float(args.fee_bps), "slippage_bps": float(args.slippage_bps),
+            "folds": total_folds, "train_fraction": float(args.train_fraction),
+            "symbols": str(args.symbols),
+        }
+        record["experiment_contract"] = contract
+        permission = experiment_permission(ledger, experiment_id=experiment_identity(contract), evidence_signature=evidence_signature, max_failures=max_failures)
+        record["experiment_permission"] = {key: permission[key] for key in ("allowed", "reason")}
+        if not permission["allowed"]:
+            record["replay_status"] = "skipped_experiment_stopping_rule"
+            record["screening"] = {"status": "skipped", "reason": permission["reason"]}
+            candidates.append(record)
+            continue
+        variant_names = ["always_long", "cash", "momentum", "abstain_volatile", *[f"remove_{name.strip()}" for name in contract["feature_removals"].split(",") if name.strip()]]
+        record["disabled_experiments"] = [name for name in variant_names if not experiment_permission(ledger, experiment_id=experiment_identity({**contract, "variant": name}), evidence_signature=evidence_signature, max_failures=max_failures)["allowed"]]
         try:
             screening_report = train_replay_aligned_model(
                 _training_args(
@@ -385,7 +440,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             record["screening"] = {"status": "error"}
         candidates.append(record)
 
-    screened = [record for record in candidates if "error" not in record]
+    screened = [record for record in candidates if record.get("screening", {}).get("status") == "complete"]
     survivor_count = max(1, int(math.ceil(len(screened) / halving_eta)))
     survivors = sorted(
         screened,
@@ -394,7 +449,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )[:survivor_count]
     survivor_names = {str(record["model_name"]) for record in survivors}
     for record in candidates:
-        if str(record["model_name"]) not in survivor_names and "error" not in record:
+        if str(record["model_name"]) not in survivor_names and record in screened:
             record["halving_status"] = "eliminated_after_screening"
             record["replay_status"] = "skipped_successive_halving"
     full_evaluated: list[dict[str, Any]] = []
@@ -621,6 +676,15 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     ranked = list(development_ranked)
+    outcomes: list[dict[str, Any]] = []
+    for record in full_evaluated:
+        outcomes.append({"contract": record["experiment_contract"], "accepted": bool(record.get("development_eligible")), "conclusive": True, "metrics": dict(_walk_forward_aggregate(record))})
+        comparisons = record.get("walk_forward", {}).get("controlled_comparisons", {})
+        for variant in comparisons.get("variants", []):
+            if variant["name"] != "candidate":
+                outcomes.append({"contract": {**record["experiment_contract"], "variant": variant["name"]}, "accepted": variant["accepted"], "conclusive": variant["conclusive"], "metrics": variant})
+    if outcomes:
+        ledger = record_research_experiments(ledger_path, evidence_signature=evidence_signature, outcomes=outcomes, max_failures=max_failures)
     valid_trained = list(screened)
     falsified_candidates = [
         {
@@ -641,6 +705,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     report = {
         "schema_version": "2.0.0",
         "artifact_type": "multi_horizon_research_report",
+        "experiment_lifecycle": {"ledger_path": str(ledger_path), "evidence_signature": evidence_signature, "max_failed_evaluations": max_failures, "retired_count": sum(state.get("status") == "retired" for state in ledger["experiments"].values()), "skipped": [record["model_name"] for record in candidates if record.get("replay_status") == "skipped_experiment_stopping_rule"]},
         "generated_at": datetime.now(UTC).isoformat(),
         "config": {
             "data_dir": str(args.data_dir),
@@ -723,6 +788,7 @@ def run_multi_horizon_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "holdout_confirmation": holdout_confirmation,
         "promotion_exit_criteria": promotion_exit_criteria,
         "ranked_candidates": ranked,
+        "candidate_evaluations": candidates,
         "lead_candidates": [
             record
             for record in candidates
@@ -767,6 +833,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", type=str, default="")
     parser.add_argument("--timestamp-col", type=str, default="timestamp")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--research-experiments", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--experiment-ledger-json", type=Path, default=None)
+    parser.add_argument("--experiment-max-failures", type=int, default=2)
+    parser.add_argument("--experiment-feature-removals", default="macd_signal_gap")
+    parser.add_argument("--cost-scenarios-bps", default="0,3,6,10,20")
     parser.add_argument("--horizons", type=str, default="1,3,5,15")
     parser.add_argument(
         "--label-objectives",

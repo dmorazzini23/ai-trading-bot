@@ -1,0 +1,5 @@
+# Project defaults for Codex. These do not configure the trading runtime.
+model = "gpt-6-astra"
+model_reasoning_effort = "low"
+service_tier = "default"
+tool_output_token_limit = 4000

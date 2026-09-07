@@ -31,6 +31,16 @@ This document is the authoritative playbook for Codex-style editing in this repo
 ---
 
 ## 2. Editing Contract (Codex Editing Contract)
+- Use one agent by default. Delegate only when independent work justifies the
+  additional context and execution; do not automatically invoke swarm skills.
+- Keep each task focused on its requested outcome. Read relevant files and
+  current evidence; avoid rereading archival reports or entire logs.
+- Save lengthy command output to an artifact and return the relevant excerpt.
+  Reuse successful checks until code changes or new evidence require rerunning.
+- Leave a concise handoff for long tasks: current state, changed files, checks,
+  blockers, and the next action. Follow the validation requirements below.
+- Codex efficiency defaults and task restart guidance are documented in
+  `docs/CODEX_EFFICIENCY.md`.
 - All edits must use **`apply_patch`**.
 - Keep diffs surgical; touch only what is necessary and preserve context.
 - Do not introduce new shims, compatibility facades, or bulk rewrites.

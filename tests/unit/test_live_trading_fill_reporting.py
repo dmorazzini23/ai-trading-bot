@@ -187,6 +187,8 @@ def test_record_runtime_fill_event_backfills_edge_fields(monkeypatch):
 
 def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine._cycle_account = {"id": "account-test"}
+    engine.execution_mode = "paper"
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -227,7 +229,7 @@ def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
         order_status="filled",
         signal=None,
         timestamp=live_trading.datetime.now(live_trading.UTC),
-        runtime_payload={"source": "live"},
+        runtime_payload={"source": "live", "fee_amount": 0.25, "decision_id": "decision-test"},
         closing_position=False,
         expected_net_edge_bps=3.25,
         realized_net_edge_bps=1.75,
@@ -239,6 +241,33 @@ def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
     assert payload["symbol"] == "AAPL"
     assert payload["expected_net_edge_bps"] == 3.25
     assert payload["realized_net_edge_bps"] == 1.75
+    assert payload["fee_source"] == "broker_payload"
+    assert payload["fee_amount"] == 0.25
+    assert payload["decision_id"] == "decision-test"
+    assert payload["account_id"] == "account-test"
+    assert payload["trading_mode"] == "paper"
+    assert payload["ts"] == payload["entry_time"]
+    assert payload["fill_id_source"] == "derived_execution_fields"
+    assert "decision_correlation_id" not in payload
+
+
+def test_broker_boundary_records_empty_positions_but_not_missing_response(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine._cycle_account = {"id": "account-test"}
+    engine.execution_mode = "paper"
+    captured = []
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(engine, "_append_runtime_jsonl", lambda **kwargs: captured.append(kwargs["payload"]))
+    monkeypatch.setattr(engine, "_update_position_tracker_snapshot", lambda *_: None)
+    monkeypatch.setattr(engine, "_emit_runtime_snapshots_from_broker_sync", lambda **_: None)
+    engine._update_broker_snapshot([], None)
+    assert not captured
+    engine._update_broker_snapshot([], [])
+    assert captured[0]["positions"] == {}
+    assert captured[0]["identity_verified"] is True
+    assert captured[0]["positions_complete"] is True
+    engine._update_broker_snapshot([], [{"symbol": "MSFT", "qty": "bad"}])
+    assert captured[-1]["positions_complete"] is False
 
 
 def test_persist_fill_derived_trade_record_includes_execution_attribution(monkeypatch):

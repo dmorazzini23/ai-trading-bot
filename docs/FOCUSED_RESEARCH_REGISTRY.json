@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "scope": "Focused fixed-rule research only; no live model or trading configuration authority",
+  "completed_families": [
+    {
+      "protocol_id": "aapl_intraday_continuation_20260906_v1",
+      "signal_rule": "positive_sma_macd",
+      "universe": [
+        "AAPL"
+      ],
+      "closed_horizons_minutes": [
+        1,
+        5,
+        15,
+        60
+      ],
+      "retired_horizons_minutes": [
+        1,
+        5,
+        15
+      ],
+      "inconclusive_horizons_minutes": [
+        60
+      ],
+      "reason": "Predeclared fixed grid completed; supported variants failed economics; 60-minute support 135 below 250. No retuning.",
+      "evidence": "artifacts/focused_research/study/study_report.json"
+    },
+    {
+      "protocol_id": "aapl_intraday_reversal_20260906_v1",
+      "signal_rule": "negative_15m_shock_2sigma_prior60",
+      "universe": ["AAPL"],
+      "closed_horizons_minutes": [15, 60],
+      "retired_horizons_minutes": [],
+      "inconclusive_horizons_minutes": [15, 60],
+      "reason": "Fixed grid completed. Only 37 and 4 validation trades versus the required 250; both observed net returns negative. Close without threshold relaxation or promotion.",
+      "evidence": "artifacts/revised_research/study/study_report.json"
+    }
+  ]
+}

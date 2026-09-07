@@ -15,6 +15,26 @@ def _write_jsonl(path: Path, rows: list[object]) -> None:
     )
 
 
+def test_cost_model_correlations_pending_and_quote_only_evidence(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 4, 15, tzinfo=UTC)
+    events, fills = tmp_path / "events.jsonl", tmp_path / "fills.jsonl"
+    base = {"ts": now.isoformat(), "symbol": "AAPL"}
+    _write_jsonl(events, [
+        {**base, "order_id": "shared", "slippage_bps": 4},
+        {**base, "order_id": "orphan", "quote_age_ms": 1},
+        {**base, "pending_event": True, "spread_bps": 10},
+        {**base, "spread_bps": 8},
+    ])
+    _write_jsonl(fills, [{**base, "order_id": "shared", "slippage_bps": 4}])
+    report = live_cost_model.build_live_cost_model(events_path=events, fill_events_path=fills, now=now)
+    stats = report["sources"]["execution_quality_events"]
+    assert stats["correlation_counts"]["matched_other_source"] == 1
+    assert stats["correlation_counts"]["rejected_unmatched_identifier"] == 1
+    assert stats["rejection_counts"]["non_executed_terminal"] == 1
+    assert stats["rejection_counts"]["cost_metrics_missing_or_invalid"] == 1
+    assert report["by_symbol_side_session"][0]["fill_derived_sample_count"] == 2
+
+
 def test_cost_rejections_reconcile_all_input_rows(tmp_path: Path) -> None:
     now = datetime(2026, 9, 4, 15, tzinfo=UTC)
     good = {"ts": now.isoformat(), "symbol": "AAPL", "slippage_bps": 1.0}

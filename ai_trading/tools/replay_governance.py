@@ -152,6 +152,9 @@ def _collect_replay_snapshot(path: Path) -> dict[str, Any]:
         }
     )
     live_cost_alignment = payload.get("live_cost_alignment")
+    loss_attribution = payload.get("loss_attribution")
+    if isinstance(loss_attribution, dict):
+        snapshot["loss_attribution"] = dict(loss_attribution)
     if isinstance(live_cost_alignment, dict):
         snapshot["live_cost_alignment"] = dict(live_cost_alignment)
     return snapshot

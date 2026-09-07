@@ -5,10 +5,24 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from ai_trading.replay.live_cost_alignment import (
+    evaluate_cost_scenarios,
     resolve_live_cost_alignment,
     resolve_live_cost_alignments,
 )
 
+
+def test_cost_scenarios_round_trip_break_even_and_monotonic_edge() -> None:
+    report = evaluate_cost_scenarios(gross_returns_bps=[10, 20], turnover=[2, 2], scenario_costs_bps=[0, 3, 10])
+    assert report["break_even_execution_cost_bps"] == 7.5
+    assert [row["net_edge_bps"] for row in report["scenarios"]] == [15, 9, -5]
+    assert report["promotion_eligible"] is False
+    assert evaluate_cost_scenarios(gross_returns_bps=[], turnover=[])["break_even_execution_cost_bps"] is None
+
+
+@pytest.mark.parametrize("gross,turnover,cost", [([1], [], [1]), ([float("nan")], [1], [1]), ([1], [-1], [1]), ([1], [1], [-1])])
+def test_cost_scenarios_reject_invalid_inputs(gross, turnover, cost) -> None:
+    with pytest.raises(ValueError):
+        evaluate_cost_scenarios(gross_returns_bps=gross, turnover=turnover, scenario_costs_bps=cost)
 
 def _live_cost_model(
     now: datetime,
