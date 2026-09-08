@@ -1,0 +1,12 @@
+[Unit]
+Description=Verify September 7-8 research execution and paper session evidence
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/aiuser/ai-trading-bot
+Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
+Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
+ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.tools.scheduled_evidence_verification --runtime-dir /var/lib/ai-trading-bot/runtime --session 2026-09-08 --output-dir /var/lib/ai-trading-bot/runtime/research_reports/evidence_verification
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal

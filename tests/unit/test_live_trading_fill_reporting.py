@@ -229,7 +229,7 @@ def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
         order_status="filled",
         signal=None,
         timestamp=live_trading.datetime.now(live_trading.UTC),
-        runtime_payload={"source": "live", "fee_amount": 0.25, "decision_id": "decision-test"},
+        runtime_payload={"source": "live", "fee_amount": 0.25, "fee_currency": "USD", "fee_basis": "per_fill_total", "decision_id": "decision-test"},
         closing_position=False,
         expected_net_edge_bps=3.25,
         realized_net_edge_bps=1.75,
@@ -243,6 +243,8 @@ def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
     assert payload["realized_net_edge_bps"] == 1.75
     assert payload["fee_source"] == "broker_payload"
     assert payload["fee_amount"] == 0.25
+    assert payload["fee_currency"] == "USD"
+    assert payload["fee_basis"] == "per_fill_total"
     assert payload["decision_id"] == "decision-test"
     assert payload["account_id"] == "account-test"
     assert payload["trading_mode"] == "paper"

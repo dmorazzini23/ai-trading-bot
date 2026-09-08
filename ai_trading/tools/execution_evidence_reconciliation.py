@@ -197,9 +197,13 @@ def reconcile_session(*, session_date: str, account_id: str, boundaries: list[di
     lower, upper = opening[0] if opening else start, closing[0] if closing else end
     selected_fills = []
     unknown_identity = 0
+    invalid_timestamps = 0
     for row in fills:
         ts = pd.to_datetime(row.get("ts"), utc=True, errors="coerce")
-        if pd.isna(ts) or not lower < ts <= upper:
+        if pd.isna(ts):
+            invalid_timestamps += 1
+            continue
+        if not lower < ts <= upper:
             continue
         if row.get("account_id") is None or row.get("trading_mode") not in {"paper", "live"}:
             unknown_identity += 1
@@ -209,6 +213,8 @@ def reconcile_session(*, session_date: str, account_id: str, boundaries: list[di
     relevant_orders = [row for row in orders if _identities(row) & identities or lower < pd.to_datetime(row.get("ts"), utc=True, errors="coerce") <= upper]
     report = reconcile_evidence(decisions=decisions, orders=relevant_orders, fills=selected_fills, tca=tca, opening_positions=opening[1] if opening else None, closing_positions=closing[1] if closing else None)
     gaps = []
+    if invalid_timestamps:
+        gaps.append("unclassifiable_fill_timestamps")
     if not opening or not closing:
         gaps.append("complete_session_boundary_pair_missing")
     if unknown_identity:
@@ -223,7 +229,8 @@ def reconcile_session(*, session_date: str, account_id: str, boundaries: list[di
         gaps.append("order_quantities_not_reconciled")
     if report["counts"].get("tca_unmatched", 0):
         gaps.append("tca_missing")
-    report.update(session_date=session_date, unknown_identity_fills=unknown_identity, session_gaps=gaps, status="evidence_gaps" if gaps else "paper_session_reconciled")
+    report.update(session_date=session_date, unknown_identity_fills=unknown_identity, unclassifiable_fill_timestamps=invalid_timestamps, session_gaps=gaps, status="evidence_gaps" if gaps else "paper_session_reconciled")
+    report["boundary_evidence"] = {"opening_timestamp": opening[0].isoformat() if opening else None, "closing_timestamp": closing[0].isoformat() if closing else None, "fill_interval": "opening_exclusive_closing_inclusive", "opening_window_utc": [(start - pd.Timedelta(minutes=15)).isoformat(), start.isoformat()], "closing_window_utc": [end.isoformat(), (end + pd.Timedelta(minutes=15)).isoformat()]}
     return report
 
 

@@ -39876,6 +39876,14 @@ def _replay_summary_metrics(
                 edge = ((markout_price - fill_price) / fill_price) * 10_000.0
             else:
                 edge = ((fill_price - markout_price) / fill_price) * 10_000.0
+            fee_amount = float(event.get("fee_amount") or 0.0)
+            fill_qty = float(event.get("fill_qty", 0.0) or 0.0)
+            if not math.isfinite(fee_amount) or fee_amount < 0:
+                raise ValueError("replay fill fee must be finite and nonnegative")
+            if fee_amount and fill_qty <= 0:
+                raise ValueError("replay fill fee requires a positive quantity")
+            if fill_qty > 0:
+                edge -= fee_amount / (fill_price * fill_qty) * 10_000.0
             if math.isfinite(edge):
                 edge_bps.append(float(edge))
 
@@ -39890,6 +39898,8 @@ def _replay_summary_metrics(
                     cost = ((fill_price - reference_price) / reference_price) * 10_000.0
                 else:
                     cost = ((reference_price - fill_price) / reference_price) * 10_000.0
+                if fill_qty > 0:
+                    cost += fee_amount / (reference_price * fill_qty) * 10_000.0
                 if math.isfinite(cost):
                     execution_cost_bps.append(float(cost))
             if reference_price > 0.0 and math.isfinite(reference_price) and math.isfinite(edge):
@@ -39906,6 +39916,11 @@ def _replay_summary_metrics(
                     "fallback_cost_bps": float(cost),
                     "fill_price": fill_price,
                     "reference_price": reference_price,
+                    "fee_amount": event.get("fee_amount"),
+                    "fee_currency": event.get("fee_currency"),
+                    "fee_basis": event.get("fee_basis"),
+                    "fee_source": event.get("fee_source"),
+                    "fee_rate_bps": event.get("fee_rate_bps"),
                     "markout_price": markout_price,
                     "net_edge_bps": float(edge),
                     "gross_edge_bps": float(gross_edge),

@@ -12,6 +12,26 @@ from ai_trading.tools import training_accelerator
 from ai_trading.tools.regime_champion_models import build_regime_champion_report
 
 
+def test_cli_resolves_manifest_before_legacy_directory_preflight(tmp_path, monkeypatch):
+    governed = tmp_path / "governed"
+    governed.mkdir()
+    monkeypatch.setattr(training_accelerator, "_resolve_training_input", lambda args: (governed, {"quality_passed": True}))
+    def run(args):
+        assert args.data_dir == governed
+        assert args.require_validated_data
+        return {"status": "no_valid_candidates", "path": str(tmp_path / "report.json")}
+    monkeypatch.setattr(training_accelerator, "run_training_accelerator", run)
+    assert training_accelerator.main(["--data-dir", str(tmp_path / "missing_legacy"), "--acquisition-manifest-json", str(tmp_path / "acquisition.json"), "--require-validated-data"]) == 0
+
+
+def test_cli_invalid_manifest_cannot_fall_back_to_existing_csvs(tmp_path, monkeypatch):
+    def invalid(args):
+        raise ValueError("dataset content hash mismatch")
+    monkeypatch.setattr(training_accelerator, "_resolve_training_input", invalid)
+    monkeypatch.setattr(training_accelerator, "run_training_accelerator", lambda args: pytest.fail("must not train"))
+    assert training_accelerator.main(["--data-dir", str(tmp_path), "--acquisition-manifest-json", str(tmp_path / "bad.json"), "--require-validated-data"]) == 2
+
+
 def test_real_training_pipeline_candidate_reaches_registry_selector(tmp_path: Path) -> None:
     import numpy as np
     import pandas as pd

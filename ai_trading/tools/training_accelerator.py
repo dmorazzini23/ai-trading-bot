@@ -15,6 +15,7 @@ from ai_trading.config.management import get_env
 from ai_trading.data.training_provenance import validate_training_provenance
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.multi_horizon_research_pipeline import run_multi_horizon_pipeline
+from ai_trading.tools.candidate_abstention_review import review_candidate
 from ai_trading.tools.train_replay_aligned_model import (
     REPLAY_ALIGNED_FEATURE_COLUMNS,
     _resolve_training_input,
@@ -659,6 +660,7 @@ def run_training_accelerator(args: argparse.Namespace) -> dict[str, Any]:
         report["candidates"] = [
             {
                 "model_id": row.get("model_name"),
+                "abstention_review": review_candidate(row),
                 "regime": "default",
                 "requested_authority": "shadow",
                 "development_eligible": row.get("development_eligible") is True,
@@ -822,6 +824,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if not args.plan_only and args.acquisition_manifest_json is not None:
+        try:
+            args.data_dir, _ = _resolve_training_input(args)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(f"training accelerator acquisition validation failed: {exc}\n")
+            return 2
     if not args.plan_only and (args.data_dir is None or not Path(args.data_dir).exists()):
         sys.stderr.write("training accelerator requires --data-dir for non-plan runs\n")
         return 2

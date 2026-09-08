@@ -1760,7 +1760,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 ),
                 purpose="Refresh cached lightweight replay-aligned training candidates.",
                 output_path=training_accelerator,
-                skip_if_missing=(config.data_dir,),
                 blocked_returncodes=(2,),
                 metadata={
                     "promotion_authority": False,
@@ -1973,11 +1972,29 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             steps.insert(anchor + offset, step)
     steps.append(
         ResearchStep(
+            name="broker_accounting_evidence",
+            command=_python_module(
+                "ai_trading.tools.broker_accounting_evidence",
+                "--fills", _runtime_input_path("runtime/fill_events.jsonl"),
+                "--snapshot", config.run_dir / "broker_account_activities.json",
+                "--output", config.run_dir / "broker_accounting_evidence.json",
+                "--fetch-paper",
+            ),
+            purpose="Read paper account activities and reconcile accounting quantities and fee coverage.",
+            output_path=config.run_dir / "broker_accounting_evidence.json",
+            metadata={"promotion_authority": False, "orders_sent": 0},
+        )
+    )
+    steps.append(
+        ResearchStep(
             name="paper_evidence_review",
             command=_python_module(
                 "ai_trading.tools.paper_evidence_review",
                 "--runtime-dir", _runtime_input_path("runtime/decision_records.jsonl").parent,
                 "--replay-report", replay,
+                "--training-report", training_accelerator,
+                "--selection-report", regime_champions,
+                "--accounting-report", config.run_dir / "broker_accounting_evidence.json",
                 "--output", config.run_dir / "paper_evidence_review.json",
             ),
             purpose="Audit the latest completed paper session and paired execution costs without placing orders.",
@@ -1985,6 +2002,21 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             metadata={"promotion_authority": False, "orders_sent": 0},
         )
     )
+    steps.append(ResearchStep(
+        name="research_decision_dashboard",
+        command=_python_module(
+            "ai_trading.tools.research_decision_dashboard",
+            "--training-report", training_accelerator,
+            "--paper-review", config.run_dir / "paper_evidence_review.json",
+            "--portfolio-returns", _runtime_input_path("runtime/research_portfolio_returns.csv"),
+            "--portfolio-manifest", _runtime_input_path("runtime/research_portfolio_returns.manifest.json"),
+            "--portfolio-candidate", _env_text("AI_TRADING_RESEARCH_PORTFOLIO_CANDIDATE", "candidate"),
+            "--output", config.run_dir / "research_decision_dashboard.json",
+        ),
+        purpose="Combine opportunity accounting, paired baselines, experiment decisions and portfolio evidence.",
+        output_path=config.run_dir / "research_decision_dashboard.json",
+        metadata={"promotion_authority": False, "orders_sent": 0},
+    ))
     return steps
 
 
@@ -2112,7 +2144,6 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
                 ),
                 purpose="Run the broader cached weekly horizon/objective candidate refresh.",
                 output_path=training_accelerator,
-                skip_if_missing=(config.data_dir,),
                 blocked_returncodes=(2,),
                 metadata={"promotion_authority": False, "uses_cached_training_features": True},
             )
@@ -2606,7 +2637,6 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
                 ),
                 purpose="Run bounded broad weekend candidate refresh with cached features.",
                 output_path=training_accelerator,
-                skip_if_missing=(config.data_dir,),
                 blocked_returncodes=(2,),
                 metadata={
                     "promotion_authority": False,
@@ -3440,6 +3470,7 @@ def _artifact_status(payload: Mapping[str, Any], default: str = "missing") -> st
 
 def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     latest = config.report_root / "latest"
+    decision_dashboard = _read_json(latest / "research_decision_dashboard_latest.json")
     paper_evidence = _read_json(latest / "paper_evidence_review_latest.json")
     paper_session = paper_evidence.get("session_audit") or {}
     paper_costs = paper_evidence.get("execution_cost_comparison") or {}
@@ -3476,10 +3507,23 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     weekend_summary = _read_json(latest / "weekend_operator_summary.json")
     return {
         "paper_execution_evidence": {
+            "research_decision_dashboard": {"status": decision_dashboard.get("status", "missing"), "html_path": decision_dashboard.get("html_path"), "candidate_count": len(decision_dashboard.get("candidates", [])), "portfolio_status": decision_dashboard.get("portfolio", {}).get("status")},
             "status": _artifact_status(paper_evidence),
             "session_date": paper_evidence.get("session_date"),
             "session_audit_status": paper_session.get("status"),
             "session_gaps": paper_session.get("session_gaps", []),
+            "completion_gaps": paper_evidence.get("completion_gaps", []),
+            "capture_readiness": paper_evidence.get("capture_readiness", {}),
+            "broker_accounting": {
+                key: value for key, value in paper_evidence.get("broker_accounting", {}).items()
+                if key not in {"fee_activities", "order_quantity_comparison", "limitations"}
+            },
+            "candidate_abstention_reviews": paper_evidence.get("candidate_abstention_reviews", []),
+            "boundary_evidence": paper_session.get("boundary_evidence", {}),
+            "training_readiness": {
+                key: value for key, value in paper_evidence.get("training_readiness", {}).items()
+                if key != "data_provenance"
+            },
             "accepted_unique_fills": paper_session.get("accepted_unique_fills", 0),
             "execution_cost_comparison": {
                 key: value for key, value in paper_costs.items()
@@ -3755,6 +3799,8 @@ def _copy_authority_artifacts(
                     ),
                 ]
             )
+        elif name == "research_decision_dashboard":
+            targets.append(latest_dir / "research_decision_dashboard_latest.json")
         elif name == "paper_evidence_review":
             targets.append(latest_dir / "paper_evidence_review_latest.json")
         elif name == "replay_live_cost_alignment":

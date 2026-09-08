@@ -35,6 +35,13 @@ def test_complete_paper_session_and_missing_boundary_fail_closed():
     report = reconcile_session(**inputs, boundaries=boundaries)
     assert report["status"] == "paper_session_reconciled"
     assert report["position_reconciliation"]["status"] == "matched"
+    for bad_timestamp in [None, "not-a-timestamp", ""]:
+        invalid = {**fills[0], "fill_id": "unclassifiable", "ts": bad_timestamp}
+        broken = reconcile_session(**{**inputs, "fills": [*fills, invalid]}, boundaries=boundaries)
+        assert broken["status"] == "evidence_gaps"
+        assert broken["accepted_unique_fills"] == 2
+        assert broken["unclassifiable_fill_timestamps"] == 1
+        assert "unclassifiable_fill_timestamps" in broken["session_gaps"]
     report = reconcile_session(**inputs, boundaries=boundaries[:1])
     assert "complete_session_boundary_pair_missing" in report["session_gaps"]
     assert report["status"] == "evidence_gaps"

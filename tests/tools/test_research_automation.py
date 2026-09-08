@@ -38,6 +38,16 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert payload["status"] == "planned"
     evidence = next(step for step in payload["steps"] if step["name"] == "paper_evidence_review")
     assert "ai_trading.tools.paper_evidence_review" in evidence["command"]
+    assert "--training-report" in evidence["command"]
+    assert "--selection-report" in evidence["command"]
+    assert "--accounting-report" in evidence["command"]
+    accounting = next(step for step in payload["steps"] if step["name"] == "broker_accounting_evidence")
+    assert "--fetch-paper" in accounting["command"]
+    assert accounting["metadata"]["orders_sent"] == 0
+    assert payload["steps"].index(accounting) < payload["steps"].index(evidence)
+    dashboard = next(step for step in payload["steps"] if step["name"] == "research_decision_dashboard")
+    assert "ai_trading.tools.research_decision_dashboard" in dashboard["command"]
+    assert dashboard["metadata"]["promotion_authority"] is False
     assert evidence["metadata"]["orders_sent"] == 0
     assert evidence["output_path"].endswith("paper_evidence_review.json")
     assert payload["safety"] == {
@@ -288,6 +298,7 @@ def test_daily_plan_with_data_adds_upward_trajectory_report(
     accelerator = next(
         step for step in payload["steps"] if step["name"] == "training_accelerator_daily"
     )
+    assert accelerator["skip_if_missing"] == []
     accelerator_command = [str(token) for token in accelerator["command"]]
     assert accelerator_command[accelerator_command.index("--symbols") + 1] == (
         "AAPL,AMZN"
@@ -536,6 +547,7 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     accelerator = next(
         step for step in payload["steps"] if step["name"] == "training_accelerator_weekly"
     )
+    assert accelerator["skip_if_missing"] == []
     accelerator_command = [str(token) for token in accelerator["command"]]
     assert accelerator_command[accelerator_command.index("--symbols") + 1] == (
         "AAPL,AMZN,MSFT"
@@ -604,6 +616,7 @@ def test_weekend_saturday_plan_uses_bounded_broad_research_caps(
         for step in payload["steps"]
         if step["name"] == "training_accelerator_weekend_broad"
     )
+    assert accelerator["skip_if_missing"] == []
     assert "--research-cost-fallback" in accelerator["command"]
     assert accelerator["blocked_returncodes"] == [2]
     live_cost = next(step for step in payload["steps"] if step["name"] == "live_cost_model")

@@ -46,8 +46,12 @@ class SimulatedBroker:
         min_fill_delay_ms: int = 150,
         max_fill_delay_ms: int = 2500,
         cancel_reject_probability: float = 0.0,
+        fee_bps: float = 0.0,
     ) -> None:
         self._seed = int(seed)
+        self._fee_bps = float(fee_bps)
+        if not math.isfinite(self._fee_bps) or self._fee_bps < 0:
+            raise ValueError("fee_bps must be finite and nonnegative")
         self._order_random: dict[str, random.Random] = {}
         self._fill_probability = max(0.0, min(1.0, float(fill_probability)))
         self._partial_fill_probability = max(
@@ -212,11 +216,17 @@ class SimulatedBroker:
             if market_price_by_symbol is not None:
                 raw_market = market_price_by_symbol.get(symbol)
                 if raw_market is not None:
-                    market_px = float(raw_market)
+                    try:
+                        market_px = float(raw_market)
+                    except (TypeError, ValueError):
+                        market_px = None
+            if market_px is None or not math.isfinite(market_px) or market_px <= 0:
+                self._scheduled.append(item)
+                continue
             is_limit = model_order.get("type") == "limit"
             if is_limit:
                 limit = model_order.get("limit_price")
-                if market_px is None or not math.isfinite(market_px) or market_px <= 0 or limit is None:
+                if limit is None:
                     self._scheduled.append(item)
                     continue
                 if (model_order.get("side") == "buy" and market_px > float(limit)) or (model_order.get("side") == "sell" and market_px < float(limit)):
@@ -255,6 +265,11 @@ class SimulatedBroker:
                 "side": model_order.get("side"),
                 "fill_qty": fill_qty,
                 "fill_price": fill_price,
+                "fee_amount": fill_qty * fill_price * self._fee_bps / 10000.0,
+                "fee_currency": "USD",
+                "fee_basis": "per_fill_total",
+                "fee_source": "simulated_notional_bps_v1",
+                "fee_rate_bps": self._fee_bps,
                 "filled_qty": new_filled,
                 "status": model_order["status"],
                 "ts": current.isoformat(),
@@ -270,20 +285,10 @@ class SimulatedBroker:
         order: Mapping[str, Any],
         market_price: float | None,
     ) -> float:
-        limit_price = order.get("limit_price")
         side = str(order.get("side", "buy")).lower()
-        base = None
-        if market_price is not None and math.isfinite(market_price) and market_price > 0:
-            base = market_price
-        if base is None and limit_price is not None:
-            try:
-                parsed_limit = float(limit_price)
-            except (TypeError, ValueError):
-                parsed_limit = None
-            if parsed_limit is not None and math.isfinite(parsed_limit) and parsed_limit > 0:
-                base = parsed_limit
-        if base is None:
-            base = 100.0
+        if market_price is None or not math.isfinite(market_price) or market_price <= 0:
+            raise ValueError("a finite positive observed market price is required")
+        base = market_price
         spread_bps = float(order.get("spread_bps", 8.0) or 8.0)
         spread_component = base * (spread_bps / 10_000.0)
         vol_pct = float(order.get("volatility_pct", 0.01) or 0.01)

@@ -2,7 +2,33 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from ai_trading.execution.simulated_broker import SimulatedBroker
+
+
+@pytest.mark.parametrize("price", [None, 0, -1, float("nan"), float("inf"), "bad"])
+def test_market_order_waits_for_valid_observed_price(price):
+    broker = SimulatedBroker(seed=42, fill_probability=1, partial_fill_probability=0, min_fill_delay_ms=0, max_fill_delay_ms=0)
+    start = datetime(2026, 9, 4, 15, tzinfo=UTC)
+    order = broker.submit_order({"symbol": "AAPL", "side": "buy", "qty": 1, "type": "market", "price": 999, "client_order_id": "market"}, timestamp=start)
+    quotes = {} if price is None else {"AAPL": price}
+    assert broker.process_until(now=start, market_price_by_symbol=quotes) == []
+    assert broker.get_order(order["id"])["filled_qty"] == 0
+    later = start + timedelta(seconds=1)
+    fills = broker.process_until(now=later, market_price_by_symbol={"AAPL": 200})
+    assert len(fills) == 1
+    assert 199 < fills[0]["fill_price"] < 202
+    assert fills[0]["ts"] == later.isoformat()
+    assert broker.process_until(now=later, market_price_by_symbol={"AAPL": 200}) == []
+
+
+def test_replay_trailing_drain_does_not_invent_a_market_fill():
+    from ai_trading.replay.event_loop import ReplayEventLoop
+
+    replay = ReplayEventLoop(strategy=lambda bar: {"symbol": "AAPL", "side": "buy", "qty": 1, "type": "market", "price": 100, "client_order_id": "trailing"}, broker=SimulatedBroker(fill_probability=1, partial_fill_probability=0)).run([{"symbol": "AAPL", "ts": "2026-09-04T15:00:00Z", "close": 100}])
+    assert len(replay["orders"]) == 1
+    assert replay["events"] == []
 
 
 def _run(seed: int) -> tuple[dict, list[dict], dict | None]:
@@ -128,3 +154,23 @@ def test_unrelated_removed_order_does_not_change_retained_order_randomness():
         retained = next(row for row in events if row["client_order_id"] == "retained")
         results.append({key: retained[key] for key in ["fill_qty", "fill_price", "ts"]})
     assert results[0] == results[1]
+
+
+def test_simulated_fee_contract_survives_replay_summary():
+    from ai_trading.core.bot_engine import _replay_summary_metrics
+    from ai_trading.replay.event_loop import ReplayEventLoop
+    from ai_trading.tools.paper_evidence_review import _fee_total
+
+    bars = [{"ts": f"2026-08-03T15:{minute:02d}:00Z", "symbol": "AAPL", "close": 100} for minute in (0, 5, 10)]
+    def strategy(bar):
+        return {"symbol": "AAPL", "side": "buy", "qty": 2, "type": "market", "price": 100, "client_order_id": "fee-test"} if bar["ts"].endswith("00:00Z") else None
+    broker = SimulatedBroker(fee_bps=1, fill_probability=1, partial_fill_probability=0)
+    result = ReplayEventLoop(strategy=strategy, broker=broker).run(bars)
+    summary = _replay_summary_metrics(result, market_rows=bars)
+    rows = summary["markout_observations"]
+    assert len(rows) == 1
+    assert _fee_total(rows, simulated=True) == pytest.approx(rows[0]["fill_qty"] * rows[0]["fill_price"] / 10000)
+    gross_markout = (rows[0]["markout_price"] / rows[0]["fill_price"] - 1) * 10000
+    assert summary["net_edge_bps"] == pytest.approx(gross_markout - 1)
+    with pytest.raises(ValueError, match="fee_bps"):
+        SimulatedBroker(fee_bps=float("nan"))

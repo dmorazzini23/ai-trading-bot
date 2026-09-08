@@ -17788,6 +17788,8 @@ class ExecutionEngine:
             "slippage_bps": slippage_bps,
             "fee_amount": fee_amount,
             "fee_source": fee_source,
+            "fee_currency": runtime_payload.get("fee_currency") if runtime_payload else None,
+            "fee_basis": runtime_payload.get("fee_basis") if runtime_payload else None,
             "fee_bps": float(fee_bps) if fee_bps > 0 else None,
             "status": order_status,
             "client_order_id": client_order_id,
