@@ -119,9 +119,9 @@ class DecisionJournalRecorder:
             or (market_bar.ts if isinstance(market_bar, Bar) else None)
             or normalized_bar_ts
         )
-        normalized_decision_ts = (
-            normalize_evidence_timestamp(decision_ts) or normalized_bar_ts
-        )
+        recorded_at = datetime.now(UTC)
+        explicit_decision_ts = normalize_evidence_timestamp(decision_ts)
+        normalized_decision_ts = explicit_decision_ts or recorded_at
         normalized_quote_ts = normalize_evidence_timestamp(quote_timestamp)
         normalized_side = _normalize_side(signal_side)
         resolved_correlation_id = str(correlation_id or "").strip() or (
@@ -243,6 +243,8 @@ class DecisionJournalRecorder:
         metrics["event"] = str(event or "trade_decision")
         metrics["correlation_id"] = resolved_correlation_id
         metrics["decision_ts"] = normalized_decision_ts.isoformat()
+        metrics["recorded_at"] = recorded_at.isoformat()
+        metrics["decision_ts_basis"] = "explicit" if explicit_decision_ts else "record_capture"
         metrics["source_timestamp"] = normalized_source_ts.isoformat()
         metrics["opportunity_eligible"] = resolved_opportunity_eligible
         metrics.setdefault("evidence_type", "decision_opportunity")

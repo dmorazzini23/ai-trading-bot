@@ -54,6 +54,11 @@ def test_decision_recorder_tracks_counts_and_observations() -> None:
     )
 
     assert len(written) == 1
+    timing = written[0][0].to_dict()['metrics']
+    assert timing['source_timestamp'] == bar_ts.isoformat()
+    assert timing['decision_ts'] == timing['recorded_at']
+    assert timing['decision_ts_basis'] == 'record_capture'
+    assert timing['decision_ts'] != bar_ts.isoformat()
     assert recorder.decision_records_total == 1
     assert recorder.decision_gate_counts["OK_TRADE"] == 1
     assert recorder.decision_observations[0]["accepted"] is True

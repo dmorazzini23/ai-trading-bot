@@ -26,6 +26,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from ai_trading.data.historical_bars import HistoricalBarLoadReport, load_historical_bars
+from ai_trading.data.historical_backfill import GOVERNED_HISTORICAL_SYMBOLS as _GOVERNED_HISTORICAL_SYMBOLS
 from ai_trading.features.indicators import (
     compute_atr,
     compute_macd,
@@ -83,7 +84,6 @@ REPLAY_ALIGNED_FEATURE_COLUMNS: tuple[str, ...] = (
     "rsi_centered",
 )
 _FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v1"
-_GOVERNED_HISTORICAL_SYMBOLS = frozenset({"AAPL", "AMZN", "MSFT"})
 _HISTORICAL_AUTHORITY_REQUIRED: dict[str, Any] = {
     "research_only": True,
     "evidence_type": "historical_research",

@@ -20,6 +20,75 @@ _DEFAULT_OUTPUT_DIR = "runtime/research_reports/experiment_ledger"
 _ALLOWED_STATUSES = {"success", "failed", "blocked", "dry-run"}
 
 
+def register_campaign(path: Path, contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze a research budget and future holdout before viewing outcomes."""
+    if int(contract['max_trials']) != 1 or len(contract['hypotheses']) != 1:
+        raise ValueError('this campaign permits exactly one fixed hypothesis')
+    if not str(contract['development_end']) < str(contract['holdout_start']) <= str(contract['holdout_end']):
+        raise ValueError('development and holdout overlap')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(path.suffix + '.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if path.exists():
+            state = json.loads(path.read_text())
+            if state['contract'] != dict(contract):
+                raise ValueError('campaign contract is immutable')
+            return dict(state)
+        state = {'contract': dict(contract), 'contract_hash': _canonical_hash(contract), 'trials': [], 'registered_at': _iso(_utc_now())}
+        atomic_write_text(path, json.dumps(state, indent=2) + '\n')
+        return dict(state)
+
+
+def amend_campaign_feed(path: Path, *, feed: str, reason: str) -> None:
+    """Allow an audited feed repair before any outcomes, preserving the budget."""
+    if feed != 'sip' or not reason.strip():
+        raise ValueError('only a documented SIP data repair is supported')
+    with path.with_suffix(path.suffix + '.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = json.loads(path.read_text())
+        if state['trials'] or state['contract']['feed'] != 'iex':
+            raise ValueError('feed amendment requires an unevaluated IEX campaign')
+        state.setdefault('amendments', []).append({'previous_contract': dict(state['contract']), 'reason': reason, 'changed_at': _iso(_utc_now())})
+        state['contract']['feed'] = feed
+        state['contract_hash'] = _canonical_hash(state['contract'])
+        atomic_write_text(path, json.dumps(state, indent=2) + '\n')
+
+
+def claim_campaign_trial(path: Path, *, hypothesis_id: str, evidence_signature: str, evaluation_start: str, evaluation_end: str, quality_passed: bool) -> dict[str, Any]:
+    """Reserve budget before evaluation, blocking retries even after a crash."""
+    with path.with_suffix(path.suffix + '.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = json.loads(path.read_text())
+        contract = state['contract']
+        if state['contract_hash'] != _canonical_hash(contract):
+            raise ValueError('campaign contract hash mismatch')
+        if quality_passed is not True:
+            raise ValueError('data quality unverified')
+        if hypothesis_id not in contract['hypotheses']:
+            raise ValueError('unregistered hypothesis')
+        if not contract['development_start'] <= evaluation_start <= evaluation_end <= contract['development_end']:
+            raise ValueError('evaluation outside frozen development interval')
+        if not evidence_signature:
+            raise ValueError('missing evidence signature')
+        if len(state['trials']) >= contract['max_trials']:
+            raise ValueError('campaign budget exhausted')
+        state['trials'].append({'hypothesis_id': hypothesis_id, 'evidence_signature': evidence_signature, 'evaluation_start': evaluation_start, 'evaluation_end': evaluation_end, 'status': 'claimed', 'claimed_at': _iso(_utc_now())})
+        atomic_write_text(path, json.dumps(state, indent=2) + '\n')
+        return dict(state)
+
+
+def finish_campaign_trial(path: Path, *, evidence_signature: str, decision: str, report_path: Path) -> None:
+    """Attach an immutable outcome to the reserved trial without refunding budget."""
+    with path.with_suffix(path.suffix + '.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = json.loads(path.read_text())
+        trial = state['trials'][-1]
+        if trial['evidence_signature'] != evidence_signature or trial['status'] != 'claimed':
+            raise ValueError('trial does not match an unfinished claim')
+        trial.update(status=decision, report_path=str(report_path), report_sha256=hashlib.sha256(report_path.read_bytes()).hexdigest(), finished_at=_iso(_utc_now()))
+        atomic_write_text(path, json.dumps(state, indent=2) + '\n')
+
+
 def experiment_identity(contract: Mapping[str, Any]) -> str:
     """Identify a hypothesis independently of new data or output locations."""
     return _canonical_hash(contract)

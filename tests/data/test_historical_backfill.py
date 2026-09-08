@@ -121,6 +121,7 @@ def _fetcher(client: _Client) -> AlpacaHistoricalBarFetcher:
 
 
 def test_governed_symbols_are_deterministic_and_reject_ungoverned() -> None:
+    assert normalize_governed_symbols("SPY,QQQ,IWM,DIA,XLF,XLE") == ("DIA", "IWM", "QQQ", "SPY", "XLE", "XLF")
     assert normalize_governed_symbols("msft,AAPL,msft") == ("AAPL", "MSFT")
     with pytest.raises(ValueError, match="GOOGL"):
         normalize_governed_symbols("AAPL,GOOGL")
@@ -162,6 +163,7 @@ def test_materializes_loader_compatible_csv_and_provenance(tmp_path: Path) -> No
     assert load_report.timestamp_authoritative is True
     assert load_report.source_providers == ("alpaca",)
 
+
     provenance = json.loads(symbol_result.provenance_path.read_text(encoding="utf-8"))
     assert provenance["identity"]["provider"] == "alpaca"
     assert provenance["identity"]["feed"] == "iex"
@@ -183,6 +185,19 @@ def test_materializes_loader_compatible_csv_and_provenance(tmp_path: Path) -> No
     }
 
 
+def test_fetch_window_continues_after_sdk_total_limit() -> None:
+    window = build_fetch_windows(date(2024, 11, 27), date(2024, 11, 27), window_sessions=1)[0]
+    original = _session_frame('AAPL', date(2024, 11, 27))
+    def responder(request: Any) -> pd.DataFrame:
+        timestamps = original.index.get_level_values('timestamp')
+        return original.loc[timestamps >= request.start].iloc[:request.limit]
+    client = _Client(responder)
+    result = _fetcher(client).fetch_window(symbol='AAPL', window=window, feed='sip', adjustment='split', limit=100)
+    assert len(result) == 390
+    assert len(client.calls) == 4
+    assert result['timestamp'].is_unique
+
+
 def test_rerun_uses_verified_checkpoint_without_refetching(tmp_path: Path) -> None:
     client = _Client(lambda request: _frame_for_request("AAPL", request))
     spec = _spec(tmp_path)
@@ -196,6 +211,22 @@ def test_rerun_uses_verified_checkpoint_without_refetching(tmp_path: Path) -> No
     assert second.symbols[0].resumed_windows == 1
     assert second.symbols[0].csv_path.read_bytes() == first_bytes
     assert second.symbols[0].content_sha256 == first.symbols[0].content_sha256
+
+
+def test_legacy_capped_checkpoint_is_refreshed_once(tmp_path: Path) -> None:
+    client = _Client(lambda request: _frame_for_request('AAPL', request))
+    spec = _spec(tmp_path)
+    result = materialize_historical_backfill(spec, fetcher=_fetcher(client))
+    path = result.symbols[0].provenance_path
+    provenance = json.loads(path.read_text())
+    for window in provenance['window_results']:
+        window['raw_rows'] = spec.request_limit
+        window.pop('pagination_complete', None)
+    path.write_text(json.dumps(provenance))
+    refreshed = materialize_historical_backfill(spec, fetcher=_fetcher(client))
+    assert refreshed.symbols[0].fetched_windows == 1
+    repeated = materialize_historical_backfill(spec, fetcher=_fetcher(client))
+    assert repeated.symbols[0].fetched_windows == 0
 
 
 def test_feed_and_adjustment_provenance_do_not_share_cache(tmp_path: Path) -> None:

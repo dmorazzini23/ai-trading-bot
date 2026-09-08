@@ -43,6 +43,9 @@ def test_decision_journal_recorder_emits_canonical_journal() -> None:
 
     payload = captured["payload"]
     assert isinstance(payload, dict)
+    assert payload['metrics']['decision_ts_basis'] == 'record_capture'
+    assert payload['metrics']['decision_ts'] == payload['metrics']['recorded_at']
+    assert payload['metrics']['source_timestamp'] == ts.isoformat()
     journal = payload["decision_journal"]
     assert journal["event"] == "order_submitted"
     assert journal["provider"] == "alpaca"
@@ -87,6 +90,17 @@ def test_decision_journal_recorder_emits_block_without_order() -> None:
     assert journal["order_intent"] is None
     assert journal["broker_result"] is None
     assert journal["reasons"] == ["LOW_OR_NO_SIGNAL"]
+
+
+def test_explicit_decision_time_is_preserved() -> None:
+    captured = []
+    recorder = DecisionJournalRecorder(path=None, write_impl=lambda record, path: captured.append(record.to_dict()))
+    bar = datetime(2026, 4, 19, 15, 0, tzinfo=UTC)
+    decision = datetime(2026, 4, 19, 15, 5, tzinfo=UTC)
+    recorder.record(symbol='AAPL', bar_ts=bar, decision_ts=decision, signal_side='hold', final_score=0, confidence=0, strategy_id=None, accepted=False)
+    assert captured[0]['metrics']['decision_ts'] == decision.isoformat()
+    assert captured[0]['metrics']['decision_ts_basis'] == 'explicit'
+    assert captured[0]['metrics']['source_timestamp'] == bar.isoformat()
 
 
 def test_decision_journal_uses_market_bar_contract_defaults() -> None:

@@ -4,7 +4,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from ai_trading.core.netting import (
@@ -241,7 +241,11 @@ class DecisionRecorder:
             )
         )
         metrics_payload.setdefault("correlation_id", resolved_correlation_id)
-        metrics_payload.setdefault("decision_ts", bar_ts.isoformat())
+        recorded_at = datetime.now(UTC)
+        metrics_payload["recorded_at"] = recorded_at.isoformat()
+        explicit_decision_ts = normalize_evidence_timestamp(metrics_payload.get("decision_ts"))
+        metrics_payload["decision_ts"] = (explicit_decision_ts or recorded_at).isoformat()
+        metrics_payload.setdefault("decision_ts_basis", "explicit" if explicit_decision_ts else "record_capture")
         metrics_payload.setdefault("source_timestamp", source_timestamp.isoformat())
         metrics_payload.setdefault(
             "opportunity_eligible",

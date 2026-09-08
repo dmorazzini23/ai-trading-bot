@@ -28,7 +28,7 @@ from ai_trading.utils.market_calendar import is_trading_day, session_info
 
 logger = get_logger(__name__)
 
-GOVERNED_HISTORICAL_SYMBOLS: frozenset[str] = frozenset({"AAPL", "AMZN", "MSFT"})
+GOVERNED_HISTORICAL_SYMBOLS: frozenset[str] = frozenset({"AAPL", "AMZN", "MSFT", "SPY", "QQQ", "IWM", "DIA", "XLF", "XLE"})
 HISTORICAL_EVIDENCE_TYPE = "historical_research"
 HISTORICAL_TIMEFRAME = "1Min"
 _CSV_COLUMNS: tuple[str, ...] = (
@@ -197,7 +197,7 @@ def normalize_governed_symbols(symbols: Sequence[str] | str) -> tuple[str, ...]:
     ungoverned = sorted(set(normalized) - GOVERNED_HISTORICAL_SYMBOLS)
     if ungoverned:
         raise ValueError(
-            "historical backfill symbols must be limited to AAPL,AMZN,MSFT; "
+            f"historical backfill symbols must be limited to {','.join(sorted(GOVERNED_HISTORICAL_SYMBOLS))}; "
             f"received ungoverned symbols: {','.join(ungoverned)}"
         )
     return normalized
@@ -306,17 +306,29 @@ class AlpacaHistoricalBarFetcher:
         limit: int,
     ) -> Any:
         request_factory, minute_timeframe = self._request_components()
-        request = request_factory(
-            symbol_or_symbols=symbol,
-            timeframe=minute_timeframe,
-            start=window.start_utc,
-            end=window.end_utc,
-            feed=feed,
-            adjustment=adjustment,
-            limit=int(limit),
-            sort="asc",
-        )
-        return self.client.get_stock_bars(request)
+        cursor = window.start_utc
+        pages = []
+        while cursor < window.end_utc:
+            request = request_factory(
+                symbol_or_symbols=symbol,
+                timeframe=minute_timeframe,
+                start=cursor,
+                end=window.end_utc,
+                feed=feed,
+                adjustment=adjustment,
+                limit=int(limit),
+                sort="asc",
+            )
+            response = self.client.get_stock_bars(request)
+            page = _response_frame(response, symbol=symbol)
+            pages.append(page)
+            if len(page) < limit:
+                break
+            next_cursor = page['timestamp'].max().to_pydatetime() + timedelta(minutes=1)
+            if next_cursor <= cursor:
+                raise HistoricalBackfillError('historical pagination cursor did not progress')
+            cursor = next_cursor
+        return pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
 
 
 def _parse_timestamp_series(series: pd.Series) -> pd.Series:
@@ -694,7 +706,11 @@ def materialize_historical_backfill(
             out_of_session_rows = 0
 
         for window in windows:
-            if window.window_id in completed_windows:
+            previous_window = next((item for item in window_results if item.get('window_id') == window.window_id), {})
+            # Older clients treated the SDK total-result limit as a page limit.
+            # Re-fetch potentially capped checkpoints rather than preserving truncation.
+            capped_checkpoint = int(previous_window.get('raw_rows', 0)) >= spec.request_limit and not previous_window.get('pagination_complete', False)
+            if window.window_id in completed_windows and not capped_checkpoint:
                 resumed_windows += 1
                 continue
             response = fetcher.fetch_window(
@@ -729,6 +745,7 @@ def materialize_historical_backfill(
                     "request_start_utc": _iso_utc(window.start_utc),
                     "request_end_utc": _iso_utc(window.end_utc),
                     "raw_rows": int(fetch_counts["raw_rows"]),
+                    "pagination_complete": True,
                     "accepted_rows": int(len(incoming)),
                     "duplicate_rows": int(fetch_counts["duplicate_rows"]),
                     "out_of_session_rows": int(fetch_counts["out_of_session_rows"]),
