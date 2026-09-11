@@ -70,6 +70,7 @@ def test_promotion_eligibility_accepts_boundaries_with_positive_expectancy(
         model_id,
         PromotionMetrics(
             sessions_completed=criteria.min_shadow_sessions,
+            observation_hashes={str(i): f'{i:064x}' for i in range(criteria.min_shadow_sessions)},
             total_trades=criteria.min_trade_count,
             turnover_ratio=criteria.max_turnover_ratio,
             live_sharpe_ratio=criteria.min_live_sharpe,
@@ -105,6 +106,18 @@ def test_promotion_eligibility_accepts_boundaries_with_positive_expectancy(
     assert all(details["checks"].values())
     assert details["metrics"]["policy_min_oos_samples"] == 20
     assert details["criteria"]["min_sessions"] == criteria.min_shadow_sessions
+
+    # Identical passing aggregates without source identities must not promote.
+    metrics = promotion._load_shadow_metrics(model_id)
+    assert metrics is not None
+    metrics.observation_hashes = {}
+    promotion._save_shadow_metrics(model_id, metrics)
+    eligible, details = promotion.check_promotion_eligibility(model_id)
+    assert eligible is False
+    assert details['checks']['shadow_observation_provenance'] is False
+    assert all(value for key, value in details['checks'].items()
+               if key != 'shadow_observation_provenance')
+    assert promotion.promote_to_production(model_id) is False
 
 
 def test_malformed_shadow_metrics_artifact_blocks_eligibility_without_raising(
@@ -337,14 +350,11 @@ def test_update_shadow_metrics_handles_invalid_session_payload_without_artifact(
     monkeypatch.setenv("AI_TRADING_MODEL_GOVERNANCE_AUTO_VALIDATION_ENABLED", "0")
     model_id = _register_model(registry, strategy="bad_session", marker="candidate")
 
-    promotion.update_shadow_metrics(
-        model_id,
-        {
-            "trade_count": "bad",
-            "returns": [0.01, 0.02],
-            "avg_cost_bps": math.inf,
-        },
-    )
+    with pytest.raises(ValueError, match="session_id"):
+        promotion.update_shadow_metrics(
+            model_id,
+            {"trade_count": "bad", "returns": [0.01, 0.02], "avg_cost_bps": math.inf},
+        )
 
     assert promotion._load_shadow_metrics(model_id) is None
 
@@ -369,11 +379,10 @@ def test_jsonl_write_failure_and_scorecard_write_failure_return_none(
         return None
 
     monkeypatch.setattr(promotion, "_append_jsonl_event", fail_append_jsonl)
-    assert promotion.record_promotion_approval(
-        strategy="write_fail",
-        model_id=challenger,
-        approver="ops@example.com",
-    ) is None
+    with pytest.raises(OSError, match="not persisted"):
+        promotion.record_promotion_approval(
+            strategy="write_fail", model_id=challenger, approver="ops@example.com",
+        )
 
     blocker = tmp_path / "governance" / "challenger_evaluations.jsonl"
     blocker.mkdir(parents=True)

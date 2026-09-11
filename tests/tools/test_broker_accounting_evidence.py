@@ -45,3 +45,14 @@ def test_retirement_uses_development_evidence_only():
     fold["abstention_diagnostics"]["scope"] = "holdout"
     assert review_candidate({"walk_forward": {"folds": [fold]}})["status"] == "review_required"
     assert review_candidate({})["status"] == "review_required"
+def test_fee_schema_audit_does_not_allocate_account_charges():
+    from ai_trading.tools.broker_accounting_evidence import fee_record_coverage
+    snapshot = {"pagination_complete": True, "activities": [{"activity_type": "FILL", "id": "fill", "order_id": "order", "price": "100", "qty": "1"}, {"activity_type": "FEE", "id": "fee", "net_amount": "-.01", "date": "2026-09-08", "currency": "USD"}]}
+    result = fee_record_coverage(snapshot)
+    assert result["fill_activity_rows"] == result["fee_activity_rows"] == 1
+    assert result["fill_rows_with_fee_amount"] == 0
+    assert result["fee_rows_with_execution_reference"] == 0
+    assert result["status"] == "no_execution_linkage_in_fee_records"
+    snapshot["activities"][1]["order_id"] = "order"
+    assert fee_record_coverage(snapshot)["status"] == "references_present_completeness_unverified"
+    assert fee_record_coverage({})["fill_rows_with_fee_amount"] == 0

@@ -31658,6 +31658,12 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         )
         need_to_retrain = False
 
+    from ai_trading.config.research_policy import training_block_reason
+
+    block_reason = training_block_reason()
+    if block_reason:
+        logger.info("DAILY_TRAINING_SKIPPED", extra={"reason": block_reason})
+        need_to_retrain = False
     if need_to_retrain:
         if not callable(globals().get("retrain_meta_learner")):
             logger.warning(
@@ -31968,6 +31974,12 @@ def _resolve_after_hours_training_date_key(now_est: datetime) -> str | None:
 def on_market_close() -> None:
     """Trigger daily retraining after the market closes."""
     now_est = dt_.now(UTC).astimezone(ZoneInfo("America/New_York"))
+    from ai_trading.config.research_policy import training_block_reason
+
+    block_reason = training_block_reason(now_est)
+    if block_reason:
+        logger.info("MARKET_CLOSE_TRAINING_SKIPPED", extra={"reason": block_reason})
+        return
     if market_is_open(now_est):
         logger.info("RETRAIN_SKIP_MARKET_OPEN")
         return

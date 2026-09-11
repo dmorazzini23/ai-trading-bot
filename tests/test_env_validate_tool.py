@@ -70,3 +70,27 @@ def test_main_loads_dotenv_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         monkeypatch.delenv(key, raising=False)
 
     assert env_validate_tool.main([]) == 0
+
+
+def test_main_hydrates_before_validation(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    state = {}
+    def hydrate(**kwargs):
+        assert kwargs["required_keys"] == ("ALPACA_API_KEY", "ALPACA_SECRET_KEY")
+        state.update(_base_env(), ALPACA_TRADING_BASE_URL="https://paper-api.alpaca.markets")
+    monkeypatch.setattr(env_validate_tool, "hydrate_managed_secrets", hydrate)
+    monkeypatch.setattr(env_validate_tool, "merged_env_snapshot", lambda: state)
+    assert env_validate_tool.main([]) == 0
+
+
+def test_main_managed_failure_is_redacted(monkeypatch, tmp_path, caplog):
+    monkeypatch.chdir(tmp_path)
+    def fail(**kwargs):
+        raise RuntimeError("sensitive-provider-payload")
+    monkeypatch.setattr(env_validate_tool, "hydrate_managed_secrets", fail)
+    assert env_validate_tool.main([]) == 1
+    assert "sensitive-provider-payload" not in caplog.text
+
+
+def test_explicit_empty_mapping_does_not_use_process_credentials():
+    assert "ALPACA_API_KEY" in validate_env({})

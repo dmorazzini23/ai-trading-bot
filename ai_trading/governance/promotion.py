@@ -9,9 +9,12 @@ import hashlib
 import json
 import math
 import uuid
+import fcntl
+import os
+from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.logging import get_logger
 from ai_trading.governance.paths import resolve_governance_base_path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean, pstdev
@@ -94,6 +97,7 @@ class PromotionMetrics:
     challenger_eval_samples: int = 0
     challenger_sequential_passes: int = 0
     last_updated: datetime | None = None
+    observation_hashes: dict[str, str] = field(default_factory=dict)
 
 class ModelPromotion:
     """
@@ -136,8 +140,11 @@ class ModelPromotion:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
                 handle.write(json.dumps(payload, sort_keys=True))
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             return str(path)
         except OSError as exc:
             self.logger.error(
@@ -624,6 +631,8 @@ class ModelPromotion:
             payload=payload,
             error_event="PROMOTION_APPROVAL_WRITE_FAILED",
         )
+        if not output_path:
+            raise OSError("promotion approval was not persisted")
         self._append_governance_audit_event(
             event_type="GOVERNANCE_APPROVAL_RECORDED",
             payload=payload,
@@ -698,7 +707,7 @@ class ModelPromotion:
     def _load_live_kpi_breach_state(self) -> dict[str, Any]:
         path = self._live_kpi_breach_state_path()
         if not path.exists():
-            return {"version": 1, "strategies": {}}
+            return {"version": 2, "strategies": {}}
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -706,30 +715,27 @@ class ModelPromotion:
                 "LIVE_KPI_BREACH_STATE_LOAD_FAILED",
                 extra={"path": str(path)},
             )
-            return {"version": 1, "strategies": {}}
+            raise ValueError("live KPI breach state is unreadable")
         if not isinstance(payload, dict):
-            return {"version": 1, "strategies": {}}
+            raise ValueError("invalid live KPI breach state")
         strategies = payload.get("strategies")
         if not isinstance(strategies, dict):
-            payload["strategies"] = {}
-        payload["version"] = 1
+            raise ValueError("invalid live KPI strategy state")
+        payload["version"] = 2
         return payload
 
     def _write_live_kpi_breach_state(self, payload: dict[str, Any]) -> None:
         path = self._live_kpi_breach_state_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-            tmp_path.write_text(
-                json.dumps(payload, sort_keys=True, indent=2, default=self._json_default),
-                encoding="utf-8",
-            )
-            tmp_path.replace(path)
+            atomic_write_text(path, json.dumps(payload, sort_keys=True, indent=2,
+                                               default=self._json_default))
         except OSError as exc:
             self.logger.warning(
                 "LIVE_KPI_BREACH_STATE_WRITE_FAILED",
                 extra={"path": str(path), "error": str(exc)},
             )
+            raise
 
     def _required_live_kpi_breach_count(self) -> int:
         try:
@@ -751,6 +757,8 @@ class ModelPromotion:
         model_id: str | None,
         breaches: dict[str, Any],
         allow_rollback: bool,
+        observation_id: str,
+        observation_hash: str,
     ) -> dict[str, Any]:
         state = self._load_live_kpi_breach_state()
         strategies = state.setdefault("strategies", {})
@@ -770,22 +778,20 @@ class ModelPromotion:
             json.dumps(signature_payload, sort_keys=True).encode("utf-8")
         ).hexdigest()
         prior_model_id = str(prior.get("model_id") or "")
-        prior_signature = str(prior.get("last_breach_signature") or "")
-        if prior_model_id != str(model_id or ""):
+        observations = dict(prior.get("observation_hashes", {})) if prior_model_id == str(model_id or "") else {}
+        if observation_id in observations:
+            if observations[observation_id] != observation_hash:
+                raise ValueError("live KPI observation identity conflict")
+            return dict(prior)
+        if prior_model_id != str(model_id or "") or not observations:
             prior_count = 0
         else:
             try:
                 prior_count = int(prior.get("consecutive_breach_count", 0) or 0)
             except (TypeError, ValueError):
                 prior_count = 0
-        duplicate_rollback_eval = (
-            bool(allow_rollback)
-            and prior_signature == signature
-            and str(prior.get("last_status") or "") == "pending"
-            and not bool(prior.get("last_allow_rollback", True))
-            and prior_count > 0
-        )
-        breach_count = prior_count if duplicate_rollback_eval else prior_count + 1
+        breach_count = prior_count + 1 if breaches else 0
+        observations[observation_id] = observation_hash
         required = self._required_live_kpi_breach_count()
         now = datetime.now(UTC).isoformat()
         window = {
@@ -799,6 +805,9 @@ class ModelPromotion:
             "last_breach_signature": signature,
             "last_status": "pending",
             "last_allow_rollback": bool(allow_rollback),
+            "observation_hashes": observations,
+            "last_observation_id": observation_id,
+            "legacy_unverified_count": prior.get("legacy_unverified_count", prior.get("consecutive_breach_count", 0) if not prior.get("observation_hashes") else 0),
         }
         strategies[strategy_key] = window
         state["updated_at"] = now
@@ -1151,6 +1160,8 @@ class ModelPromotion:
         """
         _ = benchmark_model_id  # Reserved for future benchmark-vs-shadow comparisons.
         try:
+            if not model_id or Path(model_id).name != model_id:
+                raise ValueError("invalid model identifier")
             model_info = self.registry.model_index.get(model_id)
             if model_info is None:
                 raise ValueError(f'Model {model_id} not found')
@@ -1158,9 +1169,16 @@ class ModelPromotion:
             shadow_models = self.registry.get_shadow_models(strategy)
             if shadow_models:
                 self.logger.warning(f'Strategy {strategy} already has shadow models: {[m[0] for m in shadow_models]}')
-            self.registry.update_governance_status(model_id, 'shadow')
-            shadow_metrics = PromotionMetrics(last_updated=datetime.now(UTC))
-            self._save_shadow_metrics(model_id, shadow_metrics)
+            with (self.base_path / f"{model_id}_shadow_metrics.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                metrics_path = self.base_path / f"{model_id}_shadow_metrics.json"
+                if metrics_path.exists():
+                    if self._load_shadow_metrics(model_id) is None:
+                        raise ValueError("existing shadow metrics are unreadable")
+                    return True
+                shadow_metrics = PromotionMetrics(last_updated=datetime.now(UTC))
+                self._save_shadow_metrics(model_id, shadow_metrics)
+                self.registry.update_governance_status(model_id, 'shadow')
             self.logger.info(f'Started shadow testing for model {model_id} (strategy: {strategy})')
             return True
         except (ValueError, TypeError) as e:
@@ -1168,6 +1186,41 @@ class ModelPromotion:
             return False
 
     def update_shadow_metrics(self, model_id: str, session_stats: dict[str, Any]) -> None:
+        """Apply one identified, chronological session exactly once under a lock."""
+        if not model_id or Path(model_id).name != model_id:
+            raise ValueError("invalid model identifier")
+        payload = dict(session_stats)
+        observation_id = str(payload.get("session_id") or "").strip()
+        if not observation_id:
+            raise ValueError("shadow metrics require session_id")
+        start = datetime.fromisoformat(str(payload.get("source_start", "")).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(payload.get("source_end", "")).replace("Z", "+00:00"))
+        if start.tzinfo is None or end.tzinfo is None or start >= end or end > datetime.now(UTC):
+            raise ValueError("invalid shadow source interval")
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        with (self.base_path / f"{model_id}_shadow_metrics.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            current = self._load_shadow_metrics(model_id)
+            if current is None:
+                if (self.base_path / f"{model_id}_shadow_metrics.json").exists():
+                    raise ValueError("existing shadow metrics are unreadable")
+                current = PromotionMetrics()
+            prior_hash = current.observation_hashes.get(observation_id)
+            if prior_hash is not None:
+                if prior_hash != digest:
+                    raise ValueError("shadow session identity conflict")
+                return
+            if current.sessions_completed and not current.observation_hashes:
+                raise ValueError("legacy shadow evidence lacks observation identities")
+            if current.sessions_completed and current.last_updated and start < current.last_updated:
+                raise ValueError("shadow source intervals overlap or are out of order")
+            current.observation_hashes[observation_id] = digest
+            self._apply_shadow_metrics(model_id, payload, current, source_end=end)
+
+    def _apply_shadow_metrics(
+        self, model_id: str, session_stats: dict[str, Any],
+        current_metrics: PromotionMetrics, *, source_end: datetime,
+    ) -> None:
         """
         Update shadow testing metrics.
 
@@ -1180,12 +1233,9 @@ class ModelPromotion:
             session_payload.update(
                 self._derive_institutional_validation_metrics(session_payload)
             )
-            current_metrics = self._load_shadow_metrics(model_id)
-            if current_metrics is None:
-                current_metrics = PromotionMetrics()
             current_metrics.sessions_completed += 1
             current_metrics.total_trades += int(session_payload.get('trade_count', 0) or 0)
-            current_metrics.last_updated = datetime.now(UTC)
+            current_metrics.last_updated = source_end
             alpha = 0.1
             new_turnover = float(session_payload.get('turnover_ratio', 0.0) or 0.0)
             current_metrics.turnover_ratio = alpha * new_turnover + (1 - alpha) * current_metrics.turnover_ratio
@@ -1367,6 +1417,7 @@ class ModelPromotion:
             self.logger.debug(f'Updated shadow metrics for model {model_id}: {current_metrics.sessions_completed} sessions')
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error updating shadow metrics for {model_id}: {e}')
+            raise
 
     @staticmethod
     def evaluate_challenger_significance(
@@ -1454,6 +1505,16 @@ class ModelPromotion:
                 float(metrics.net_expectancy_bps)
             )
             checks = {
+                'shadow_observation_provenance': (
+                    metrics.sessions_completed > 0
+                    and len(metrics.observation_hashes) == metrics.sessions_completed
+                    and all(
+                        isinstance(identity, str) and bool(identity.strip())
+                        and isinstance(digest, str) and len(digest) == 64
+                        and all(char in '0123456789abcdef' for char in digest)
+                        for identity, digest in metrics.observation_hashes.items()
+                    )
+                ),
                 'shadow_metrics_freshness': metrics_fresh,
                 'min_sessions': metrics.sessions_completed >= self.criteria.min_shadow_sessions,
                 'min_days': days_in_shadow >= self.criteria.min_shadow_days,
@@ -2195,6 +2256,23 @@ class ModelPromotion:
         force: bool = True,
         allow_rollback: bool = True,
     ) -> dict[str, Any]:
+        """Serialize observation accounting and its rollback decision across processes."""
+        path = self._live_kpi_breach_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self._evaluate_live_kpis_locked(
+                strategy=strategy, live_kpis=live_kpis,
+                force=force, allow_rollback=allow_rollback)
+
+    def _evaluate_live_kpis_locked(
+        self,
+        *,
+        strategy: str,
+        live_kpis: dict[str, Any],
+        force: bool = True,
+        allow_rollback: bool = True,
+    ) -> dict[str, Any]:
         """Rollback production when live KPI control bands are persistently breached."""
 
         breaches: dict[str, Any] = {}
@@ -2246,18 +2324,24 @@ class ModelPromotion:
                 extra={"consistency": consistency},
             )
             return result
-        if not breaches:
-            self._clear_live_kpi_breach_window(
-                strategy=strategy,
-                model_id=current_model_id,
-            )
-            return result
+        observed = {key: float(live_kpis.get(key, 0.0) or 0.0) for key in (
+            'max_drawdown', 'reject_rate', 'execution_drift_bps', 'drift_psi',
+            'live_calibration_ece', 'live_calibration_brier')}
+        observation_hash = hashlib.sha256(json.dumps(observed, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        observation_id = str(live_kpis.get('observation_id') or observation_hash)
         breach_window = self._update_live_kpi_breach_window(
             strategy=strategy,
             model_id=current_model_id,
             breaches=breaches,
             allow_rollback=allow_rollback,
+            observation_id=observation_id,
+            observation_hash=observation_hash,
         )
+        if not breaches:
+            return result
+        if breach_window.get('last_observation_id') != observation_id or breach_window.get('last_status') in {'rolled_back', 'demoted_no_rollback_target', 'rollback_failed'}:
+            return {**result, 'status': 'duplicate_observation',
+                    'consecutive_breach_count': breach_window.get('consecutive_breach_count', 0)}
         breach_count = int(breach_window.get("consecutive_breach_count", 0) or 0)
         required_breaches = int(breach_window.get("required_consecutive_breaches", 1) or 1)
         failed_kpis = list(breach_window.get("failed_kpis", result["failed_kpis"]))
@@ -2366,6 +2450,7 @@ class ModelPromotion:
         """Save shadow metrics to disk."""
         metrics_file = self.base_path / f'{model_id}_shadow_metrics.json'
         metrics_dict = {
+            'observation_hashes': metrics.observation_hashes,
             'sessions_completed': metrics.sessions_completed,
             'total_trades': metrics.total_trades,
             'turnover_ratio': metrics.turnover_ratio,
@@ -2396,8 +2481,7 @@ class ModelPromotion:
             'challenger_sequential_passes': metrics.challenger_sequential_passes,
             'last_updated': metrics.last_updated.isoformat() if metrics.last_updated else None,
         }
-        with open(metrics_file, 'w') as f:
-            json.dump(metrics_dict, f, indent=2)
+        atomic_write_text(metrics_file, json.dumps(metrics_dict, indent=2))
 
     def _load_shadow_metrics(self, model_id: str) -> PromotionMetrics | None:
         """Load shadow metrics from disk."""
@@ -2411,6 +2495,7 @@ class ModelPromotion:
             if data.get('last_updated'):
                 last_updated = datetime.fromisoformat(data['last_updated'].replace('Z', '+00:00'))
             return PromotionMetrics(
+                observation_hashes=dict(data.get('observation_hashes', {})),
                 sessions_completed=data.get('sessions_completed', 0),
                 total_trades=data.get('total_trades', 0),
                 turnover_ratio=data.get('turnover_ratio', 0.0),

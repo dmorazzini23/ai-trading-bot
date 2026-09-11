@@ -45,6 +45,8 @@ class GovernanceService:
             note=note,
             ticket=ticket,
         )
+        if not output_path:
+            raise OSError("promotion approval was not persisted")
         return {
             "path": output_path,
             "approvals": promotion.list_recent_promotion_approvals(limit=5),

@@ -395,7 +395,8 @@ def test_live_kpi_rollout_clears_prior_window_when_state_recovers(
 
     assert result["breached"] is False
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert "rollout_recovered" not in state["strategies"]
+    assert state["strategies"]["rollout_recovered"]["consecutive_breach_count"] == 0
+    assert state["strategies"]["rollout_recovered"]["observation_hashes"]
 
 
 def test_safety_threshold_boundaries_and_degraded_health_state() -> None:

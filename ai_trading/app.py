@@ -1407,8 +1407,8 @@ def create_app(
             )
         except ValueError as exc:
             return _safe_response({"ok": False, "error": str(exc)}, status=400)
-        except (ImportError, TypeError) as exc:
-            _log.warning("OPERATOR_GOVERNANCE_APPROVAL_FAILED", extra={"error": str(exc)})
+        except (ImportError, TypeError, OSError) as exc:
+            _log.warning("OPERATOR_GOVERNANCE_APPROVAL_FAILED", extra={"error_type": type(exc).__name__})
             return _safe_response(
                 {"ok": False, "error": "operator governance approval unavailable"},
                 status=503,

@@ -480,7 +480,7 @@ def test_promotion_state_and_new_rows_helpers(monkeypatch: pytest.MonkeyPatch) -
     confirmed_guard = ah._oof_promotion_authority_guard(
         best=tuned_candidate,
         default_threshold=0.5,
-        live_execution_quality_gate={"gate_passed": True},
+        live_execution_quality_gate={"enabled": True, "gate_passed": True},
         champion_challenger_ab={},
         promotion_confidence_gate={},
     )

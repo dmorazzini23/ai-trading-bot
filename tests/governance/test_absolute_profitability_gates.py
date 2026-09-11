@@ -89,6 +89,7 @@ def _register_shadow_model(registry: ModelRegistry) -> str:
 def _eligible_metrics(*, net_expectancy_bps: float) -> PromotionMetrics:
     return PromotionMetrics(
         sessions_completed=5,
+        observation_hashes={str(i): f'{i:064x}' for i in range(5)},
         total_trades=10,
         turnover_ratio=1.0,
         live_sharpe_ratio=0.6,

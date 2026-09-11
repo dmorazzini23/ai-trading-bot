@@ -202,7 +202,7 @@ def test_live_kpi_control_band_persists_consecutive_breaches_before_rollback(
     restarted = ModelPromotion(model_registry=registry, base_path=str(governance_path))
     second = restarted.evaluate_live_kpis_and_maybe_rollback(
         strategy=strategy,
-        live_kpis={"max_drawdown": 0.20, "reject_rate": 0.07},
+        live_kpis={"max_drawdown": 0.20, "reject_rate": 0.07, "observation_id": "second"},
     )
 
     assert second["status"] == "rolled_back"
@@ -286,6 +286,7 @@ def test_update_shadow_metrics_autoderives_validation_ratios(tmp_path: Path) -> 
         model_id,
         {
             "trade_count": 240,
+            "session_id": "first", "source_start": "2024-01-02T14:00:00Z", "source_end": "2024-01-02T14:30:00Z",
             "turnover_ratio": 0.8,
             "returns": returns,
             "regimes": regimes,
@@ -336,6 +337,7 @@ def test_challenger_sequential_gate_requires_consecutive_passes(tmp_path: Path) 
 
     payload = {
         "trade_count": 10,
+        "session_id": "first", "source_start": "2024-01-02T14:00:00Z", "source_end": "2024-01-02T14:30:00Z",
         "turnover_ratio": 0.8,
         "returns": [0.002, 0.001, -0.0005, 0.0015, 0.0025],
         "live_calibration_ece": 0.04,
@@ -350,6 +352,7 @@ def test_challenger_sequential_gate_requires_consecutive_passes(tmp_path: Path) 
     assert eligible_1 is False
     assert details_1["checks"]["challenger_sequential_check"] is False
 
+    payload.update(session_id="second", source_start="2024-01-02T14:30:00Z", source_end="2024-01-02T15:00:00Z")
     promotion.update_shadow_metrics(model_id, payload)
     eligible_2, details_2 = promotion.check_promotion_eligibility(model_id)
     assert details_2["checks"]["challenger_sequential_check"] is True

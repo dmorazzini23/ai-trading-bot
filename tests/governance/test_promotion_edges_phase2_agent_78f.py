@@ -151,12 +151,13 @@ def test_live_kpi_state_malformed_inputs_and_relative_path_are_normalized(
     state_path.write_text("{bad-json", encoding="utf-8")
 
     assert promotion._live_kpi_breach_state_path() == state_path
-    assert promotion._load_live_kpi_breach_state() == {"version": 1, "strategies": {}}
+    with pytest.raises(ValueError, match="unreadable"):
+        promotion._load_live_kpi_breach_state()
     assert promotion._required_live_kpi_breach_count() == 30
 
     state_path.write_text(json.dumps({"strategies": ["bad"]}), encoding="utf-8")
-    loaded = promotion._load_live_kpi_breach_state()
-    assert loaded == {"strategies": {}, "version": 1}
+    with pytest.raises(ValueError, match="strategy state"):
+        promotion._load_live_kpi_breach_state()
 
 
 def test_live_kpi_pending_dry_run_demotion_and_successful_rollback_paths(
@@ -181,7 +182,7 @@ def test_live_kpi_pending_dry_run_demotion_and_successful_rollback_paths(
 
     dry_run = promotion.evaluate_live_kpis_and_maybe_rollback(
         strategy="kpi_edges",
-        live_kpis=breached,
+        live_kpis={**breached, 'observation_id': 'second'},
     )
     assert dry_run["status"] == "dry_run_disabled"
     assert dry_run["triggered"] is False
@@ -189,7 +190,7 @@ def test_live_kpi_pending_dry_run_demotion_and_successful_rollback_paths(
     monkeypatch.setenv("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", "1")
     rolled_back = promotion.evaluate_live_kpis_and_maybe_rollback(
         strategy="kpi_edges",
-        live_kpis=breached,
+        live_kpis={**breached, 'observation_id': 'second'},
     )
     assert rolled_back["status"] == "rolled_back"
     assert rolled_back["triggered"] is True
@@ -318,6 +319,7 @@ def test_shadow_metric_update_handles_returns_costs_calibration_and_challenger_g
         model_id,
         {
             "trade_count": 3,
+            "session_id": "first", "source_start": "2024-01-02T14:00:00Z", "source_end": "2024-01-02T14:30:00Z",
             "turnover_ratio": 1.0,
             "sharpe_ratio": 1.0,
             "max_drawdown": 0.01,
@@ -369,6 +371,7 @@ def test_shadow_metrics_tca_gate_fails_closed_when_telemetry_absent(
         {
             "trade_count": 1,
             "turnover_ratio": 0.1,
+            "session_id": "first", "source_start": "2024-01-02T14:00:00Z", "source_end": "2024-01-02T14:30:00Z",
         },
     )
 

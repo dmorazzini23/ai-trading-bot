@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from json import JSONDecodeError
 from typing import Any
+import math
+from alpaca.common.exceptions import APIError
 
 from ai_trading.contracts import position_snapshot_from_position
 
@@ -63,14 +65,23 @@ class ReconciliationService:
                 return True
             return warned
         try:
-            live_position_snapshots = {
-                snapshot.symbol: snapshot
-                for snapshot in (
-                    position_snapshot_from_position(pos, provider="alpaca")
-                    for pos in positions_reader()
-                )
-                if snapshot is not None
-            }
+            raw_positions = positions_reader()
+            if raw_positions is None:
+                raise ValueError("broker positions unavailable")
+            live_position_snapshots = {}
+            seen = set()
+            for pos in raw_positions:
+                symbol = pos.get("symbol") if isinstance(pos, Mapping) else getattr(pos, "symbol", None)
+                qty = pos.get("qty") if isinstance(pos, Mapping) else getattr(pos, "qty", None)
+                if not symbol or symbol in seen or qty is None or not math.isfinite(float(qty)):
+                    raise ValueError("invalid broker position snapshot")
+                seen.add(symbol)
+                if float(qty) == 0:
+                    continue
+                snapshot = position_snapshot_from_position(pos, provider="alpaca")
+                if snapshot is None:
+                    raise ValueError("invalid broker position snapshot")
+                live_position_snapshots[snapshot.symbol] = snapshot
             live_positions = {
                 symbol: _position_qty_decimal(snapshot.qty)
                 for symbol, snapshot in live_position_snapshots.items()
@@ -95,6 +106,7 @@ class ReconciliationService:
                         ctx.stop_targets.pop(symbol, None)
                         ctx.take_profit_targets.pop(symbol, None)
         except (
+            APIError,
             FileNotFoundError,
             PermissionError,
             IsADirectoryError,

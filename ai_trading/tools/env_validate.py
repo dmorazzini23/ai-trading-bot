@@ -4,6 +4,7 @@ import sys
 import importlib.util
 from collections.abc import Iterable, Mapping
 from ai_trading.config.management import merged_env_snapshot, reload_env
+from ai_trading.config.managed_secrets import hydrate_managed_secrets
 from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 REQUIRED_KEYS: tuple[str, ...] = (
@@ -20,7 +21,7 @@ REQUIRED_PACKAGES: tuple[str, ...] = ('hmmlearn',)
 
 def validate_env(env: Mapping[str, str] | None=None) -> list[str]:
     """Return list of missing required environment keys or packages."""
-    env = env or merged_env_snapshot()
+    env = merged_env_snapshot() if env is None else env
     missing: list[str] = []
     for key in DEPRECATED_URL_KEYS:
         if env.get(key):
@@ -40,6 +41,11 @@ def main(argv: Iterable[str] | None=None) -> int:
     _ = list(argv or sys.argv[1:])
     env_path = Path.cwd() / ".env"
     reload_env(path=env_path if env_path.exists() else None, override=False)
+    try:
+        hydrate_managed_secrets(required_keys=("ALPACA_API_KEY", "ALPACA_SECRET_KEY"))
+    except RuntimeError:
+        logger.error("ENV_VALIDATE_MANAGED_SECRETS_UNAVAILABLE")
+        return 1
     missing = validate_env()
     if not missing:
         logger.info('ENV_VALIDATE_OK', extra={'missing': 0})

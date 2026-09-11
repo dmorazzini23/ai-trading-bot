@@ -25405,7 +25405,6 @@ class ExecutionEngine:
                     extra={"symbol": symbol, "desired_side": desired_side, "order_id": order_id_str, "error": str(exc)},
                 )
                 continue
-            canceled_ids.append(order_id_str)
             while monotonic_time() < deadline:
                 try:
                     status_info = self._get_order_status_alpaca(order_id_str)
@@ -25413,14 +25412,27 @@ class ExecutionEngine:
                     break
                 status_val = _extract_value(status_info, "status")
                 if status_val:
-                    normalized = str(status_val).strip().lower()
-                    if normalized in {"canceled", "cancelled", "done", "filled", "expired", "rejected"}:
+                    normalized = str(getattr(status_val, "value", status_val)).strip().lower()
+                    if normalized in {"canceled", "cancelled", "expired", "rejected"}:
+                        filled = _extract_value(status_info, "filled_qty")
+                        if filled is not None:
+                            try:
+                                filled_qty = float(filled)
+                            except (TypeError, ValueError):
+                                break
+                            if not math.isfinite(filled_qty) or filled_qty != 0:
+                                break  # Partial fill changed exposure; recompute next cycle.
+                        canceled_ids.append(order_id_str)
+                        break
+                    if normalized == "filled":
+                        # Exposure changed; block this intent and recompute next cycle.
                         break
                 time.sleep(0.25)
-            logger.info(
-                "CANCELED_OPEN_OPPOSITE",
-                extra={"symbol": symbol, "desired_side": desired_side, "order_id": order_id_str},
-            )
+            if order_id_str in canceled_ids:
+                logger.info(
+                    "CANCELED_OPEN_OPPOSITE",
+                    extra={"symbol": symbol, "desired_side": desired_side, "order_id": order_id_str},
+                )
         return canceled_ids
 
     def _position_quantity(self, symbol: str) -> float:
@@ -25988,6 +26000,9 @@ class ExecutionEngine:
             }
         canceled_ids = self._cancel_opposite_orders(opposite_orders, symbol, normalized_side)
         conflict_extra["canceled_order_ids"] = tuple(canceled_ids)
+        if len(canceled_ids) != len(opposite_orders):
+            return False, {"status": "skipped", "reason": "opposite_cancellation_unconfirmed",
+                           "policy": policy, "symbol": symbol}
         if policy == "cover_then_long" and normalized_side == "buy":
             short_qty = self._position_quantity(symbol)
             expected_cover_qty = min(abs(short_qty), max(int(quantity), 0)) if short_qty < 0 else 0

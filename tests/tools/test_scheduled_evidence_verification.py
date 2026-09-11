@@ -5,6 +5,18 @@ from ai_trading.tools.scheduled_evidence_verification import verify_operator, ve
 from ai_trading.tools.broker_accounting_evidence import daily_fee_totals
 
 
+def test_reset_run_verifies_evidence_without_requiring_paused_training(tmp_path):
+    output = tmp_path / "artifact.json"
+    output.write_text('{"status": "evidence_pending"}')
+    names = ["broker_accounting_evidence", "paper_evidence_review", "research_reset_scorecard"]
+    report = {"status": "complete", "generated_at": "2026-09-08T21:00:00Z", "steps": [{"name": name} for name in names], "step_results": [{"name": name, "status": "passed", "returncode": 0, "output_path": str(output)} for name in names]}
+    result = verify_run(report, run_date=date(2026, 9, 8))
+    assert result["status"] == "workflow_executed"
+    assert len(result["steps"]) == 3
+    report["step_results"].pop()
+    assert verify_run(report, run_date=date(2026, 9, 8))["status"] == "awaiting_or_incomplete_run"
+
+
 def test_actual_run_required_and_blocked_gates_are_explicit(tmp_path):
     output = tmp_path / "artifact.json"
     output.write_text(json.dumps({"status": "blocked"}))

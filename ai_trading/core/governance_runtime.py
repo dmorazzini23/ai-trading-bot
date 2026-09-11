@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
+from alpaca.common.exceptions import APIError
+
+BROKER_RECONCILIATION_EXCEPTIONS: tuple[type[Exception], ...] = (*AI_TRADING_FALLBACK_EXCEPTIONS, APIError)
 
 import importlib
 from collections.abc import Mapping
@@ -187,7 +190,7 @@ def run_reconciliation_if_due(
         breakers.record_success("broker_positions")
         state.recon_halt = False
         return True
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+    except BROKER_RECONCILIATION_EXCEPTIONS as exc:
         error_info = be.classify_exception(exc, dependency="broker_positions")
         breakers.record_failure("broker_positions", error_info)
         state.recon_halt = True

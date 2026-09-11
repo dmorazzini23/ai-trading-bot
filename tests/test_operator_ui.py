@@ -463,6 +463,24 @@ def test_operator_governance_approval_requires_allowlisted_operator(monkeypatch)
     assert payload["ok"] is False
 
 
+def test_operator_rejection_returns_503_when_persistence_fails(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    _configure_operator_auth(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_OPERATOR_APPROVERS", "ops@example.com")
+    class FailedWriter:
+        def __init__(self, *args, **kwargs):
+            pass
+        def record_promotion_approval(self, **kwargs):
+            return None
+        def list_recent_promotion_approvals(self, **kwargs):
+            return [{"decision": "approved"}]
+    monkeypatch.setattr(promotion_mod, "ModelPromotion", FailedWriter)
+    response = _post_json(create_app().test_client(), "/operator/governance/approval",
+                          {"strategy": "momentum", "model_id": "m", "decision": "rejected"})
+    assert response.status_code == 503
+    assert response.get_json()["ok"] is False
+
+
 def test_operator_governance_rollback_endpoint(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     _configure_operator_auth(monkeypatch)

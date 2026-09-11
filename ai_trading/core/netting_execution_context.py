@@ -48,24 +48,24 @@ def _runtime_gonogo_suppresses_gate_auto_disable() -> tuple[bool, dict[str, Any]
         or ""
     ).strip()
     if not raw_path:
-        return False, {"enabled": True, "reason": "no_path_configured"}
+        return True, {"enabled": True, "reason": "no_path_configured"}
     path = Path(raw_path).expanduser()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return False, {"enabled": True, "path": str(path), "reason": "missing_artifact"}
+        return True, {"enabled": True, "path": str(path), "reason": "missing_artifact"}
     except (OSError, json.JSONDecodeError) as exc:
-        return False, {
+        return True, {
             "enabled": True,
             "path": str(path),
             "reason": "unreadable_artifact",
             "error_type": type(exc).__name__,
         }
     if not isinstance(payload, MappingABC):
-        return False, {"enabled": True, "path": str(path), "reason": "invalid_artifact"}
+        return True, {"enabled": True, "path": str(path), "reason": "invalid_artifact"}
     gonogo_raw = payload.get("go_no_go")
     gonogo = gonogo_raw if isinstance(gonogo_raw, MappingABC) else payload
-    if gonogo.get("gate_passed") is False:
+    if gonogo.get("gate_passed") is not True:
         failed_checks = gonogo.get("failed_checks")
         return True, {
             "enabled": True,

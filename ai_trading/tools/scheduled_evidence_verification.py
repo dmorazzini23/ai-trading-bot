@@ -21,7 +21,9 @@ def verify_run(report: dict[str, Any], *, run_date: date) -> dict[str, Any]:
         fresh = generated.tzinfo is not None and generated.astimezone(ZoneInfo("America/New_York")).date() == run_date
     except ValueError:
         fresh = False
-    required = ("training_accelerator_daily", "regime_champion_models", "broker_accounting_evidence", "paper_evidence_review")
+    required: tuple[str, ...] = ("training_accelerator_daily", "regime_champion_models", "broker_accounting_evidence", "paper_evidence_review")
+    if any(row.get("name") == "research_reset_scorecard" for row in report.get("steps", [])):
+        required = ("broker_accounting_evidence", "paper_evidence_review", "research_reset_scorecard")
     results = {row["name"]: row for row in report.get("step_results", [])}
     steps = []
     for name in required:

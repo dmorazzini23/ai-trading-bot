@@ -30,6 +30,7 @@ _WEEKEND_CADENCES = {"weekend-saturday", "weekend-sunday"}
 _CADENCES = {"daily", "weekly", "monthly", "manual", *_WEEKEND_CADENCES}
 _MANUAL_WORKFLOWS = {"promotion", "live-cutover", "incident-replay", "strategy-change"}
 _GOVERNED_ACCELERATOR_SYMBOLS = ("AAPL", "AMZN", "MSFT")
+_RESET_POLICY_PATH = Path(__file__).resolve().parents[2] / "config/research_reset.json"
 
 
 @dataclass(frozen=True)
@@ -3189,7 +3190,43 @@ def _manual_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]
     return [], blocked
 
 
+def _reset_steps(config: ResearchConfig, policy: Mapping[str, Any]) -> list[ResearchStep]:
+    root = Path(__file__).resolve().parents[2]
+    runtime = _runtime_input_path("runtime/decision_records.jsonl").parent
+    accounting = config.run_dir / "broker_accounting_evidence.json"
+    paper = config.run_dir / "paper_evidence_review.json"
+    metadata = {"promotion_authority": False, "orders_sent": 0, "reset_phase": policy["phase"], "review_date": policy["review_date"]}
+    return [
+        ResearchStep(
+            name="broker_accounting_evidence",
+            command=_python_module("ai_trading.tools.broker_accounting_evidence", "--fills", runtime / "fill_events.jsonl", "--snapshot", config.run_dir / "broker_account_activities.json", "--output", accounting, "--fetch-paper"),
+            purpose="Refresh read-only paper accounting; never guess per-fill fees.",
+            required=True, output_path=accounting, metadata=metadata,
+        ),
+        ResearchStep(
+            name="paper_evidence_review",
+            command=_python_module("ai_trading.tools.paper_evidence_review", "--runtime-dir", runtime, "--replay-report", runtime / "replay_governance_refresh_latest.json", "--accounting-report", accounting, "--output", paper),
+            purpose="Reconcile the completed paper session and execution comparisons.",
+            required=True, output_path=paper, metadata=metadata,
+        ),
+        ResearchStep(
+            name="research_reset_scorecard",
+            command=_python_module("ai_trading.tools.research_reset", "--runtime-dir", runtime, "--accounting-report", accounting, "--paper-report", paper, "--campaign-state", root / "artifacts/research_foundation/campaign_state.json", "--campaign-state", root / "artifacts/research_reset/campaign_state.json", "--output", config.run_dir / "research_reset_scorecard.json"),
+            purpose="Measure evidence completeness and unique concluded trials; preserve the untouched holdout.",
+            required=True, output_path=config.run_dir / "research_reset_scorecard.json", metadata=metadata,
+        ),
+    ]
+
+
 def build_research_steps(config: ResearchConfig) -> tuple[list[ResearchStep], list[str]]:
+    from ai_trading.tools.research_reset import reset_policy
+
+    try:
+        policy = reset_policy(_RESET_POLICY_PATH, _now())
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return [], [f"research_reset_policy_invalid:{type(exc).__name__}"]
+    if policy is not None and (config.cadence != "manual" or config.workflow == "strategy-change"):
+        return _reset_steps(config, policy), []
     if config.cadence == "daily":
         return _daily_steps(config), []
     if config.cadence == "weekly":
@@ -3470,6 +3507,7 @@ def _artifact_status(payload: Mapping[str, Any], default: str = "missing") -> st
 
 def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     latest = config.report_root / "latest"
+    reset = _read_json(config.run_dir / "research_reset_scorecard.json")
     decision_dashboard = _read_json(latest / "research_decision_dashboard_latest.json")
     paper_evidence = _read_json(latest / "paper_evidence_review_latest.json")
     paper_session = paper_evidence.get("session_audit") or {}
@@ -3506,6 +3544,7 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     weekend_research = _read_json(latest / "weekend_research_latest.json")
     weekend_summary = _read_json(latest / "weekend_operator_summary.json")
     return {
+        "research_reset": {key: reset.get(key) for key in ("status", "generated_at", "highest_value_blocker", "blockers", "experiments", "execution_chain")},
         "paper_execution_evidence": {
             "research_decision_dashboard": {"status": decision_dashboard.get("status", "missing"), "html_path": decision_dashboard.get("html_path"), "candidate_count": len(decision_dashboard.get("candidates", [])), "portfolio_status": decision_dashboard.get("portfolio", {}).get("status")},
             "status": _artifact_status(paper_evidence),
@@ -3803,6 +3842,8 @@ def _copy_authority_artifacts(
             targets.append(latest_dir / "research_decision_dashboard_latest.json")
         elif name == "paper_evidence_review":
             targets.append(latest_dir / "paper_evidence_review_latest.json")
+        elif name == "research_reset_scorecard":
+            targets.append(latest_dir / "research_reset_scorecard_latest.json")
         elif name == "replay_live_cost_alignment":
             targets.extend(
                 [

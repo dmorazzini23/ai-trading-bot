@@ -59,6 +59,27 @@ def capture(client: Any, *, after: str, max_pages: int = 100) -> dict[str, Any]:
     return {"account_id": account_id, "trading_mode": "paper", "after": after, "fetched_at": datetime.now(UTC).isoformat(), "pagination_complete": complete, "activities": rows}
 
 
+def fee_record_coverage(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Expose what the actual activity schema can support without inventing fees."""
+    fills = [row for row in snapshot.get("activities", []) if row.get("activity_type") == "FILL"]
+    fees = [row for row in snapshot.get("activities", []) if row.get("activity_type") in {"FEE", "CFEE", "PTC", "PTR"}]
+    references = sum(bool(row.get("fill_id") or row.get("order_id")) for row in fees)
+    return {
+        "status": "references_present_completeness_unverified" if references else "no_execution_linkage_in_fee_records",
+        "scope": "raw_activity_rows_not_unique_executions",
+        "fill_activity_rows": len(fills),
+        "fee_activity_rows": len(fees),
+        "fill_rows_with_fee_amount": sum(_number(row.get("fee_amount")) is not None for row in fills),
+        "fee_rows_with_execution_reference": references,
+        "fill_field_counts": dict(Counter(key for row in fills for key in row)),
+        "fee_field_counts": dict(Counter(key for row in fees for key in row)),
+        "snapshot_fetched_at": snapshot.get("fetched_at"),
+        "pagination_complete": snapshot.get("pagination_complete") is True,
+        "interpretation": "A reference or fee amount alone does not certify the complete total fee; missing records never establish zero fees.",
+        "promotion_authority": False,
+    }
+
+
 def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str, Any]:
     rejected: Counter[str] = Counter()
     unique: dict[str, dict[str, Any]] = {}
@@ -148,6 +169,7 @@ def main() -> None:
         snapshot = json.loads(args.snapshot.read_text())
     fills, _, source = _read(args.fills)
     report = reconcile(snapshot, fills)
+    report["fee_record_coverage"] = fee_record_coverage(snapshot)
     report["daily_account_fee_totals"] = daily_fee_totals(report["fee_activities"])
     report["document_evidence"] = {"status": "unavailable_in_configured_trading_client", "available_document_api": "Broker API /v1/accounts/{account_id}/documents", "configured_api": "paper Trading API", "transaction_fee_confirmation": "not_obtained", "source": "https://docs.alpaca.markets/us/reference/getdocsforaccount"}
     report.update(fill_source=source, snapshot_path=str(args.snapshot), generated_at=datetime.now(UTC).isoformat())

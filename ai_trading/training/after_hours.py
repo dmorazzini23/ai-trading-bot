@@ -3058,7 +3058,8 @@ def _oof_promotion_authority_guard(
         reasons.append("inverse_global_oof_orientation_shadow_only")
     threshold_tuned = abs(float(best.selected_threshold) - float(default_threshold)) > 1e-9
     confirmation_gate_passed = any(
-        bool(gate.get("gate_passed", False))
+        gate.get("enabled") is True and gate.get("gate_passed") is True
+        and str(gate.get("reason", "")) not in {"disabled", "not_required"}
         for gate in (
             live_execution_quality_gate,
             champion_challenger_ab,
@@ -6899,6 +6900,13 @@ def _maybe_train_rl_overlay(
 
 def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     """Run after-hours ML training and optional RL overlay training."""
+    from ai_trading.config.research_policy import training_block_reason
+
+    block_reason = training_block_reason(now)
+    if block_reason:
+        logger.info("AFTER_HOURS_TRAINING_SKIPPED", extra={"reason": block_reason})
+        return {"status": "skipped", "reason": block_reason,
+                "timestamp": (now or datetime.now(UTC)).isoformat()}
     import pandas as pd
 
     # Manual invocations may import this module before loading dotenv.

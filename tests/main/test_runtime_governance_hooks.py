@@ -9,6 +9,43 @@ import pytest
 from ai_trading import main
 
 
+def test_scheduler_does_not_inflate_persisted_observation_count(monkeypatch):
+    from unittest.mock import Mock
+    import ai_trading.governance.promotion as promotion_mod
+    main._LAST_PROMOTION_KPI_GUARD_TS = 0.0
+    main._PROMOTION_KPI_BREACH_STREAKS = {}
+    monkeypatch.setenv('AI_TRADING_PROMOTION_LIVE_KPI_GUARD_ENABLED', '1')
+    monkeypatch.setenv('AI_TRADING_PROMOTION_LIVE_KPI_GUARD_INTERVAL_SEC', '0')
+    monkeypatch.setenv('AI_TRADING_PROMOTION_RUNTIME_STRATEGIES', 'ml_edge')
+    monkeypatch.setenv('AI_TRADING_PROMOTION_LIVE_KPI_BREACH_CONSECUTIVE_REQUIRED', '2')
+    manager = Mock()
+    manager.registry.model_index = {}
+    manager.evaluate_live_kpis_and_maybe_rollback.return_value = {
+        'breached': True, 'consecutive_breach_count': 1, 'triggered': False}
+    monkeypatch.setattr(promotion_mod, 'get_promotion_manager', lambda: manager)
+    monkeypatch.setattr(main, '_collect_live_kpi_snapshot', lambda: ({'max_drawdown': .2}, {}))
+    for cycle in range(3):
+        main._maybe_evaluate_live_kpi_control_band_rollbacks(cycle_index=cycle)
+    calls = manager.evaluate_live_kpis_and_maybe_rollback.call_args_list
+    assert len(calls) == 3
+    assert all(call.kwargs['allow_rollback'] is False for call in calls)
+    assert main._PROMOTION_KPI_BREACH_STREAKS['ml_edge'] == 1
+
+
+def test_snapshot_identity_tracks_source_observations_not_poll_time(monkeypatch):
+    import ai_trading.monitoring.slo as slo_mod
+    stamp = ['2024-01-02T14:00:00+00:00']
+    monitor = types.SimpleNamespace(get_slo_status=lambda _: {
+        'current_value': .1, 'sample_count': 10, 'last_observation_at': stamp[0]})
+    monkeypatch.setattr(slo_mod, 'get_slo_monitor', lambda: monitor)
+    monkeypatch.setitem(main.sys.modules, 'ai_trading.core.bot_engine',
+                        types.SimpleNamespace(_current_drawdown=lambda: .0))
+    first = main._collect_live_kpi_snapshot()[1]['observation_id']
+    assert main._collect_live_kpi_snapshot()[1]['observation_id'] == first
+    stamp[0] = '2024-01-02T14:01:00+00:00'
+    assert main._collect_live_kpi_snapshot()[1]['observation_id'] != first
+
+
 def test_collect_live_kpi_snapshot_marks_zero_sample_metrics_as_insufficient(
     monkeypatch,
 ) -> None:
@@ -81,6 +118,7 @@ def test_live_kpi_guard_evaluates_and_can_trigger_rollback_alert(monkeypatch) ->
             return {
                 "strategy": strategy,
                 "breached": True,
+                "consecutive_breach_count": 1,
                 "triggered": bool(allow_rollback),
             }
 
@@ -162,6 +200,7 @@ def test_live_kpi_guard_requires_consecutive_breaches_before_rollback(monkeypatc
             return {
                 "strategy": strategy,
                 "breached": True,
+                "consecutive_breach_count": min(len(eval_calls), 2),
                 "triggered": bool(allow_rollback),
             }
 

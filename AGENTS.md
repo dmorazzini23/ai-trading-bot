@@ -41,6 +41,17 @@ This document is the authoritative playbook for Codex-style editing in this repo
   blockers, and the next action. Follow the validation requirements below.
 - Codex efficiency defaults and task restart guidance are documented in
   `docs/CODEX_EFFICIENCY.md`.
+- Start continuations with `docs/CODEX_HANDOFF.md`; verify only facts needed for
+  the current task. Update that short handoff at meaningful milestones.
+- Default tool output to 1,500 tokens; extract JSON fields or bounded log excerpts.
+  Save full output to artifacts. Increase the limit only for a specific need.
+- For running jobs, prefer 20-30 second completion waits. Do not repeatedly poll
+  with one-second waits; inspect logs only on new output, failure, or a milestone.
+- Reuse successful validation for unchanged code. Record command, scope, result,
+  and changed paths in the handoff; run additional checks for subsequent changes.
+- Keep the accepted scope bounded. A status/next-step question does not authorize
+  a new experiment. Recommend a fresh task at milestones; do not create one
+  without the user's explicit request.
 - All edits must use **`apply_patch`**.
 - Keep diffs surgical; touch only what is necessary and preserve context.
 - Do not introduce new shims, compatibility facades, or bulk rewrites.
@@ -168,6 +179,12 @@ Use these stable strings to anchor surgical edits:
 ---
 
 ## 8. Anti-Patterns to Avoid
+
+- During the research reset beginning September 8, 2026, follow
+  `config/research_reset.json` and `docs/RESEARCH_RESET.md`. Pause discretionary
+  features, new models and unregistered searches; prioritize named evidence gaps.
+  The October 8 review does not automatically resume broad research. Preserve
+  the September 9–December 8 holdout and consumed campaign budgets.
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
 - Adding behavior to legacy compatibility entrypoints instead of the canonical
   package module.

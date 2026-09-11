@@ -2492,6 +2492,19 @@ def test_submit_cover_order_uses_market_order_request(monkeypatch):
     assert not hasattr(req, "reduce_only")
 
 
+def test_order_flip_blocks_unconfirmed_cancellation(monkeypatch):
+    engine = _engine_stub()
+    order = SimpleNamespace(id="sell-1", side="sell", status="open")
+    monkeypatch.setattr(engine, "_list_open_orders_for_symbol", lambda _: [order])
+    monkeypatch.setattr(engine, "_order_flip_mode", lambda: "cancel_then_submit")
+    monkeypatch.setattr(engine, "_cancel_opposite_orders", lambda *a, **kw: [])
+    allowed, payload = engine._enforce_opposite_side_policy(
+        "AAPL", "buy", 4, closing_position=False, client_order_id="cid-1",
+    )
+    assert allowed is False
+    assert payload["reason"] == "opposite_cancellation_unconfirmed"
+
+
 def test_cover_then_long_blocks_when_cover_submit_fails(monkeypatch):
     engine = _engine_stub()
     order = SimpleNamespace(id="sell-1", side="sell", status="open")

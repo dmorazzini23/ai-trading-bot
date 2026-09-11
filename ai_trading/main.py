@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 import copy
+import hashlib
 import json
 import os
 import threading
@@ -314,6 +315,12 @@ def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> Non
     now_local = now_est or datetime.now(ZoneInfo("America/New_York"))
     if now_local.tzinfo is None:
         now_local = now_local.replace(tzinfo=ZoneInfo("America/New_York"))
+    from ai_trading.config.research_policy import training_block_reason
+
+    block_reason = training_block_reason(now_local)
+    if block_reason:
+        logger.info("MARKET_CLOSE_TRAINING_SKIPPED", extra={"reason": block_reason})
+        return
     date_key = _resolve_market_close_training_date_key(now_local)
     if not date_key:
         return
@@ -1440,6 +1447,7 @@ def _maybe_build_bad_session_replay_dataset(
 
 
 def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
+    observation_sources: dict[str, Any] = {}
     drawdown = 0.0
     reject_rate_pct = 0.0
     execution_drift_bps = 0.0
@@ -1476,6 +1484,12 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         residual_drift_status = monitor.get_slo_status("residual_drift_psi")
         pacing_status = monitor.get_slo_status("order_pacing_cap_hit_rate_pct")
         pending_status = monitor.get_slo_status("pending_oldest_age_sec")
+        observation_sources = {
+            key: value.get('last_observation_at') if isinstance(value, Mapping) else None
+            for key, value in {'reject': reject_status, 'execution_drift': drift_status,
+                               'ece': calibration_ece_status, 'brier': calibration_brier_status,
+                               'psi': drift_psi_status}.items()
+        }
 
         def _extract_metric(status: Any) -> tuple[float, int]:
             if not isinstance(status, Mapping):
@@ -1542,6 +1556,9 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
             insufficient_data_metrics.append(metric_name)
 
     diagnostics = {
+        "observation_id": hashlib.sha256(json.dumps(
+            {"sources": observation_sources, "drawdown": drawdown}, sort_keys=True
+        ).encode()).hexdigest() if any(observation_sources.values()) else None,
         "reject_rate_pct": reject_rate_pct if reject_samples > 0 else None,
         "execution_drift_bps": execution_drift_bps if drift_samples > 0 else None,
         "realized_slippage_bps": realized_slippage_bps if slippage_samples > 0 else None,
@@ -1643,13 +1660,14 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
         ),
     )
     live_kpis, diagnostics = _collect_live_kpi_snapshot()
+    identified_kpis = dict(live_kpis, observation_id=diagnostics.get('observation_id'))
 
     triggered: list[dict[str, Any]] = []
     for strategy in strategies:
         try:
             result = promotion_manager.evaluate_live_kpis_and_maybe_rollback(
                 strategy=str(strategy),
-                live_kpis=live_kpis,
+                live_kpis=identified_kpis,
                 force=True,
                 allow_rollback=False,
             )
@@ -1663,12 +1681,10 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
         breached = bool(result.get("breached"))
         if breached:
             with _PROMOTION_KPI_STREAK_LOCK:
-                local_streak = int(_PROMOTION_KPI_BREACH_STREAKS.get(strategy, 0)) + 1
                 try:
-                    streak = int(result.get("consecutive_breach_count", local_streak) or 0)
+                    streak = int(result.get("consecutive_breach_count", 0) or 0)
                 except (TypeError, ValueError):
-                    streak = local_streak
-                streak = max(local_streak, streak)
+                    streak = 0
                 _PROMOTION_KPI_BREACH_STREAKS[strategy] = streak
         else:
             with _PROMOTION_KPI_STREAK_LOCK:
@@ -1690,7 +1706,7 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
         try:
             result = promotion_manager.evaluate_live_kpis_and_maybe_rollback(
                 strategy=str(strategy),
-                live_kpis=live_kpis,
+                live_kpis=identified_kpis,
                 force=True,
                 allow_rollback=True,
             )

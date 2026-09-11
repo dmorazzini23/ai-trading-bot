@@ -63,6 +63,9 @@ def _has_text(exc: Exception, token: str) -> bool:
 
 
 def _is_transient_network(exc: Exception) -> bool:
+    status = _status_code(exc)
+    if status is not None and 500 <= status < 600:
+        return True
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True
     name = exc.__class__.__name__.lower()

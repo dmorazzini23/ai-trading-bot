@@ -234,6 +234,7 @@ class SLOMonitor:
             },
             'window_minutes': threshold.window_minutes,
             'sample_count': len(recent_metrics),
+            'last_observation_at': max((m.timestamp for m in recent_metrics), default=None).isoformat() if recent_metrics else None,
             'description': threshold.description,
         }
 

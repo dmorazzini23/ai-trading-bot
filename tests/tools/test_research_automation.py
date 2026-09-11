@@ -4,7 +4,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from ai_trading.tools import research_automation
+
+
+@pytest.fixture(autouse=True)
+def legacy_plan_without_reset(tmp_path, monkeypatch):
+    """Keep legacy plan coverage; active reset plans have dedicated regressions."""
+    path = tmp_path / "reset.json"
+    path.write_text('{"enabled": false}')
+    monkeypatch.setattr(research_automation, "_RESET_POLICY_PATH", path)
 
 
 def _read(path: Path) -> dict[str, Any]:

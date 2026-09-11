@@ -2,4 +2,17 @@
 model = "gpt-6-astra"
 model_reasoning_effort = "low"
 service_tier = "default"
-tool_output_token_limit = 4000
+tool_output_token_limit = 2000
+
+# Research/code tasks load these optional integrations only when needed.
+# Security, GitHub, Alpaca and Sentry remain enabled.
+[plugins."supabase@openai-curated"]
+enabled = false
+[plugins."slack@openai-curated"]
+enabled = false
+[plugins."hugging-face@codex-marketplace-ai-trading-bot-036ee271"]
+enabled = false
+[plugins."sites@openai-bundled"]
+enabled = false
+[plugins."visualize@openai-bundled"]
+enabled = false

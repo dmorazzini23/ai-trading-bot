@@ -1,6 +1,7 @@
 """Retry helpers for idempotent dependency reads."""
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
+from alpaca.common.exceptions import APIError
 
 import random
 import time
@@ -11,6 +12,7 @@ from ai_trading.core.dependency_breakers import DependencyBreakers
 from ai_trading.core.errors import ErrorAction, ErrorInfo
 
 T = TypeVar("T")
+BROKER_READ_EXCEPTIONS: tuple[type[Exception], ...] = (*AI_TRADING_FALLBACK_EXCEPTIONS, APIError)
 
 
 def retry_idempotent(
@@ -37,7 +39,7 @@ def retry_idempotent(
             result = fn()
             breakers.record_success(dep)
             return result
-        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        except BROKER_READ_EXCEPTIONS as exc:
             attempts += 1
             info = classify_exception(
                 exc,

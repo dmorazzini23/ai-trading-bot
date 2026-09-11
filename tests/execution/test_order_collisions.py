@@ -28,8 +28,8 @@ class _ConflictClient:
     def cancel_order(self, order_id):
         self.cancelled.append(order_id)
 
-    def get_order(self, order_id):
-        return SimpleNamespace(id=order_id, status="canceled")
+    def get_order_by_id(self, order_id):
+        return SimpleNamespace(id=order_id, status="canceled", filled_qty="0")
 
     def submit_order(self, order_data=None, **kwargs):
         self.submit_calls += 1
@@ -71,6 +71,9 @@ def test_enforce_opposite_policy_cancels_orders(monkeypatch):
         return True
 
     monkeypatch.setattr(ExecutionEngine, "_cancel_order_alpaca", _cancel, raising=False)
+    # The engine's generic PYTEST status stub reports a fill; this scenario
+    # requires an actual cancellation acknowledgment from the fake broker.
+    monkeypatch.setattr(engine, "_get_order_status_alpaca", client.get_order_by_id)
     allowed, payload = engine._enforce_opposite_side_policy(
         "ABBV",
         "buy",
