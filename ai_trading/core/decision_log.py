@@ -410,9 +410,13 @@ class DecisionRecorder:
             if intent_limit_price is not None and intent_limit_price > 0.0:
                 order_type = "limit"
         if order_type:
-            metrics_payload.setdefault("order_type", order_type.lower())
-        elif not order_payload and order_intent is None:
-            metrics_payload.setdefault("order_type", "not_submitted")
+            if order_type.lower() == "not_submitted":
+                metrics_payload.pop("order_type", None)
+            else:
+                metrics_payload.setdefault("order_type", order_type.lower())
+                metrics_payload.setdefault("opportunity_order_type", order_type.lower())
+        if not order_payload and order_intent is None:
+            metrics_payload.setdefault("submission_status", "not_submitted")
 
         metrics_payload.setdefault(
             "session_regime",

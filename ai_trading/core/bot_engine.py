@@ -39405,8 +39405,10 @@ def _replay_parity_shadow_row_diagnostic(
         price_raw = (
             metadata.get("opportunity_price") or metadata.get("reference_price")
         )
-        order_type = "not_submitted"
+        order_type = str(metadata.get("opportunity_order_type") or metadata.get("order_type") or "").strip().lower()
         source_kind = "decision_journal_parity_opportunity"
+    if order_type not in {"market", "limit"}:
+        return None, "unsupported_or_missing_order_type"
     if not symbol or side not in {"buy", "sell"}:
         return None, "symbol_or_side_invalid"
     try:
@@ -39439,6 +39441,10 @@ def _replay_parity_shadow_row_diagnostic(
                 "side": side,
                 "qty": float(qty),
                 "order_type": order_type,
+                "submission_status": "not_submitted",
+                **({key: intent_raw[key] for key in ('time_in_force', 'expires_at') if key in intent_raw}
+                   if isinstance(intent_raw, Mapping) else
+                   {key: metadata[key] for key in ('time_in_force', 'expires_at') if key in metadata}),
                 "client_order_id": client_order_id,
                 "correlation_id": correlation_id,
                 "timeframe": timeframe,
@@ -39618,6 +39624,7 @@ def _refresh_replay_dataset_from_tca(
             "correlation_id": correlation_id or None,
             "timeframe": "5Min",
             "source_kind": "tca_decision",
+            **{key: record[key] for key in ('time_in_force', 'expires_at') if key in record},
             "regime_profile": str(
                 record.get("regime_profile")
                 or record.get("market_regime")
@@ -39849,6 +39856,62 @@ def _replay_summary_metrics(
     edge_bps: list[float] = []
     execution_cost_bps: list[float] = []
     markout_observations: list[dict[str, Any]] = []
+    markout_exclusions: list[dict[str, Any]] = []
+    exclusion_counts: dict[str, int] = {}
+    fill_events_seen = 0
+    timing_rows: list[dict[str, Any]] = []
+    timing_counts: dict[str, int] = {}
+    timing_contract = {
+        'version': 1,
+        'decision_basis': 'simulated_order_submitted_at_not_verified_source_decision',
+        'entry_basis': 'simulated_fill_event_timestamp',
+        'metric_exit_basis': 'first_valid_symbol_observation_strictly_after_fill',
+        'diagnostic_horizon_seconds': 300,
+        'diagnostic_anchors': ['decision', 'fill'],
+        'matching': 'exact_timestamp_unique_price_no_interpolation',
+        'scope': 'observation_coverage_only_not_strategy_returns',
+        'qualification_authority': False,
+    }
+    exact_prices: dict[str, dict[datetime, set[float]]] = {}
+    for symbol, points in price_points.items():
+        for point_ts, point_price in points:
+            exact_prices.setdefault(symbol, {}).setdefault(point_ts, set()).add(point_price)
+
+    def record_timing(event: Mapping[str, Any], order: Mapping[str, Any],
+                      symbol: str, fill_ts: datetime | None) -> None:
+        decision_ts = _parse_iso_timestamp(order.get('submitted_at'))
+        row: dict[str, Any] = {'order_id': event.get('order_id'),
+                               'symbol': symbol, 'fill_ts': event.get('ts')}
+        for anchor, anchor_ts in [('decision', decision_ts), ('fill', fill_ts)]:
+            target = anchor_ts + timedelta(seconds=300) if anchor_ts else None
+            prices = exact_prices.get(symbol, {}).get(target, set()) if target else set()
+            status = ('invalid_anchor' if target is None else
+                      'missing_exact_observation' if not prices else
+                      'conflicting_exact_observations' if len(prices) > 1 else 'available')
+            row[f'{anchor}_target_ts'] = target.isoformat() if target else None
+            row[f'{anchor}_observation_status'] = status
+            key = f'{anchor}_{status}'
+            timing_counts[key] = timing_counts.get(key, 0) + 1
+        row['entry_timing_status'] = (
+            'invalid_anchor' if decision_ts is None or fill_ts is None else
+            'fill_before_decision' if fill_ts < decision_ts else
+            'fill_at_or_after_decision_target' if fill_ts >= decision_ts + timedelta(seconds=300) else
+            'fill_before_decision_target'
+        )
+        key = str(row['entry_timing_status'])
+        timing_counts[key] = timing_counts.get(key, 0) + 1
+        timing_rows.append(row)
+    order_expiry_events = [dict(event) for event in events
+                           if isinstance(event, Mapping) and event.get('event_type') == 'order_expired'] if isinstance(events, list) else []
+    ioc_cancellation_events = [dict(event) for event in events
+                               if isinstance(event, Mapping) and event.get('reason') == 'ioc_unfilled_remainder'] if isinstance(events, list) else []
+
+    def exclude(event: Mapping[str, Any], reason: str) -> None:
+        exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+        markout_exclusions.append({'order_id': event.get('order_id'),
+                                   'client_order_id': event.get('client_order_id'),
+                                   'symbol': event.get('symbol'), 'fill_ts': event.get('ts'),
+                                   'reason': reason})
     max_horizon_seconds = max(0.0, float(max_markout_hours)) * 3600.0
     if isinstance(events, list):
         for event in events:
@@ -39856,14 +39919,17 @@ def _replay_summary_metrics(
                 continue
             if str(event.get("event_type", "")).strip().lower() != "fill":
                 continue
+            fill_events_seen += 1
             order_id = str(event.get("order_id", "")).strip()
             order = order_map.get(order_id, {})
             symbol = str(event.get("symbol") or order.get("symbol") or "").strip().upper()
             side = str(event.get("side", order.get("side", ""))).strip().lower()
             fill_ts = _parse_iso_timestamp(event.get("ts"))
+            record_timing(event, order, symbol, fill_ts)
             try:
                 fill_price = float(event.get("fill_price"))
             except (TypeError, ValueError):
+                exclude(event, 'invalid_fill_price')
                 continue
             if (
                 not symbol
@@ -39872,17 +39938,20 @@ def _replay_summary_metrics(
                 or fill_price <= 0.0
                 or not math.isfinite(fill_price)
             ):
+                exclude(event, 'invalid_fill_fields')
                 continue
             symbol_points = price_points.get(symbol, [])
             symbol_timestamps = timestamps.get(symbol, [])
             next_index = bisect_right(symbol_timestamps, fill_ts)
             if next_index >= len(symbol_points):
+                exclude(event, 'no_subsequent_price')
                 continue
             markout_ts, markout_price = symbol_points[next_index]
             horizon_seconds = (markout_ts - fill_ts).total_seconds()
             if horizon_seconds < 0.0 or (
                 max_horizon_seconds > 0.0 and horizon_seconds > max_horizon_seconds
             ):
+                exclude(event, 'markout_horizon_exceeded')
                 continue
             if side == "buy":
                 edge = ((markout_price - fill_price) / fill_price) * 10_000.0
@@ -39896,8 +39965,9 @@ def _replay_summary_metrics(
                 raise ValueError("replay fill fee requires a positive quantity")
             if fill_qty > 0:
                 edge -= fee_amount / (fill_price * fill_qty) * 10_000.0
-            if math.isfinite(edge):
-                edge_bps.append(float(edge))
+            if not math.isfinite(edge):
+                exclude(event, 'nonfinite_net_markout')
+                continue
 
             try:
                 reference_price = float(
@@ -39905,6 +39975,10 @@ def _replay_summary_metrics(
                 )
             except (TypeError, ValueError):
                 reference_price = fill_price
+            if not math.isfinite(reference_price) or reference_price <= 0:
+                exclude(event, 'invalid_reference_price')
+                continue
+            edge_bps.append(float(edge))
             if reference_price > 0.0:
                 if side == "buy":
                     cost = ((fill_price - reference_price) / reference_price) * 10_000.0
@@ -39924,6 +39998,18 @@ def _replay_summary_metrics(
                     "side": side,
                     "session_bucket": _session_bucket_from_ts(fill_ts),
                     "order_type": str(order.get("type") or "unknown"),
+                    "submission_status": order.get("submission_status", "unknown"),
+                    "decision_ts": order.get("submitted_at"),
+                    "reference_ts": order.get("submitted_at"),
+                    "fill_ts": fill_ts.isoformat(),
+                    "markout_ts": markout_ts.isoformat(),
+                    "markout_horizon_seconds": horizon_seconds,
+                    "decision_to_fill_seconds": (
+                        (fill_ts - decision_ts).total_seconds()
+                        if (decision_ts := _parse_iso_timestamp(order.get("submitted_at"))) is not None
+                        else None
+                    ),
+                    "fill_assumptions": event.get("fill_assumptions"),
                     "volatility_bucket": "unknown",
                     "fallback_cost_bps": float(cost),
                     "fill_price": fill_price,
@@ -39942,6 +40028,13 @@ def _replay_summary_metrics(
     if not edge_bps:
         return {
             "sample_count": 0,
+            "timing_contract": timing_contract,
+            "timing_diagnostics": {'fill_count': fill_events_seen, 'counts': timing_counts, 'rows': timing_rows},
+            "fill_events_seen": fill_events_seen,
+            "order_expiry_events": order_expiry_events,
+            "ioc_cancellation_events": ioc_cancellation_events,
+            "markout_exclusion_counts": exclusion_counts,
+            "markout_exclusions": markout_exclusions,
             "markout_observations": markout_observations,
             "net_edge_bps": 0.0,
             "max_drawdown_pct": 0.0,
@@ -39963,6 +40056,13 @@ def _replay_summary_metrics(
         max_drawdown = max(max_drawdown, peak - cumulative)
     return {
         "sample_count": len(edge_bps),
+        "timing_contract": timing_contract,
+        "timing_diagnostics": {'fill_count': fill_events_seen, 'counts': timing_counts, 'rows': timing_rows},
+        "fill_events_seen": fill_events_seen,
+        "order_expiry_events": order_expiry_events,
+        "ioc_cancellation_events": ioc_cancellation_events,
+        "markout_exclusion_counts": exclusion_counts,
+        "markout_exclusions": markout_exclusions,
         "markout_observations": markout_observations,
         "net_edge_bps": float(sum(edge_bps) / len(edge_bps)),
         "max_drawdown_pct": float(max_drawdown),
@@ -40355,6 +40455,10 @@ def _run_replay_governance(
                 "side": str(row.get("side", "buy")).lower(),
                 "qty": float(row.get("qty", 0.0) or 0.0),
                 "order_type": str(row.get("order_type", "limit")),
+                "submission_status": str(row.get("submission_status") or "unknown"),
+                "time_in_force": str(row.get('time_in_force') or 'day'),
+                "time_in_force_source": 'recorded' if row.get('time_in_force') else 'governance_day_assumption',
+                "expires_at": row.get('expires_at'),
                 "client_order_id": str(row.get("client_order_id", "")),
                 "session_token": session_token,
                 "regime_token": regime_token,
@@ -40456,6 +40560,10 @@ def _run_replay_governance(
             "side": side,
             "qty": qty,
             "type": str(bar.get("order_type", "limit")),
+            "submission_status": str(bar.get("submission_status") or "unknown"),
+            "time_in_force": bar.get('time_in_force', 'day'),
+            "time_in_force_source": bar.get('time_in_force_source', 'governance_day_assumption'),
+            "expires_at": bar.get('expires_at'),
             "price": close_price,
             "limit_price": close_price,
             "intent_key": intent_key,

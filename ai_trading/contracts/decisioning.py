@@ -680,6 +680,8 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         "quote_status": ("quote_status",),
         "quote_source": ("quote_source", "submit_quote_source"),
         "metadata_quality_status": ("metadata_quality_status",),
+        "submission_status": ("submission_status",),
+        "opportunity_order_type": ("opportunity_order_type",),
         "liquidity_regime": ("liquidity_regime",),
     }.items():
         for source in source_keys:

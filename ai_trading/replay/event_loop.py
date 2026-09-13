@@ -213,6 +213,10 @@ class ReplayEventLoop:
                 "side": side,
                 "qty": qty,
                 "type": str(proposal.get("type", proposal.get("order_type", "limit"))),
+                "submission_status": proposal.get("submission_status", "unknown"),
+                "time_in_force": proposal.get('time_in_force', 'gtc'),
+                "time_in_force_source": proposal.get('time_in_force_source', 'explicit' if proposal.get('time_in_force') else 'simulator_default_gtc'),
+                "expires_at": proposal.get('expires_at'),
                 "price": proposal.get("price", close),
                 "limit_price": proposal.get("limit_price", proposal.get("price", close)),
                 "client_order_id": str(proposal.get("client_order_id", intent_key)),
@@ -228,6 +232,21 @@ class ReplayEventLoop:
             )
             order = self.broker.submit_order(order_payload, timestamp=ts)
             orders.append(order)
+            if order.get('time_in_force') == 'ioc':
+                immediate = self.broker.process_until(now=ts, market_price_by_symbol=prices_by_timestamp[ts])
+                events.extend(immediate)
+                for event in immediate:
+                    if event.get('event_type') != 'fill':
+                        continue
+                    fill_symbol = str(event.get('symbol', '')).upper()
+                    fill_qty = float(event.get('fill_qty', 0.0) or 0.0)
+                    self._last_price_by_symbol[fill_symbol] = float(event['fill_price'])
+                    signed_qty = fill_qty if str(event.get('side', 'buy')).lower() == 'buy' else -fill_qty
+                    self._positions[fill_symbol] = self._positions.get(fill_symbol, 0.0) + signed_qty
+                    if abs(self._positions[fill_symbol]) < 1e-9:
+                        self._positions.pop(fill_symbol, None)
+                if immediate and self.event_callback is not None:
+                    self.event_callback([dict(event) for event in immediate])
 
         if ordered:
             last_ts = _to_utc(ordered[-1].get("ts"))

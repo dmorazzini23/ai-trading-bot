@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import pytest
 
@@ -682,6 +682,7 @@ def test_refresh_replay_dataset_accepts_only_valid_parity_shadow_decisions(
             "close": 405.25,
             "correlation_id": "opp_shadow_msft_1",
             "order_type": "limit",
+            "submission_status": "not_submitted",
             "qty": 3.0,
             "regime_profile": "unknown",
             "side": "sell",
@@ -802,6 +803,7 @@ def test_refresh_replay_dataset_accepts_marked_opportunity_without_intent(
                     "opportunity_side": "buy",
                     "opportunity_quantity": 4.5,
                     "opportunity_price": 191.25,
+                    "opportunity_order_type": "limit",
                     "replay_shadow_evidence": True,
                     "replay_live_entry_control": {
                         "status": "monitor_only",
@@ -839,10 +841,21 @@ def test_refresh_replay_dataset_accepts_marked_opportunity_without_intent(
     assert rows[0]["correlation_id"] == "opp_aapl_opportunity_1"
     assert rows[0]["qty"] == 4.5
     assert rows[0]["close"] == 191.25
-    assert rows[0]["order_type"] == "not_submitted"
+    assert rows[0]["order_type"] == "limit"
+    assert rows[0]["submission_status"] == "not_submitted"
     assert context["shadow_intent_accepted_records"] == 0
     assert context["shadow_opportunity_accepted_records"] == 1
     assert context["shadow_opportunity_rows"] == 1
+    raw = json.loads(decision_path.read_text())
+    del raw['metrics']['opportunity_order_type']
+    row, reason = bot_engine._replay_parity_shadow_row_diagnostic(
+        raw, cutoff=now - timedelta(days=1), now=now)
+    assert row is None
+    assert reason == 'unsupported_or_missing_order_type'
+    raw['metrics']['order_type'] = 'market'
+    row, _ = bot_engine._replay_parity_shadow_row_diagnostic(
+        raw, cutoff=now - timedelta(days=1), now=now)
+    assert row is not None and row[1]['order_type'] == 'market'
 
 
 def test_rollout_replay_eligibility_fails_closed_for_required_live_gate(

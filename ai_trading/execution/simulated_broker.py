@@ -9,6 +9,7 @@ import math
 import random
 from hashlib import sha256
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 
 def _to_utc(raw: datetime | str | None) -> datetime:
@@ -84,13 +85,26 @@ class SimulatedBroker:
     ) -> dict[str, Any]:
         """Submit order and schedule async fill event(s)."""
 
+        order_type = str(order.get("type", order.get("order_type", "limit"))).strip().lower()
+        if order_type not in {'market', 'limit'}:
+            raise ValueError(f"unsupported replay order type: {order_type}")
         self._counter += 1
         now = _to_utc(timestamp)
+        tif = str(order.get('time_in_force') or 'gtc').strip().lower()
+        if tif not in {'day', 'gtc', 'ioc'}:
+            raise ValueError(f'unsupported replay time in force: {tif}')
+        expires_at = _to_utc(order['expires_at']) if order.get('expires_at') else None
+        if tif == 'day':
+            from ai_trading.utils.market_calendar import session_info
+            try:
+                session_end = session_info(now.astimezone(ZoneInfo('America/New_York')).date()).end_utc
+            except ValueError:
+                session_end = now
+            expires_at = min(expires_at, session_end) if expires_at else session_end
         order_id = f"sim-{self._counter:08d}"
         qty = float(order.get("qty", 0.0) or 0.0)
         symbol = str(order.get("symbol", "")).upper()
         side = str(order.get("side", "buy")).lower()
-        order_type = str(order.get("type", order.get("order_type", "limit"))).lower()
         price = order.get("limit_price", order.get("price", None))
         limit_price = float(price) if price is not None else None
         client_order_id = str(order.get("client_order_id", "") or order_id)
@@ -100,6 +114,10 @@ class SimulatedBroker:
             "symbol": symbol,
             "side": side,
             "type": order_type,
+            "submission_status": order.get("submission_status", "unknown"),
+            "time_in_force": tif,
+            "time_in_force_source": order.get('time_in_force_source', 'explicit' if order.get('time_in_force') else 'simulator_default_gtc'),
+            "expires_at": expires_at.isoformat() if expires_at else None,
             "qty": qty,
             "filled_qty": 0.0,
             "filled_avg_price": None,
@@ -119,6 +137,8 @@ class SimulatedBroker:
         delay_ms = base_delay_ms + vol_delay_ms + jitter_ms
         delay_ms = max(self._min_fill_delay_ms, min(self._max_fill_delay_ms, delay_ms))
         due_at = now + timedelta(milliseconds=delay_ms)
+        if tif == 'ioc':
+            due_at = now
 
         if rng.random() > self._fill_probability:
             # No fill scheduled; order stays accepted/open.
@@ -140,7 +160,7 @@ class SimulatedBroker:
         if model_order is None:
             return False
         status = str(model_order.get("status", ""))
-        if status in {"filled", "canceled", "rejected"}:
+        if status in {"filled", "canceled", "rejected", "expired"}:
             return False
         now = _to_utc(timestamp)
         if self._rng_for(model_order).random() < self._cancel_reject_probability:
@@ -198,6 +218,21 @@ class SimulatedBroker:
 
         current = _to_utc(now)
         drained: list[dict[str, Any]] = []
+        for order in self._orders.values():
+            expiry = order.get('expires_at')
+            if expiry and _to_utc(expiry) <= current and order['status'] not in {'filled', 'canceled', 'rejected', 'expired'}:
+                order['status'] = 'expired'
+                order['updated_at'] = expiry
+                event = {'event_type': 'order_expired', 'order_id': order['id'],
+                         'client_order_id': order.get('client_order_id'),
+                         'symbol': order['symbol'], 'status': 'expired', 'ts': expiry,
+                         'observed_at': current.isoformat(), 'filled_qty': order['filled_qty'],
+                         'time_in_force': order['time_in_force'],
+                         'time_in_force_source': order['time_in_force_source'],
+                         'remaining_qty': max(0.0, order['qty'] - order['filled_qty'])}
+                self._events.append(event)
+        self._scheduled = [item for item in self._scheduled
+                           if self._orders[item.order_id]['status'] != 'expired']
         ready: list[_ScheduledFill] = []
         while self._scheduled and self._scheduled[0].due_at <= current:
             ready.append(self._scheduled.pop(0))
@@ -209,9 +244,12 @@ class SimulatedBroker:
                 "canceled",
                 "filled",
                 "rejected",
+                "expired",
             }:
                 continue
             symbol = str(model_order.get("symbol", "")).upper()
+            if model_order['time_in_force'] == 'ioc' and current != _to_utc(model_order['submitted_at']):
+                continue
             market_px = None
             if market_price_by_symbol is not None:
                 raw_market = market_price_by_symbol.get(symbol)
@@ -265,6 +303,26 @@ class SimulatedBroker:
                 "side": model_order.get("side"),
                 "fill_qty": fill_qty,
                 "fill_price": fill_price,
+                "fill_assumptions": {
+                    "model": "spread_volatility_jitter_v1",
+                    "ioc_price_basis": 'same_timestamp_market_observation' if model_order['time_in_force'] == 'ioc' else None,
+                    "time_in_force": model_order['time_in_force'],
+                    "time_in_force_source": model_order['time_in_force_source'],
+                    "expires_at": model_order['expires_at'],
+                    "seed": self._seed,
+                    "fill_probability": self._fill_probability,
+                    "partial_fill_probability": self._partial_fill_probability,
+                    "spread_bps": model_order['spread_bps'],
+                    "volatility_pct": model_order['volatility_pct'],
+                    "fee_bps": self._fee_bps,
+                    "half_spread_multiplier": 0.5,
+                    "volatility_uniform_max": 0.35,
+                    "jitter_bps_range": [-8.0, 8.0],
+                    "market_price": market_px,
+                    "scheduled_fill_at": item.due_at.isoformat(),
+                    "limit_clamped": is_limit,
+                    "source": "simulator_assumptions_not_observed_costs",
+                },
                 "fee_amount": fill_qty * fill_price * self._fee_bps / 10000.0,
                 "fee_currency": "USD",
                 "fee_basis": "per_fill_total",
@@ -275,6 +333,17 @@ class SimulatedBroker:
                 "ts": current.isoformat(),
             }
             self._events.append(event)
+        for order in self._orders.values():
+            if order['time_in_force'] == 'ioc' and _to_utc(order['submitted_at']) <= current and order['status'] not in {'filled', 'canceled', 'expired', 'rejected'}:
+                order['status'] = 'canceled'
+                order['updated_at'] = order['submitted_at']
+                self._events.append({'event_type': 'order_canceled', 'reason': 'ioc_unfilled_remainder',
+                                     'order_id': order['id'], 'client_order_id': order.get('client_order_id'),
+                                     'symbol': order['symbol'], 'status': 'canceled',
+                                     'ts': order['submitted_at'], 'observed_at': current.isoformat(),
+                                     'filled_qty': order['filled_qty'],
+                                     'remaining_qty': max(0.0, order['qty'] - order['filled_qty'])})
+        self._scheduled = [item for item in self._scheduled if self._orders[item.order_id]['status'] not in {'canceled','expired','filled'}]
         self._scheduled.sort(key=lambda item: item.due_at)
         while self._events:
             drained.append(self._events.popleft())

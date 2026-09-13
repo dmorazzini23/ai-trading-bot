@@ -253,25 +253,27 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
         record.metrics["quote_anomaly_reason"]
         == "spread_at_or_above_anomaly_threshold"
     )
-    assert record.metrics["order_type"] == "not_submitted"
+    assert record.metrics.get("order_type") is None
+    assert record.metrics["submission_status"] == "not_submitted"
     assert record.metrics["session_regime"] == "opening"
     assert record.metrics["market_regime"] == "volatile"
     assert record.metrics["volatility_regime"] == "volatile"
     assert record.metrics["regime_profile"] == "conservative"
     assert record.metrics["liquidity_regime"] == "thin"
     assert record.metrics["execution_profile"] == "paper_sampling_passive"
-    assert record.metrics["metadata_quality_status"] == "complete"
-    assert record.metrics["metadata_missing_reasons"] == {}
+    assert record.metrics["metadata_quality_status"] == "partial"
+    assert record.metrics["metadata_missing_reasons"] == {'order_type': 'submitted_order_type_unavailable'}
 
     metadata = record.to_dict()["decision_journal"]["metadata"]
     assert metadata["quote_age_ms"] == 250.0
     assert metadata["spread_bps"] == pytest.approx(9.99500249874909)
-    assert metadata["order_type"] == "not_submitted"
+    assert metadata.get("order_type") is None
+    assert metadata["submission_status"] == "not_submitted"
     assert metadata["session_regime"] == "opening"
     assert metadata["market_regime"] == "volatile"
     assert metadata["execution_profile"] == "paper_sampling_passive"
-    assert metadata["metadata_quality_status"] == "complete"
-    assert metadata["metadata_missing_reasons"] == {}
+    assert metadata["metadata_quality_status"] == "partial"
+    assert metadata["metadata_missing_reasons"] == {'order_type': 'submitted_order_type_unavailable'}
 
 
 def test_decision_recorder_marks_explicit_monitor_only_replay_evidence() -> None:
@@ -382,7 +384,8 @@ def test_decision_recorder_reports_quote_metadata_failure_without_crashing() -> 
     assert record.metrics["metadata_missing_reasons"]["spread_bps"] == (
         "quote_snapshot_error"
     )
-    assert record.metrics["order_type"] == "not_submitted"
+    assert record.metrics.get("order_type") is None
+    assert record.metrics["submission_status"] == "not_submitted"
 
 
 def _lineage_test_recorder(written: list[object]) -> DecisionRecorder:
