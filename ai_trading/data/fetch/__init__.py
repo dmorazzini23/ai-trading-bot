@@ -8577,6 +8577,8 @@ def _fetch_reference_bars(
     try:
         normalized.attrs["reference_feed_requested"] = str(resolved_feed)
         normalized.attrs["reference_feed_effective"] = str(effective_feed)
+        normalized.attrs["effective_adjustment"] = resolved_adjustment
+        normalized.attrs["adjustment_evidence_basis"] = 'provider_request'
         normalized.attrs["requested_timeframe"] = _canon_tf(timeframe)
     except FETCH_FALLBACK_EXCEPTIONS:
         pass
@@ -10778,6 +10780,10 @@ def _fetch_bars(
                 return _depth_exit(finalized_backup)
             return _depth_exit(_empty_result())
         df = pd.DataFrame(data)
+        df.attrs['effective_adjustment'] = adjustment
+        df.attrs['adjustment_evidence_basis'] = 'provider_request'
+        df.attrs['data_feed'] = _feed
+        df.attrs['data_provider'] = 'alpaca'
         _attach_payload_metadata(
             df,
             payload=data,
@@ -15010,6 +15016,11 @@ def get_bars(
         _from_get_bars=True,
         return_meta=return_meta,
     )
+    evidence_frame = result[0] if isinstance(result, tuple) else result
+    if isinstance(evidence_frame, pd.DataFrame):
+        # Request settings are not proof of effective fallback adjustment.
+        evidence_frame.attrs['requested_feed'] = normalized_feed
+        evidence_frame.attrs['requested_adjustment'] = adjustment
     if (
         not return_meta
         and normalized_feed == "sip"

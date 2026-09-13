@@ -1,5 +1,136 @@
 # Current handoff
 
+## Calendar and input-contract implementation — September 13, 2026
+
+See docs/INPUT_CONTRACT_IMPLEMENTATION.md. Intraday normalization now uses the
+canonical exchange calendar; holiday/early-close rows excluded. Finalization intact.
+Provider/request attributes, finalized-batch bounds/count/hash and inference
+feature hash/column order are logged; decision debug includes input provenance.
+day_input_v1 compares explicit model metadata with serving inputs, reporting
+unknown/mismatched fields as unverified with no qualification authority. Loader
+preserves absent historical contracts as absent. No feed/adjustment/history change.
+Review: live IEX/all/10-day request vs incomplete historical model contract;
+current reference and development sources differ. Do not infer historical settings.
+Focused tests: 31 initial calendar/serving/contract; final 23 integration tests and
+16 loader tests passed. Final lint, compile and additional types (3 files) passed.
+Changed-file validator: 1,330 passed, 3 daily-fetch tests failed on unmocked Alpaca
+DNS requests in sandbox. Isolated reruns reproduce; get_daily_df AST unchanged
+from HEAD. /tmp/input-contract-validation.log; /tmp/input-contract-daily-failures.log;
+/tmp/input-contract-fetch-regressions.log. Full suite not clean; no broad rerun.
+Non-sending snapshot passed; preflight fresh broker, zero positions/orders.
+Paper-service restart succeeded; active, broker fresh/connected at 15:45:59 UTC,
+zero positions/orders, no broker failures; only existing model/replay flags.
+/tmp/input-contract-health-final.json. Selected-model contract review returns
+unverified with missing declarations: /tmp/input-contract-review.json.
+Docs-only validator and git diff --check passed after final handoff update.
+Natural finalized-batch/eligible-inference provenance verification remains pending
+normal scheduled session. Do not force trades or bypass stale-model gates.
+
+## Live/training bar contract verification — September 13, 2026
+
+See docs/LIVE_TRAINING_BAR_CONTRACT_AUDIT.md. Effective runtime settings: 10-day
+default live history vs selected model 60-day training metadata; live IEX/all,
+current reference-training delayed_sip/raw, development SIP/split. Historical
+selected-model feed/adjustment absent; do not infer it from current training code.
+Finalization verified at five-minute close + two seconds. 19 serving tests passed.
+Synthetic checks confirm normalize_bars retains holiday and post-early-close rows;
+it filters weekdays/time-of-day rather than canonical exchange sessions.
+No matching bar-fetch evidence in post-reboot service logs; actual returned live
+batch remains unverified. Health broker fresh, zero positions/orders, existing
+model/replay flags. No runtime edits, settings changes, new fetches, training or trials.
+Next corrective scope: calendar normalization, actual inference-batch provenance,
+then versioned training/serving input contract. Preserve selected model abstention.
+Docs-only validation and git diff --check passed.
+
+## Bounded feature parity audit — September 13, 2026
+
+See docs/STOCK_FEATURE_PARITY.md. New ai_trading.tools.stock_feature_parity checks
+current training/runtime builders on governed 2024-2025 stock data only. Nine
+fixed prefixes (250/500/1000 bars x three stocks): all identical-history and
+prefix-causality comparisons pass. Last-200-bar histories differ in recursive
+features at rtol=atol=1e-10; economic/prediction effect not measured.
+Report artifacts/stock_development/feature_parity.json. No model loaded, returns,
+training, trial consumption, holdout evaluation, orders or gate changes.
+Warmup regression confirms training imputation can yield finite rows where runtime
+rejects insufficient history. Full live-history equivalence remains unverified.
+Focused tests: 2 passed. Changed-file validator passed: 616 tests, lint, types
+(7 sources), compile; /tmp/feature-parity-validation.log. Used --market-hours
+--skip-runtime-smoke with separate health/incident checks and temporary bytecode cache.
+Docs-only validation and git diff --check passed. No runtime deployment needed.
+Source/ledger checks, live health and non-sending incident snapshot passed.
+
+## Stock-universe development readiness — September 13, 2026
+
+See docs/STOCK_DEVELOPMENT_READINESS.md. Post-maintenance service active, reboot
+00:57 UTC, broker fresh/connected, zero orders/positions; prior model/replay flags.
+Acquired governed AAPL/AMZN/MSFT SIP split-adjusted 1Min bars for 2024-2025 only:
+artifacts/stock_development/acquisition.json, quality passed, 194,700 expected and
+observed regular-session minutes per stock. No holdout acquisition/evaluation.
+New CLI ai_trading.tools.stock_development_readiness verifies source provenance
+and audits raw OHLCV plus 200-bar/current-session feature history. Canonical source
+verification extracted from research_feasibility; existing sampling logic retained.
+Report artifacts/stock_development/readiness.json: each stock 37,936 valid windows,
+195 warmup exclusions, 37,741 necessary feature-input-supported slots. No missing,
+duplicate or invalid regular-session minute exclusions. Full feature parity and
+execution remain unverified; feature imputation/RSI fallback cannot prove validity.
+Fresh broker accounting: 535 activities, 407 quantity matches, 407 unknown fee
+totals, no fee execution linkage. /tmp/stock-audit-accounting.json.
+Campaign ledger hashes match prior audit; no trials, fitting, returns or orders.
+3 readiness tests passed plus lint. Non-sending incident snapshot passed.
+Changed-file validator passed: 613 tests, lint, types (5 sources), compile;
+/tmp/stock-readiness-validation.log. Used --market-hours --skip-runtime-smoke,
+PYTHONPYCACHEPREFIX=/tmp/stock-audit-validation-cache, separate health/incident checks.
+Final added warmup test passed in the 3-test focused run. Docs-only and diff checks
+passed. No deployment needed. Next bounded gap is full feature computation parity
+and execution provenance; input support alone does not authorize model use.
+
+## Five-minute requirements and coverage — September 13, 2026
+
+Completed requested timing definition and development-only coverage assessment.
+See docs/FIVE_MINUTE_TIMING_REQUIREMENTS.md. Proposed convention: completed
+five-minute inputs, entry D+1 minute, exit D+6 (five minutes after entry); exact
+unique minute coverage throughout, same regular session. Not adopted in runtime,
+not retroactive labels, not a new trial. Existing model label durations remain
+irregular (fresh metadata check: maximum 89.67 hours).
+New reproducible CLI: ai_trading.tools.five_minute_coverage; report at
+artifacts/research_reset/five_minute_coverage.json. 2024-2025 governed ETF timestamps
+only, verified hashes and quality, no returns/signals/prices used in analysis.
+502 sessions/symbol: 38,438 candidate slots, 502 boundary exclusions each.
+DIA 36,088 complete, 1,848 missing; other five ETFs 37,936 complete, zero missing.
+No duplicate exclusions. Current AAPL/AMZN/MSFT coverage is not available in this
+dataset. Counts are timestamp upper bounds, not model-ready or independent trades.
+Campaign ledger hashes unchanged; no training, trials, orders or holdout evaluation.
+Tests: 2 new regressions passed. Validator lint, types (2 sources), compile passed;
+609 tests passed, 2 repository-audit tests initially failed writing pycache into
+read-only .codex. Rerun test_audit_repo_tool.py with
+PYTHONPYCACHEPREFIX=/tmp/five-minute-audit-pycache: all 3 passed, no source workaround.
+Logs: /tmp/five-minute-validation-final.log and
+/tmp/five-minute-audit-cache-validation.log. Live broker fresh, existing stale-model/
+replay flags only; non-sending incident snapshot passed. No deployment required.
+Docs-only validation and diff check passed. Next: separately review applicability
+to current stock universe and full feature requirements before any performance study.
+
+## Production timing verification — September 13, 2026
+
+Executed installed replay CLI with runtime environment and production paths;
+exit 2, blocked REPLAY_POLICY_NON_REGRESSION_FAILED as expected. New artifact:
+/var/lib/ai-trading-bot/runtime/replay_outputs/replay_hash_20260913.json
+SHA256 8b133b8ef7d03361a7ecbbd16bfc4621eed24448764bf1803e3b8904fffeb360.
+Both summaries persist timing contracts and per-fill diagnostics. Category counts,
+diagnostic rows and usable-plus-excluded markouts reconcile to all fills.
+Candidate: 82 fills, 76 usable; decision-target missing 34, fill-target missing 44,
+78 fills at/after decision target; net edge -10.735105 bps. Baseline: 534 fills,
+520 usable; decision-target missing 200, fill-target missing 249.
+Rolling source window changed; do not interpret score differences as improvement
+or regression caused by diagnostics. No tuning, training, orders or gate changes.
+Health 00:41:14 UTC: paper broker connected/fresh, zero orders/positions; only
+existing replay/stale-model flags. Non-sending incident snapshot passed.
+Logs: /tmp/timing-production-verification.log; /tmp/timing-production-health.json.
+Timer active; last actual invocation September 11, next September 14 09:22:18 UTC.
+Production CLI integration verified; actual timer-triggered adoption still pending.
+Runtime code unchanged, prior 836-test validation reused. Docs-only validation
+and git diff --check passed for this handoff update.
+
 ## Timing contract implementation — September 12, 2026
 
 See docs/REPLAY_TIMING_CONTRACT.md. Replay summary now persists explicit metric

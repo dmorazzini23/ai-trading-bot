@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.utils.market_calendar import is_trading_day, session_info
 
 logger = get_logger(__name__)
 pd = load_pandas()
@@ -88,11 +89,13 @@ def normalize_bars(
         df.index = df.index.tz_convert(UTC)
     if rth_only and isinstance(df.index, pd.DatetimeIndex):
         eastern = df.index.tz_convert(_NY_TZ)
-        is_weekday = eastern.weekday < 5
-        is_rth = (
-            (eastern.hour > 9) | ((eastern.hour == 9) & (eastern.minute >= 30))
-        ) & (eastern.hour < 16)
-        df = df[is_weekday & is_rth]
+        mask = pd.Series(False, index=df.index)
+        for day in set(eastern.date):
+            if not is_trading_day(day):
+                continue
+            session = session_info(day)
+            mask |= (df.index >= session.start_utc) & (df.index < session.end_utc)
+        df = df.loc[mask.to_numpy()]
     return df
 
 

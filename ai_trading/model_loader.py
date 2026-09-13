@@ -54,6 +54,7 @@ class DaySleeveProductionModel:
     market_regime_policy: Mapping[str, Any] | None
     governance_status: str
     serving_authority: str
+    input_contract: Mapping[str, Any] | None = None
 
 
 _DAY_SLEEVE_MODEL_CACHE: DaySleeveProductionModel | None = None
@@ -249,6 +250,8 @@ def load_day_sleeve_production_model(
         market_regime_policy=market_regime_policy,
         governance_status=governance_status,
         serving_authority=serving_authority,
+        input_contract=(MappingProxyType(dict(metadata['input_contract']))
+                        if isinstance(metadata.get('input_contract'), Mapping) else None),
     )
     _DAY_SLEEVE_MODEL_CACHE = loaded
     _DAY_SLEEVE_MODEL_CACHE_KEY = cache_key

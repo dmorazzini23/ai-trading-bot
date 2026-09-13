@@ -61,7 +61,7 @@ def sampling_support(protocol: dict[str, Any], indices: dict[str, pd.DatetimeInd
     return {"status": "support_possible_not_strategy_eligible" if possible else "blocked_sampling_support", "possible_common_periods": len(common), "candidate_periods": len(candidate_indices), "maximum_possible_selections": maximum_selections, "supported_quarters_upper_bound": supported_quarters_upper, "minimum_required": {"periods": 60, "selections": 100, "quarters_with_12_selections": 6}, "common_entry_dates": [dates[i].isoformat() for i in sorted(common)], "periods_by_quarter": dict(folds), "symbols": by_symbol, "invalid_inputs": invalid, "prices_read_for_analysis": False, "strategy_outcomes_computed": False, "trial_claimed": False, "promotion_authority": False, "limitations": ["Possible observations are upper bounds; actual signal selection and valid prices can reduce support.", "Missing bars may reflect no eligible trades; this audit alone does not identify their cause.", "Passing this audit cannot reopen a consumed campaign or authorize a new trial."]}
 
 
-def audit_sampling_acquisition(protocol: dict[str, Any], acquisition_path: Path) -> dict[str, Any]:
+def load_governed_development_timestamps(protocol: dict[str, Any], acquisition_path: Path) -> tuple[dict[str, pd.DatetimeIndex], dict[str, Any]]:
     """Verify frozen source hashes and inspect only their timestamp columns."""
     acquisition_raw = acquisition_path.read_bytes()
     acquisition = json.loads(acquisition_raw)
@@ -103,8 +103,15 @@ def audit_sampling_acquisition(protocol: dict[str, Any], acquisition_path: Path)
             raise ValueError(f"source changed during audit:{symbol}")
         indices[symbol] = index
         sources[symbol] = {"path": str(path), "sha256": digest, "stable_during_read": True, "columns_used": ["timestamp"]}
+    report = dict(generated_at=datetime.now(UTC).isoformat(), protocol_hash=protocol_hash(protocol), sources=sources, acquisition_sha256=hashlib.sha256(acquisition_raw).hexdigest(), manifest_sha256=hashlib.sha256(manifest_raw).hexdigest())
+    return indices, report
+
+
+def audit_sampling_acquisition(protocol: dict[str, Any], acquisition_path: Path) -> dict[str, Any]:
+    """Audit fixed slower-horizon support after canonical source verification."""
+    indices, provenance = load_governed_development_timestamps(protocol, acquisition_path)
     report = sampling_support(protocol, indices)
-    report.update(generated_at=datetime.now(UTC).isoformat(), protocol_hash=protocol_hash(protocol), sources=sources, acquisition_sha256=hashlib.sha256(acquisition_raw).hexdigest(), manifest_sha256=hashlib.sha256(manifest_raw).hexdigest())
+    report.update(provenance)
     return report
 
 

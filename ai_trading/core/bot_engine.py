@@ -176,6 +176,7 @@ from ai_trading.models.contracts import (
     normalize_bar_timeframe,
 )
 from ai_trading.features.day_sleeve import build_day_sleeve_features
+from ai_trading.features.input_provenance import compare_input_contracts, describe_batch, frame_identity
 from ai_trading.model_loader import load_day_sleeve_production_model
 from ai_trading.registry.manifest import evaluate_market_regime_policy
 from ai_trading.policy.compiler import (
@@ -7457,6 +7458,12 @@ def _score_day_sleeve_with_ml(
         return heuristic_score, heuristic_confidence, None, None
     try:
         features = build_day_sleeve_features(frame)
+        input_provenance = dict(frame.attrs.get('finalized_input_provenance') or describe_batch(frame))
+        input_provenance['feature_input_sha256'] = frame_identity(features)
+        input_provenance['feature_columns'] = list(features.columns)
+        input_provenance['training_contract_comparison'] = compare_input_contracts(
+            getattr(bundle, 'input_contract', None), input_provenance.get('input_contract', {}))
+        logger.info('DAY_SLEEVE_INFERENCE_INPUT', extra={'symbol': symbol, 'input_provenance': input_provenance})
         probability = _day_sleeve_positive_probability(bundle.model, features)
         regimes = infer_day_sleeve_regimes(frame["close"].astype(float).to_numpy())
         regime = regimes[-1] if regimes else "sideways"
@@ -7529,6 +7536,7 @@ def _score_day_sleeve_with_ml(
         )
         debug = {
             "ml_influenced": True,
+            "input_provenance": input_provenance,
             "model_lineage": lineage,
             "ml_governance_status": str(
                 getattr(bundle, "governance_status", "production")
@@ -42532,6 +42540,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     now=now,
                     grace_seconds=day_sleeve_bar_finality_grace_seconds,
                 )
+                if df is not None:
+                    df.attrs['history_policy'] = {'kind': 'rolling_calendar_days',
+                                                  'days': (end - start).total_seconds() / 86400}
+                batch_provenance = describe_batch(df, requested_start=start,
+                    requested_end=end, grace_seconds=max(0.0, min(day_sleeve_bar_finality_grace_seconds, 60.0)),
+                    rth_only=rth_only)
+                if df is not None:
+                    df.attrs['finalized_input_provenance'] = batch_provenance
+                logger.info('DAY_SLEEVE_FINALIZED_BATCH', extra={
+                    'symbol': symbol,
+                    'input_provenance': batch_provenance,
+                })
                 if _day_sleeve_waiting_for_first_finalized_bar(
                     df,
                     now=now,
