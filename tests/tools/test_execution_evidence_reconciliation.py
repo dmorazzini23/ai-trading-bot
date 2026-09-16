@@ -6,7 +6,17 @@ from ai_trading.tools.execution_evidence_reconciliation import reconcile_evidenc
 
 
 def _fill(fill_id, side, qty, price, timestamp, fee=None):
-    return {"fill_id": fill_id, "order_id": fill_id, "symbol": "AAPL", "side": side, "fill_qty": qty, "fill_price": price, "ts": timestamp, "fee_amount": fee, "fee_source": "broker_payload" if fee is not None else "missing"}
+    return {"fill_id": fill_id, "order_id": fill_id, "symbol": "AAPL", "side": side, "fill_qty": qty, "fill_price": price, "ts": timestamp, "fee_amount": fee, "fee_currency": "USD", "fee_basis": "per_fill_total", "fee_source": "broker_payload" if fee is not None else "missing"}
+
+
+@pytest.mark.parametrize("field,value", [("fee_currency", None), ("fee_currency", "EUR"), ("fee_basis", "cumulative_order"), ("fee_amount", -1), ("fee_amount", None)])
+def test_session_fees_require_complete_per_fill_contract(field, value):
+    buy = {**_fill("buy", "buy", 1, 100, "2026-01-02T15:00:00Z", 0), field: value, "fee_bps": 1}
+    sell = _fill("sell", "sell", 1, 101, "2026-01-02T16:00:00Z", 0)
+    report = reconcile_evidence(decisions=[buy, sell], orders=[buy, sell], tca=[buy, sell], fills=[buy, sell])
+    assert report["counts"]["fees_missing"] == 1
+    assert report["entry_exit_links"][0]["net_pnl"] is None
+    assert report["status"] == "evidence_gaps"
 
 
 def test_estimated_or_unverified_fees_cannot_certify_net_profit():

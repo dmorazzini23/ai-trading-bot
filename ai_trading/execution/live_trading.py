@@ -16814,6 +16814,7 @@ class ExecutionEngine:
         policy_hash: str | None,
         decision_trace_id: str | None,
         session_regime: str | None = None,
+        strategy_id: str | None = None,
         market_regime: str | None = None,
         volatility_regime: str | None = None,
         trend_regime: str | None = None,
@@ -16887,6 +16888,7 @@ class ExecutionEngine:
                 side=side,
                 quantity=float(quantity),
                 decision_ts=datetime.now(UTC).isoformat(),
+                strategy_id=strategy_id,
                 expected_edge_bps=expected_edge_bps,
                 metadata=metadata,
                 regime=metadata.get("market_regime") or metadata.get("session_regime"),
@@ -23632,6 +23634,8 @@ class ExecutionEngine:
                 model_artifact_hash=model_artifact_hash_hint,
                 policy_hash=policy_hash_hint,
                 decision_trace_id=decision_trace_id_hint,
+                strategy_id=(str(metadata_raw.get("strategy_id") or "").strip() or None)
+                if isinstance(metadata_raw, Mapping) else None,
                 session_regime=(
                     str(execution_profile_context.get("session_regime") or "")
                     if isinstance(execution_profile_context, Mapping)

@@ -48,6 +48,22 @@ def test_normalize_submitted_order_defaults_pending_payload() -> None:
     assert result.fill_price is None
     assert result.fill_fees == 0.0
     assert result.persistable_fill is False
+    assert result.submitted_qty is None
+
+
+def test_normalize_sampled_broker_quantity() -> None:
+    from ai_trading.core.bot_engine import _extract_order_value
+    from ai_trading.execution.engine import ExecutionResult
+
+    order = ExecutionResult(SimpleNamespace(id="broker-1", qty="1"), "partially_filled", 0.5, 1, None)
+    result = execution_outcome.normalize_submitted_order(
+        order, delta_shares=12, extract_order_value=_extract_order_value,
+        extract_order_fill_timestamp=lambda obj: None,
+        normalize_order_status_token=str, safe_float=_safe_float,
+        has_persistable_fill=lambda **kwargs: False,
+    )
+    assert result.submitted_qty == 1
+    assert result.filled_qty == 0.5
 
 
 def test_normalize_submitted_order_does_not_conflate_client_and_broker_ids() -> None:

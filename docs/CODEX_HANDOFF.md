@@ -1,5 +1,170 @@
 # Current handoff
 
+## Replay/fee/session trace — September 16, 04:48 UTC
+
+See docs/REPLAY_FEE_SESSION_REVIEW_20260916.md. Exact normalized input and full
+reproduced output hashes match Sep15 saved replay. All24 missing comparisons:
+10Sep15 fills after cutoff, 9cap-zero, 3simulated orders expired unfilled, 2older
+market exits absent decision/TCA input. Candidate90fills/90markouts/no exclusions;
+baseline536fills/527markouts (8horizon,1no-subsequent). No source/pricing repair.
+Fee-specific FEE/PTC/PTR reads empty+pagination complete. Official current Alpaca
+paper docs exclude regulatory fees; do not expect paper data alone to close real
+total-cost gate. Account activities may post next day; empty != zero fees.
+Updated Sep15 session CLI: all10 linked/quantities/positions matched, fees_missing10.
+Artifacts /tmp/replay-missing-observations.json, replay-trace-reproduction.log,
+replay-fee-followup-broker.json, replay-fee-session-review/latest.json.
+Read-only investigation/docs; no runtime changes/restart/training/new trials.
+Natural receipt/closeout-with-exposure verification still pending.
+
+## Four evidence priorities — September 16, 04:36 UTC
+
+See docs/EVIDENCE_FOLLOWUP_20260916.md and TRAINING_RESUMPTION_REQUIREMENTS.md.
+Sep15 ten fills: all decision/order/TCA links and quantities/position boundaries
+match; sole session gap is ten missing fees. Fresh 2-day broker activity capture:
+14fills/14quantitymatches, no fee fields or fee activities. No historical repair.
+Fixed reconciliation accepting fees without USD/per_fill_total; stopped comparison
+publishing fee bps for invalid fee contracts. Added separate evidence gap counts,
+bounded per-order comparison exclusions and explicit all-history scope. Two
+benchmark mismatches are Sep11 AMZN255.20vs255.17 and Sep14 AAPL333.02vs332.94;
+Sep15 has no matching markout observations. Prices remain unchanged/gates intact.
+Validated455 selected +34focused, lint/types39/compile, non-sending snapshot pass.
+CLI refreshed /tmp/evidence-four-review.json: fees_missing10, zero comparable pairs.
+04:34 broker: no orders since reporting deploy, zero positions/openorders, closed.
+Natural production field verification PENDING next eligible order (open13:30UTC).
+No forced trades/training/holdout work. CLI-only changes need no service restart.
+Artifacts/logs /tmp/evidence-four-*. Training checklist preserves explicit review.
+
+## Reporting provenance — September 15, 18:40 UTC
+
+See docs/REPORTING_PROVENANCE_20260915.md. Primary netted sleeve strategy ID now
+passes to durable intents. Receipts separate requested/submitted/filled quantities;
+unknown broker quantity stays null; intent quantity remains requested. Historical
+records unchanged, gates/research untouched. Focused54 and final contract32 pass;
+validator426 pass, lint/types35/compile pass, final types2 pass, non-sending snapshot
+pass. /tmp/provenance-{validation,focused,contract-tests}.log. Broker18:38: ten
+orders, zero positions; 10/10 durable fill quantity matches, old strategy IDs null.
+Restart18:40:05 UTC succeeded; health18:40:39 broker fresh/connected zero positions
+and orders, NRestarts0. Startup warnings: existing parity, stale model, minute gaps,
+sampling block; no new reporting error observed. /tmp/provenance-post-health.json
+and /tmp/provenance-postrestart.log. Docs-only/diff checks passed.
+EOD observation pending19:55–20:00; reconciliation command in report after20:15.
+No background watcher installed. Natural orders required for production field proof.
+
+## Trade/exit review — September 15, 2026
+
+See docs/TRADE_AND_EXIT_REVIEW_20260915.md. Completed ten-trade audit and explicit
+per-trade authority report (/tmp/four-improvements-trade-review.json). Four round
+trips -5.31 gross; all tagged stale_model_paper_diagnostic, not qualified ML.
+Overnight policy enabled (5-minute lead) DID trigger Sep14; Alpaca 504 escaped EOD
+exit and crashed service at20:00 before second symbol. execution_flow now handles
+APIError/transport failure per exit, continues, uses stable date/symbol/side client
+IDs across cycles/restarts; position-fetch APIError handled. Broker latency can
+still defeat close deadline; no guarantee of flatness without broker confirmation.
+Three unmocked-network tests repaired: actual imported getter patched; memo test
+primary call mocked and historical window aligned. Focused73 passed; validator369
+passed, lint/types28/compile passed; non-sending incident smoke passed.
+Additional gaps documented: null intent strategy_id; AMZN receipts show requested
+8/12 vs actual1; review separates these. 113bps carried-MSFT exit quote needs causal
+review. No trading thresholds, research budgets or holdout changed. Restart17:00 UTC;
+at17:01 service active/ready, broker fresh, zero positions/orders; only existing
+parity/stale-model flags. /tmp/four-improvements-health.json. Docs/diff checks pass.
+Logs: /tmp/four-improvements-{focused,validation}.log. Actual EOD window pending.
+
+## Log diagnostics — September 14, 18:40 UTC
+
+See docs/LOG_DIAGNOSTICS_20260914.md. Renamed stale-data rejection warning;
+gap logs now identify missing timestamps/provider/feed; skew logs identify outliers.
+49 focused tests passed; lint/mypy22/compile passed. Selected suite 648 passed,
+three known unmocked daily-fetch DNS failures (get_daily_df unchanged from HEAD).
+Non-sending incident check and docs/diff checks passed. Restarted 18:36:30 UTC;
+watched through 18:40:26, three active cycles, broker fresh, two positions/zero
+orders. No new operational error; only four gap/four replay warnings and existing
+stale-model startup error/unavailable warning. No quote/skew recurrence in window.
+Same-feed requery confirms AMZN bars absent at 16:35,17:56,17:59 UTC; provider gap
+unresolved, not fabricated or hidden. Skew/freshness causes not proven resolved.
+Private logs /tmp/log-fix-{validation,tests,postrestart}.log; health
+/tmp/log-fix-health.json. Thresholds/models/trading authority unchanged.
+
+## Historical integrity / active reconciler — September 14, 14:29 UTC
+
+See docs/HISTORICAL_INTEGRITY_REVIEW_20260914.md. Read-only audit: 2,082 intents,
+715 fill rows; 711 quantities match complete May 3 onward broker capture; four
+unmatched explicitly tagged cutover drills. No observed duplicates/overfills,
+orphans, invalid quantities, post-terminal live-source events or reopened intents.
+SQLite quick_check ok. Repair preview: no database mutations justified.
+LiveTradingEngine durable/pending reconciliation confirmed in logs, zero lookup
+errors. Optional PositionReconciler worker not wired into repository startup;
+no activation observed. Session now open; final broker fresh, zero positions/orders;
+health degraded with existing parity/stale-model flags. Post-close audit pending.
+Private evidence /tmp/history-integrity-audit.json and /tmp/history-audit-*.json.
+No runtime edits, trades or restarts. Docs-only validation/diff check passed.
+
+## Recovery fixes — September 14, 2026
+
+All four audited bugs corrected; see docs/ORDER_RECOVERY_FIXES_20260914.md.
+Conditional terminal transitions; cumulative fills serialized in DB across store
+connections/restarts; invalid snapshots preserve state; APIError recovery and
+interruptible worker stop/restart. New regression suite and manager fake updates.
+Focused: 38 passed. Validator: 247 passed, lint/types (17 sources)/compile passed.
+Synthetic lifecycle parity: four scenarios, zero mismatches. Non-sending incident
+check passed. Service restarted; at 03:23 UTC active/ready, broker fresh/connected,
+zero positions/orders; only existing stale-model/parity flags. Snapshot:
+/tmp/recovery-fix-postdeploy.json. Docs-only validation and git diff --check passed.
+Logs: /tmp/recovery-fix-{tests,validation,parity}.log. No trades/gate changes.
+
+## Recovery audit — September 14, 2026
+
+Historical findings, now fixed above: docs/ORDER_RECOVERY_AUDIT_20260914.md.
+P1 terminal intents reopened by late callbacks; P1 concurrent cumulative fill
+callbacks double-count; P2 None snapshot clears optional reconciler state;
+P2 APIError kills optional reconciliation loop with running flag still true.
+Five local reproductions passed; retained fixture in
+artifacts/audits/test_order_recovery_20260914.py asserts BUG behavior, not fixes.
+Existing focused tests: 17 passed. No runtime changes, trades or deployment.
+Live manager wiring verified for OMS findings; optional reconciler activation
+not established. Next implementation priority: atomic durable transitions and
+fill deduplication, then snapshot failure and worker recovery handling.
+
+## Operational review — September 14, 2026, 02:58 UTC
+
+See docs/OPERATIONAL_REVIEW_20260914.md. Fresh health: broker connected/fresh,
+zero positions/orders; existing stale-model/parity flags. Market closed;
+post-deployment regular-session verification remains pending (13:30–20:00 UTC).
+Verified daily Sep 11, weekly Sep 12 and Sunday Sep 13 workflows/operator reports;
+three reset-approved evidence steps passed. Training guard research_reset_active.
+Policy/scorecard tests: 22 passed. Fresh accounting: 535 activities, 407 quantity
+matches, 407 unknown fees; Documents API access not available in configured client.
+Fresh scorecard: artifacts/research_reset/operational_review_20260914_scorecard.json;
+12 observed fills, zero complete chains, missing causal quotes/fees for all 12.
+No runtime changes or trials. Sep 15–21 review pending future weekly Sep 19 output.
+Existing one-shot user verification timer expired Sep 8; recurring evidence timers
+remain active. No automatic follow-up added. Next: inspect regular-session evidence,
+then next weekly report; obtain authoritative per-fill fee records if available.
+
+## Deep input fixes — September 13, 2026
+
+See docs/DEEP_INPUT_VALIDATION_FIXES.md. Strict input-contract scalar/nested schema
+validation; malformed contracts cannot match. Live feature builder rejects invalid
+historical OHLCV and duplicate/naive/off-grid/irregular timestamps before indicators.
+Replay training retains missing features instead of ffill/zero; RSI errors propagate
+in both replay and after-hours paths. Feature-cache v2 prevents old imputed reuse.
+Shared training/label_timing.py rejects gaps, cross-session/holiday/early-close and
+off-grid labels. Shadow overrides enforce elapsed horizon/session too. Warmup and
+session-boundary exclusions are explicit; numeric quality thresholds unchanged.
+Empty datasets retain quality diagnostics. Existing models and research gates intact.
+Execution evidence refreshed: 535 activities, 407 quantity matches, 407 unknown
+fee totals. /tmp/deep-input-accounting.json; no fee fabrication or trades.
+Real development feature check: 9/9 same-history, 9/9 causal. Ledger hashes unchanged.
+Validator: 199 selected tests, lint/types (10 sources), compile passed;
+/tmp/deep-input-final-validation.log. Additional final focused tests: 46 passed;
+after-hours/helper scope: 114 passed. Final type check: 2 sources passed;
+/tmp/deep-input-last-types.log. Deployed by service restart September 14.
+At 02:31 UTC service active/ready; broker fresh/connected, zero positions/orders.
+Only existing replay_live_parity_gate_failed and required_model_stale flags remain.
+Health snapshot: /tmp/deep-input-postdeploy.json. Non-sending incident check passed.
+Regular-session inference and scheduled-training behavior remain to be observed;
+no forced trades/training or research-budget changes. Per-fill fees remain blocked.
+
 ## Calendar and input-contract implementation — September 13, 2026
 
 See docs/INPUT_CONTRACT_IMPLEMENTATION.md. Intraday normalization now uses the

@@ -114,6 +114,40 @@ def test_execute_netting_submission_returns_blocked_on_exception() -> None:
     assert result.terminal_reason == "BROKER_SUBMIT_ERROR"
 
 
+def test_sampled_receipt_preserves_requested_submitted_and_filled_quantities() -> None:
+    kwargs = _base_kwargs()
+    submitted: dict[str, Any] = {}
+
+    def submit(*args: Any, **values: Any) -> Any:
+        submitted.update(values)
+        return SimpleNamespace(status="partially_filled")
+
+    kwargs["submit_order_func"] = submit
+    kwargs["normalize_submitted_order_func"] = lambda *args, **values: SimpleNamespace(
+        status_text="partially_filled", submitted_qty=1.0, filled_qty=0.5,
+    )
+    result = execute_netting_submission(**kwargs)
+    assert submitted["metadata"]["strategy_id"] == "alpha"
+    assert result.order_payload["requested_qty"] == 10
+    assert result.order_payload["submitted_qty"] == 1
+    assert result.order_payload["qty"] == 1
+    assert result.order_payload["filled_qty"] == 0.5
+
+
+@pytest.mark.parametrize("submitted_qty", [None, 0.0, 1.0])
+def test_journal_keeps_unknown_broker_quantity_distinct_from_intent(submitted_qty: float | None) -> None:
+    from ai_trading.contracts.decisioning import OrderIntent, _derive_broker_result
+
+    payload = {"requested_qty": 12, "submitted_qty": submitted_qty, "qty": submitted_qty,
+               "side": "buy", "broker_order_id": "broker-1", "filled_qty": 0.0}
+    intent = OrderIntent.from_mapping(payload, symbol="AMZN", bar_ts=None)
+    record = SimpleNamespace(order=payload, gates=["OK_TRADE"], fills=[], tca={})
+    result = _derive_broker_result(record, intent, provider="alpaca")
+    assert intent.qty == 12
+    assert result is not None
+    assert result.broker_order.qty == submitted_qty
+
+
 def test_execute_netting_submission_preserves_submit_outcome_detail() -> None:
     kwargs = _base_kwargs()
     kwargs["runtime"] = SimpleNamespace(

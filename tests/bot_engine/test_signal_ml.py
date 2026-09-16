@@ -387,3 +387,5 @@ def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):
 
     assert result is not None
     assert "ML_TRAINING_SERVING_SKEW" in caplog.text
+    record = next(r for r in caplog.records if r.message == "ML_TRAINING_SERVING_SKEW")
+    assert "rsi" in record.outlier_features

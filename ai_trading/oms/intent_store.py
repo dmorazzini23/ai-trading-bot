@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import math
 from pathlib import Path
 import threading
 from typing import Any, cast
@@ -657,7 +658,10 @@ class IntentStore:
             update(_INTENTS_TABLE)
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
             .values(
-                status=status_for_submit_ack(),
+                status=case(
+                    (_INTENTS_TABLE.c.status.in_((*sorted(_TERMINAL_STATUSES), "PARTIALLY_FILLED")), _INTENTS_TABLE.c.status),
+                    else_=status_for_submit_ack(),
+                ),
                 broker_order_id=str(broker_order_id),
                 updated_at=now,
             )
@@ -688,6 +692,7 @@ class IntentStore:
         stmt = (
             update(_INTENTS_TABLE)
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
+            .where(_INTENTS_TABLE.c.status.in_((PENDING_SUBMIT_STATUS, SUBMITTING_STATUS)))
             .values(
                 status=status_for_submit_error(),
                 last_error=str(error)[:500],
@@ -722,11 +727,15 @@ class IntentStore:
         fee: float = 0.0,
         liquidity_flag: str | None = None,
         fill_ts: str | None = None,
+        cumulative: bool = False,
     ) -> None:
         """Persist a fill observation for an intent."""
 
         assert _INTENTS_TABLE is not None
         assert _INTENT_FILLS_TABLE is not None
+        fill_qty = float(fill_qty)
+        if not math.isfinite(fill_qty) or fill_qty < 0:
+            raise ValueError("fill quantity must be finite and nonnegative")
         now = self._utcnow_iso()
         ts = fill_ts or now
         fill_stmt = insert(_INTENT_FILLS_TABLE).values(
@@ -739,7 +748,7 @@ class IntentStore:
             created_at=now,
         )
         status_case = case(
-            (_INTENTS_TABLE.c.status.in_(("FILLED", "CLOSED")), _INTENTS_TABLE.c.status),
+            (_INTENTS_TABLE.c.status.in_(tuple(_TERMINAL_STATUSES)), _INTENTS_TABLE.c.status),
             else_=status_for_fill(None),
         )
         update_stmt = (
@@ -752,6 +761,24 @@ class IntentStore:
         )
         fill_id_text: str | None = None
         with self._lock, self._session_factory.begin() as session:
+            # Acquire a database write lock before reading cumulative fills. This
+            # serializes independent store instances/processes as well as threads.
+            locked = session.execute(
+                update(_INTENTS_TABLE)
+                .where(_INTENTS_TABLE.c.intent_id == intent_id)
+                .values(updated_at=_INTENTS_TABLE.c.updated_at)
+            )
+            if self._result_rowcount(locked) == 0:
+                raise ValueError("unknown fill intent")
+            if cumulative:
+                quantities = session.execute(
+                    select(_INTENT_FILLS_TABLE.c.fill_qty)
+                    .where(_INTENT_FILLS_TABLE.c.intent_id == intent_id)
+                ).scalars()
+                fill_qty = max(0.0, fill_qty - sum(float(qty) for qty in quantities))
+                if fill_qty == 0:
+                    return
+                fill_stmt = fill_stmt.values(fill_qty=fill_qty)
             fill_result = session.execute(fill_stmt)
             session.execute(update_stmt)
             inserted_primary = self._result_inserted_primary_key(fill_result)
@@ -810,6 +837,7 @@ class IntentStore:
         stmt = (
             update(_INTENTS_TABLE)
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
+            .where(~_INTENTS_TABLE.c.status.in_(tuple(_TERMINAL_STATUSES)))
             .values(
                 status=normalized,
                 last_error=(str(last_error)[:500] if last_error else None),

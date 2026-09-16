@@ -39,6 +39,17 @@ def build_day_sleeve_features(bars: Any) -> Any:
     if len(set(normalized_columns)) != len(normalized_columns):
         raise ValueError("Day-sleeve feature bars contain duplicate columns")
     frame.columns = normalized_columns
+    if (not isinstance(frame.index, pd.DatetimeIndex) or frame.index.tz is None
+            or frame.index.hasnans or frame.index.has_duplicates or not frame.index.is_monotonic_increasing):
+        raise ValueError('Day-sleeve history requires unique ordered timezone-aware timestamps')
+    if bool(((frame.index.minute % 5 != 0) | (frame.index.second != 0)
+             | (frame.index.microsecond != 0) | (frame.index.nanosecond != 0)).any()):
+        raise ValueError('Day-sleeve timestamps are not aligned to the five-minute grid')
+    stamps = pd.Series(frame.index, index=frame.index)
+    dates = pd.Series(frame.index.tz_convert('America/New_York').date, index=frame.index)
+    same_date = dates.eq(dates.shift())
+    if bool((same_date & stamps.diff().ne(pd.Timedelta(minutes=5))).any()):
+        raise ValueError('Day-sleeve history contains a missing or irregular five-minute interval')
     required_raw = ("open", "high", "low", "close", "volume")
     missing_raw = [column for column in required_raw if column not in frame.columns]
     if missing_raw:
@@ -49,6 +60,10 @@ def build_day_sleeve_features(bars: Any) -> Any:
     raw_values = frame.loc[:, required_raw].to_numpy(dtype=float)
     if not bool(np.isfinite(raw_values).all()):
         raise ValueError("Day-sleeve feature bars contain non-finite OHLCV values")
+    if (not bool((raw_values > 0).all())
+            or bool((frame['high'] < frame[['open', 'close', 'low']].max(axis=1)).any())
+            or bool((frame['low'] > frame[['open', 'close', 'high']].min(axis=1)).any())):
+        raise ValueError('Day-sleeve history contains invalid OHLCV geometry or non-positive values')
 
     frame = compute_macd(frame)
     frame = compute_macds(frame)

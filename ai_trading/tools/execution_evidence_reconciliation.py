@@ -132,12 +132,12 @@ def reconcile_evidence(*, decisions: list[dict[str, Any]], orders: list[dict[str
         for name, source_keys in (("decision", decision_keys), ("order", order_keys), ("tca", tca_keys)):
             counts[f"{name}_matched" if identities & source_keys else f"{name}_unmatched"] += 1
         fee = _number(row.get("fee_amount"))
-        fee_bps = _number(row.get("fee_bps"))
         fee_source = str(row.get("fee_source") or "legacy_unverified")
         counts[f"fee_source_{fee_source}"] += 1
-        if fee is None and fee_bps is not None:
-            fee = qty * price * fee_bps / Decimal(10000)
-        if fee_source not in {"broker_payload", "broker_activity"}:
+        if (fee_source not in {"broker_payload", "broker_activity"}
+                or fee is None or fee < 0
+                or row.get("fee_currency") != "USD"
+                or row.get("fee_basis") != "per_fill_total"):
             if fee_source == "configured_estimate":
                 counts["fees_estimated"] += 1
             fee = None
@@ -230,6 +230,11 @@ def reconcile_session(*, session_date: str, account_id: str, boundaries: list[di
     if report["counts"].get("tca_unmatched", 0):
         gaps.append("tca_missing")
     report.update(session_date=session_date, unknown_identity_fills=unknown_identity, unclassifiable_fill_timestamps=invalid_timestamps, session_gaps=gaps, status="evidence_gaps" if gaps else "paper_session_reconciled")
+    report["evidence_gap_counts"] = {
+        name: report["counts"].get(name, 0)
+        for name in ("decision_unmatched", "order_unmatched", "tca_unmatched",
+                     "fees_missing", "invalid_fill_rows", "missing_fill_id", "conflicting_fill_rows")
+    }
     report["boundary_evidence"] = {"opening_timestamp": opening[0].isoformat() if opening else None, "closing_timestamp": closing[0].isoformat() if closing else None, "fill_interval": "opening_exclusive_closing_inclusive", "opening_window_utc": [(start - pd.Timedelta(minutes=15)).isoformat(), start.isoformat()], "closing_window_utc": [end.isoformat(), (end + pd.Timedelta(minutes=15)).isoformat()]}
     return report
 

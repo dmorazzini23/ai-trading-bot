@@ -74,7 +74,7 @@ def test_periodic_reconciliation_thread_and_loop_branches(monkeypatch) -> None:
     low = pr.PositionDiscrepancy("AAPL", 0, 1, "missing_position", "low")
     loop_reconciler.reconcile_positions = lambda: [low]
     loop_reconciler.auto_resolve_discrepancies = lambda discrepancies: len(discrepancies)
-    monkeypatch.setattr(pr.time, "sleep", lambda _seconds: setattr(loop_reconciler, "running", False))
+    monkeypatch.setattr(loop_reconciler._stop_event, "wait", lambda _seconds: True)
     loop_reconciler._reconciliation_loop()
 
     error_reconciler = pr.PositionReconciler()
@@ -84,7 +84,7 @@ def test_periodic_reconciliation_thread_and_loop_branches(monkeypatch) -> None:
         raise ValueError("bad reconciliation")
 
     error_reconciler.reconcile_positions = fail_reconcile
-    monkeypatch.setattr(pr.time, "sleep", lambda _seconds: setattr(error_reconciler, "running", False))
+    monkeypatch.setattr(error_reconciler._stop_event, "wait", lambda _seconds: True)
     error_reconciler._reconciliation_loop()
 
 

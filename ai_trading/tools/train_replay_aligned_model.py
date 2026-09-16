@@ -35,6 +35,7 @@ from ai_trading.features.indicators import (
     compute_vwap,
 )
 from ai_trading.logging import get_logger
+from ai_trading.training.label_timing import valid_five_minute_labels
 from ai_trading.replay.live_cost_alignment import evaluate_cost_scenarios
 from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.models.contracts import (
@@ -63,7 +64,6 @@ from ai_trading.tools.offline_replay import (
     _load_live_cost_replay_model,
     _replay_session_regime,
     _replay_slippage_bps,
-    _safe_rsi,
     _sanitize_model_feature_index,
 )
 
@@ -83,7 +83,7 @@ REPLAY_ALIGNED_FEATURE_COLUMNS: tuple[str, ...] = (
     "macd_signal_gap",
     "rsi_centered",
 )
-_FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v1"
+_FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v2_no_imputation"
 _HISTORICAL_AUTHORITY_REQUIRED: dict[str, Any] = {
     "research_only": True,
     "evidence_type": "historical_research",
@@ -239,13 +239,19 @@ def _feature_frame(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
     work = compute_vwap(work)
     work = compute_sma(work, windows=(50, 200))
     close_arr = pd.to_numeric(work.get("close"), errors="coerce").to_numpy(dtype=float)
-    work["rsi"] = _safe_rsi(close_arr)
+    from ai_trading.indicators import rsi as rsi_indicator
+    rsi_values = np.asarray(rsi_indicator(tuple(close_arr.tolist()), 14), dtype=float)
+    if rsi_values.size != len(work):
+        raise ValueError('Training RSI output is not aligned to input bars')
+    work["rsi"] = rsi_values
     work = _augment_model_features(work)
     for name in REPLAY_ALIGNED_FEATURE_COLUMNS:
         if name not in work.columns:
             work[name] = np.nan
     features = work[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].apply(pd.to_numeric, errors="coerce")
-    return cast(pd.DataFrame, features.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0))
+    return cast(pd.DataFrame, features.replace([np.inf, -np.inf], np.nan))
+
+
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -410,6 +416,11 @@ def _load_shadow_markout_overrides(
                 outcome_id = str(row.get("outcome_id") or "").strip()
                 if pd.isna(timestamp) or pd.isna(label_end) or not np.isfinite(edge):
                     raise ValueError(f"invalid shadow label at row {line_number}")
+                if (label_end - timestamp != pd.Timedelta(minutes=5 * int(horizon_bars))
+                        or timestamp.tz_convert('America/New_York').date() != label_end.tz_convert('America/New_York').date()):
+                    raise ValueError(f'shadow label timing mismatch at row {line_number}')
+                if not valid_five_minute_labels(pd.date_range(timestamp, label_end, freq='5min'), int(horizon_bars)).iloc[0]:
+                    raise ValueError(f'shadow label outside exchange session at row {line_number}')
                 if not outcome_id or outcome_id in outcome_ids:
                     raise ValueError(f"duplicate shadow outcome at row {line_number}")
                 outcome_ids.add(outcome_id)
@@ -923,7 +934,8 @@ def _build_symbol_dataset(
         frame = frame.sort_index(kind="mergesort")
         features = features.reindex(frame.index)
     close = pd.to_numeric(frame["close"], errors="coerce").astype(float)
-    future_close = close.shift(-int(horizon_bars))
+    timing_valid = valid_five_minute_labels(frame.index, int(horizon_bars))
+    future_close = close.shift(-int(horizon_bars)).where(timing_valid)
     gross_long_bps = ((future_close / close.replace(0.0, np.nan)) - 1.0) * 10000.0
     if "spread_bps" in frame.columns:
         spread_cost_bps = pd.to_numeric(frame["spread_bps"], errors="coerce").fillna(0.0).clip(lower=0.0).astype(float)
@@ -1014,6 +1026,7 @@ def _build_symbol_dataset(
     out["symbol"] = symbol
     out["timestamp"] = frame.index
     label_end_timestamp = pd.Series(frame.index, index=frame.index).shift(-int(horizon_bars))
+    label_end_timestamp = label_end_timestamp.where(timing_valid)
     out["label_end_timestamp"] = label_end_timestamp.to_numpy()
     out["session_regime"] = [_replay_session_regime(ts) for ts in frame.index]
     out["gross_long_bps"] = gross_long_bps.to_numpy(dtype=float)
@@ -1054,14 +1067,25 @@ def _build_symbol_dataset(
     eligible = out.iloc[:expected_rows] if expected_rows else out.iloc[0:0]
     invalid_mask = eligible[required_columns].isna().any(axis=1)
     invalid_rows = int(invalid_mask.sum())
+    warmup = pd.Series(np.arange(expected_rows) < 199, index=eligible.index)
+    local_dates = pd.Series(frame.index.tz_convert('America/New_York').date, index=frame.index)
+    boundary = local_dates.ne(local_dates.shift(-int(horizon_bars))).iloc[:expected_rows] & ~warmup
+    expected_exclusion = warmup | boundary
+    unexpected_rows = int((invalid_mask & ~expected_exclusion).sum())
     quality_report = {
         "symbol": symbol,
         "raw_rows": int(len(out)),
         "expected_labeled_rows": int(expected_rows),
         "valid_labeled_rows": int(expected_rows - invalid_rows),
         "quarantined_rows": invalid_rows,
+        "warmup_excluded_rows": int((invalid_mask & warmup).sum()),
+        "session_boundary_excluded_rows": int((invalid_mask & boundary).sum()),
+        "unexpected_invalid_rows": unexpected_rows,
+        "missing_feature_rows": int(eligible[list(REPLAY_ALIGNED_FEATURE_COLUMNS)].isna().any(axis=1).sum()),
+        "invalid_label_timing_rows": int((~timing_valid.iloc[:expected_rows]).sum()),
+        "label_timing_contract": "consecutive_5min_same_session_date_v1",
         "unexpected_invalid_rate": (
-            float(invalid_rows / expected_rows) if expected_rows else 0.0
+            float(unexpected_rows / max(1, expected_rows - int(expected_exclusion.sum())))
         ),
         "missing_rate_by_required_column": {
             column: float(eligible[column].isna().mean()) if expected_rows else 0.0
@@ -1129,9 +1153,7 @@ def build_training_dataset(
                 rows.append(symbol_rows)
     finally:
         setattr(_build_symbol_dataset, "_load_reports", None)
-    if not rows:
-        return pd.DataFrame()
-    dataset = pd.concat(rows, axis=0, ignore_index=True)
+    dataset = pd.concat(rows, axis=0, ignore_index=True) if rows else pd.DataFrame(columns=['timestamp', 'label_end_timestamp', 'symbol'])
     dataset["timestamp"] = pd.to_datetime(dataset["timestamp"], errors="coerce", utc=True)
     dataset["label_end_timestamp"] = pd.to_datetime(
         dataset["label_end_timestamp"],
@@ -1151,14 +1173,20 @@ def build_training_dataset(
         int(report.get("quarantined_rows", 0) or 0)
         for report in quality_reports.values()
     )
+    total_unexpected = sum(int(report.get('unexpected_invalid_rows', 0)) for report in quality_reports.values())
+    total_warmup = sum(int(report.get('warmup_excluded_rows', 0)) for report in quality_reports.values())
+    total_boundary = sum(int(report.get('session_boundary_excluded_rows', 0)) for report in quality_reports.values())
     dataset.attrs["quality_report"] = {
         "status": "complete",
         "symbols": quality_reports,
         "expected_labeled_rows": total_expected,
         "valid_labeled_rows": total_expected - total_quarantined,
         "quarantined_rows": total_quarantined,
+        "warmup_excluded_rows": total_warmup,
+        "session_boundary_excluded_rows": total_boundary,
+        "unexpected_invalid_rows": total_unexpected,
         "unexpected_invalid_rate": (
-            float(total_quarantined / total_expected) if total_expected else 0.0
+            float(total_unexpected / max(1, total_expected - total_warmup - total_boundary))
         ),
     }
     return cast(pd.DataFrame, dataset)

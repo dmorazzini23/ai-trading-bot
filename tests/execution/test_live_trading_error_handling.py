@@ -794,6 +794,26 @@ def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory,
     assert detail_records[-1].reason == "duplicate_intent"
 
 
+def test_durable_lifecycle_persists_explicit_strategy(engine_factory):
+    engine = engine_factory()
+    captured = {}
+
+    def begin(**kwargs):
+        captured.update(kwargs)
+        return kwargs["intent_id"]
+
+    engine.order_manager = SimpleNamespace(begin_external_order_lifecycle=begin)
+    engine._begin_durable_order_lifecycle(
+        client_order_id="strategy-test", symbol="AAPL", side="buy", quantity=1,
+        order_type="market", expected_price=None, expected_edge_bps=None,
+        closing_position=False, model_id=None, model_version=None,
+        config_snapshot_hash=None, dataset_hash=None, feature_version=None,
+        model_artifact_hash=None, policy_hash=None, decision_trace_id=None,
+        strategy_id="day",
+    )
+    assert captured["strategy_id"] == "day"
+
+
 def test_execute_order_propagates_precheck_failure_detail(engine_factory):
     engine = engine_factory()
     submit_errors: list[dict[str, Any]] = []

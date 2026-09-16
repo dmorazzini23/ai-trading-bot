@@ -58,6 +58,7 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
     simulated: dict[str, list[dict[str, Any]]] = defaultdict(list)
     observed: dict[str, list[dict[str, Any]]] = defaultdict(list)
     rejected: Counter[str] = Counter()
+    rejection_details: list[dict[str, Any]] = []
     for row in replay.get("replay_summary", {}).get("markout_observations", []):
         simulated[str(row["client_order_id"])].append(row)
     seen: dict[str, dict[str, Any]] = {}
@@ -83,6 +84,9 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
         key = str(row.get("client_order_id") or "")
         if not key or key not in simulated:
             rejected["simulated_order_missing"] += 1
+            if len(rejection_details) < 100:
+                rejection_details.append({"reason": "simulated_order_missing", "client_order_id": key,
+                                          "symbol": row.get("symbol"), "ts": row.get("ts")})
             continue
         observed[key].append(row)
     pairs = []
@@ -93,6 +97,16 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
         symbols = {row.get("symbol") for row in [*sim, *actual]}
         if any(ref is None or ref <= 0 for ref in references) or len(set(references)) != 1 or len(sides) != 1 or not sides <= {"buy", "sell"} or len(symbols) != 1:
             rejected["arrival_benchmark_or_order_contract_mismatch"] += 1
+            if len(rejection_details) < 100:
+                rejection_details.append({
+                    "reason": "arrival_benchmark_or_order_contract_mismatch",
+                    "client_order_id": identity,
+                    "simulated_references": [row.get("reference_price") for row in sim],
+                    "observed_references": [row.get("expected_price") for row in actual],
+                    "symbols": sorted(str(value) for value in symbols),
+                    "sides": sorted(str(value) for value in sides),
+                    "observed_timestamps": [row.get("ts") for row in actual],
+                })
             continue
         prices, quantities = [], []
         for rows in [sim, actual]:
@@ -120,6 +134,7 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
         if actual_fee is None:
             rejected["observed_fee_contract_missing_or_invalid"] += 1
         pair = pairs[-1]
+        pair["observed_fee_bps"] = actual_fee / (prices[1] * quantities[1]) * 10000 if actual_fee is not None else None
         pair["net_cost_contract_valid"] = sim_fee is not None and actual_fee is not None
         if sim_fee is not None and actual_fee is not None:
             sim_net = sim_bps + sim_fee / (reference * quantities[0]) * 10000
@@ -128,9 +143,13 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
     sessions = len({row["session"] for row in pairs})
     errors = [row["simulation_minus_observed_bps"] for row in pairs]
     net_pairs = [row for row in pairs if row["net_cost_contract_valid"]]
+    diagnostics = {"scope": "all_supplied_fill_history_not_only_report_session",
+                   "simulated_order_count": len(simulated),
+                   "rejection_details": rejection_details,
+                   "rejection_details_limit": 100}
     supported = len(pairs) >= 30 and sessions >= 5
     net_status = "validated" if supported and len(net_pairs) == len(pairs) else "insufficient_execution_evidence" if len(net_pairs) == len(pairs) and pairs else "unavailable_without_simulated_and_observed_fee_contracts"
-    return {"status": "comparison_available" if supported else "insufficient_execution_evidence", "minimum_orders": 30, "minimum_sessions": 5, "paired_orders": len(pairs), "sessions": sessions, "pairs": pairs, "rejection_counts": dict(rejected), "mean_slippage_error_bps": float(np.mean(errors)) if errors else None, "p90_absolute_slippage_error_bps": float(np.quantile(np.abs(errors), .9)) if errors else None, "net_cost_validation": net_status, "net_cost_paired_orders": len(net_pairs), "mean_net_cost_error_bps": float(np.mean([row["net_cost_error_bps"] for row in net_pairs])) if net_pairs else None, "fee_contract": {"currency": "USD", "basis": "per_fill_total", "cost_denominator": "arrival_price_times_each_quantity", "validation_meaning": "complete_comparable_measurements_not_cost_accuracy_or_profitability"}, "limitations": ["Identical arrival benchmark required; quantities may differ and are reported.", "Paper fills do not validate market impact or queue position.", "No promotion authority; sample thresholds establish comparison support, not profitability."]}
+    return {**diagnostics, "status": "comparison_available" if supported else "insufficient_execution_evidence", "minimum_orders": 30, "minimum_sessions": 5, "paired_orders": len(pairs), "sessions": sessions, "pairs": pairs, "rejection_counts": dict(rejected), "mean_slippage_error_bps": float(np.mean(errors)) if errors else None, "p90_absolute_slippage_error_bps": float(np.quantile(np.abs(errors), .9)) if errors else None, "net_cost_validation": net_status, "net_cost_paired_orders": len(net_pairs), "mean_net_cost_error_bps": float(np.mean([row["net_cost_error_bps"] for row in net_pairs])) if net_pairs else None, "fee_contract": {"currency": "USD", "basis": "per_fill_total", "cost_denominator": "arrival_price_times_each_quantity", "validation_meaning": "complete_comparable_measurements_not_cost_accuracy_or_profitability"}, "limitations": ["Identical arrival benchmark required; quantities may differ and are reported.", "Paper fills do not validate market impact or queue position.", "No promotion authority; sample thresholds establish comparison support, not profitability."]}
 
 
 def latest_completed_session(now: datetime) -> str:

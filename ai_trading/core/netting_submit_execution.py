@@ -193,6 +193,12 @@ def execute_netting_submission(
     submit_annotations = dict(order_annotations)
     submit_annotations.setdefault("expected_net_edge_bps", expected_net_edge_bps)
     submit_metadata = dict(order_lineage_metadata)
+    proposals = net_target.proposals
+    if proposals:
+        primary = max(proposals, key=lambda proposal: abs(float(getattr(proposal, "score", 0.0) or 0.0)))
+        strategy_id = str(getattr(primary, "sleeve", "") or "").strip()
+        if strategy_id:
+            submit_metadata["strategy_id"] = strategy_id
     submit_metadata.setdefault("expected_net_edge_bps", expected_net_edge_bps)
     quote_context = submit_annotations.get("quote")
     if isinstance(quote_context, Mapping):
@@ -457,7 +463,10 @@ def execute_netting_submission(
                 "correlation_id": execution_metadata.get("correlation_id"),
                 "decision_trace_id": decision_trace_id_for_order,
                 "side": side,
-                "qty": abs(delta_shares),
+                "qty": getattr(order_state, "submitted_qty", None),
+                "requested_qty": abs(delta_shares),
+                "submitted_qty": getattr(order_state, "submitted_qty", None),
+                "filled_qty": getattr(order_state, "filled_qty", None),
                 "price": price,
                 "order_type": execution_metadata.get("order_type"),
                 "session_regime": execution_metadata.get("session_regime"),
@@ -526,7 +535,10 @@ def execute_netting_submission(
             "correlation_id": execution_metadata.get("correlation_id"),
             "decision_trace_id": decision_trace_id_for_order,
             "side": side,
-            "qty": abs(delta_shares),
+            "qty": getattr(order_state, "submitted_qty", None),
+            "requested_qty": abs(delta_shares),
+            "submitted_qty": getattr(order_state, "submitted_qty", None),
+            "filled_qty": getattr(order_state, "filled_qty", None),
             "price": price,
             "order_type": execution_metadata.get("order_type"),
             "session_regime": execution_metadata.get("session_regime"),

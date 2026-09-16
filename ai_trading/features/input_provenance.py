@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any, Mapping
 from ai_trading.models.contracts import DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION
 
@@ -11,15 +12,44 @@ REQUIRED = ('feed', 'adjustment', 'timeframe', 'session_policy',
             'history_policy', 'finality_policy', 'feature_version')
 
 
+def invalid_contract_fields(contract: Mapping[str, Any]) -> list[str]:
+    """Validate declarations, including nested policy types and finite bounds."""
+    allowed = {'feed': {'iex', 'sip', 'delayed_sip'},
+               'adjustment': {'raw', 'split', 'dividend', 'all'},
+               'timeframe': {'5Min'},
+               'session_policy': {'canonical_exchange_regular_session_v1', 'extended_sessions'},
+               'feature_version': {DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION}}
+    invalid = [key for key, values in allowed.items()
+               if not isinstance(contract.get(key), str) or contract[key] not in values]
+    for key, kind, number, low, high in [
+        ('history_policy', 'rolling_calendar_days', 'days', 7, 60),
+        ('finality_policy', 'start', 'grace_seconds', 0, 60)]:
+        value = contract.get(key)
+        tag = 'kind' if key == 'history_policy' else 'bar_label'
+        if not isinstance(value, Mapping) or set(value) != {tag, number}:
+            invalid.append(key)
+            continue
+        amount = value[number]
+        if (value[tag] != kind or isinstance(amount, bool) or not isinstance(amount, (int, float))
+                or not math.isfinite(amount) or not low <= amount <= high):
+            invalid.append(key)
+        elif key == 'history_policy' and amount != int(amount):
+            invalid.append(key)
+    return invalid
+
+
 def compare_input_contracts(training: Mapping[str, Any] | None,
                             serving: Mapping[str, Any]) -> dict[str, Any]:
     """Unknown evidence never establishes parity or changes trading authority."""
-    training = training or {}
+    training = training if isinstance(training, Mapping) else {}
+    serving = serving if isinstance(serving, Mapping) else {}
+    invalid = sorted(set(invalid_contract_fields(training) + invalid_contract_fields(serving)))
     missing = [key for key in REQUIRED if training.get(key) in (None, '', 'unknown')
                or serving.get(key) in (None, '', 'unknown')]
-    mismatched = [key for key in REQUIRED if key not in missing and training[key] != serving[key]]
+    mismatched = [key for key in REQUIRED if key not in missing and key not in invalid and training[key] != serving[key]]
     versions_ok = training.get('version') == serving.get('version') == VERSION
-    return {'status': 'matched' if not missing and not mismatched and versions_ok else 'unverified',
+    return {'status': 'matched' if not missing and not invalid and not mismatched and versions_ok else 'unverified',
+            'invalid_fields': invalid,
             'missing_fields': missing, 'mismatched_fields': mismatched,
             'version_matched': versions_ok, 'qualification_authority': False}
 

@@ -6,11 +6,12 @@ including discrepancy detection and alerting.
 """
 from __future__ import annotations
 import logging
-import time
+import math
 from collections import defaultdict
 from datetime import UTC, datetime
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any
+from alpaca.common.exceptions import APIError
 from ai_trading.logging import get_logger
 from ai_trading.utils.time import safe_utcnow
 
@@ -64,6 +65,8 @@ class PositionReconciler:
         self.large_discrepancy_threshold = 10
         self.running = False
         self._reconciliation_thread: Thread | None = None
+        self._stop_event = Event()
+        self._lifecycle_lock = Lock()
 
     def update_bot_position(self, symbol: str, quantity: float, reason: str='execution_engine') -> None:
         """Update the bot's internal position tracking."""
@@ -98,19 +101,24 @@ class PositionReconciler:
                 fetch_positions = getattr(self.api_client, 'list_positions', None)
             if not callable(fetch_positions):
                 raise AttributeError('broker client missing positions method')
-            raw_positions = fetch_positions() or []
+            raw_positions = fetch_positions()
+            if raw_positions is None:
+                raise ValueError('broker position snapshot unavailable')
             broker_positions: dict[str, float] = {}
             for position in raw_positions:
                 symbol = _position_symbol(position)
-                if not symbol:
-                    continue
-                broker_positions[symbol] = _position_quantity(position)
+                if not symbol or symbol in broker_positions:
+                    raise ValueError('invalid broker position identity')
+                quantity = _position_quantity(position)
+                if not math.isfinite(quantity):
+                    raise ValueError('nonfinite broker position quantity')
+                broker_positions[symbol] = quantity
             with self._lock:
                 self._broker_positions = broker_positions.copy()
             self._last_broker_fetch_failed = False
             self.logger.debug('BROKER_POSITIONS_FETCHED', extra={'positions_count': len(broker_positions), 'timestamp': safe_utcnow().isoformat()})
             return broker_positions
-        except (AttributeError, ConnectionError, TimeoutError, ValueError, TypeError) as e:
+        except (APIError, AttributeError, ConnectionError, TimeoutError, ValueError, TypeError) as e:
             self._last_broker_fetch_failed = True
             self.logger.error('BROKER_POSITION_FETCH_ERROR', extra={'error': str(e), 'timestamp': safe_utcnow().isoformat()})
             with self._lock:
@@ -185,36 +193,50 @@ class PositionReconciler:
 
     def start_periodic_reconciliation(self, interval: int | None=None) -> None:
         """Start periodic position reconciliation in background thread."""
-        if self.running:
-            self.logger.warning('RECONCILIATION_ALREADY_RUNNING')
-            return
-        if interval:
-            self.reconciliation_interval = interval
-        self.running = True
-        self._reconciliation_thread = Thread(target=self._reconciliation_loop, daemon=True, name='PositionReconciler')
-        self._reconciliation_thread.start()
+        with self._lifecycle_lock:
+            if self.running or (self._reconciliation_thread and self._reconciliation_thread.is_alive()):
+                self.logger.warning('RECONCILIATION_ALREADY_RUNNING')
+                return
+            if interval is not None:
+                if interval <= 0:
+                    raise ValueError('reconciliation interval must be positive')
+                self.reconciliation_interval = interval
+            self._stop_event.clear()
+            self.running = True
+            self._reconciliation_thread = Thread(target=self._reconciliation_loop, daemon=True, name='PositionReconciler')
+            try:
+                self._reconciliation_thread.start()
+            except RuntimeError:
+                self.running = False
+                raise
         self.logger.info('PERIODIC_RECONCILIATION_STARTED', extra={'interval_seconds': self.reconciliation_interval})
 
     def stop_periodic_reconciliation(self) -> None:
         """Stop periodic reconciliation."""
         self.running = False
+        self._stop_event.set()
         if self._reconciliation_thread:
             self._reconciliation_thread.join(timeout=10)
         self.logger.info('PERIODIC_RECONCILIATION_STOPPED')
 
     def _reconciliation_loop(self) -> None:
         """Background loop for periodic reconciliation."""
-        while self.running:
-            try:
-                discrepancies = self.reconcile_positions()
-                if discrepancies:
-                    resolved = self.auto_resolve_discrepancies(discrepancies)
-                    if resolved > 0:
-                        self.logger.info('AUTO_RESOLVED_DISCREPANCIES', extra={'resolved_count': resolved, 'total_discrepancies': len(discrepancies)})
-                time.sleep(self.reconciliation_interval)
-            except (ValueError, TypeError) as e:
-                self.logger.error('RECONCILIATION_LOOP_ERROR', extra={'error': str(e), 'timestamp': safe_utcnow().isoformat()})
-                time.sleep(min(self.reconciliation_interval, 60))
+        try:
+            while self.running:
+                delay = self.reconciliation_interval
+                try:
+                    discrepancies = self.reconcile_positions()
+                    if discrepancies and not self._last_broker_fetch_failed:
+                        resolved = self.auto_resolve_discrepancies(discrepancies)
+                        if resolved > 0:
+                            self.logger.info('AUTO_RESOLVED_DISCREPANCIES', extra={'resolved_count': resolved, 'total_discrepancies': len(discrepancies)})
+                except (APIError, ConnectionError, TimeoutError, ValueError, TypeError) as e:
+                    self.logger.error('RECONCILIATION_LOOP_ERROR', extra={'error': str(e), 'timestamp': safe_utcnow().isoformat()})
+                    delay = min(self.reconciliation_interval, 60)
+                if self._stop_event.wait(delay):
+                    break
+        finally:
+            self.running = False
 
     def get_current_discrepancies(self) -> list[PositionDiscrepancy]:
         """Get current position discrepancies."""

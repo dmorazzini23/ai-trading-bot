@@ -975,19 +975,7 @@ class OrderManager:
             filled_total = float(filled_qty) if filled_qty not in (None, "") else None
         except (TypeError, ValueError):
             filled_total = None
-        reported_qty = float(self._intent_reported_fill_qty.get(resolved_intent_id, 0.0) or 0.0)
-        if reported_qty <= 0.0:
-            try:
-                persisted_fills = store.list_fills(resolved_intent_id)
-            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
-                persisted_fills = []
-            if persisted_fills:
-                reported_qty = float(
-                    sum(float(getattr(fill, "fill_qty", 0.0) or 0.0) for fill in persisted_fills)
-                )
-                self._intent_reported_fill_qty[resolved_intent_id] = reported_qty
-        if filled_total is not None and filled_total > reported_qty:
-            fill_delta = max(0.0, filled_total - reported_qty)
+        if filled_total is not None:
             parsed_fill_price: float | None
             try:
                 parsed_fill_price = (
@@ -997,10 +985,10 @@ class OrderManager:
                 parsed_fill_price = None
             store.record_fill(
                 resolved_intent_id,
-                fill_qty=fill_delta,
+                fill_qty=filled_total,
                 fill_price=parsed_fill_price,
+                cumulative=True,
             )
-            self._intent_reported_fill_qty[resolved_intent_id] = reported_qty + fill_delta
             current = store.get_intent(resolved_intent_id) or current
 
         if normalize_intent_status(current.status) in TERMINAL_INTENT_STATUSES:

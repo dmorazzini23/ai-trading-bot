@@ -7649,6 +7649,7 @@ def _evaluate_training_serving_skew(
         return None
     z_scores: list[float] = []
     outlier_count = 0
+    outlier_features: list[str] = []
     observed = 0
     max_abs_z = 0.0
     for feature, raw_value in zip(feature_names, feature_values):
@@ -7672,6 +7673,7 @@ def _evaluate_training_serving_skew(
             max_abs_z = max(max_abs_z, float(abs_z))
         if value < min(p05_value, p95_value) or value > max(p05_value, p95_value):
             outlier_count += 1
+            outlier_features.append(str(feature))
     if observed <= 0:
         return None
     mean_abs_z = float(np.mean(z_scores)) if z_scores else 0.0
@@ -7688,6 +7690,7 @@ def _evaluate_training_serving_skew(
         "mean_abs_z": float(mean_abs_z),
         "max_abs_z": float(max_abs_z),
         "outlier_ratio": float(outlier_ratio),
+        "outlier_features": outlier_features,
         "observed_features": int(observed),
         "thresholds": {
             "mean_abs_z": float(breach_mean_abs_z),
@@ -11555,7 +11558,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         if recovery_payload is None:
             detail_text = "; ".join(stale_details)
             logger.warning(
-                "FETCH_MINUTE_STALE_USING_ORIGINAL",
+                "FETCH_MINUTE_STALE_REJECTED",
                 extra={
                     "symbol": symbol,
                     "detail": detail_text,

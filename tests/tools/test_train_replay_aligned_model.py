@@ -55,7 +55,7 @@ def test_shadow_markout_overrides_are_hash_gated_and_research_only(
     tmp_path: Path,
 ) -> None:
     timestamp = pd.Timestamp("2026-08-24T13:30:00Z")
-    label_end = pd.Timestamp("2026-08-24T13:31:00Z")
+    label_end = pd.Timestamp("2026-08-24T13:35:00Z")
     dataset = pd.DataFrame(
         {
             "symbol": ["AMZN"],
@@ -125,7 +125,10 @@ def test_shadow_markout_overrides_are_hash_gated_and_research_only(
 
 
 def _write_cycle_bars(csv_path: Path, *, periods: int = 260, phase: float = 0.0) -> None:
-    idx = pd.date_range("2026-01-02 14:30:00+00:00", periods=periods, freq="min")
+    periods += 200  # Explicit SMA200 warmup, never synthesized feature values.
+    days = pd.bdate_range('2026-01-02', periods=30)
+    parts = [pd.date_range(day.strftime('%Y-%m-%d') + ' 14:30:00+00:00', periods=78, freq='5min') for day in days]
+    idx = parts[0].append(parts[1:])[:periods]
     x = np.linspace(phase, phase + 30.0, periods)
     close = 100.0 + 2.4 * np.sin(x) + 0.4 * np.sin(x * 0.33)
     open_ = close + 0.03 * np.cos(x)
@@ -164,7 +167,7 @@ def _write_governed_acquisition(tmp_path: Path) -> Path:
             {
                 "symbol": symbol,
                 "csv_path": str(csv_path),
-                "row_count": 260,
+                "row_count": 460,
                 "content_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
                 "quality_passed": True,
                 "completeness": {"missing_ratio": 0.0, "quality_passed": True},

@@ -565,7 +565,7 @@ def test_fetch_minute_df_safe_recovers_from_single_stale(monkeypatch, caplog):
     assert any(rec.message == "FETCH_MINUTE_STALE_RECOVERED" for rec in caplog.records)
 
 
-def test_fetch_minute_df_safe_raises_when_all_retries_stale(monkeypatch):
+def test_fetch_minute_df_safe_raises_when_all_retries_stale(monkeypatch, caplog):
     pd = load_pandas()
 
     base_now = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
@@ -622,6 +622,8 @@ def test_fetch_minute_df_safe_raises_when_all_retries_stale(monkeypatch):
 
     assert len(calls) >= 2  # initial + retry
     assert getattr(excinfo.value, "fetch_reason", None) == "stale_minute_data"
+    assert "FETCH_MINUTE_STALE_REJECTED" in caplog.text
+    assert "FETCH_MINUTE_STALE_USING_ORIGINAL" not in caplog.text
     assert getattr(excinfo.value, "symbol", None) == "AAPL"
     detail = getattr(excinfo.value, "detail", "")
     assert "age=900s-call1" in detail

@@ -110,6 +110,10 @@ def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> 
 
     execution_flow.exit_all_positions(runtime)
 
+    for call in calls:
+        client_id = str(call.pop("client_order_id"))
+        assert client_id.startswith("eod-")
+        assert client_id.endswith(f"-{call['symbol']}-{call['side']}")
     assert calls == [
         {
             "symbol": "AAPL",

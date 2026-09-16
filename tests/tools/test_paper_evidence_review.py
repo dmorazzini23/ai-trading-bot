@@ -17,6 +17,31 @@ def test_slippage_support_does_not_complete_missing_net_cost_validation():
     assert completion_gaps({"status": "evidence_gaps"}, validated, []) == ["paper_session_not_reconciled"]
 
 
+def test_comparison_reports_exact_benchmark_exclusion_without_repairing_it():
+    actual = {"client_order_id": "one", "fill_id": "fill", "account_id": "test",
+              "trading_mode": "paper", "symbol": "AMZN", "side": "sell",
+              "expected_price": 255.2, "ts": "2026-09-11T14:36:21Z"}
+    sim = {"client_order_id": "one", "symbol": "AMZN", "side": "sell", "reference_price": 255.17}
+    report = compare_execution_costs({"replay_summary": {"markout_observations": [sim]}}, [actual], account_id="test")
+    assert report["paired_orders"] == 0
+    assert report["rejection_details"][0]["observed_references"] == [255.2]
+    assert report["rejection_details"][0]["simulated_references"] == [255.17]
+    assert report["scope"] == "all_supplied_fill_history_not_only_report_session"
+    missing = compare_execution_costs({}, [actual], account_id="test")
+    assert missing["rejection_details"][0]["reason"] == "simulated_order_missing"
+
+
+def test_gross_cost_pair_does_not_publish_unverified_fee_bps():
+    row = {"client_order_id": "one", "fill_id": "fill", "account_id": "test",
+           "trading_mode": "paper", "symbol": "AMZN", "side": "buy",
+           "expected_price": 100, "reference_price": 100, "fill_qty": 1,
+           "fill_price": 100, "ts": "2026-09-11T14:36:21Z",
+           "fee_source": "broker_payload", "fee_amount": 2, "fee_currency": "EUR"}
+    report = compare_execution_costs({"replay_summary": {"markout_observations": [row]}}, [row], account_id="test")
+    assert report["pairs"][0]["observed_fee_bps"] is None
+    assert report["pairs"][0]["net_cost_contract_valid"] is False
+
+
 def test_daily_cli_keeps_supported_session_and_slippage_pending_without_fee_contract(tmp_path, monkeypatch):
     from ai_trading.tools.paper_evidence_review import main
 
@@ -35,10 +60,11 @@ def test_daily_cli_keeps_supported_session_and_slippage_pending_without_fee_cont
     monkeypatch.setattr("sys.argv", ["paper_evidence_review", "--runtime-dir", str(tmp_path), "--replay-report", str(replay), "--training-report", str(training), "--selection-report", str(selection), "--session", "2026-08-07", "--output", str(output)])
     main()
     report = json.loads(output.read_text())
-    assert report["session_audit"]["status"] == "paper_session_reconciled"
+    assert report["session_audit"]["status"] == "evidence_gaps"
+    assert report["session_audit"]["evidence_gap_counts"]["fees_missing"] == 6
     assert report["execution_cost_comparison"]["status"] == "comparison_available"
     assert report["status"] == "evidence_pending"
-    assert report["completion_gaps"] == ["net_cost_validation_unavailable"]
+    assert report["completion_gaps"] == ["paper_session_not_reconciled", "net_cost_validation_unavailable"]
     assert report["training_readiness"]["candidate_count"] == 1
     assert report["training_readiness"]["selection_decisions"][0]["reasons"] == ["insufficient_samples"]
     assert report["training_readiness"]["runtime_model_replaced"] is False
@@ -100,7 +126,7 @@ def test_cost_pairs_require_account_and_matching_benchmark():
     assert result["status"] == "comparison_available"
     assert result["sessions"] == 5
     assert result["mean_slippage_error_bps"] == pytest.approx(10)
-    assert result["pairs"][0]["observed_fee_bps"] == 0
+    assert result["pairs"][0]["observed_fee_bps"] is None
     mismatched = [{**row, "expected_price": 99} for row in fills]
     result = compare_execution_costs(replay, mismatched, account_id="paper-test")
     assert result["paired_orders"] == 0

@@ -7142,6 +7142,11 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
         "missing_minutes": missing_minutes,
         "expected_minutes": expected_minutes,
         "gap_ratio": gap_ratio,
+        "window_start": start_utc.isoformat(),
+        "window_end": end_utc.isoformat(),
+        "missing_timestamps_sample": [stamp.isoformat() for stamp in missing_index[:10]],
+        "provider": df.attrs.get("data_provider") or df.attrs.get("provider") or "unknown",
+        "feed": df.attrs.get("data_feed") or df.attrs.get("feed") or "unknown",
     }
     logger.warning("MINUTE_GAPS_DETECTED", extra=_norm_extra(gap_log))
     _record_gap_ratio_state(

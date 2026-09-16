@@ -10,6 +10,7 @@ from threading import Thread
 import csv
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
+from alpaca.common.exceptions import APIError
 
 from ai_trading.config.management import get_env
 from ai_trading.data.feed_roles import get_execution_feed
@@ -902,15 +903,28 @@ def exit_all_positions(ctx: Any) -> None:
                     "eod_exit",
                     position=pos,
                 )
-                execute_order(
-                    pos.symbol,
-                    side,
-                    qty,
-                    order_type="market",
-                    closing_position=True,
-                    reduce_only=True,
-                    metadata=exit_metadata,
-                )
+                # Keep broker idempotency stable across cycles and restarts. A
+                # timeout is ambiguous, not evidence that no order was accepted.
+                session_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+                client_order_id = f"eod-{session_date}-{pos.symbol}-{side}"
+                try:
+                    execute_order(
+                        pos.symbol,
+                        side,
+                        qty,
+                        order_type="market",
+                        closing_position=True,
+                        reduce_only=True,
+                        client_order_id=client_order_id,
+                        metadata=exit_metadata,
+                    )
+                except (APIError, ConnectionError, TimeoutError, OSError) as exc:
+                    logger.error(
+                        "EOD_EXIT_SUBMISSION_UNCONFIRMED",
+                        extra={"symbol": pos.symbol, "client_order_id": client_order_id,
+                               "error": str(exc), "requires_broker_reconciliation": True},
+                    )
+                    continue
             else:
                 send_exit_order(
                     ctx,
@@ -994,6 +1008,7 @@ def liquidate_positions_if_needed(runtime: Any) -> None:
     try:
         raw_positions = _list_positions_compat(api)
     except (
+        APIError,
         FileNotFoundError,
         PermissionError,
         IsADirectoryError,

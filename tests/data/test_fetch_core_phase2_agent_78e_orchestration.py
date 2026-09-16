@@ -817,7 +817,10 @@ def test_should_skip_symbol_sets_coverage_metadata_for_catastrophic_gap() -> Non
 
 
 def test_get_daily_df_forced_yahoo_and_fresh_memo(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_trading import alpaca_api
+
     daily = _frame(PAST_START, provider="yahoo")
+    monkeypatch.setattr(alpaca_api, "get_bars_df", lambda *_args, **_kwargs: daily.copy())
     monkeypatch.setattr(fetch, "_env_source_override", lambda tf: ("yahoo", "DATA_SOURCE") if tf == "1Day" else None)
     monkeypatch.setattr(fetch, "_safe_backup_get_bars", lambda *_args, **_kwargs: daily)
     monkeypatch.setattr(fetch, "should_import_alpaca_sdk", lambda: True)
@@ -829,7 +832,7 @@ def test_get_daily_df_forced_yahoo_and_fresh_memo(fetch_env: dict[str, Any], mon
     monkeypatch.setattr(fetch, "_env_source_override", lambda _tf: None)
     monkeypatch.setattr(fetch, "_is_fresh", lambda _ts: True)
     memo = {"df": memo_frame, "ts": datetime.now(tz=UTC)}
-    memo_result = fetch.get_daily_df("AAPL", BASE_START, BASE_END, memo=memo)
+    memo_result = fetch.get_daily_df("AAPL", PAST_START, PAST_END, memo=memo)
     assert memo_result is not memo_frame
     assert list(memo_result.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
     assert memo_result.attrs["data_provider"] == "memo"

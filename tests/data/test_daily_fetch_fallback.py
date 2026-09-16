@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-import sys
 import types
 from typing import Any, cast
 
@@ -49,13 +48,12 @@ def test_get_daily_df_uses_backup_when_columns_missing(monkeypatch):
 
     monkeypatch.setattr(fetch_module, "_backup_get_bars", _fake_backup_get_bars)
 
-    alpaca_stub = types.ModuleType("ai_trading.alpaca_api")
+    from ai_trading import alpaca_api
 
     def _raise_missing(*_args, **_kwargs):
         raise fetch_module.MissingOHLCVColumnsError("missing columns")
 
-    cast(Any, alpaca_stub).get_bars_df = _raise_missing
-    monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", alpaca_stub)
+    monkeypatch.setattr(alpaca_api, "get_bars_df", _raise_missing)
 
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = datetime(2024, 1, 3, tzinfo=UTC)
@@ -106,13 +104,12 @@ def test_get_daily_df_normalizes_yahoo_regular_market_schema(monkeypatch):
 
     monkeypatch.setattr(fetch_module, "_backup_get_bars", _fake_backup_get_bars)
 
-    alpaca_stub = types.ModuleType("ai_trading.alpaca_api")
+    from ai_trading import alpaca_api
 
     def _raise_missing(*_args, **_kwargs):
         raise fetch_module.MissingOHLCVColumnsError("missing columns")
 
-    cast(Any, alpaca_stub).get_bars_df = _raise_missing
-    monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", alpaca_stub)
+    monkeypatch.setattr(alpaca_api, "get_bars_df", _raise_missing)
 
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = datetime(2024, 1, 3, tzinfo=UTC)

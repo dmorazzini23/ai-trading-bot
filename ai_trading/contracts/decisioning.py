@@ -273,7 +273,7 @@ class OrderIntent:
             symbol=symbol,
             side=_normalize_side(payload.get("side")),
             bar_ts=bar_ts or _normalize_timestamp(payload.get("bar_ts")),
-            qty=_safe_float(payload.get("qty") or payload.get("shares")),
+            qty=_first_safe_float(payload.get("requested_qty"), payload.get("qty"), payload.get("shares")),
             notional=_safe_float(payload.get("notional") or payload.get("target_dollars")),
             limit_price=_safe_float(payload.get("limit_price") or payload.get("price")),
             client_order_id=_safe_text(payload.get("client_order_id") or payload.get("id")),
@@ -586,8 +586,11 @@ def _derive_broker_result(
         ),
         side=_safe_text(payload_map.get("side"))
         or (order_intent.side if order_intent is not None else None),
-        qty=_safe_float(payload_map.get("qty") or payload_map.get("shares"))
-        or (order_intent.qty if order_intent is not None else None),
+        qty=(
+            _safe_float(payload_map.get("submitted_qty"))
+            if "submitted_qty" in payload_map
+            else _first_safe_float(payload_map.get("qty"), payload_map.get("shares"))
+        ),
         filled_qty=_first_safe_float(
             payload_map.get("filled_qty"),
             tca_map.get("total_qty"),

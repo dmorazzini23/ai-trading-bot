@@ -40,6 +40,8 @@ def test_log_on_gaps(caplog):
     assert record is not None
     assert getattr(record, "symbol", None) == "TEST"
     assert getattr(record, "gap_count", None) == 1
+    assert record.missing_timestamps_sample == ["2024-01-02T14:31:00+00:00"]
+    assert record.window_start == "2024-01-02T14:30:00+00:00"
 
 def test_backfill_ffill():
     df = _make_gap_df()

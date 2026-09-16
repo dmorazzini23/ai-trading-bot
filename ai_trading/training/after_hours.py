@@ -604,22 +604,6 @@ def _infer_regime(close: np.ndarray) -> np.ndarray:
     return cast(np.ndarray, np.asarray(infer_day_sleeve_regimes(close), dtype=object))
 
 
-def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
-    if close_values.size == 0:
-        return cast(np.ndarray, np.array([], dtype=float))
-    try:
-        out = rsi_indicator(tuple(close_values.tolist()), 14)
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        out = None
-    if out is None:
-        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
-    try:
-        arr = np.asarray(out, dtype=float)
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
-    if arr.size != close_values.size:
-        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
-    return cast(np.ndarray, arr)
 
 
 def _augment_training_features(frame: Any) -> Any:
@@ -747,22 +731,34 @@ def _build_symbol_dataset(
     frame = compute_vwap(frame)
     frame = compute_sma(frame, windows=(50, 200))
     close_arr = frame["close"].astype(float).to_numpy()
-    frame["rsi"] = _safe_rsi(close_arr)
+    rsi_values = np.asarray(rsi_indicator(tuple(close_arr.tolist()), 14), dtype=float)
+    if rsi_values.size != len(frame):
+        raise ValueError('Training RSI output is not aligned to input bars')
+    frame["rsi"] = rsi_values
     frame = _augment_training_features(frame)
     label_horizon = max(1, int(horizon_bars))
-    future_close = frame["close"].astype(float).shift(-label_horizon)
+    from ai_trading.training.label_timing import valid_five_minute_labels
+    timing_valid = valid_five_minute_labels(frame.index, label_horizon)
+    future_close = frame["close"].astype(float).shift(-label_horizon).where(timing_valid)
     future_ret_bps = (future_close / frame["close"].astype(float) - 1.0) * 10_000.0
     frame["realized_edge_bps"] = future_ret_bps - float(cost_floor_bps)
     frame["label"] = (frame["realized_edge_bps"] > 0).astype(int)
     frame["regime"] = _infer_regime(close_arr)
     timestamps = pd.to_datetime(frame.index, utc=True, errors="coerce")
     frame["timestamp"] = timestamps
-    frame["label_ts"] = pd.Series(timestamps, index=frame.index).shift(-label_horizon)
+    frame["label_ts"] = pd.Series(timestamps, index=frame.index).shift(-label_horizon).where(timing_valid)
     frame["symbol"] = symbol
+    eligibility = {'raw_rows': len(frame),
+                   'missing_feature_rows': int(frame[list(FEATURE_COLUMNS)].isna().any(axis=1).sum()),
+                   'invalid_label_timing_rows': int((~timing_valid).sum()),
+                   'label_timing_contract': 'consecutive_5min_exchange_session_v1'}
     frame = frame.dropna(
         subset=list(FEATURE_COLUMNS)
         + ["timestamp", "label_ts", "realized_edge_bps", "label", "regime"]
     )
+    eligibility['eligible_rows'] = len(frame)
+    frame.attrs['input_eligibility'] = eligibility
+    logger.info('TRAINING_INPUT_ELIGIBILITY', extra={'symbol': symbol, 'input_eligibility': eligibility})
     return frame
 
 

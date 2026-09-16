@@ -22,6 +22,7 @@ class SubmittedOrderState:
     fill_timestamp: datetime | None
     fill_fees: float
     persistable_fill: bool
+    submitted_qty: float | None = None
 
 
 def normalize_submitted_order(
@@ -53,6 +54,7 @@ def normalize_submitted_order(
     )
     if requested_qty is None:
         requested_qty = float(abs(delta_shares))
+    submitted_qty = safe_float(extract_order_value(order, "qty", "quantity"))
     fill_price = safe_float(
         extract_order_value(
             order,
@@ -90,6 +92,7 @@ def normalize_submitted_order(
         fill_timestamp=fill_timestamp,
         fill_fees=float(fill_fees),
         persistable_fill=bool(persistable_fill),
+        submitted_qty=submitted_qty,
     )
 
 

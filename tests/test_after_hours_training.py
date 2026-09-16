@@ -268,14 +268,13 @@ def test_build_symbol_dataset_excludes_forming_bar_and_uses_bar_horizon(
     assert row["timestamp"] == bars.index[-4]
 
 
-def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
+def test_build_symbol_dataset_rejects_label_across_missing_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bars = _synthetic_intraday("AAPL")
     removed_ts = bars.index[250]
     irregular = bars.drop(index=removed_ts)
     expected_previous_ts = bars.index[249]
-    expected_next_ts = bars.index[251]
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
@@ -289,9 +288,8 @@ def test_build_symbol_dataset_label_ts_uses_next_valid_bar(
         cost_floor_bps=8.0,
     )
 
-    row = dataset.loc[dataset["timestamp"] == expected_previous_ts].iloc[0]
-    assert row["label_ts"] == expected_next_ts
-    assert row["label_ts"] != expected_previous_ts + pd.Timedelta(days=1)
+    assert dataset.loc[dataset["timestamp"] == expected_previous_ts].empty
+    assert ((dataset['label_ts'] - dataset['timestamp']) == pd.Timedelta(minutes=5)).all()
 
 
 def test_build_symbol_dataset_uses_configured_label_horizon(
@@ -1263,6 +1261,8 @@ def test_after_hours_training_trains_and_writes_outputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"
@@ -1603,6 +1603,8 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"
@@ -1835,6 +1837,8 @@ def test_after_hours_training_falls_back_when_model_dir_read_only(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"
@@ -1895,6 +1899,8 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"
@@ -1932,6 +1938,8 @@ def test_after_hours_runtime_promotion_skips_shadow_governance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"
@@ -1969,6 +1977,8 @@ def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"
@@ -3910,6 +3920,8 @@ def test_after_hours_training_no_global_leakage_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # Exercise artifact/control flow with deterministic positive qualification.
+    monkeypatch.setattr(after_hours, '_evaluate_candidate', _positive_candidate_metrics)
     tickers = tmp_path / "tickers.csv"
     tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
     tca_path = tmp_path / "tca_records.jsonl"

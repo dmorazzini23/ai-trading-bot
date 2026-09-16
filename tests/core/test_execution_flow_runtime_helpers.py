@@ -274,6 +274,8 @@ def test_exit_all_positions_uses_runtime_exec_engine_when_execute_order_absent(m
 
     execution_flow.exit_all_positions(runtime)
 
+    for call in calls:
+        assert str(call.pop("client_order_id")).startswith("eod-")
     assert calls == [
         {
             "symbol": "AAPL",

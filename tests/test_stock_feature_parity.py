@@ -22,6 +22,6 @@ def test_same_history_and_prefix_causality():
 
 def test_training_fallback_is_not_runtime_readiness():
     short = bars().iloc[:20]
-    assert np.isfinite(_feature_frame(short, symbol='AAPL').to_numpy()).all()
+    assert _feature_frame(short, symbol='AAPL')['sma_200'].isna().all()
     with pytest.raises(ValueError, match='non-finite'):
         build_day_sleeve_features(short)

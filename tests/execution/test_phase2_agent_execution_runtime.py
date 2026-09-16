@@ -140,7 +140,12 @@ class _FakeIntentStore:
         *,
         fill_qty: float,
         fill_price: float | None,
+        cumulative: bool = False,
     ) -> None:
+        if cumulative:
+            fill_qty = max(0.0, fill_qty - sum(row.fill_qty for row in self.fills.get(intent_id, [])))
+            if fill_qty == 0:
+                return
         self.fills.setdefault(intent_id, []).append(
             SimpleNamespace(fill_qty=fill_qty, fill_price=fill_price)
         )
