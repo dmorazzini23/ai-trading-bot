@@ -1,5 +1,34 @@
 # Current handoff
 
+## Skew evidence deployment — September 17, 03:32 UTC
+
+See docs/SKEW_EVIDENCE_AND_FEED_COMPARISON_20260917.md. Skew breaches now record
+feature values/reference stats, frame datetime label versus capture time, model
+class and actual in-memory joblib SHA1 fingerprint (NOT artifact-file checksum).
+Fingerprint failure explicit; predictions/thresholds unchanged. Regression14 pass.
+Initial validator343pass/6 stale lifecycle mocks failed; changed those to real
+normalizer. Final validator20 pass, lint/types3/compile, non-sending snapshot pass.
+Same-window IEX/SIP: AMZN Sep15 389/390 vs390/390; MSFT Sep16 387/390 vs390/390.
+No feed/ticker/model/training changes. Historical SIP != real-time entitlement.
+Restart03:31:15 succeeded. At03:32:40 healthy/ready cycle1 broker fresh connected,
+zero positions/orders; startup logs no warning/error, existing parity/stale flags
+remain. /tmp/skew-fix-{posthealth.json,startup.jsonl,validation-final.log};
+feed result /tmp/skew-fix-feed-comparison.json. Natural skew warning capture pending.
+Docs-only/diff checks passed. Rollback only diagnostic hunks; no data migration.
+
+## Minute gaps/skew — September 17, 03:23 UTC
+
+See docs/GAP_AND_SKEW_REVIEW_20260917.md. 187gap warnings repeat four timestamps:
+AMZN Sep15 16:42 and MSFT Sep16 16:29/17:13/18:17. Direct same-feed IEX/all requests
+reproduce all four absences; no solely local cache defect established. QQQ skew
+16:50:46: RSI/ATR/SMA200/ATRpct/centeredRSI, 5/12=41.7% >35%; meanz1.206<2.5.
+OR threshold explains warning; exact historic feature values/model identity absent,
+so cause beyond distribution excursion unverified. No runtime/gate/feed changes.
+Eight Sep16 intents strategy=day qty1; journals preserve requests2/6/10 versus
+submitted1, pending filled0 correctly precedes durable FILLED. Natural reporting
+verification now observed. Artifacts /tmp/gaps-skew-{provider,amzn-prior}.json.
+Docs-only/diff validation; no restart or new tests needed for read-only review.
+
 ## Replay/fee/session trace — September 16, 04:48 UTC
 
 See docs/REPLAY_FEE_SESSION_REVIEW_20260916.md. Exact normalized input and full

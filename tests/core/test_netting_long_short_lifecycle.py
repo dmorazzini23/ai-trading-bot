@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from ai_trading.core.netting_submit_execution import execute_netting_submission
+from ai_trading.core.execution_outcome import normalize_submitted_order
 from ai_trading.core.netting_symbol_approval import prepare_netting_symbol_approval
 from ai_trading.oms import decision_events
 from tests.test_netting_submit_execution import _base_kwargs as _submit_base_kwargs
@@ -115,6 +116,7 @@ def test_netting_long_short_lifecycle_approval_submission_and_decision_action(
         return {"side": kwargs["side"]}, {"side": kwargs["side"], "delta": kwargs["delta_shares"]}
 
     submit_kwargs["submit_order_func"] = _submit_order
+    submit_kwargs["normalize_submitted_order_func"] = normalize_submitted_order
     submit_kwargs["record_successful_submission_func"] = _record_success
     submit_kwargs["build_order_metrics_and_tca_func"] = _build_metrics_and_tca
 

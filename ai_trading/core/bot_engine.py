@@ -7641,6 +7641,7 @@ def _evaluate_training_serving_skew(
     feature_names: Sequence[str],
     feature_values: Sequence[float],
     symbol: str | None,
+    input_timestamp: str | None = None,
 ) -> dict[str, Any] | None:
     if not bool(get_env("AI_TRADING_ML_SKEW_MONITOR_ENABLED", True, cast=bool)):
         return None
@@ -7650,6 +7651,7 @@ def _evaluate_training_serving_skew(
     z_scores: list[float] = []
     outlier_count = 0
     outlier_features: list[str] = []
+    feature_evidence: dict[str, Any] = {}
     observed = 0
     max_abs_z = 0.0
     for feature, raw_value in zip(feature_names, feature_values):
@@ -7666,6 +7668,13 @@ def _evaluate_training_serving_skew(
             continue
         if not math.isfinite(value):
             continue
+        feature_evidence[str(feature)] = {
+            "value": value,
+            "training_mean": mean_value if math.isfinite(mean_value) else None,
+            "training_std": std_value if math.isfinite(std_value) else None,
+            "training_p05": p05_value if math.isfinite(p05_value) else None,
+            "training_p95": p95_value if math.isfinite(p95_value) else None,
+        }
         observed += 1
         if std_value > 1e-9 and math.isfinite(std_value):
             abs_z = abs((value - mean_value) / std_value)
@@ -7699,6 +7708,26 @@ def _evaluate_training_serving_skew(
         "breached": breached,
     }
     if breached:
+        # Fingerprint the actual in-memory estimator, never an unrelated current
+        # file at a configured path. This is not an artifact-file checksum.
+        import joblib
+
+        fingerprint = None
+        fingerprint_error = None
+        try:
+            fingerprint = joblib.hash(model, hash_name="sha1")
+        except (TypeError, ValueError, AttributeError, pickle.PicklingError) as exc:
+            fingerprint_error = type(exc).__name__
+        payload.update(
+            feature_evidence=feature_evidence,
+            input_timestamp=input_timestamp,
+            input_timestamp_basis="frame_last_row_label" if input_timestamp else "unavailable",
+            recorded_at=datetime.now(UTC).isoformat(),
+            model_class=f"{type(model).__module__}.{type(model).__qualname__}",
+            model_state_fingerprint=fingerprint,
+            model_state_fingerprint_algorithm="joblib_sha1",
+            model_state_fingerprint_error=fingerprint_error,
+        )
         logger.warning("ML_TRAINING_SERVING_SKEW", extra=payload)
     return payload
 
@@ -17895,6 +17924,11 @@ class SignalManager:
                 feature_names=feat,
                 feature_values=X[0],
                 symbol=symbol,
+                input_timestamp=(
+                    df.index[-1].isoformat()
+                    if isinstance(df.index, pd.DatetimeIndex) and not df.empty
+                    else None
+                ),
             )
             shadow_payload: dict[str, Any] | None = None
             shadow_model: Any | None = None

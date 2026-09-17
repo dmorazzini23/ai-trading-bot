@@ -377,6 +377,7 @@ def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):
 
     df = _minimal_df()
     df.loc[df.index[-1], "rsi"] = 90.0
+    df.index = pd.date_range("2026-09-16T15:10:00Z", periods=len(df), freq="5min")
     monkeypatch.setenv("AI_TRADING_ML_SKEW_MONITOR_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_ML_SKEW_MEAN_ABS_Z_THRESHOLD", "0.5")
     monkeypatch.setenv("AI_TRADING_ML_SKEW_OUTLIER_RATIO_THRESHOLD", "0.1")
@@ -389,3 +390,40 @@ def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):
     assert "ML_TRAINING_SERVING_SKEW" in caplog.text
     record = next(r for r in caplog.records if r.message == "ML_TRAINING_SERVING_SKEW")
     assert "rsi" in record.outlier_features
+    assert record.feature_evidence["rsi"] == {
+        "value": 90.0, "training_mean": 50.0, "training_std": 1.0,
+        "training_p05": 49.0, "training_p95": 51.0,
+    }
+    assert record.input_timestamp == df.index[-1].isoformat()
+    assert record.input_timestamp_basis == "frame_last_row_label"
+
+
+def test_skew_evidence_identifies_actual_model_and_timestamp(monkeypatch):
+    from types import SimpleNamespace
+    import joblib
+
+    model = SimpleNamespace(training_feature_stats_={
+        "rsi": {"mean": 50, "std": 10, "p05": 30, "p95": 70},
+    })
+    monkeypatch.setenv("AI_TRADING_ML_SKEW_MONITOR_ENABLED", "1")
+    result = bot_engine._evaluate_training_serving_skew(
+        model=model, feature_names=["rsi"], feature_values=[90], symbol="QQQ",
+        input_timestamp="2026-09-16T16:45:00+00:00",
+    )
+    assert result["model_state_fingerprint"] == joblib.hash(model, hash_name="sha1")
+    assert result["input_timestamp"] == "2026-09-16T16:45:00+00:00"
+    assert result["input_timestamp_basis"] == "frame_last_row_label"
+    assert result["outlier_ratio"] == 1
+    assert result["mean_abs_z"] == 4
+
+    def fail(*args, **kwargs):
+        raise TypeError("not serializable")
+
+    monkeypatch.setattr(joblib, "hash", fail)
+    failed = bot_engine._evaluate_training_serving_skew(
+        model=model, feature_names=["rsi"], feature_values=[90], symbol="QQQ",
+    )
+    assert failed["breached"] is True
+    assert failed["model_state_fingerprint"] is None
+    assert failed["model_state_fingerprint_error"] == "TypeError"
+    assert failed["input_timestamp_basis"] == "unavailable"
