@@ -51,6 +51,77 @@ from ai_trading.tools.train_replay_aligned_model import (
 from ai_trading.tools import train_replay_aligned_model as trainer
 
 
+@pytest.mark.parametrize("defect", ["gap", "duplicate", "unordered", "off_grid", "naive"])
+def test_replay_features_reject_invalid_history_before_indicators(monkeypatch, defect):
+    index = pd.date_range("2026-01-02T14:30Z", periods=6, freq="5min")
+    if defect == "gap":
+        index = index.delete(2)
+    elif defect == "duplicate":
+        index = index.insert(2, index[1])
+    elif defect == "unordered":
+        index = index[::-1]
+    elif defect == "off_grid":
+        index += pd.Timedelta(minutes=1)
+    else:
+        index = index.tz_localize(None)
+    frame = pd.DataFrame({"close": 100.0}, index=index)
+
+    def unexpected_indicator(_frame):
+        pytest.fail("Invalid history reached indicator computation")
+
+    monkeypatch.setattr(trainer, "compute_macd", unexpected_indicator)
+    with pytest.raises(ValueError, match="Day-sleeve"):
+        trainer._feature_frame(frame, symbol="AAPL")
+
+
+def test_history_validation_allows_session_boundaries():
+    from ai_trading.features.day_sleeve import validate_day_sleeve_history
+    frame = pd.DataFrame({"close": 100.0}, index=pd.to_datetime([
+        "2026-01-02T20:50Z", "2026-01-02T20:55Z",
+        "2026-01-05T14:30Z", "2026-01-05T14:35Z",
+    ]))
+    validate_day_sleeve_history(frame)
+
+
+def test_replay_trained_model_declares_validated_timeframe():
+    from types import SimpleNamespace
+    model = SimpleNamespace()
+    trainer._attach_model_metadata(model, edge_global_threshold=None)
+    assert model.training_bar_timeframe_ == "5Min"
+
+
+def test_replay_feature_cache_cannot_bypass_history_validation(tmp_path, monkeypatch):
+    csv_path = tmp_path / "AAPL.csv"
+    _write_cycle_bars(csv_path, periods=240)
+    cache_dir = tmp_path / "cache"
+    kwargs = dict(timestamp_col="timestamp", use_training_cache=True,
+                  training_cache_dir=cache_dir, allow_research_synthetic_timestamps=False)
+    trainer._load_or_build_symbol_features("AAPL", csv_path, **kwargs)
+    cache_path = next(cache_dir.glob("*.pkl"))
+    cached = pd.read_pickle(cache_path)
+    cached["frame"] = cached["frame"].drop(cached["frame"].index[5])
+    pd.to_pickle(cached, cache_path)
+    with pytest.raises(ValueError, match="missing or irregular"):
+        trainer._load_or_build_symbol_features("AAPL", csv_path, **kwargs)
+
+
+@pytest.mark.parametrize("declaration", ["attribute", "manifest"])
+def test_offline_day_model_rejects_gap_before_scoring(declaration):
+    from types import SimpleNamespace
+    from ai_trading.tools.offline_replay import ReplayModelContext, _compute_model_signal
+    model = SimpleNamespace()
+    if declaration == "attribute":
+        model.training_bar_timeframe_ = "5Min"
+    else:
+        model.artifact_manifest_metadata_ = {"required_bar_timeframe": "5Min"}
+    context = ReplayModelContext(model, "unused", ("close",), 1, False, {})
+    frame = pd.DataFrame({"close": 100.0}, index=pd.to_datetime([
+        "2026-01-02T14:30Z", "2026-01-02T14:40Z",
+    ]))
+    with pytest.raises(ValueError, match="missing or irregular"):
+        _compute_model_signal(frame, symbol="AAPL", model_context=context)
+
+
 def test_shadow_markout_overrides_are_hash_gated_and_research_only(
     tmp_path: Path,
 ) -> None:

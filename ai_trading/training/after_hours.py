@@ -725,6 +725,8 @@ def _build_symbol_dataset(
         return pd.DataFrame()
     frame = frame.sort_index()
     _validate_day_sleeve_bar_cadence(frame, symbol=symbol)
+    from ai_trading.features.day_sleeve import validate_day_sleeve_history
+    validate_day_sleeve_history(frame)
     frame = compute_macd(frame)
     frame = compute_macds(frame)
     frame = compute_atr(frame)

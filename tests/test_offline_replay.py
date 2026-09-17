@@ -79,7 +79,10 @@ class _ConstantEdgeModel:
 
 
 def test_replay_event_loop_allows_long_short_netting_reductions() -> None:
-    bars = [{"ts": "2026-05-05T14:30:00Z", "symbol": "AAPL", "close": 100.0}]
+    bars = [
+        {"ts": "2026-05-05T14:30:00Z", "symbol": "AAPL", "close": 100.0},
+        {"ts": "2026-05-05T14:31:00Z", "symbol": "AAPL", "close": 100.0},
+    ]
 
     for initial_qty, side, expected_qty in ((10.0, "sell", 5.0), (-10.0, "buy", -5.0)):
         loop = ReplayEventLoop(
@@ -89,7 +92,7 @@ def test_replay_event_loop_allows_long_short_netting_reductions() -> None:
                 "qty": 5.0,
                 "type": "limit",
                 "price": 100.0,
-            },
+            } if _bar["ts"] == bars[0]["ts"] else None,
             broker=SimulatedBroker(
                 seed=7,
                 fill_probability=1.0,
@@ -193,9 +196,12 @@ def _load_json(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
-def _write_trending_bars(csv_path: Path, periods: int = 120) -> None:
+def _write_trending_bars(csv_path: Path, periods: int = 120, *, plateaus: bool = False) -> None:
     idx = pd.date_range("2026-01-02 14:30:00+00:00", periods=periods, freq="min")
     close = np.linspace(100.0, 220.0, periods)
+    if plateaus:
+        # A later observed equal price can fill a previously submitted buy limit.
+        close[1::2] = close[::2][:len(close[1::2])]
     open_ = close - 0.2
     high = close + 0.25
     low = open_ - 0.25
@@ -798,7 +804,7 @@ def test_offline_replay_simulation_mode_populates_markout_metrics(
 ) -> None:
     csv_path = tmp_path / "UPTREND.csv"
     out_path = tmp_path / "sim_metrics.json"
-    _write_trending_bars(csv_path, periods=80)
+    _write_trending_bars(csv_path, periods=80, plateaus=True)
 
     monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
     monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
@@ -897,8 +903,8 @@ def test_offline_replay_opportunity_openings_only_skips_quantile_after_open(
     low_idx = pd.date_range("2026-01-02 14:30:00+00:00", periods=3, freq="min")
     high_idx = pd.date_range("2026-01-02 14:31:00+00:00", periods=2, freq="min")
     for symbol, idx, close in (
-        ("LOW", low_idx, [100.0, 100.2, 100.4]),
-        ("HIGH", high_idx, [101.0, 101.2]),
+        ("LOW", low_idx, [100.0, 100.0, 100.0]),
+        ("HIGH", high_idx, [101.0, 101.0]),
     ):
         pd.DataFrame(
             {
@@ -1199,7 +1205,9 @@ def test_offline_replay_model_scoring_sanitizes_duplicate_timestamps(
     assert rc == 0
     payload = _load_json(out_path)
     assert payload["aggregate"]["model_score"]["enabled"] is True
-    assert int(payload["aggregate"]["total_trades"]) > 0
+    assert int(payload["aggregate"]["accepted_candidate_count"]) > 0
+    # These increasing observations never return to the submitted buy limits.
+    assert int(payload["aggregate"]["total_trades"]) == 0
     assert not any(record.msg == "OFFLINE_REPLAY_MODEL_SCORING_FAILED" for record in caplog.records)
 
 

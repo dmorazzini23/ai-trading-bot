@@ -18,6 +18,26 @@ from ai_trading.models.contracts import DAY_SLEEVE_ML_FEATURE_COLUMNS
 from ai_trading.utils.lazy_imports import load_pandas
 
 
+def validate_day_sleeve_history(frame: Any) -> None:
+    """Reject unusable five-minute history before computing any indicators."""
+    pd = load_pandas()
+    if pd is None or not hasattr(pd, "DataFrame"):
+        raise RuntimeError("pandas is required for day-sleeve feature construction")
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        raise ValueError("Day-sleeve feature bars must be a non-empty DataFrame")
+    if (not isinstance(frame.index, pd.DatetimeIndex) or frame.index.tz is None
+            or frame.index.hasnans or frame.index.has_duplicates or not frame.index.is_monotonic_increasing):
+        raise ValueError('Day-sleeve history requires unique ordered timezone-aware timestamps')
+    if bool(((frame.index.minute % 5 != 0) | (frame.index.second != 0)
+             | (frame.index.microsecond != 0) | (frame.index.nanosecond != 0)).any()):
+        raise ValueError('Day-sleeve timestamps are not aligned to the five-minute grid')
+    stamps = pd.Series(frame.index, index=frame.index)
+    dates = pd.Series(frame.index.tz_convert('America/New_York').date, index=frame.index)
+    same_date = dates.eq(dates.shift())
+    if bool((same_date & stamps.diff().ne(pd.Timedelta(minutes=5))).any()):
+        raise ValueError('Day-sleeve history contains a missing or irregular five-minute interval')
+
+
 def build_day_sleeve_features(bars: Any) -> Any:
     """Return one ordered feature row for the latest finalized five-minute bar.
 
@@ -39,17 +59,7 @@ def build_day_sleeve_features(bars: Any) -> Any:
     if len(set(normalized_columns)) != len(normalized_columns):
         raise ValueError("Day-sleeve feature bars contain duplicate columns")
     frame.columns = normalized_columns
-    if (not isinstance(frame.index, pd.DatetimeIndex) or frame.index.tz is None
-            or frame.index.hasnans or frame.index.has_duplicates or not frame.index.is_monotonic_increasing):
-        raise ValueError('Day-sleeve history requires unique ordered timezone-aware timestamps')
-    if bool(((frame.index.minute % 5 != 0) | (frame.index.second != 0)
-             | (frame.index.microsecond != 0) | (frame.index.nanosecond != 0)).any()):
-        raise ValueError('Day-sleeve timestamps are not aligned to the five-minute grid')
-    stamps = pd.Series(frame.index, index=frame.index)
-    dates = pd.Series(frame.index.tz_convert('America/New_York').date, index=frame.index)
-    same_date = dates.eq(dates.shift())
-    if bool((same_date & stamps.diff().ne(pd.Timedelta(minutes=5))).any()):
-        raise ValueError('Day-sleeve history contains a missing or irregular five-minute interval')
+    validate_day_sleeve_history(frame)
     required_raw = ("open", "high", "low", "close", "volume")
     missing_raw = [column for column in required_raw if column not in frame.columns]
     if missing_raw:
@@ -115,4 +125,4 @@ def build_day_sleeve_features(bars: Any) -> Any:
     return feature_row
 
 
-__all__ = ["build_day_sleeve_features"]
+__all__ = ["build_day_sleeve_features", "validate_day_sleeve_history"]

@@ -863,6 +863,15 @@ def _compute_model_signal(
     symbol: str,
     model_context: ReplayModelContext,
 ) -> tuple[pd.Series, pd.Series]:
+    metadata = getattr(model_context.model, "artifact_manifest_metadata_", None)
+    declared_timeframes = {str(getattr(model_context.model, "training_bar_timeframe_", ""))}
+    if isinstance(metadata, Mapping):
+        declared_timeframes.update(str(metadata.get(key, "")) for key in (
+            "training_bar_timeframe", "required_bar_timeframe",
+        ))
+    if "5Min" in declared_timeframes:
+        from ai_trading.features.day_sleeve import validate_day_sleeve_history
+        validate_day_sleeve_history(df)
     frame = _sanitize_model_feature_index(df.copy(), symbol=symbol)
     frame = compute_macd(frame)
     frame = compute_macds(frame)

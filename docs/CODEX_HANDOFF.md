@@ -1,5 +1,86 @@
 # Current handoff
 
+## Market preflight parsing repair — September 17, 14:19 UTC
+
+ai_trading/tools/market_preflight.py reads canonical health with urllib and emits
+bounded JSON. Valid blocked HTTP200/503 reports exit0; malformed/transport/other
+HTTP failures emit failed/unknown and exit1. No jq or guessed nested field paths.
+Regression10pass; changed-file validator --market-hours --skip-runtime-smoke:
+233passed, lint/types9/compile passed. Live command complete/blocked HTTP503 for
+existing required_model_stale + replay parity flags; non-sending incident passed.
+Updated OpenClaw job33a17762-62de-40ad-a7e7-18f1c8b2112a via matching
+/home/aiuser/.local/bin/openclaw (2026.7.1). Readback matches prompt (gateway trims
+trailing newline); schedule/delivery/enabled/identity preserved. PATH's older
+.npm-global CLI2026.6.11 remains unchanged. No manual cron run/notification sent.
+Next natural scheduled run verifies delivery. No restart/gate/training changes.
+See docs/MARKET_PREFLIGHT.md. Logs /tmp/market-preflight-{tests,validation}.log;
+live.json, incident.log, job-before.json and job-after.json under same prefix.
+Rollback job message from job-before.json via matching CLI, then revert only the
+new preflight module/tests/docs. Prior working-tree changes are unrelated.
+
+## Replay tests and pending evidence — September 17, 03:55 UTC
+
+See REPLAY_TEST_AND_PENDING_EVIDENCE_20260917.md. Four replay failures resolved
+through test fixture/assertion corrections: later actual observations for limits,
+plateaus for markouts/opening policy, candidates rather than fictitious fills
+for rising-price duplicate-timestamp case. Full test_offline_replay.py:30 passed.
+Changed-file validator:223 passed, lint/types7/compile passed; diff check passed.
+No new runtime behavior changes. Healthy active NRestarts0; no new natural skew
+or closeout event in postdeployment journal. Both observations remain pending.
+Original manifest/report still lack full input contract. Canonical comparison
+returns unverified, no qualification authority. No artifact/gate/feed changes.
+Logs /tmp/three-{replay-tests,followup-validation}.log; runtime/provenance evidence
+in report. No restart/training/new trial/background monitor. Prior four-failure
+notes below are historical and superseded by this follow-up.
+
+## Shared five-minute history validation — September 17
+
+Implemented validate_day_sleeve_history in features/day_sleeve.py, extracted
+unchanged live timestamp rules. After-hours datasets and replay-aligned features
+now reject intraday gaps before indicators. Replay caches versioned v3 and cache
+hits validated. Offline replay applies this rule to models declaring 5Min via
+model attribute or artifact metadata; other timeframes remain supported. New
+replay-trained models declare the validated timeframe; old models not relabeled.
+No training, feed/universe/gate changes or restart. Current live rule unchanged.
+Regression covers gap/duplicate/order/grid/timezone, session boundaries, cache
+bypass, declared replay models and new model timeframe metadata.
+Changed-file validator:193 passed, lint/types6/compile passed. Final focused12
+passed; final lint passed. Extended suite190pass/4fail; same4 reproduced using
+HEAD offline replay function: netting reductions, markout metrics, opening-only
+quantile, duplicate-timestamp model scoring. Existing failures remain unresolved.
+Logs /tmp/iex-history-{validation,final-tests,baseline,final-regressions}.log.
+Live health healthy active NRestarts0, existing stale/parity flags. Natural skew
+and closeout-with-exposure still pending. Partial-session boundaries and missing
+whole sessions are not certified by continuity alone; full provenance remains
+unverified. Rollback: revert these code/test hunks, preserving previous docs;
+no data migration. Old cache version is excluded, not deleted.
+
+## IEX-only follow-up — September 17, 03:45 UTC
+
+User declines paid SIP; retain IEX. See IEX_PROVENANCE_AND_GAP_REVIEW_20260917.md.
+Original July17 training report/manifest agree on IEX and dataset fingerprint;
+full adjustment/session/history/finality contract remains absent. No relabeling.
+Unresolved mismatch: serving rejects missing intraday five-minute intervals;
+training permits aligned gaps, excludes crossing labels but computes indicators
+over surviving rows; replay feature helper lacks serving continuity validation.
+Next correction: shared history eligibility with synthetic regression, preserve
+strictness; no training/new trials. Audit only, correction not implemented.
+23 contract/serving +1 missing-bar training tests passed. Active healthy service,
+NRestarts0; stale/parity flags remain. No natural new skew/closeout in postdeploy
+journal. No feed/ticker/gate changes, restart or background monitor.
+
+## SIP entitlement/input contract — September 17, 03:35 UTC
+
+See docs/SIP_ENTITLEMENT_REVIEW_20260917.md. SIP latest quotes and recent minute
+bars both rejected: subscription does not permit recent SIP. Historical SIP
+success is insufficient. /tmp/sip-access-review.json. No subscription/feed edits.
+Selected day model 236ba0fe registry declares IEX/5Min/feature version/lookback60,
+but lacks full input contract (adjustment/session/history semantics/finality).
+Referenced artifact manifest also lacks contract; parity remains unverified.
+Do not infer old training settings from current env or substitute generic model.
+Natural skew capture and closeout with exposure remain pending; no forced trades.
+Read-only checks/docs only; no restart, training or gate changes.
+
 ## Skew evidence deployment — September 17, 03:32 UTC
 
 See docs/SKEW_EVIDENCE_AND_FEED_COMPARISON_20260917.md. Skew breaches now record

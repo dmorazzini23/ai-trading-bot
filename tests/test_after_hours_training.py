@@ -268,28 +268,25 @@ def test_build_symbol_dataset_excludes_forming_bar_and_uses_bar_horizon(
     assert row["timestamp"] == bars.index[-4]
 
 
-def test_build_symbol_dataset_rejects_label_across_missing_bar(
+def test_build_symbol_dataset_rejects_history_with_missing_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bars = _synthetic_intraday("AAPL")
-    removed_ts = bars.index[250]
+    removed_ts = bars.index[251]
     irregular = bars.drop(index=removed_ts)
-    expected_previous_ts = bars.index[249]
     monkeypatch.setattr(
         after_hours,
         "_fetch_day_sleeve_bars",
         lambda symbol, _start, _end: irregular,
     )
 
-    dataset = after_hours._build_symbol_dataset(
-        "AAPL",
-        bars.index[0].to_pydatetime(),
-        (bars.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
-        cost_floor_bps=8.0,
-    )
-
-    assert dataset.loc[dataset["timestamp"] == expected_previous_ts].empty
-    assert ((dataset['label_ts'] - dataset['timestamp']) == pd.Timedelta(minutes=5)).all()
+    with pytest.raises(ValueError, match="missing or irregular"):
+        after_hours._build_symbol_dataset(
+            "AAPL",
+            bars.index[0].to_pydatetime(),
+            (bars.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
+            cost_floor_bps=8.0,
+        )
 
 
 def test_build_symbol_dataset_uses_configured_label_horizon(

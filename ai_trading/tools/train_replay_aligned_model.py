@@ -83,7 +83,7 @@ REPLAY_ALIGNED_FEATURE_COLUMNS: tuple[str, ...] = (
     "macd_signal_gap",
     "rsi_centered",
 )
-_FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v2_no_imputation"
+_FEATURE_CACHE_SCHEMA_VERSION = "replay_aligned_features_v3_strict_history"
 _HISTORICAL_AUTHORITY_REQUIRED: dict[str, Any] = {
     "research_only": True,
     "evidence_type": "historical_research",
@@ -232,6 +232,8 @@ def _resolve_symbol_paths(data_dir: Path, symbols: str) -> dict[str, Path]:
 
 
 def _feature_frame(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+    from ai_trading.features.day_sleeve import validate_day_sleeve_history
+    validate_day_sleeve_history(frame)
     work = _sanitize_model_feature_index(frame.copy(), symbol=symbol)
     work = compute_macd(work)
     work = compute_macds(work)
@@ -793,6 +795,8 @@ def _load_or_build_symbol_features(
             frame = cached.get("frame")
             features = cached.get("features")
             if isinstance(frame, pd.DataFrame) and isinstance(features, pd.DataFrame):
+                from ai_trading.features.day_sleeve import validate_day_sleeve_history
+                validate_day_sleeve_history(frame)
                 return frame, features, report
     if frame.empty:
         return frame, pd.DataFrame(), report
@@ -1808,6 +1812,7 @@ def _attach_model_metadata(
 ) -> None:
     continuous = isinstance(model, ContinuousEdgeEstimator)
     for name, value in (
+        ("training_bar_timeframe_", DAY_SLEEVE_ML_BAR_TIMEFRAME),
         ("edge_score_orientation_", "direct"),
         (
             "edge_score_semantics_",
