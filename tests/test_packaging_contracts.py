@@ -43,6 +43,33 @@ def test_ta_extra_and_package_data_include_required_assets() -> None:
     assert "tickers.csv" in package_data["ai_trading.data"] or "*.csv" in package_data["ai_trading.data"]
 
 
+def test_runtime_lock_is_valid_constraints_and_satisfies_runtime_requirements() -> None:
+    from packaging.utils import canonicalize_name
+
+    locked = {}
+    for line in (ROOT / "constraints.txt").read_text().splitlines():
+        value = line.split("#", 1)[0].strip()
+        if not value or value.startswith("-"):
+            continue
+        requirement = Requirement(value)
+        assert not requirement.extras, f"pip constraints cannot contain extras: {value}"
+        pins = list(requirement.specifier)
+        assert len(pins) == 1 and pins[0].operator == "==", value
+        locked[canonicalize_name(requirement.name)] = pins[0].version
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    dependencies = list(project["project"]["dependencies"])
+    dependencies.extend((ROOT / "requirements.txt").read_text().splitlines())
+    for line in dependencies:
+        value = line.split("#", 1)[0].strip()
+        if not value or value.startswith("-"):
+            continue
+        requirement = Requirement(value)
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
+        assert locked[canonicalize_name(requirement.name)] in requirement.specifier, value
+
+
 def test_runtime_workflows_use_ubuntu_2404_constraints_and_block_scheduled_gates() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     workflow_text = "\n".join(path.read_text(encoding="utf-8") for path in workflow_dir.glob("*.yml"))
