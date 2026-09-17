@@ -31,6 +31,10 @@ removes the old advisory exclusions. CI retains the 80% coverage gate, collects
 all failures instead of stopping at the first one and uploads JUnit artifacts.
 Packaging regression validates constraint syntax and version compatibility with
 both runtime dependency declarations.
+An optional run_nightly_full_deps workflow-dispatch input allows the scheduled
+full-dependency job to be validated on the repair branch before merge. That
+manual mode runs only the nightly job; normal push/PR and scheduled selection
+is unchanged. It does not disable any test or coverage threshold.
 
 ## Validation and runtime check
 

@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_nightly_full_deps:
+        description: "Also validate the scheduled full-dependency suite"
+        type: boolean
+        default: false
   schedule:
     - cron: "20 09 * * 1-5"
 
@@ -24,7 +29,7 @@ env:
 
 jobs:
   research-backtest-gate:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.run_nightly_full_deps)
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
@@ -60,7 +65,7 @@ jobs:
             tests/unit/test_backtest_replay_determinism.py
 
   offline-replay-gate:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.run_nightly_full_deps)
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
@@ -97,7 +102,7 @@ jobs:
             tests/test_replay_governance_async_parity.py
 
   ci:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.run_nightly_full_deps)
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
@@ -254,7 +259,7 @@ jobs:
           if-no-files-found: error
 
   determinism-seed-matrix:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && !(github.event_name == 'workflow_dispatch' && inputs.run_nightly_full_deps)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -295,7 +300,7 @@ jobs:
             tests/unit/test_no_unseeded_global_random_simulator_usage.py
 
   nightly-full-deps:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_nightly_full_deps)
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
