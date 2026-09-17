@@ -668,7 +668,7 @@ def test_health_route_builder_failure_returns_503_json():
     register_health_routes(
         app,
         payload_builder=broken_builder,
-        response_builder=lambda payload, status: app_module.jsonify(payload) if status == 200 else (app_module.jsonify(payload), status),
+        response_builder=lambda payload, status: (dict(payload), status),
     )
 
     payload, status = _call_healthz(app)
@@ -703,7 +703,7 @@ def test_health_route_response_failure_returns_503_json_tuple():
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError("response down")
-        return app_module.jsonify(payload), status
+        return dict(payload), status
 
     register_health_routes(
         app,

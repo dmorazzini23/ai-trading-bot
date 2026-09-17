@@ -45,10 +45,14 @@ def test_decision_costs_and_session_bootstrap():
 def test_canonical_feature_is_causal():
     from ai_trading.tools.train_replay_aligned_model import _feature_frame
 
-    index = pd.date_range('2026-03-30 13:30Z', periods=390, freq='min')
+    index = pd.DatetimeIndex([
+        day + pd.Timedelta(minutes=5 * offset)
+        for day in pd.bdate_range('2026-03-30 13:30Z', periods=5, normalize=False)
+        for offset in range(78)
+    ])
     frame = pd.DataFrame({k: np.linspace(100, 102, 390) for k in ('open', 'high', 'low', 'close')}, index=index)
     frame['volume'] = 1000
     original = _feature_frame(frame, symbol='AAPL')['sma_spread']
-    frame.loc[index[250]:, 'close'] *= 10
+    frame.loc[index[250]:, ['open', 'high', 'low', 'close']] *= 10
     changed = _feature_frame(frame, symbol='AAPL')['sma_spread']
     pd.testing.assert_series_equal(original.iloc[:250], changed.iloc[:250])

@@ -47,9 +47,23 @@ is unchanged. It does not disable any test or coverage threshold.
 - All 125 packages in the resolved runtime lock audited clean, with no ignored
   vulnerabilities. Evidence: /tmp/workflow-patched-audit.json.
 - Production installed packages, service and model gates were not changed.
-  Full execution of the suite with upgraded dependencies still requires GitHub
-  CI before merge or deployment. The initial coverage failures followed early
-  test termination; full-suite coverage has not yet been established.
+  The first complete PR run passed 6,773 tests and exposed nine failures;
+  the full-dependency run passed 6,777 and exposed five of those same failures.
+  Coverage was 78.76% and 78.80%, respectively, below the unchanged 80% gate.
+- Corrected stale one-minute feature fixtures to valid five-minute sessions,
+  replaced the constructor regex with AST inspection, isolated health response
+  adapters from collection-time Flask stubs, and refreshed SDK/config class
+  fixtures after module reloads. Deferred SDK exception imports in retry and
+  reconciliation preserve lazy imports without changing exception handling.
+  Added import regressions for each affected module; 89 focused tests pass.
+- Dependency Audit on the PR installed 140 packages and found no vulnerabilities.
+  Replay, all determinism seeds, research, actionlint, CodeQL and SBOM passed.
+  CI now retains coverage XML alongside JUnit for exact gap analysis. The full
+  suite must be rerun after these repairs; coverage remains an unresolved gate.
+- Follow-up changed-file validation passed lint, types (11 files), compilation
+  and its related regression suite. A separate two-worker isolation run passed
+  seven tests. Live health returned required_model_stale (existing degraded
+  readiness); the non-sending incident snapshot passed. No branch deployment.
 
 ## Publishing and next action
 

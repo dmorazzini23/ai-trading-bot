@@ -1,4 +1,5 @@
 from __future__ import annotations
+import ast
 import pathlib, re
 
 from tests.helpers.constants import LEGACY_ENV_PREFIXES, LEGACY_ENV_WHITELIST
@@ -56,14 +57,18 @@ def test_all_python_has_explicit_alpaca_creds():
 def test_tradingclient_sets_paper_not_base_url():
     offenders_missing_paper = []
     offenders_with_base = []
-    rx = re.compile(r"\bTradingClient\s*\((?P<args>[^)]*)\)", re.DOTALL)
     for p in PY:
         t = p.read_text(encoding="utf-8", errors="ignore")
-        for m in rx.finditer(t):
-            args = m.group("args")
-            if "paper=" not in args:
+        for node in ast.walk(ast.parse(t, filename=str(p))):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+            if name != "TradingClient":
+                continue
+            keywords = {keyword.arg for keyword in node.keywords}
+            if "paper" not in keywords:
                 offenders_missing_paper.append(p)
-            if "base_url=" in args:
+            if "base_url" in keywords:
                 offenders_with_base.append(p)
     assert not offenders_with_base, (
         f"TradingClient must not set base_url=: {sorted(set(offenders_with_base))}"

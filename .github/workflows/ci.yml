@@ -236,13 +236,14 @@ jobs:
           pytest -q -n auto --junitxml=.ci/pytest-results.xml \
             --cov=ai_trading \
             --cov-report=term-missing \
+            --cov-report=xml:.ci/coverage.xml \
             --cov-fail-under="${COVERAGE_MIN}"
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ci-test-results
-          path: .ci/pytest-results.xml
+          path: .ci/*.xml
           if-no-files-found: warn
       - name: Runtime performance report
         if: always()
@@ -330,13 +331,14 @@ jobs:
           pytest -q --junitxml=.ci/pytest-results.xml \
             --cov=ai_trading \
             --cov-report=term-missing \
+            --cov-report=xml:.ci/coverage.xml \
             --cov-fail-under="${COVERAGE_MIN}"
       - name: Upload nightly test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nightly-test-results
-          path: .ci/pytest-results.xml
+          path: .ci/*.xml
           if-no-files-found: warn
       - name: Runtime performance report
         if: always()

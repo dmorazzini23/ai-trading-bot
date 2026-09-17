@@ -41,7 +41,11 @@ def test_real_training_pipeline_candidate_reaches_registry_selector(tmp_path: Pa
     x = np.linspace(0, 100, 1600)
     close = 100 + 2 * np.sin(x) + 0.3 * np.sin(0.3 * x)
     pd.DataFrame({
-        "timestamp": pd.date_range("2026-08-03T13:30:00Z", periods=len(x), freq="min"),
+        "timestamp": pd.DatetimeIndex([
+            day + pd.Timedelta(minutes=5 * offset)
+            for day in pd.bdate_range("2026-08-03T13:30Z", periods=21, normalize=False)
+            for offset in range(78)
+        ][:len(x)]),
         "open": close, "high": close + 0.1, "low": close - 0.1,
         "close": close, "volume": 12000 + 500 * np.cos(x),
     }).to_csv(bars / "AAPL.csv", index=False)

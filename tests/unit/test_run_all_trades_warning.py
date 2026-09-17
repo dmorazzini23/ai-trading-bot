@@ -192,6 +192,8 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
 
     state = eng.BotState()
     api = DummyAPI()
+    # The native-client guard must see the same client class as this fixture.
+    monkeypatch.setattr("ai_trading.core.alpaca_client.get_trading_client_cls", lambda: DummyAPI)
     runtime = types.SimpleNamespace(api=api, risk_engine=DummyRiskEngine())
 
     # Minimal patches to isolate the order-check logic

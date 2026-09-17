@@ -4,6 +4,8 @@ import subprocess
 import sys
 from typing import cast
 
+import pytest
+
 
 def _imported_alpaca_modules(mod: str) -> list[str]:
     code = (
@@ -41,8 +43,14 @@ def _imported_alpaca_modules(mod: str) -> list[str]:
     raise AssertionError(result.stdout + result.stderr)
 
 
-def test_bot_engine_lazy_alpaca_import():
-    mods = _imported_alpaca_modules("ai_trading.core.bot_engine")
+@pytest.mark.parametrize("module", [
+    "ai_trading.core.bot_engine",
+    "ai_trading.core.retry",
+    "ai_trading.core.governance_runtime",
+    "ai_trading.services.reconciliation",
+])
+def test_bot_engine_lazy_alpaca_import(module):
+    mods = _imported_alpaca_modules(module)
     assert mods == []
 
 

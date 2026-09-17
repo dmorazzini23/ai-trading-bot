@@ -6,7 +6,6 @@ from decimal import Decimal, InvalidOperation
 from json import JSONDecodeError
 from typing import Any
 import math
-from alpaca.common.exceptions import APIError
 
 from ai_trading.contracts import position_snapshot_from_position
 
@@ -50,6 +49,8 @@ class ReconciliationService:
         warned: bool = False,
     ) -> bool:
         """Prune stale stop/take targets against live broker positions."""
+
+        from alpaca.common.exceptions import APIError
 
         if not getattr(ctx, "api", None):
             if not warned:

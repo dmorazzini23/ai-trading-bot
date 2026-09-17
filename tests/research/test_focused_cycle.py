@@ -57,6 +57,11 @@ def test_canonical_signal_features_do_not_change_when_future_bars_change():
     from ai_trading.tools.train_replay_aligned_model import _feature_frame
 
     bars, _ = _bars()
+    days = pd.bdate_range("2026-08-03T13:30Z", periods=9, normalize=False)
+    bars.index = pd.DatetimeIndex([
+        day + pd.Timedelta(minutes=5 * offset)
+        for day in days for offset in range(78)
+    ][:len(bars)])
     bars["close"] = bars["open"] + np.sin(np.arange(len(bars)) / 9) * 0.1
     bars["high"] = bars[["open", "close"]].max(axis=1) + 0.1
     bars["low"] = bars[["open", "close"]].min(axis=1) - 0.1
