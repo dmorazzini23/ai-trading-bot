@@ -228,10 +228,17 @@ jobs:
         run: vulture ai_trading scripts run.py --min-confidence 80
       - name: Tests
         run: |
-          pytest -q -n auto --maxfail=1 \
+          pytest -q -n auto --junitxml=.ci/pytest-results.xml \
             --cov=ai_trading \
             --cov-report=term-missing \
             --cov-fail-under="${COVERAGE_MIN}"
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-test-results
+          path: .ci/pytest-results.xml
+          if-no-files-found: warn
       - name: Runtime performance report
         if: always()
         run: |
@@ -315,10 +322,17 @@ jobs:
           pip install -e . --no-deps
       - name: Nightly full-deps tests with coverage
         run: |
-          pytest -q --maxfail=1 \
+          pytest -q --junitxml=.ci/pytest-results.xml \
             --cov=ai_trading \
             --cov-report=term-missing \
             --cov-fail-under="${COVERAGE_MIN}"
+      - name: Upload nightly test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-results
+          path: .ci/pytest-results.xml
+          if-no-files-found: warn
       - name: Runtime performance report
         if: always()
         run: |

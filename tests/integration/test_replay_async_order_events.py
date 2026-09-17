@@ -18,8 +18,8 @@ def _parse_utc(text: str) -> datetime:
 def test_replay_event_loop_emits_async_fill_events_deterministically() -> None:
     bars = [
         {"symbol": "AAPL", "ts": "2026-02-18T15:00:00Z", "close": 190.0},
-        {"symbol": "AAPL", "ts": "2026-02-18T15:01:00Z", "close": 190.5},
-        {"symbol": "AAPL", "ts": "2026-02-18T15:02:00Z", "close": 191.0},
+        {"symbol": "AAPL", "ts": "2026-02-18T15:01:00Z", "close": 190.0},
+        {"symbol": "AAPL", "ts": "2026-02-18T15:02:00Z", "close": 190.0},
     ]
 
     def strategy(bar):
@@ -39,7 +39,12 @@ def test_replay_event_loop_emits_async_fill_events_deterministically() -> None:
     assert fills
     first_bar = _parse_utc(str(bars[0]["ts"]))
     second_bar = _parse_utc(str(bars[1]["ts"]))
-    assert any(first_bar < _parse_utc(str(event["ts"])) < second_bar for event in fills)
+    # Delay schedules eligibility; only a subsequent observed price proves a fill.
+    observed_times = {_parse_utc(str(bar["ts"])) for bar in bars[1:]}
+    assert all(_parse_utc(str(event["ts"])) in observed_times for event in fills)
+    assert any(_parse_utc(str(event["ts"])) == second_bar for event in fills)
+    assert all(first_bar < _parse_utc(str(event["ts"])) for event in fills)
+    assert all(float(event["fill_price"]) <= 190.0 for event in fills)
 
 
 def test_replay_event_loop_respects_fill_probability_env(monkeypatch) -> None:
