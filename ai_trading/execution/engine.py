@@ -3705,8 +3705,8 @@ class ExecutionEngine:
         else:
             try:
                 order_type = OrderType(str(order_type_value).lower())
-            except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
-                order_type = OrderType.MARKET
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Unsupported order type: {order_type_value!r}") from exc
         asset_class = kwargs.pop("asset_class", None)
         parent_order_id = str(
             kwargs.pop("parent_order_id", "") or f"parent-{uuid.uuid4().hex[:16]}"

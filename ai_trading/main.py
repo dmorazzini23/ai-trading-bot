@@ -2511,7 +2511,8 @@ def run_cycle() -> None:
                 require_confirmation=True,
             )
         except MAIN_FALLBACK_EXC:
-            logger.debug("STARTUP_PENDING_RECONCILE_SKIPPED", exc_info=True)
+            logger.warning("STARTUP_PENDING_RECONCILE_FAILED", exc_info=True)
+            return
         else:
             now_dt = datetime.now(UTC)
             pending_ids: list[str] = []
@@ -2584,9 +2585,10 @@ def run_cycle() -> None:
             _STARTUP_PENDING_RECONCILED = True
         finally:
             _set_execution_phase(
-                "warmup" if warmup_mode else "active",
+                ("warmup" if warmup_mode else "active") if _STARTUP_PENDING_RECONCILED else "reconcile",
                 status="warming_up",
-                reason="startup_pending_reconcile_complete",
+                reason=("startup_pending_reconcile_complete" if _STARTUP_PENDING_RECONCILED
+                        else "startup_pending_reconcile_failed"),
             )
             runtime_state_map = getattr(runtime, "state", None)
             if isinstance(runtime_state_map, dict):

@@ -67,6 +67,39 @@ is unchanged. It does not disable any test or coverage threshold.
 
 ## Publishing and next action
 
+### September 18 follow-up
+
+Commit cf7a973e8 retains the replacement returned by immutable TradingConfig.update
+in four test modules (11 tests pass). Artifact uploads now explicitly include
+hidden files so `.ci/*.xml` is actually retained. The prior full-dependency run
+passed 6,785 tests but failed the unchanged 80% gate at 78.82% coverage.
+
+Additional boundary regressions found two runtime defects: startup broker-order
+reconciliation failure could fall through to the trading worker, and an invalid
+sliced-order type silently became a market order. Both now fail closed. Added
+startup, child-order conservation/retry/type and trade-history boundary tests.
+Related main tests: 38 passed; execution plus offline replay: 63 passed;
+trade-history tests: 15 passed. These patches remain undeployed.
+Changed-file validator passed lint, types (five files), compilation and 43
+regressions. The final startup read-timeout/retry regression also passes (nine
+startup tests). No runtime model or qualification gate was relaxed.
+
+Operationally, market-preflight now uses OpenClaw's direct command payload for
+the canonical Python module, preserving its schedule, enabled state and delivery.
+Direct non-sending execution completed with blocked readiness; natural scheduled
+delivery remains to be observed. Service remains active with zero restarts.
+
+A fresh two-day broker accounting fetch at 2026-09-18T01:35:38Z returned 16 fills
+but no execution-linked fee amounts. Existing comparison has one paired order
+and zero net-cost pairs, versus minimum 30 orders over five sessions. Historical
+benchmark mismatches and missing simulated orders remain explicit exclusions;
+do not invent fees, normalize historical benchmarks or relax qualification.
+
+Residual investigation: a legacy audit-to-meta converter test exposed two
+opposite-reward rows for one buy/sell round trip. This is not repaired here;
+training remains paused under the research reset. Full CI coverage is still an
+open gate; added focused tests do not establish 80% overall coverage.
+
 Prepared isolated worktree /tmp/ai-trading-workflow-fix on branch
 codex/fix-actions-20260917. Automatic approval review rejected the bundled
 commit/push/draft-PR command, stating that publishing repository contents to the
