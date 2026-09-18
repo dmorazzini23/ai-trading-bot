@@ -1,5 +1,42 @@
 # Current handoff
 
+## Workflow repair PR published — September 17
+
+User explicitly authorized commit/push/draft PR after earlier auto-review block.
+Repair branch codex/fix-actions-20260917 pushed; current head eaa952a8f.
+Draft PR https://github.com/dmorazzini23/ai-trading-bot/pull/3164 is open.
+Worktree /tmp/ai-trading-workflow-fix is clean; temporary venv symlink removed.
+First complete PR CI35237366997: 6773 passed, nine failures, coverage78.76%.
+Manual full-deps CI35237357129: 6777 passed, five failures, coverage78.80%.
+Fixed feature cadence/OHLC fixtures, nested-call regex guard via AST, health
+response adapters and stale class fixtures; defer SDK imports in retry and both
+reconciliation modules. Added lazy import regressions for four modules.
+Follow-up validation: 89 focused tests and seven xdist tests pass; required
+agent_validate_changed --market-hours --skip-runtime-smoke passes 436 tests,
+lint, types11files and compile. Logs /tmp/workflow-repair-validation-final.log,
+/tmp/workflow-repair-focused-final.log and /tmp/workflow-isolation-xdist.log.
+Live health responds degraded required_model_stale; non-sending incident passes.
+No merge/deploy/restart or installed production dependency changes.
+Current head PR CI35242203178 and dispatched full-deps CI35242253502 pending.
+Other checks passed on previous head, audit140packages zero findings; verify
+new runs before claiming green. CI now uploads coverage XML with JUnit.
+Coverage remains unresolved against80%; do not lower threshold/exclude code.
+Next: inspect current CI results, download JUnit/coverage, fix remaining failures
+and add meaningful coverage for the exact gap. Old logs: /tmp/workflow-pr3164-
+{ci,nightly}-failed.log. PR body updated via REST (gh pr edit hits deprecated
+Projects classic GraphQL). /tmp/workflow-pr-body.md has current review details.
+
+## GitHub workflow repairs — September 17
+
+See GITHUB_WORKFLOW_REPAIR_20260917.md. CI failures trace to async limit fixture;
+fixed observed-time/price assertions,64 targeted tests pass. Dependency Audit
+fixed via patched runtime/ML pins and regenerated lock:125packages zero findings,
+no ignores. Full dev/test dependency dry-run passes; actionlint passes. Added
+constraint syntax/version regression. CI now collects all failures/JUnit while
+preserving80%coverage. No production installed dependencies changed or restart.
+Publishing was subsequently explicitly authorized and completed; see current
+state above. Do not ask again for repair-branch publishing authorization.
+
 ## Market preflight parsing repair — September 17, 14:19 UTC
 
 ai_trading/tools/market_preflight.py reads canonical health with urllib and emits
