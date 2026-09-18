@@ -244,6 +244,7 @@ jobs:
         with:
           name: ci-test-results
           path: .ci/*.xml
+          include-hidden-files: true
           if-no-files-found: warn
       - name: Runtime performance report
         if: always()
@@ -339,6 +340,7 @@ jobs:
         with:
           name: nightly-test-results
           path: .ci/*.xml
+          include-hidden-files: true
           if-no-files-found: warn
       - name: Runtime performance report
         if: always()

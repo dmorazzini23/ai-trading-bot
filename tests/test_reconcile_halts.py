@@ -8,7 +8,7 @@ from ai_trading.core import bot_engine
 
 def test_reconcile_halts(monkeypatch):
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(recon_enabled=True)
+    cfg = cfg.update(recon_enabled=True)
     runtime = SimpleNamespace(cfg=cfg, api=None)
     state = bot_engine.BotState()
     state.position_cache = {"AAPL": 10}
@@ -25,7 +25,7 @@ def test_reconcile_halts(monkeypatch):
 
 def test_reconcile_exception_latches_halt_until_success(monkeypatch):
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(recon_enabled=True, recon_interval_seconds=300)
+    cfg = cfg.update(recon_enabled=True, recon_interval_seconds=300)
     runtime = SimpleNamespace(cfg=cfg, api=None)
     state = bot_engine.BotState()
     state.position_cache = {"AAPL": 10}
@@ -65,7 +65,7 @@ def test_reconcile_exception_latches_halt_until_success(monkeypatch):
 
 def test_reconcile_ignores_invalid_last_recon_ts_and_non_mapping_cache(monkeypatch):
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(recon_enabled=True, recon_interval_seconds=300)
+    cfg = cfg.update(recon_enabled=True, recon_interval_seconds=300)
     runtime = SimpleNamespace(cfg=cfg, api=None)
     state = bot_engine.BotState()
     state.position_cache = cast(Any, [])
@@ -89,7 +89,7 @@ def test_reconcile_ignores_invalid_last_recon_ts_and_non_mapping_cache(monkeypat
 
 def test_reconcile_circuit_open_logs_skip(monkeypatch):
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(recon_enabled=True, recon_interval_seconds=300)
+    cfg = cfg.update(recon_enabled=True, recon_interval_seconds=300)
     runtime = SimpleNamespace(cfg=cfg, api=None)
     state = bot_engine.BotState()
     warnings: list[tuple[str, dict[str, object] | None]] = []

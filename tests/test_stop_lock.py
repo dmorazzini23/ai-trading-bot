@@ -17,7 +17,7 @@ def _disable_slo_derisk(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_netting_cycle_applies_execution_symbol_budget(monkeypatch):
     # Other tests reload the runtime module; use the class held by this consumer.
     cfg = bot_engine.TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(
+    cfg = cfg.update(
         netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
@@ -26,6 +26,8 @@ def test_netting_cycle_applies_execution_symbol_budget(monkeypatch):
         allow_extended=True,
         decision_log_path=None,
     )
+    assert cfg.rth_only is False
+    assert cfg.recon_enabled is False
 
     class _ExecEngine:
         def _resolve_order_submit_cap(self):

@@ -15,7 +15,7 @@ from ai_trading.policy.compiler import ExecutionApproval
 
 def test_netting_cycle_emits_decision_reject_reason_summary(monkeypatch, caplog) -> None:
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(
+    cfg = cfg.update(
         netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
@@ -134,7 +134,7 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(
     monkeypatch, caplog
 ) -> None:
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(
+    cfg = cfg.update(
         netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
@@ -373,7 +373,7 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(
 
 def test_netting_cycle_pacing_headroom_uses_submitted_orders(monkeypatch) -> None:
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(
+    cfg = cfg.update(
         netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
@@ -569,7 +569,7 @@ def test_netting_cycle_pacing_headroom_uses_submitted_orders(monkeypatch) -> Non
 
 def test_netting_cycle_clamps_cross_zero_reversal_before_submit(monkeypatch) -> None:
     cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    cfg.update(
+    cfg = cfg.update(
         netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
