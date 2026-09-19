@@ -6,6 +6,10 @@ from io import BytesIO
 from urllib.error import HTTPError
 from pathlib import Path
 from types import ModuleType
+from types import SimpleNamespace
+from datetime import UTC, datetime
+
+import pytest
 
 
 def _load_recap_module() -> ModuleType:
@@ -189,6 +193,95 @@ def test_journal_summary_ignores_broker_last_error_field(monkeypatch) -> None:
 
     summary = recap._journal_summary("2026-07-13")
 
-    assert summary.startswith("1 matching journal lines")
+    assert summary.startswith("1 relevant events in the bounded journal sample")
     assert "after-hours training failed" in summary
     assert "broker_last_error" not in summary
+
+
+def test_reset_recap_uses_current_paper_review_not_retired_report(tmp_path, monkeypatch):
+    latest = tmp_path / "research_reports" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "daily_research_automation_latest.json").write_text(json.dumps({
+        "generated_at": "2026-09-17T20:38:00Z", "status": "complete",
+        "steps": [{"name": "research_reset_scorecard"}],
+    }))
+    paper = latest / "paper_evidence_review_latest.json"
+    paper.write_text(json.dumps({"session_date": "2026-09-17",
+        "generated_at": "2026-09-17T20:37:00Z", "status": "evidence_pending",
+        "completion_gaps": ["net_cost_validation_unavailable"]}))
+    monkeypatch.setattr(recap, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setenv("AI_TRADING_RECAP_DATE", "2026-09-17")
+    text, issues = recap._trading_day_summary("2026-09-17")
+    assert "paper-session review evidence_pending" in text
+    assert "paused under research reset" in text
+    assert issues == ["Paper evidence: net_cost_validation_unavailable"]
+    (tmp_path / "operator_control_plane_latest.json").write_text(json.dumps({
+        "status": "complete", "generated_at": "2026-09-07T21:00:00Z"}))
+    assert recap._operator_issues() == []
+    text, issues = recap._trading_day_summary("2026-09-18")
+    assert "pending" in text and issues == ["Reset evidence reports missing or stale"]
+
+
+def test_incident_checked_at_and_stale_operator_are_distinguished(tmp_path, monkeypatch):
+    monkeypatch.setattr(recap, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setenv("AI_TRADING_RECAP_DATE", "2026-09-17")
+    (tmp_path / "openclaw_incident_state.json").write_text(json.dumps({
+        "status": "clear", "checked_at": "2026-09-17T21:00:00Z"}))
+    (tmp_path / "operator_control_plane_latest.json").write_text(json.dumps({
+        "status": "complete", "generated_at": "2026-09-07T21:00:00Z"}))
+    issues = recap._operator_issues()
+    assert "historical/unverified" in issues[0]
+    assert issues[1] == "OpenClaw incident state: clear at 2026-09-17T21:00:00Z"
+
+
+def test_fill_last_timestamp_only_uses_matching_session_fills(tmp_path, monkeypatch):
+    rows = [
+        {"event": "fill_recorded", "ts": "2026-09-17T14:00:00Z", "qty": 1},
+        {"event": "other", "ts": "2026-09-17T19:00:00Z"},
+        {"event": "fill_recorded", "ts": "2026-09-18T00:30:00Z", "qty": 1},
+        {"event": "fill_recorded", "ts": "2026-09-18T14:00:00Z", "qty": 1},
+    ]
+    (tmp_path / "fill_events.jsonl").write_text("\n".join(map(json.dumps, rows)))
+    monkeypatch.setattr(recap, "RUNTIME_DIR", tmp_path)
+    result = recap._fill_summary("2026-09-17")
+    assert result["fills"] == 2
+    assert result["last_ts"] == "2026-09-18T00:30:00Z"
+    assert recap._fill_summary("2026-09-19")["last_ts"] is None
+
+
+def test_journal_filters_whole_new_york_day_before_limiting(monkeypatch):
+    observed = []
+    monkeypatch.delenv("AI_TRADING_RECAP_SKIP_SYSTEM", raising=False)
+    monkeypatch.delenv("AI_TRADING_RECAP_JOURNAL_SINCE", raising=False)
+    monkeypatch.setattr(recap, "_run_command", lambda args, **kw: (observed.append(args) or (0, "")))
+    assert "does not establish absence of fills" in recap._journal_summary("2026-09-17")
+    args = observed[0]
+    assert args[args.index("--since") + 1] == "2026-09-17 04:00:00 UTC"
+    assert args[args.index("--until") + 1] == "2026-09-18 04:00:00 UTC"
+    assert "--grep" in args
+
+
+def test_session_date_does_not_roll_at_utc_midnight(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_RECAP_DATE", raising=False)
+    monkeypatch.setattr(recap, "datetime", SimpleNamespace(
+        now=lambda tz: datetime(2026, 9, 18, 0, 10, tzinfo=UTC).astimezone(tz)))
+    assert recap._utc_today() == "2026-09-17"
+
+
+@pytest.mark.parametrize("connected,failures,active,healthy", [
+    (True, [], True, True), (False, [], True, False),
+    (True, ["required_model_stale"], True, False), (True, [], False, False),
+])
+def test_healthy_close_requires_connection_readiness_and_active_service(
+    monkeypatch, connected, failures, active, healthy,
+):
+    monkeypatch.setattr(recap, "_health_summary", lambda: ("health", {
+        "ok": True, "readiness_failures": failures,
+        "broker": {"connected": connected, "positions_count": 0, "open_orders_count": 0},
+    }))
+    monkeypatch.setattr(recap, "_service_summary", lambda: "ai-trading.service active" if active else "inactive")
+    monkeypatch.setattr(recap, "_fill_summary", lambda day: {"available": False})
+    monkeypatch.setattr(recap, "_trading_day_summary", lambda day: ("pending", []))
+    monkeypatch.setattr(recap, "_journal_summary", lambda day: "journal")
+    monkeypatch.setattr(recap, "_operator_issues", lambda: [])
+    assert ("Healthy close:" in recap.build_recap()) is healthy

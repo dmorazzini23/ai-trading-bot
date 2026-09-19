@@ -1708,12 +1708,12 @@ def build_runtime_health_payload(
         "failed_checks": failed_checks,
     }
 
-    if offhours_market_closed_ready:
+    if degraded:
+        resolved_status = "degraded"
+    elif offhours_market_closed_ready:
         resolved_status = "healthy"
     elif warmup_market_closed_ready:
         resolved_status = "healthy"
-    elif degraded:
-        resolved_status = "degraded"
     elif healthy_status_mode == "healthy":
         resolved_status = "healthy"
     else:
@@ -1753,12 +1753,12 @@ def build_runtime_health_payload(
         "launch_profile": launch_profile_status,
         "provider_authority": provider_authority | {"ok": provider_authority_ok},
     }
-    if offhours_market_closed_ready:
+    if readiness_failures:
+        payload["reason"] = readiness_failures[0]
+    elif offhours_market_closed_ready:
         payload["reason"] = "market_closed"
     elif warmup_market_closed_ready:
         payload["reason"] = "market_closed"
-    elif readiness_failures:
-        payload["reason"] = readiness_failures[0]
     elif broker_unknown and service_phase_normalized == "warmup":
         payload["reason"] = "broker_status_unknown"
     elif provider_unknown:
