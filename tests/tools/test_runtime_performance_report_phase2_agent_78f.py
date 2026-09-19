@@ -199,8 +199,9 @@ def test_runtime_report_exposes_same_day_fill_pnl_and_broker_position_basis(
 
     summary = rpr.summarize_trade_history(fills, fill_events_path=fills)
 
-    assert summary["open_positions_basis"] == "broker_open_positions"
-    assert summary["open_positions"] == {}
+    assert summary["open_positions_basis"] == "trade_history"
+    assert summary["open_positions"] == {"AMZN": 1.0}
+    assert summary["open_position_reconciliation"]["symbol_mismatch_count"] == 1
     same_day_rows = {
         row["date"]: row
         for row in summary["same_day_fill_pair_stats"]["daily_trade_stats"]

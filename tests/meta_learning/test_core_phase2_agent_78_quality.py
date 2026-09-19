@@ -76,10 +76,10 @@ def test_meta_learning_conversion_and_synthetic_filter(monkeypatch: pytest.Monke
 
     converted = core._convert_audit_to_meta_format(audit_df)
 
-    assert list(converted["symbol"]) == ["SPY", "SPY"]
+    assert list(converted["symbol"]) == ["SPY"]
     assert converted.iloc[0]["exit_price"] == 102.0
     assert converted.iloc[0]["reward"] == 20.0
-    assert converted.iloc[1]["signal_tags"].startswith("audit_order_")
+    assert converted.iloc[0]["signal_tags"].startswith("audit_order_")
 
     monkeypatch.delenv("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", raising=False)
     filtered, removed = core._exclude_synthetic_training_rows(

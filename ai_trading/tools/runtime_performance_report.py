@@ -2566,7 +2566,8 @@ def _reconstruct_closed_trades(
             qty = lot.qty if lot.side == "buy" else -lot.qty
             net_qty += qty
         if net_qty != 0:
-            open_by_symbol[symbol] = net_qty
+            open_by_symbol[symbol] = open_by_symbol.get(symbol, 0.0) + net_qty
+    open_by_symbol = {symbol: qty for symbol, qty in open_by_symbol.items() if qty != 0}
     return closed, open_by_symbol, open_lot_count
 
 
@@ -3340,80 +3341,11 @@ def _choose_reconciliation_positions(
         return None, "trade_history"
     broker_map = _normalise_position_map(broker_positions)
 
-    fallback_to_broker_enabled = bool(
-        get_env(
-            "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_ENABLED",
-            True,
-            cast=bool,
-        )
-    )
-    fallback_ratio_threshold = max(
-        0.05,
-        min(
-            2.0,
-            float(
-                get_env(
-                    "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_ABS_DELTA_RATIO",
-                    0.80,
-                    cast=float,
-                )
-            ),
-        ),
-    )
-    fallback_mismatch_threshold = max(
-        1,
-        int(
-            get_env(
-                "AI_TRADING_RUNTIME_PERF_RECONCILIATION_FALLBACK_TO_BROKER_MISMATCH_COUNT",
-                6,
-                cast=int,
-            )
-        ),
-    )
-
-    if not trade_map and not broker_map:
-        return None, "trade_history"
+    # Broker positions are the independent comparison target, never a substitute
+    # for the reconstructed ledger. A large discrepancy must remain visible.
     if not trade_map:
-        fill_score = _position_delta_score(fill_map, broker_map)
-        fill_ratio = _position_delta_ratio(
-            total_abs_delta=fill_score[0],
-            candidate_positions=fill_map,
-            broker_positions=broker_map,
-        )
-        if bool(fallback_to_broker_enabled) and (
-            float(fill_ratio) >= float(fallback_ratio_threshold)
-            or int(fill_score[1]) >= int(fallback_mismatch_threshold)
-        ):
-            return broker_map, "broker_open_positions"
         return fill_map, "fill_events"
-
-    trade_score = _position_delta_score(trade_map, broker_map)
-    fill_score = _position_delta_score(fill_map, broker_map)
-    selected_map: dict[str, float]
-    selected_source: str
-    selected_score: tuple[float, int, float]
-    if fill_score < trade_score:
-        selected_map = fill_map
-        selected_source = "fill_events"
-        selected_score = fill_score
-    else:
-        selected_map = trade_map
-        selected_source = "trade_history"
-        selected_score = trade_score
-
-    selected_total_abs_delta, selected_mismatch_count, _selected_max_abs = selected_score
-    selected_ratio = _position_delta_ratio(
-        total_abs_delta=selected_total_abs_delta,
-        candidate_positions=selected_map,
-        broker_positions=broker_map,
-    )
-    if bool(fallback_to_broker_enabled) and (
-        float(selected_ratio) >= float(fallback_ratio_threshold)
-        or int(selected_mismatch_count) >= int(fallback_mismatch_threshold)
-    ):
-        return broker_map, "broker_open_positions"
-
-    if selected_source == "fill_events":
+    if _position_delta_score(fill_map, broker_map) < _position_delta_score(trade_map, broker_map):
         return fill_map, "fill_events"
     return None, "trade_history"
 

@@ -292,10 +292,11 @@ class _PCA:
         pass
 
 
-_set_module_attr("sklearn.ensemble", "RandomForestClassifier", _RFC)
-_set_module_attr("sklearn.linear_model", "Ridge", _Ridge)
-_set_module_attr("sklearn.linear_model", "BayesianRidge", _BR)
-_set_module_attr("sklearn.decomposition", "PCA", _PCA)
+# Keep real estimators intact during collection: other test modules import and
+# retain these classes before our module-scoped teardown can restore anything.
+importlib.import_module("sklearn.ensemble")
+importlib.import_module("sklearn.linear_model")
+importlib.import_module("sklearn.decomposition")
 _set_module_attr("prometheus_client", "start_http_server", lambda *a, **k: None)
 _set_module_attr("prometheus_client", "Counter", lambda *a, **k: None)
 _set_module_attr("prometheus_client", "Gauge", lambda *a, **k: None)

@@ -1,5 +1,27 @@
 # Current handoff
 
+## September 19 reconciliation and release follow-through
+
+See RECONCILIATION_REPAIR_20260919.md. Current retained ledger reproduces Sep18
+two blocks: AAPL-3/AMZN2/MSFT1 versus session-implied0/1/1. Removed unsafe
+broker-to-itself reconciliation fallback; fixed separate lineage quantity
+overwrite and duplicate/partial audit-to-meta FIFO conversion. Historical data
+unchanged; exact incident input snapshots unavailable. Do not claim ledger
+repaired. Removed sklearn estimator stubs causing eight parallel CI failures.
+104 reporting/conversion tests and56 CI-isolation tests pass. Latest full-deps
+suite6827pass/4skip but78.98%coverage;80%threshold remains enforced.
+Merged committed close/health fixes bde5a6a4f into isolated worktree. Production
+checkout/service untouched; active,NRestarts0,flat,fresh broker,model stale.
+Current validation artifacts:/tmp/sep19-*.log. Deployment requires remaining
+CI/coverage and evidence review; no restart authorized by passing targeted tests.
+Final standard validator --skip-runtime-smoke passed lint,types8,compile and108
+tests. Initial imported dataclass-slots diagnostics did not recur on final run;
+clean production baseline types2 and scoped changed-file types8 also passed.
+Two-worker CI reproduction56pass; integrated replay/health/recap107pass; final
+converter group45pass. Counts overlap. Nonsending incident/live health passed.
+Saved15:26 report replay now reports2 mismatches instead of the old false zero.
+Full-suite CI on the new commit remains required; coverage is not claimed fixed.
+
 ## Main integration — September 18
 
 User explicitly requested all current commits on main after disclosure of the

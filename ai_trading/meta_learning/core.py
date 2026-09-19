@@ -1648,8 +1648,9 @@ def _convert_audit_to_meta_format(df: Any) -> Any:
                     qty = str(row.iloc[4]).strip()
                     price = str(row.iloc[5]).strip()
                     status = str(row.iloc[7]).strip().lower() if len(row) >= 8 else 'unknown'
-                    invalid_statuses = ['pending', 'cancelled', 'canceled', 'rejected', 'failed', 'error', 'unknown']
-                    if status in invalid_statuses:
+                    # This format has order quantity, not incremental execution
+                    # quantity. Only a filled order establishes that quantity.
+                    if status != 'filled':
                         logger.debug(f'Skipping audit row with invalid status: {status}')
                         continue
                     try:
@@ -1658,39 +1659,29 @@ def _convert_audit_to_meta_format(df: Any) -> Any:
                     except (ValueError, TypeError):
                         logger.debug(f'Invalid numeric values in audit row: qty={qty}, price={price}')
                         continue
-                    if symbol not in position_tracker:
-                        position_tracker[symbol] = []
-                    meta_row = {'symbol': symbol, 'entry_time': timestamp, 'entry_price': price_val, 'exit_time': '', 'exit_price': '', 'qty': qty_val, 'side': side, 'strategy': 'audit_converted', 'classification': 'converted', 'signal_tags': f'audit_order_{order_id[:8]}', 'confidence': '0.5', 'reward': ''}
-                    opposite_side = 'sell' if side == 'buy' else 'buy'
-                    matching_positions = [p for p in position_tracker[symbol] if p['side'] == opposite_side and (not p.get('matched', False))]
-                    if matching_positions:
-                        match = matching_positions[0]
-                        match['matched'] = True
-                        meta_row['exit_time'] = timestamp
-                        meta_row['exit_price'] = price_val
-                        if side == 'buy':
-                            pnl = (price_val - match['entry_price']) * qty_val
-                        else:
-                            pnl = (match['entry_price'] - price_val) * qty_val
-                        meta_row['reward'] = pnl
-                        for existing_row in meta_rows:
-                            if existing_row['symbol'] == symbol and existing_row['entry_price'] == match['entry_price'] and (existing_row['side'] == opposite_side) and (not existing_row['exit_price']):
-                                existing_row['exit_time'] = timestamp
-                                existing_row['exit_price'] = price_val
-                                if side == 'sell':
-                                    existing_entry_price = float(existing_row['entry_price'])
-                                    existing_qty = float(existing_row['qty'])
-                                    existing_row['reward'] = (price_val - existing_entry_price) * existing_qty
-                                else:
-                                    existing_entry_price = float(existing_row['entry_price'])
-                                    existing_qty = float(existing_row['qty'])
-                                    existing_row['reward'] = (existing_entry_price - price_val) * existing_qty
-                                break
-                    position_tracker[symbol].append(meta_row.copy())
-                    meta_rows.append(meta_row)
+                    if side not in {"buy", "sell"} or not (0 < qty_val < float("inf")) or not (0 < price_val < float("inf")):
+                        continue
+                    book = position_tracker.setdefault(symbol, [])
+                    remaining = qty_val
+                    while remaining > 0 and book and book[0]["side"] != side:
+                        entry = book[0]
+                        matched_qty = min(remaining, entry["qty"])
+                        closed_row = dict(entry)
+                        closed_row.update(qty=matched_qty, exit_time=timestamp, exit_price=price_val)
+                        direction = 1 if entry["side"] == "buy" else -1
+                        closed_row["reward"] = direction * (price_val - entry["entry_price"]) * matched_qty
+                        meta_rows.append(closed_row)
+                        entry["qty"] -= matched_qty
+                        remaining -= matched_qty
+                        if entry["qty"] <= 0:
+                            book.pop(0)
+                    if remaining > 0:
+                        book.append({'symbol': symbol, 'entry_time': timestamp, 'entry_price': price_val, 'exit_time': '', 'exit_price': '', 'qty': remaining, 'side': side, 'strategy': 'audit_converted', 'classification': 'converted', 'signal_tags': f'audit_order_{order_id[:8]}', 'confidence': '0.5', 'reward': ''})
             except COMMON_EXC as e:
                 logger.debug(f"Failed to convert audit row {(row.iloc[0] if len(row) > 0 else 'unknown')}: {e}")
                 continue
+        for positions in position_tracker.values():
+            meta_rows.extend(positions)
         if meta_rows:
             converted_df = pd.DataFrame(meta_rows)
             logger.info(f'META_LEARNING_AUDIT_CONVERSION: Successfully converted {len(meta_rows)} audit rows to meta format')

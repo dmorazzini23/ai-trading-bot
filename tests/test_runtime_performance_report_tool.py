@@ -1630,7 +1630,7 @@ def test_build_report_prefers_fill_events_for_reconciliation(
     assert reconciliation["symbol_mismatch_count"] == 0
 
 
-def test_build_report_can_fallback_to_broker_positions_for_extreme_mismatch(
+def test_build_report_preserves_extreme_mismatch_even_with_legacy_fallback_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1707,15 +1707,15 @@ def test_build_report_can_fallback_to_broker_positions_for_extreme_mismatch(
 
     trade = report["trade_history"]
     assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
-    assert trade["open_positions"] == {"MSFT": 2.0}
-    assert trade["reconciliation_open_positions_source"] == "broker_open_positions"
+    assert trade["open_positions"] == {"AAPL": 9.0}
+    assert trade["reconciliation_open_positions_source"] == "fill_events"
     reconciliation = trade["open_position_reconciliation"]
     assert reconciliation["available"] is True
-    assert reconciliation["source"] == "broker_open_positions"
-    assert reconciliation["symbol_mismatch_count"] == 0
+    assert reconciliation["source"] == "fill_events"
+    assert reconciliation["symbol_mismatch_count"] == 2
 
 
-def test_build_report_keeps_broker_flat_when_fill_events_are_stale(
+def test_build_report_preserves_ledger_discrepancy_when_broker_is_flat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1781,11 +1781,11 @@ def test_build_report_keeps_broker_flat_when_fill_events_are_stale(
     )
 
     trade = report["trade_history"]
-    assert trade["reconciliation_open_positions_source"] == "broker_open_positions"
+    assert trade["reconciliation_open_positions_source"] == "trade_history"
     reconciliation = trade["open_position_reconciliation"]
     assert reconciliation["available"] is True
-    assert reconciliation["source"] == "broker_open_positions"
-    assert reconciliation["symbol_mismatch_count"] == 0
+    assert reconciliation["source"] == "trade_history"
+    assert reconciliation["symbol_mismatch_count"] == 1
 
 
 def test_build_report_scopes_trade_history_to_canary_symbols(
