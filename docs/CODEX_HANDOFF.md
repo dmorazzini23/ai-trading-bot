@@ -2,6 +2,14 @@
 
 ## Efficient ledger and coverage follow-through — September19
 
+Full CI35411547532 on4ae076049 completed:78.99%,6880pass/4fail/4skip. Nine prior
+sklearn failures gone. Four new failures isolated with test-only fixes: throttle
+filter, network-free minute fallback, sizing cache, shared order tracking.
+Follow-up22parallel tests pass; validator lint/types4/compile/nine tests pass.
+Final publishing-triggered CI pending; latest measured coverage remains78.99%,
+below unchanged80%. Conserve user budget; do not start another coverage campaign
+without a new task. Service and original runtime ledger remain unchanged.
+
 See LEDGER_AND_COVERAGE_20260919.md. Removed global import-time stubs from three
 test modules, added fail-closed optional broker-ledger rebuild to the accounting
 CLI, and targeted schema/ledger regressions.66 parallel isolation tests pass;

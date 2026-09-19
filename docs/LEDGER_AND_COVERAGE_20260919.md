@@ -48,3 +48,21 @@ avoid repeating full runs or arbitrary tests solely to inflate the metric.
 
 Rollback source/test changes together; generated audit artifacts can be retained
 because they have no operational authority. No original ledger was mutated.
+
+## Completed full-run measurement and follow-up
+
+CI35411547532 on4ae076049 measured78.99% (153911 statements,32332 missed):
+6880 passed,4 failed,4 skipped. Previous comparable main CI was78.95% with nine
+sklearn failures; all of those failures disappeared. Coverage remains below80%.
+The four remaining failures were test isolation defects: inherited logging
+throttle state, a real network request in the minute-fallback logging test,
+reused position-sizing cache and shared order-monitor state. Isolate those
+inputs/resources; do not weaken their behavioral assertions. Follow-up22 tests
+pass with two workers, and the standard validator passes lint,types4,compile
+and nine mapped tests. Runtime code is unchanged by this follow-up.
+
+The publishing-triggered CI for the final test-only patch still needs its own
+result. To conserve the user's remaining allowance, no further broad coverage
+campaign is included here. Do not report that the final full suite is green or
+that coverage reached80%. Full log:/tmp/efficient-full-ci.log; follow-up logs:
+/tmp/efficient-followup-{final,validation}.log.

@@ -5,6 +5,12 @@ import ai_trading.main as m
 
 
 def test_startup_without_max_position_size(monkeypatch, caplog):
+    from ai_trading import position_sizing
+    cache = position_sizing._Cache()
+    monkeypatch.setattr(position_sizing, "_CACHE", cache)
+    monkeypatch.setattr(m, "_CACHE", cache)
+    monkeypatch.setattr(m, "_get_equity_from_alpaca", lambda *a, **k: 100000.0)
+    monkeypatch.setattr(position_sizing, "_get_equity_from_alpaca", lambda *a, **k: 100000.0)
     env = {
         "ALPACA_API_KEY": "dummy",
         "ALPACA_SECRET_KEY": "dummy",
@@ -30,6 +36,7 @@ def test_startup_without_max_position_size(monkeypatch, caplog):
         paper = True
 
     class DummySettings:
+        max_position_mode = "STATIC"
         trading_mode = "balanced"
         capital_cap = 0.04
         dollar_risk_limit = 0.05

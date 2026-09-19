@@ -15,6 +15,13 @@ class TestShortSellingImplementation(unittest.TestCase):
 
     def setUp(self):
         """Set up test environment."""
+        from ai_trading.monitoring import order_health_monitor
+        from ai_trading.execution import engine as engine_module
+        orders = {}
+        for module in (order_health_monitor, engine_module):
+            tracker = patch.object(module, "_active_orders", orders)
+            tracker.start()
+            self.addCleanup(tracker.stop)
         # Mock dependencies to avoid import issues during testing
         self.mock_api = Mock()
         self.mock_account = Mock()

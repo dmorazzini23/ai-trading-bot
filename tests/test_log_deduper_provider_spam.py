@@ -8,7 +8,7 @@ log_mod = require("ai_trading.logging")
 
 
 @pytest.mark.unit
-def test_throttle_summaries_flush_each_cycle(caplog):
+def test_throttle_summaries_flush_each_cycle(caplog, monkeypatch):
     flush = getattr(log_mod, "flush_log_throttle_summaries", None)
     throttle_filter = getattr(log_mod, "_THROTTLE_FILTER", None)
     if flush is None or throttle_filter is None:
@@ -18,7 +18,10 @@ def test_throttle_summaries_flush_each_cycle(caplog):
     with throttle_filter._lock:  # type: ignore[attr-defined]
         throttle_filter._state.clear()  # type: ignore[attr-defined]
 
-    logger = log_mod.get_logger("ai_trading.tests.deduper")
+    throttle_filter = log_mod.MessageThrottleFilter(throttle_seconds=5.0)
+    monkeypatch.setattr(log_mod, "_THROTTLE_FILTER", throttle_filter)
+    logger = logging.getLogger("ai_trading.tests.deduper")
+    monkeypatch.setattr(logger, "filters", [throttle_filter])
 
     for _ in range(4):
         logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
