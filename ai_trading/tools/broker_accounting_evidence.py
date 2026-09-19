@@ -150,6 +150,51 @@ def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str
     return {"status": "accounting_compared" if snapshot.get("pagination_complete") and snapshot.get("trading_mode") == "paper" and account else "accounting_incomplete", "activity_count": len(unique), "activity_types": dict(Counter(row.get("activity_type") for row in unique.values())), "recovered_order_account_links": recovered_order_links, "fee_coverage": dict(fee_coverage), "fee_activities": fees, "order_quantity_comparison": orders, "order_quantity_counts": dict(Counter(row["status"] for row in orders)), "rejection_counts": dict(rejected), "net_fee_validation": "unavailable_without_complete_per_fill_totals", "limitations": ["Accounting quantities alone do not establish fill identity or fee completeness.", "No fee activity does not establish zero execution fees.", "Unallocated charges and rebates are never distributed across fills."], "promotion_authority": False, "orders_sent": 0}
 
 
+def rebuild_quantity_ledger(snapshot: dict[str, Any], opening: dict[str, Any], closing: dict[str, Any]) -> dict[str, Any]:
+    """Build a separate quantity audit; never replace historical execution evidence."""
+    from ai_trading.tools.execution_evidence_reconciliation import _reconcile_positions
+
+    account = snapshot.get("account_id")
+    start = pd.to_datetime(opening.get("timestamp"), utc=True, errors="coerce")
+    end = pd.to_datetime(closing.get("timestamp"), utc=True, errors="coerce")
+    after = pd.to_datetime(snapshot.get("after"), utc=True, errors="coerce")
+    fetched = pd.to_datetime(snapshot.get("fetched_at"), utc=True, errors="coerce")
+    if (not account or snapshot.get("trading_mode") != "paper"
+            or snapshot.get("pagination_complete") is not True
+            or any(pd.isna(t) for t in (start, end, after, fetched))
+            or not after < start < end <= fetched
+            or any(b.get("account_id") != account or b.get("trading_mode") != "paper"
+                   or b.get("positions_complete") is not True for b in (opening, closing))):
+        raise ValueError("complete same-account paper snapshots and covering broker pagination required")
+    unique: dict[str, dict[str, Any]] = {}
+    for row in snapshot.get("activities", []):
+        if row.get("activity_type") != "FILL":
+            continue
+        key = str(row.get("id") or "")
+        if not key or (key in unique and unique[key] != row):
+            raise ValueError("missing or conflicting broker execution identity")
+        unique[key] = row
+    accepted = []
+    for key, row in unique.items():
+        ts = pd.to_datetime(row.get("transaction_time"), utc=True, errors="coerce")
+        qty = _number(row.get("qty"))
+        if (pd.isna(ts) or qty is None or qty <= 0 or not row.get("symbol")
+                or not row.get("order_id") or row.get("side") not in ("buy", "sell")):
+            raise ValueError("invalid broker execution fields")
+        if start < ts <= end:
+            accepted.append({"fill_id": key, "order_id": str(row["order_id"]),
+                             "timestamp": ts, "symbol": str(row["symbol"]),
+                             "side": row["side"], "qty": qty})
+    accepted.sort(key=lambda row: (row["timestamp"], row["fill_id"]))
+    comparison = _reconcile_positions(accepted, opening, closing)
+    return {"status": comparison["status"], "position_reconciliation": comparison,
+            "opening": opening, "closing": closing,
+            "executions": [{**row, "timestamp": row["timestamp"].isoformat(), "qty": str(row["qty"])} for row in accepted],
+            "historical_scope": "pre_opening_history_unverified_excluded_from_this_ledger",
+            "scope": "broker_execution_quantity_audit_not_fee_or_performance_certification",
+            "promotion_authority": False, "orders_sent": 0}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fills", type=Path, required=True)
@@ -157,7 +202,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fetch-paper", action="store_true")
     parser.add_argument("--lookback-days", type=int, default=90)
+    parser.add_argument("--opening-positions", type=Path)
+    parser.add_argument("--closing-positions", type=Path)
+    parser.add_argument("--ledger-output", type=Path)
     args = parser.parse_args()
+    if any((args.opening_positions, args.closing_positions, args.ledger_output)) and not all((args.opening_positions, args.closing_positions, args.ledger_output)):
+        parser.error("opening-positions, closing-positions and ledger-output must be supplied together")
     if args.fetch_paper:
         from alpaca.trading.client import TradingClient
         from ai_trading.config.managed_secrets import hydrate_managed_secrets
@@ -168,6 +218,9 @@ def main() -> None:
     else:
         snapshot = json.loads(args.snapshot.read_text())
     fills, _, source = _read(args.fills)
+    if args.ledger_output:
+        ledger = rebuild_quantity_ledger(snapshot, json.loads(args.opening_positions.read_text()), json.loads(args.closing_positions.read_text()))
+        atomic_write_text(args.ledger_output, json.dumps(ledger, indent=2, sort_keys=True) + "\n")
     report = reconcile(snapshot, fills)
     report["fee_record_coverage"] = fee_record_coverage(snapshot)
     report["daily_account_fee_totals"] = daily_fee_totals(report["fee_activities"])

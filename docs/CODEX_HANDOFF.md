@@ -1,5 +1,19 @@
 # Current handoff
 
+## Efficient ledger and coverage follow-through — September19
+
+See LEDGER_AND_COVERAGE_20260919.md. Removed global import-time stubs from three
+test modules, added fail-closed optional broker-ledger rebuild to the accounting
+CLI, and targeted schema/ledger regressions.66 parallel isolation tests pass;
+validator lint/types6/compile/40tests pass;17 final ledger/CLI tests pass.
+Rebuilt50 broker executions from Sep7 verified opening through Sep18 closing:
+quantity matched. Separate ignored artifacts in production checkout under
+artifacts/ledger_rebuild/20260918. Original history unchanged, earlier history
+unverified/excluded from this rebuild; no live/training source switch or restart.
+One full CI measurement follows publishing; do not claim80% from focused tests.
+User requested efficient use of remaining26%weekly allowance. Keep future runs
+bounded, reuse unchanged validation, and do not delete archived branches.
+
 ## September 19 reconciliation and release follow-through
 
 See RECONCILIATION_REPAIR_20260919.md. Current retained ledger reproduces Sep18
