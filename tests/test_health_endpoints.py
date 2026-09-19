@@ -761,9 +761,21 @@ def test_runtime_health_payload_db_requirement_marks_degraded(monkeypatch):
     assert payload.get("reason") == "database_unhealthy"
 
 
+@pytest.mark.parametrize("market_closed", [False, True])
 def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
-    monkeypatch,
+    monkeypatch, market_closed,
 ):
+    if market_closed:
+        monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: {
+            "status": "idle", "reason": "market_closed", "market_open": False,
+        })
+        monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: {
+            "status": "connected", "connected": True,
+            "positions_count": 0, "open_orders_count": 0,
+        })
+        monkeypatch.setattr(runtime_state, "observe_service_status", lambda: {
+            "status": "ready", "phase": "active", "reason": "market_closed",
+        })
     monkeypatch.setenv("EXECUTION_MODE", "paper")
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL", "1")
@@ -815,7 +827,7 @@ def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
     assert payload["latest_training_attempt"]["status"] == "skipped"
     assert payload["latest_training_attempt"]["reason"] == "no_qualified_candidate"
     assert payload["latest_training_attempt"]["runtime_authority"] is False
-    assert payload["entry_control"]["paper_evidence_allowed"] is True
+    assert payload["entry_control"]["paper_evidence_allowed"] is (not market_closed)
 
 
 def test_runtime_health_payload_db_requirement_rejects_unconfigured_db(monkeypatch):

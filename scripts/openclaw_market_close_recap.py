@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
+from zoneinfo import ZoneInfo
 
 
 RUNTIME_DIR = Path(os.environ.get("AI_TRADING_RECAP_RUNTIME_DIR", "/var/lib/ai-trading-bot/runtime"))
@@ -42,7 +43,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _utc_today() -> str:
-    return os.environ.get("AI_TRADING_RECAP_DATE") or datetime.now(UTC).date().isoformat()
+    return os.environ.get("AI_TRADING_RECAP_DATE") or datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
 
 def _parse_ts(raw: Any) -> datetime | None:
@@ -64,7 +65,7 @@ def _parse_ts(raw: Any) -> datetime | None:
 
 def _is_fresh_date(raw: Any, day: str) -> bool:
     ts = _parse_ts(raw)
-    return bool(ts and ts.date().isoformat() == day)
+    return bool(ts and ts.astimezone(ZoneInfo("America/New_York")).date().isoformat() == day)
 
 
 def _run_command(args: list[str], *, timeout: float = 12.0) -> tuple[int, str]:
@@ -147,19 +148,23 @@ def _journal_summary(day: str) -> str:
         return "journal not checked in test/dry mode"
     since = os.environ.get("AI_TRADING_RECAP_JOURNAL_SINCE")
     if not since:
-        since_dt = datetime.fromisoformat(f"{day}T19:20:00+00:00") - timedelta(minutes=0)
-        since = since_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        since_dt = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo("America/New_York"))
+        since = since_dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    end = (datetime.fromisoformat(day).replace(tzinfo=ZoneInfo("America/New_York")) + timedelta(days=1)).astimezone(UTC)
     code, output = _run_command(
-        ["journalctl", "-u", "ai-trading.service", "--since", since, "--no-pager", "-n", "400"],
+        ["journalctl", "-u", "ai-trading.service", "--since", since,
+         "--until", end.strftime("%Y-%m-%d %H:%M:%S UTC"),
+         "--grep", "ORDER_SUBMITTED|ORDER_FILLED|fill_recorded|BUDGET_OVER|ERROR|CRITICAL|Traceback",
+         "--case-sensitive=no", "--no-pager", "-n", "400"],
         timeout=15,
     )
     if code != 0:
         return f"journal unavailable exit={code}: {output[:240] or 'no output'}"
     matches = [line for line in output.splitlines() if _journal_line_relevant(line)]
     if not matches:
-        return "no matching journal lines for order/fill/error patterns"
+        return "No matching journal events in the session window; this does not establish absence of fills."
     tail = matches[-5:]
-    return f"{len(matches)} matching journal lines; latest: " + " | ".join(line[-180:] for line in tail)
+    return f"{len(matches)} relevant events in the bounded journal sample; latest: " + " | ".join(line[-180:] for line in tail)
 
 
 def _fill_summary(day: str) -> dict[str, Any]:
@@ -176,10 +181,10 @@ def _fill_summary(day: str) -> dict[str, Any]:
         if not isinstance(row, dict):
             continue
         ts_text = str(row.get("ts") or row.get("entry_time") or "")
-        if ts_text > str(last_ts or ""):
-            last_ts = ts_text
-        if ts_text.startswith(day) and str(row.get("event") or "").lower() == "fill_recorded":
+        if _is_fresh_date(ts_text, day) and str(row.get("event") or "").lower() == "fill_recorded":
             rows.append(row)
+            if last_ts is None or _parse_ts(ts_text) > _parse_ts(last_ts):
+                last_ts = ts_text
     by_symbol: dict[str, dict[str, float]] = defaultdict(lambda: {"fills": 0.0, "qty": 0.0, "edge_bps": 0.0})
     sides: Counter[str] = Counter()
     for row in rows:
@@ -202,6 +207,21 @@ def _fill_summary(day: str) -> dict[str, Any]:
 
 def _trading_day_summary(day: str) -> tuple[str, list[str]]:
     warnings: list[str] = []
+    latest = RUNTIME_DIR / "research_reports" / "latest"
+    automation = _read_json(latest / "daily_research_automation_latest.json") or {}
+    steps = {row.get("name") for row in automation.get("steps", []) if isinstance(row, dict)}
+    if "research_reset_scorecard" in steps:
+        paper = _read_json(latest / "paper_evidence_review_latest.json") or {}
+        if (not _is_fresh_date(automation.get("generated_at"), day)
+                or paper.get("session_date") != day
+                or not _is_fresh_date(paper.get("generated_at"), day)):
+            return f"reset paper-session report pending for {day}", ["Reset evidence reports missing or stale"]
+        gaps = paper.get("completion_gaps") or []
+        warnings.extend(f"Paper evidence: {gap}" for gap in gaps)
+        if automation.get("status") != "complete":
+            warnings.append(f"Daily reset job: {automation.get('status', 'unknown')}")
+        return (f"paper-session review {paper.get('status', 'unknown')} for {day}; "
+                "legacy trading-day/control-plane reports paused under research reset"), warnings
     path = RUNTIME_DIR / "reports" / "trading_day_latest.json"
     report = _read_json(path)
     if report is None:
@@ -228,19 +248,27 @@ def _trading_day_summary(day: str) -> tuple[str, list[str]]:
 
 def _operator_issues() -> list[str]:
     issues: list[str] = []
+    automation = _read_json(RUNTIME_DIR / "research_reports/latest/daily_research_automation_latest.json") or {}
+    reset_current = _is_fresh_date(automation.get("generated_at"), _utc_today()) and any(
+        isinstance(row, dict) and row.get("name") == "research_reset_scorecard"
+        for row in automation.get("steps", [])
+    )
     for rel, label in (
         (Path("operator_control_plane_latest.json"), "operator control plane"),
         (Path("openclaw_incident_state.json"), "OpenClaw incident state"),
         (Path("slack_incident_state.json"), "Slack incident state"),
     ):
+        if reset_current and rel.name == "operator_control_plane_latest.json":
+            continue  # This legacy producer is intentionally paused in reset mode.
         path = RUNTIME_DIR / rel
         payload = _read_json(path)
         if payload is None:
             continue
         status = payload.get("status") or payload.get("severity") or payload.get("last_status")
-        generated = payload.get("generated_at") or payload.get("updated_at") or payload.get("ts")
+        generated = payload.get("generated_at") or payload.get("updated_at") or payload.get("checked_at") or payload.get("ts")
         if status:
-            issues.append(f"{label}: {status} at {generated or 'unknown time'}")
+            freshness = "" if _is_fresh_date(generated, _utc_today()) else " (historical/unverified; not current status)"
+            issues.append(f"{label}: {status} at {generated or 'unknown time'}{freshness}")
     return issues
 
 
@@ -258,7 +286,9 @@ def build_recap() -> str:
         broker = health.get("broker") if isinstance(health.get("broker"), dict) else {}
         broker_flat = broker.get("open_orders_count") == 0 and broker.get("positions_count") == 0
 
-    if isinstance(health, dict) and health.get("ok") is True and broker_flat:
+    if (isinstance(health, dict) and health.get("ok") is True and broker_flat
+            and health.get("broker", {}).get("connected") is True
+            and not health.get("readiness_failures") and service == "ai-trading.service active"):
         verdict = "Healthy close: service is up, broker is connected, and exposure is flat."
     elif isinstance(health, dict):
         readiness_failures = health.get("readiness_failures")
@@ -266,8 +296,10 @@ def build_recap() -> str:
             readiness_failures = []
         readiness_text = ", ".join(str(item) for item in readiness_failures) or "none"
         verdict = (
-            f"Close needs review: health ok={health.get('ok')} "
-            f"status={health.get('status')}; readiness failures: {readiness_text}."
+            f"Close needs review: trading readiness {'blocked' if health.get('ok') is False or readiness_failures else 'unverified'}; "
+            f"readiness failures: {readiness_text}. {service}. "
+            f"Endpoint status={health.get('status')} reason={health.get('reason')}; "
+            "service liveness does not establish model readiness."
         )
     else:
         verdict = f"Close needs review: {health_text}."
@@ -276,7 +308,7 @@ def build_recap() -> str:
     if fills.get("available"):
         fill_text = (
             f"{fills['fills']} fills, qty {fills['qty']:g}, realized edge sum "
-            f"{fills['edge_bps']:.2f} bps, symbols "
+            f"{fills['edge_bps']:.2f} bps (unweighted recorded diagnostic, not net P&L), symbols "
             f"{', '.join(fills['symbols']) or 'none'}, last fill {fills.get('last_ts') or 'n/a'}"
         )
 

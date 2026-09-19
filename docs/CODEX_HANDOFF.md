@@ -1,5 +1,80 @@
 # Current handoff
 
+## Main integration — September 18
+
+User explicitly requested all current commits on main after disclosure of the
+coverage gate. Integrated origin/main into the repair history, resolving only
+workflow artifact paths and the repair report; actionlint/diff checks passed.
+Normal fast-forward push published 02d5ead2362138afce8a941d80dcda79fa3bac4d to
+origin/main. GitHub marked PR3164 merged. No service restart/deployment or local
+production checkout reset; existing uncommitted close/health changes preserved.
+GitHub accepted the push with required checks pending; CI35301288534 is running
+on the exact main commit. Workflow Lint/SBOM passed; full CI not yet verified.
+
+Branch audit:3148 remote refs,104 historical tips outside main ancestry after
+integration:7 exact tips linked to merged PRs,87 closed-unmerged PR tips,10
+unmatched tips (nine with older PR history plus gh-pages). User explicitly chose
+to leave historical branches archived. No historical merge or deletion performed.
+All commits from the current repair branch are reachable from origin/main.
+Audit artifacts:/tmp/main-branch-audit.json and /tmp/main-closed-prs.jsonl.
+Coverage78.82% is the prior complete run's measured statement execution, not a
+test pass rate; 6785 tests passed but the unchanged80% minimum failed. Earlier
+push-blocker notes below are superseded by this authorized successful push.
+
+## September 18 fixes follow-through
+
+Isolated repair branch/worktree: codex/fix-actions-20260917 at
+/tmp/ai-trading-workflow-fix, draft PR #3164 (unmerged, undeployed).
+cf7a973e8 fixes discarded immutable TradingConfig.update returns in four test
+modules and hidden `.ci/*.xml` artifact uploads. f9fe9ba2d adds fail-closed startup
+reconciliation and rejects invalid sliced-order types before submission, with
+boundary regressions. Changed-file validator passed lint/types/compile and 43
+tests; final startup retry suite nine passed; offline replay/execution 63 passed.
+Counts overlap. CI run35295591496 remains in progress at this checkpoint.
+Push of f9fe9ba2d was rejected by automatic approval review: remote code export
+authorization was not established. This commit remains local; remote PR head is
+cf7a973e8. Ask explicit approval to push f9fe9ba2d to the existing origin branch.
+Last complete full-deps suite: 6785 passed, coverage78.82% (80% gate unchanged).
+Coverage remains unfinished; do not claim all workflows green.
+
+Preflight job33a17762-62de-40ad-a7e7-18f1c8b2112a now has a direct command argv
+payload running the canonical module with repo venv and cwd; schedule/delivery/
+enabled state preserved. Direct non-sending run complete/blocked, exit0. Next
+natural cron delivery remains pending. No service restart; active/NRestarts0.
+
+Fresh two-day broker fetch at01:35:38Z:16 fills, zero execution-linked fee amounts;
+one historical cost-comparison pair, zero net-cost pairs. No evidence fabricated,
+no qualification gates changed, no training or new experiment. Artifacts under
+/tmp/next-fixes-*. Legacy audit-to-meta conversion also produced duplicate
+opposite-reward rows for a round trip during testing; not repaired, investigate
+before training resumes. Existing close-recap/health edits below remain separate.
+
+## Close recap reporting repair — September 18, 00:05 UTC
+
+Fixed scripts/openclaw_market_close_recap.py: current reset automation/paper
+review replaces intentionally paused legacy trading-day/control-plane artifacts;
+missing/stale reset evidence still reports pending. Recognize incident checked_at,
+use New York session dates (including UTC midnight), constrain last fill to that
+session, filter full-session journal before bounded tail, and label edge sums as
+unweighted diagnostics rather than net P&L. Healthy close requires connected
+broker, flat exposure, no readiness failures and active service.
+Canonical health_payload.py now prioritizes degraded readiness and its reason
+over the market-closed healthy shortcut. This runtime patch is NOT loaded into
+the existing process; it takes effect on the next planned restart. User requested
+leave service running; no restart, training, model swap or gate relaxation.
+Recap script is immediately used by enabled OpenClaw command job515d67cc-
+ed31-41cb-acc8-5e02405d907a (16:45 America/New_York); verified live argv/cwd.
+Required changed-file validator passes93tests, lint/types4files/compile. Final
+recap-only changes checked separately:13tests, lint/types. Live read-only preview
+/tmp/close-repair-preview-final.txt finds8fills and current Sep17 evidence_pending
+report. Non-sending incident snapshot passed. Service active/NRestarts0; broker
+connected, positions0/orders0. Model age62days exceeds14, abstains; research
+reset deliberately pauses scheduled training. Fees missing for8fills; net-cost
+and execution-comparison evidence remain unqualified. Do not suppress these.
+Logs /tmp/close-repair-validation.log, /tmp/close-repair-recap-final-tests.log.
+Next natural close verifies delivery; do not manually trigger notifications.
+Rollback the four changed code/test files together; no runtime artifact rewrite.
+
 ## Workflow repair PR published — September 17
 
 User explicitly authorized commit/push/draft PR after earlier auto-review block.
