@@ -2,6 +2,21 @@
 
 ## September 21 replacement-model trial preflight
 
+Superseded by completed trial: docs/MODEL_REPLACEMENT_20260921.md. One trial used,
+status hypothesis_rejected. 113,223 derived rows; 94,200 OOF opportunities; 30,802
+selected proxies; -3.197464 bps/common opportunity, -9.778623 bps/selected trade
+after 10 bps costs, 0/5 profitable folds. Do not rerun or tune the consumed trial.
+Artifacts: production checkout artifacts/model_replacement_20260921/. Ledger,
+report and prediction hashes verified. Cache signatures now exclude audit time;
+original manifests preserved and identical builder code/source hashes verified
+before recertification. Eleven focused tests, lint/types pass; standard validator
+663 tests passed before the cache correction. Direct health and non-sending
+incident checks pass structurally; required_model_stale remains. No model saved,
+registry activation, restart or holdout evaluation. Runner is on origin/main and
+in /tmp/ai-trading-workflow-fix; production checkout was not deployed/reset.
+
+Original preflight history follows:
+
 User explicitly approved one bounded replacement trial; specification is frozen
 in config/model_replacement_campaign.json and registered with zero trials claimed
 in artifacts/model_replacement_20260921/campaign_state.json in the production
