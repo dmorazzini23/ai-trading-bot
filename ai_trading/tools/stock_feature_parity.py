@@ -25,13 +25,23 @@ def compare_history(bars: pd.DataFrame, *, symbol: str, end: int) -> dict:
     runtime = build_day_sleeve_features(prefix)
     future = _feature_frame(bars.iloc[:end + 10].copy(), symbol=symbol).iloc[end - 1:end]
     truncated = build_day_sleeve_features(prefix.iloc[-200:].copy())
+    # Match the default runtime fetch window at the first finalized decision.
+    # This is distinct from the minimum 200-bar feature support check.
+    decision_at = prefix.index[-1] + pd.Timedelta(minutes=5, seconds=2)
+    runtime_window = prefix.loc[prefix.index >= decision_at - pd.Timedelta(days=10)]
+    rolling = build_day_sleeve_features(runtime_window)
     columns = list(runtime.columns)
     same = np.isclose(training[columns].to_numpy(), runtime.to_numpy(), rtol=1e-10, atol=1e-10)
     causal = np.isclose(training[columns].to_numpy(), future[columns].to_numpy(), rtol=1e-10, atol=1e-10)
     history = np.isclose(runtime.to_numpy(), truncated[columns].to_numpy(), rtol=1e-10, atol=1e-10)
+    serving = np.isclose(training[columns].to_numpy(), rolling[columns].to_numpy(), rtol=1e-10, atol=1e-10)
     return dict(symbol=symbol, prefix_bars=end, bar_start=prefix.index[-1].isoformat(),
                 same_history_equal=bool(same.all()), prefix_causal=bool(causal.all()),
                 truncated_history_equal=bool(history.all()),
+                runtime_lookback_days=10,
+                runtime_window_bars=len(runtime_window),
+                runtime_window_equal=bool(serving.all()),
+                runtime_window_mismatch_columns=[c for c, ok in zip(columns, serving[0]) if not ok],
                 same_history_mismatch_columns=[c for c, ok in zip(columns, same[0]) if not ok],
                 truncated_history_mismatch_columns=[c for c, ok in zip(columns, history[0]) if not ok])
 

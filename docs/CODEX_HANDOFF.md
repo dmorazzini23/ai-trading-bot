@@ -1,5 +1,19 @@
 # Current handoff
 
+## September 21 replacement-model trial preflight
+
+User explicitly approved one bounded replacement trial; specification is frozen
+in config/model_replacement_campaign.json and registered with zero trials claimed
+in artifacts/model_replacement_20260921/campaign_state.json in the production
+checkout. Scheduled training remains paused. See docs/MODEL_REPLACEMENT_20260921.md.
+Nine governed 2024–2025 stock feature checks pass same-history, prefix causality,
+and default ten-day runtime-window equality. The older 200-bar truncation failures
+are not evidence that the ten-day runtime window fails. Three focused tests pass;
+lint/type/compile pass. No model fitted, holdout evaluated or service restarted.
+Next: implement provenance-preserving derived features/labels and frozen purged
+evaluation before claiming the trial; existing broad trainers are not substitutes.
+
+
 ## Efficient ledger and coverage follow-through — September19
 
 Full CI35411547532 on4ae076049 completed:78.99%,6880pass/4fail/4skip. Nine prior
