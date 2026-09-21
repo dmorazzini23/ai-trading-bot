@@ -34,6 +34,12 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + '\n')
 
 
+def evidence_signature(contract_hash: str, provenance: dict[str, Any], code_hashes: dict[str, str]) -> str:
+    stable = {key: value for key, value in provenance.items() if key != 'generated_at'}
+    return hashlib.sha256(json.dumps(dict(contract=contract_hash, provenance=stable,
+                                         code=code_hashes), sort_keys=True).encode()).hexdigest()
+
+
 def regular_bars(frame: pd.DataFrame, sessions: list[str]) -> pd.DataFrame:
     """Require every source minute, including early closes, before aggregation."""
     parts = []
@@ -210,8 +216,7 @@ def run(root: Path, *, fit: bool) -> dict[str, Any]:
                   'models/contracts.py', 'tools/research_feasibility.py', 'tools/stock_development_readiness.py',
                   'indicators/__init__.py', 'utils/market_calendar.py']
     code_hashes = {p: digest(code_root / p) for p in code_files}
-    signature = hashlib.sha256(json.dumps(dict(contract=canonical, provenance=provenance,
-                                               code=code_hashes), sort_keys=True).encode()).hexdigest()
+    signature = evidence_signature(canonical, provenance, code_hashes)
     parts = []
     for symbol in contract['symbols']:
         output, manifest = directory / f'{symbol}.parquet', directory / f'{symbol}.manifest.json'

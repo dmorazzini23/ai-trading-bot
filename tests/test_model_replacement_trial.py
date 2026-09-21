@@ -88,6 +88,14 @@ def test_bootstrap_keeps_session_clusters_and_cash_zero():
     assert trial.bootstrap_lower(rows, np.ones(4)) == 1
 
 
+def test_evidence_signature_ignores_audit_time_but_tracks_source_and_code():
+    source = {'generated_at': 'first', 'sources': {'AAPL': {'sha256': 'abc'}}}
+    signature = trial.evidence_signature('contract', source, {'builder': 'one'})
+    assert signature == trial.evidence_signature('contract', {**source, 'generated_at': 'later'}, {'builder': 'one'})
+    assert signature != trial.evidence_signature('contract', {**source, 'sources': {}}, {'builder': 'one'})
+    assert signature != trial.evidence_signature('contract', source, {'builder': 'two'})
+
+
 def test_contract_mutation_blocks_before_data_read(tmp_path, monkeypatch):
     (tmp_path / 'config').mkdir()
     (tmp_path / 'config/model_replacement_campaign.json').write_text('{}')

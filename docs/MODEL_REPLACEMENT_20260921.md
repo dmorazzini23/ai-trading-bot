@@ -27,6 +27,15 @@ The added regression explicitly distinguishes these two cases.
 
 ## Evaluation implementation
 
+Runner validation on the integrated main repair history: ten focused tests and
+663 standard-validator selected tests passed; changed-file lint, mypy and
+compilation passed. The validator's sandboxed localhost check could not connect;
+a direct health check confirmed active service, fresh broker, no open positions
+or orders and the existing required_model_stale failure. The non-sending incident
+snapshot check passed. Logs: /tmp/replacement-trial-tests-final.log and
+/tmp/replacement-standard-validation.log. These results supersede the older
+production-checkout validation failures recorded at the bottom of this report.
+
 `ai_trading.tools.model_replacement_trial` builds one hashed Parquet partition per
 symbol, using canonical feature construction separately at each finalized decision.
 It verifies complete regular sessions (including early closes), source hashes and
