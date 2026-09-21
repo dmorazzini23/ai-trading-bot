@@ -1195,6 +1195,34 @@ def build_alpaca_health_payload(
     return payload
 
 
+def _operating_mode_snapshot(model: Mapping[str, Any]) -> dict[str, Any]:
+    """Explain diagnostic authority without changing any readiness decision."""
+    result: dict[str, Any] = {
+        "model_ready": bool(model.get("enabled") and model.get("ok")),
+        "paper_diagnostics_enabled": False,
+        "diagnostic_results_are_model_performance": False,
+        "promotion_authority": False,
+    }
+    if not model.get("enabled"):
+        return {**result, "mode": "model_not_required", "summary": "Model readiness is not required by this health configuration."}
+    if model.get("ok"):
+        return {**result, "mode": "model_ready", "summary": "Governed model ready; other readiness gates still apply."}
+    reason = model.get("reason")
+    error = ("Active model for 'day_sleeve' is stale" if reason == "required_model_stale"
+             else "unavailable" if reason == "required_model_unavailable" else None)
+    try:
+        from ai_trading.config.management import get_trading_config
+        from ai_trading.runtime.paper_sampling import stale_model_diagnostics_allowed
+
+        allowed = stale_model_diagnostics_allowed(get_trading_config(), model_error=error)
+    except _HEALTH_FALLBACK_EXC:
+        return {**result, "mode": "model_blocked", "summary": "Qualified model unavailable; diagnostic configuration could not be verified."}
+    if allowed:
+        return {**result, "paper_diagnostics_enabled": True, "mode": "paper_diagnostics_only",
+                "summary": "Paper diagnostics enabled; qualified model unavailable. Diagnostic trades are not qualified-model performance."}
+    return {**result, "mode": "model_blocked", "summary": "Qualified model unavailable; paper diagnostics are not authorized for this model state."}
+
+
 def build_runtime_health_payload(
     *,
     service_name: str = "ai-trading",
@@ -1741,6 +1769,7 @@ def build_runtime_health_payload(
         "data_status": data_status,
         "model_liveness": model_liveness,
         "day_sleeve_model": day_sleeve_model,
+        "operating_mode": _operating_mode_snapshot(day_sleeve_model),
         "latest_training_attempt": latest_training_attempt,
         "database": database_readiness,
         "oms_invariants": oms_invariants,

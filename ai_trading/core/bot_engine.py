@@ -16816,7 +16816,7 @@ def prefetch_daily_data(
                 if sym in bars_df.columns.get_level_values(0)
             }
         else:
-            grouped_raw = dict(bars_df.groupby("symbol"))
+            grouped_raw = {sym: frame for sym, frame in bars_df.groupby("symbol")}
         grouped = {}
         for sym, df in grouped_raw.items():
             df = df.drop(columns=["symbol"], errors="ignore")
@@ -16854,7 +16854,7 @@ def prefetch_daily_data(
                         if sym in bars_iex.columns.get_level_values(0)
                     }
                 else:
-                    grouped_raw = dict(bars_iex.groupby("symbol"))
+                    grouped_raw = {sym: frame for sym, frame in bars_iex.groupby("symbol")}
                 grouped = {}
                 for sym, df in grouped_raw.items():
                     df = df.drop(columns=["symbol"], errors="ignore")
@@ -24395,11 +24395,15 @@ def _profitability_governor_load_rows(path: Path) -> list[dict[str, Any]]:
         except BOT_ENGINE_FALLBACK_EXC:
             try:
                 frame = pd_mod.read_pickle(path)
+            except (pickle.UnpicklingError, EOFError):
+                frame = None
             except BOT_ENGINE_FALLBACK_EXC:
                 frame = None
     elif suffix in {".pkl", ".pickle"}:
         try:
             frame = pd_mod.read_pickle(path)
+        except (pickle.UnpicklingError, EOFError):
+            frame = None
         except BOT_ENGINE_FALLBACK_EXC:
             frame = None
     elif suffix == ".csv":

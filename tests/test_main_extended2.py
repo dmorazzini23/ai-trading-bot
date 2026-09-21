@@ -1,8 +1,5 @@
-import os
-import sys
-import types
 import time
-from typing import Any, cast
+from typing import Any
 import threading
 
 import errno
@@ -10,77 +7,12 @@ import socket
 
 import pytest
 
-os.environ.setdefault("PYTEST_RUNNING", "1")
-
-
-if "numpy" not in sys.modules:
-    class _RandomStub:
-        def seed(self, *_args, **_kwargs):
-            return None
-
-    class _NumpyStub(types.ModuleType):
-        def __init__(self) -> None:
-            super().__init__("numpy")
-            self.random = _RandomStub()
-            self.nan = float("nan")
-            self.NaN = self.nan
-            self.ndarray = object
-
-        def __getattr__(self, _name):  # type: ignore[override]
-            def _stub(*_args, **_kwargs):
-                return 0
-
-            return _stub
-
-    sys.modules["numpy"] = _NumpyStub()
-
-if "portalocker" not in sys.modules:
-    portalocker_stub = types.ModuleType("portalocker")
-    cast(Any, portalocker_stub).LOCK_EX = 1
-    cast(Any, portalocker_stub).lock = lambda *_args, **_kwargs: None
-    cast(Any, portalocker_stub).unlock = lambda *_args, **_kwargs: None
-    sys.modules["portalocker"] = portalocker_stub
-
-if "bs4" not in sys.modules:
-    bs4_stub = types.ModuleType("bs4")
-
-    class _Soup:
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
-
-        def find_all(self, *_args, **_kwargs):
-            return []
-
-        def find_parent(self, *_args, **_kwargs):
-            return None
-
-        def get_text(self, *_args, **_kwargs):
-            return ""
-
-    cast(Any, bs4_stub).BeautifulSoup = lambda *_args, **_kwargs: _Soup()
-    sys.modules["bs4"] = bs4_stub
-
-flask_mod: Any = types.ModuleType("flask")
-
-
-class Flask:
-    def __init__(self, *a, **k):
-        pass
-
-    def route(self, *a, **k):
-        def deco(f):
-            return f
-
-        return deco
-
-    def run(self, *a, **k):
-        pass
-
-
-flask_mod.Flask = Flask
-flask_mod.jsonify = lambda *a, **k: {}
-sys.modules["flask"] = flask_mod
 from ai_trading import app, main
+
+
+@pytest.fixture(autouse=True)
+def offline_equity(monkeypatch):
+    monkeypatch.setattr(main, "_get_equity_from_alpaca", lambda cfg: 100000.)
 
 
 def test_run_flask_app(monkeypatch):

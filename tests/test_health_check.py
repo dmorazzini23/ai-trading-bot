@@ -32,6 +32,14 @@ EXPECTED_ALPACA_MINIMAL = {
 }
 
 
+@pytest.fixture(autouse=True)
+def isolated_preflight_status(monkeypatch):
+    import ai_trading.alpaca_api as alpaca_api
+
+    monkeypatch.setattr(alpaca_api, "get_alpaca_service_status",
+                        lambda: dict(EXPECTED_ALPACA_MINIMAL["preflight"]))
+
+
 def _install_alpaca_stubs(
     monkeypatch: pytest.MonkeyPatch,
     *,

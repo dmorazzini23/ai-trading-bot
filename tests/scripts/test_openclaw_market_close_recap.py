@@ -25,6 +25,21 @@ def _load_recap_module() -> ModuleType:
 recap = _load_recap_module()
 
 
+def test_recap_explains_diagnostics_without_hiding_readiness_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(recap, 'RUNTIME_DIR', tmp_path)
+    monkeypatch.setattr(recap, '_service_summary', lambda: 'ai-trading.service active')
+    monkeypatch.setattr(recap, '_journal_summary', lambda day: 'No errors')
+    monkeypatch.setattr(recap, '_health_summary', lambda: ('degraded', {
+        'ok': False, 'status': 'degraded', 'readiness_failures': ['required_model_stale'],
+        'broker': {'connected': True, 'positions_count': 0, 'open_orders_count': 0},
+        'operating_mode': {'summary': 'Paper diagnostics enabled; qualified model unavailable.'},
+    }))
+    text = recap.build_recap()
+    assert 'required_model_stale' in text
+    assert 'Paper diagnostics enabled; qualified model unavailable.' in text
+    assert 'Healthy close' not in text
+
+
 def test_build_recap_reports_fresh_artifacts_without_system_checks(
     tmp_path: Path,
     monkeypatch,

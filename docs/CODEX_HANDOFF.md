@@ -1,5 +1,26 @@
 # Current handoff
 
+## September 21 CI, deployment, and operating-status follow-through
+
+User authorized items 1–3: repair CI/80% coverage, deploy validated main after
+market close, and distinguish paper diagnostics from model readiness. Work is
+in /tmp/ai-trading-workflow-fix; production has not yet been restarted/deployed.
+Baseline CI35644275203 measured78.97%,6885passed/8failed/4skipped. Fixed test
+preflight-state isolation and offline startup equity; removed import-time Flask
+and dependency stubs. Cycle budget uses one deterministic clock and no broker IO.
+New regressions also found/fixed corrupt-pickle recovery and flat-table bulk
+daily grouping. Added meaningful order/fill, persistence, provenance, scheduling,
+source-audit and research-budget tests. Gates and coverage threshold unchanged.
+Shared health now explains paper_diagnostics_only; close recap repeats it while
+required_model_stale remains degraded. No new model trial or holdout evaluation.
+Validation: changed-file lint/types/compile,232tests,live health and non-sending
+incident check passed; additional research/strategy/cache tests and types passed.
+Full CI on the publishing revision remains pending. At20:00 broker clock confirmed
+market closed,account active,zero positions/orders; model remained stale.
+Next: publish to main, verify full CI coverage, preserve local production edits,
+fast-forward deployment after close, restart and verify health/logs. Historical
+ledger discrepancies and absent qualified model remain explicit limitations.
+
 ## September 21 replacement-model trial preflight
 
 Superseded by completed trial: docs/MODEL_REPLACEMENT_20260921.md. One trial used,

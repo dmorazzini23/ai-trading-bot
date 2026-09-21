@@ -304,6 +304,11 @@ def build_recap() -> str:
     else:
         verdict = f"Close needs review: {health_text}."
 
+    if isinstance(health, dict):
+        operating_mode = health.get("operating_mode")
+        if isinstance(operating_mode, dict) and isinstance(operating_mode.get("summary"), str):
+            verdict += " " + operating_mode["summary"]
+
     fill_text = "fills unavailable"
     if fills.get("available"):
         fill_text = (

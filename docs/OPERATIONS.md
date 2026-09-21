@@ -389,6 +389,13 @@ When investigating a degraded runtime, check:
 2. `/operator/control-plane` top-level fields:
    `rollout`, `service_state`, `attention_flags`, `broker_health`, and `data_provider`
 
+The shared health payload also exposes `operating_mode`. When its mode is
+`paper_diagnostics_only`, the configured paper diagnostic path is enabled but
+the required governed model remains unavailable. Diagnostic trades are not
+qualified-model performance. This explanation does not clear
+`required_model_stale`, change HTTP readiness, authorize promotion, or bypass
+other trading gates. The market-close recap includes the same explanation.
+
 Important `attention_flags` include:
 
 - `service_degraded`
