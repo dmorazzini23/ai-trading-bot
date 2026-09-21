@@ -25,7 +25,42 @@ indicator initialization sensitivity, but is not evidence of a defect in the
 default ten-day runtime window. No indicator or inference behavior was changed.
 The added regression explicitly distinguishes these two cases.
 
-## Outstanding implementation before fitting
+## Evaluation implementation
+
+`ai_trading.tools.model_replacement_trial` builds one hashed Parquet partition per
+symbol, using canonical feature construction separately at each finalized decision.
+It verifies complete regular sessions (including early closes), source hashes and
+development bounds. Reuse requires matching source, contract, code and output
+hashes. Dataset construction does not fit or select a model.
+
+Decision time is five-minute bar start plus five minutes and two seconds. Entry
+is the next minute open and exit is five minutes after entry, strictly before the
+session close. All supported five-minute opportunities are retained; adjacent
+entries can coincide with the previous exit but cannot overlap. Labels subtract
+the frozen ten-basis-point cost. Bars are proxies, not executable fills.
+
+The implementation splits the ordered development sessions into six contiguous
+chunks with numpy.array_split. The first chunk supplies initial training; each of
+the next five is one test fold, with expanding prior training. It removes the
+entire immediately preceding session and purges training labels at that boundary.
+Scaling fits inside each training fold only. Each fold fits the fixed classifier
+once, using probability >= 0.5. No calibration, search or threshold selection is
+performed. Whole-session bootstrap resamples all symbols together. Cash is zero;
+abstentions remain zero-valued slots in the common-opportunity denominator.
+
+The original campaign registration must exist. `--fit` claims it atomically
+immediately before fitting. Any existing claim blocks further data processing or
+fitting. Failure after claim requires audit, not automatic retry. The runner does
+not save a serving model or update a registry. Even a passing screen remains
+`not_qualified` until existing independent qualification gates are evaluated.
+
+```bash
+./venv/bin/python -m ai_trading.tools.model_replacement_trial \
+  --repository-root /home/aiuser/ai-trading-bot
+# Once preflight and regression checks pass, use the same command with --fit.
+```
+
+## Original preflight boundary
 
 The registered evaluation needs a derived dataset with hashed provenance for
 runtime-equivalent rolling feature windows, finalized decision timestamps,
