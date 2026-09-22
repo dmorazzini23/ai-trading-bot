@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import numpy as np
 
 import ai_trading.env as env_mod
 import ai_trading.util.env_check as env_check
@@ -95,6 +96,7 @@ def test_execution_engine_real_when_dotenv_unresolved(monkeypatch):
     config_mod = importlib.reload(config_mod)
     execution_mod = importlib.reload(execution_mod)
     importlib.reload(bot_engine)
+    assert bot_engine.np is np
 
 
 def test_optional_export_programming_errors_are_not_swallowed(monkeypatch):
