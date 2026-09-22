@@ -1,5 +1,20 @@
 # Current handoff
 
+## September 22 NumPy isolation repair
+
+CI run 35744924423 on 99995f3b4: 7064 passed, one failed, four skipped,
+80.04% coverage. The sole failure was the bot-engine correlation test because
+`np.asarray` returned a Python list. Two test modules still installed
+list-returning NumPy substitutes during import. Shared test setup also took its
+module snapshot before preloading real pandas/NumPy, leaving the canonical
+NumPy module outside the `patch.dict(sys.modules, clear=True)` restoration set.
+Removed both NumPy substitutes, moved the snapshot after dependency preloads,
+and added an isolation regression beside the correlation test. Fourteen focused
+tests passed; changed-file lint, mypy, compile, and 11 mapped tests passed;
+five selected tests passed with xdist after full collection. No runtime or
+trading code changed. Publish this test repair and require passing full CI
+before deployment. Production service and model/trading gates remain unchanged.
+
 ## September 22 final CI isolation follow-through
 
 Published revision 7f18268dd reached 80.06% coverage (unchanged 80% requirement),

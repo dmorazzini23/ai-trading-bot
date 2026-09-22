@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import sys
 import types
 import time
@@ -13,76 +12,6 @@ sys = cast(Any, sys)
 
 def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
     setattr(module, attr_name, value)
-
-if "numpy" not in sys.modules:
-    numpy_stub = types.ModuleType("numpy")
-    _set_module_attr(numpy_stub, "nan", float("nan"))
-    _set_module_attr(numpy_stub, "NaN", float("nan"))
-    _set_module_attr(numpy_stub, "bool_", bool)
-    _set_module_attr(numpy_stub, "float64", float)
-
-    def _isscalar(obj):
-        return isinstance(obj, (bool, int, float, complex))
-
-    _set_module_attr(numpy_stub, "isscalar", _isscalar)
-
-    def _isfinite(value):
-        try:
-            return math.isfinite(float(value))
-        except (TypeError, ValueError):
-            return False
-
-    _set_module_attr(numpy_stub, "isfinite", _isfinite)
-
-    def _random_default(*_args, **_kwargs):
-        return 0.5
-
-    def _normal(loc=0.0, scale=1.0, size=None):
-        if size is None:
-            return loc
-        return [loc] * (size if isinstance(size, int) else 1)
-
-    def _uniform(a=0.0, b=1.0, size=None):
-        midpoint = (float(a) + float(b)) / 2.0
-        if size is None:
-            return midpoint
-        return [midpoint] * (size if isinstance(size, int) else 1)
-
-    def _randn(*shape):
-        if not shape:
-            return 0.0
-        count = 1
-        for dim in shape:
-            try:
-                count *= int(dim)
-            except (TypeError, ValueError):
-                count = 1
-                break
-        return [0.0] * count
-
-    def _exponential(scale=1.0, size=None):
-        if size is None:
-            return scale
-        return [scale] * (size if isinstance(size, int) else 1)
-
-    def _choice(seq, *args, **kwargs):
-        if isinstance(seq, (list, tuple)) and seq:
-            return seq[0]
-        return None
-
-    _set_module_attr(numpy_stub, "random", types.SimpleNamespace(
-        seed=lambda *_args, **_kwargs: None,
-        random=_random_default,
-        normal=_normal,
-        uniform=_uniform,
-        randn=_randn,
-        exponential=_exponential,
-        choice=_choice,
-    ))
-    _set_module_attr(numpy_stub, "randn", _randn)
-    _set_module_attr(numpy_stub, "array", lambda data, *args, **kwargs: list(data))
-    _set_module_attr(numpy_stub, "asarray", lambda data, *args, **kwargs: list(data))
-    sys.modules["numpy"] = numpy_stub
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")

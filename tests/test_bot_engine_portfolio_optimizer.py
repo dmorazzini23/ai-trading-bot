@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import numpy as np
 
 from ai_trading.core import bot_engine
 
 
+def test_module_isolation_preserves_real_numpy() -> None:
+    with patch.dict(sys.modules, {}, clear=True):
+        assert sys.modules.get("numpy") is np
+        assert isinstance(np.asarray([0.01, 0.02]), np.ndarray)
+
+
 def test_build_symbol_return_correlation_matrix_handles_basic_inputs() -> None:
+    assert isinstance(bot_engine.np.asarray([0.01, 0.02]), np.ndarray)
     matrix = bot_engine._build_symbol_return_correlation_matrix(
         {
             "AAPL": [0.01, 0.02, -0.01, 0.03],

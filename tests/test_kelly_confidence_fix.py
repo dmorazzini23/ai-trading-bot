@@ -14,30 +14,6 @@ from typing import Any, cast
 def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
     setattr(module, attr_name, value)
 
-if "numpy" not in sys.modules:  # pragma: no cover - lightweight stub for tests
-    numpy_stub = types.ModuleType("numpy")
-    _set_module_attr(numpy_stub, "nan", float("nan"))
-    _set_module_attr(numpy_stub, "NaN", float("nan"))
-    _set_module_attr(numpy_stub, "array", lambda data, *_, **__: list(data))
-    _set_module_attr(numpy_stub, "asarray", lambda data, *_, **__: list(data))
-    _set_module_attr(numpy_stub, "std", lambda data, *_, **__: 1.0)
-    _set_module_attr(numpy_stub, "diff", lambda arr: [b - a for a, b in zip(arr, arr[1:])])
-    _set_module_attr(numpy_stub, "where", lambda cond, x, y: [
-        (xi if bool(ci) else yi) for ci, xi, yi in zip(cond, x, y)
-    ])
-    _set_module_attr(numpy_stub, "zeros_like", lambda arr: [0 for _ in arr])
-    _set_module_attr(
-        numpy_stub,
-        "zeros",
-        lambda shape, dtype=None: [0.0] * shape if isinstance(shape, int) else [],
-    )
-    _set_module_attr(numpy_stub, "mean", lambda data: (sum(data) / len(data)) if data else 0.0)
-    _set_module_attr(numpy_stub, "exp", math.exp)
-    _set_module_attr(numpy_stub, "float64", float)
-    _set_module_attr(numpy_stub, "ndarray", list)
-    _set_module_attr(numpy_stub, "random", types.SimpleNamespace(seed=lambda *_a, **_k: None))
-    sys.modules["numpy"] = numpy_stub
-
 if "portalocker" not in sys.modules:  # pragma: no cover - lightweight stub for tests
     portalocker_stub = types.ModuleType("portalocker")
     _set_module_attr(portalocker_stub, "LOCK_EX", 1)

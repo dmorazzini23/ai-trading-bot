@@ -93,7 +93,6 @@ for _name in _ESSENTIAL:
     except Exception:
         continue
 
-_SNAPSHOT_MODULES = dict(sys.modules)
 try:  # Ensure real pandas module is loaded before tests that set stubs conditionally
     import pandas  # type: ignore  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover - environment without pandas
@@ -113,6 +112,8 @@ for _module_name in (
         importlib.import_module(_module_name)
     except Exception:  # pragma: no cover - optional dependency may be unavailable
         continue
+
+_SNAPSHOT_MODULES = dict(sys.modules)
 
 
 def _restore_snapshot_modules() -> None:
