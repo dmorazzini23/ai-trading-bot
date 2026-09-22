@@ -1,61 +1,56 @@
 import threading
-import time
 import types
 
 from ai_trading.core import bot_engine
 
 
 def test_run_all_trades_overlap(monkeypatch, caplog):
-    monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
-    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
-    monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
-    monkeypatch.setattr(bot_engine, "_MODEL_CACHE", None, raising=False)
-    monkeypatch.setattr(bot_engine, "_global_ctx", None, raising=False)
-    monkeypatch.setattr(bot_engine, "_ctx", None, raising=False)
-    monkeypatch.setattr(bot_engine, "ctx", None, raising=False)
+    from ai_trading.core import run_all_trades_worker as worker
 
-    monkeypatch.setattr(
-        bot_engine.data_fetcher_module,
-        "build_fetcher",
-        lambda *_: types.SimpleNamespace(source="stub"),
-    )
-
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+    calls = []
     state = bot_engine.BotState()
-    runtime = bot_engine.get_ctx()
-    runtime.cfg = types.SimpleNamespace(netting_enabled=False)
+    runtime = types.SimpleNamespace(risk_engine=object())
     caplog.set_level("INFO")
 
-    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
-    monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda runtime: False)
-    monkeypatch.setattr(bot_engine, "_prepare_run", lambda ctx, st: (0.0, True, []))
-    monkeypatch.setattr(bot_engine, "_process_symbols", lambda *a, **k: ([], {}, 0))
-    monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: None)
-
-    api_obj = runtime.api
-    if api_obj is None:
-        api_obj = types.SimpleNamespace()
-        runtime.api = api_obj
+    monkeypatch.setattr(bot_engine, "run_lock", threading.Lock())
     monkeypatch.setattr(
-        api_obj,
-        "get_account",
-        lambda: types.SimpleNamespace(cash=0, equity=0),
-        raising=False,
+        worker, "prepare_run_all_trades_cycle",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            ready=True, cfg_runtime=object(), loop_start=0.0,
+            api=object(), previous_last_run_at=None,
+        ),
     )
-    assert getattr(bot_engine._MODEL_CACHE, "is_placeholder_model", False)
+    monkeypatch.setattr(worker, "_finalize_run_all_trades_cycle", lambda **kwargs: None)
 
-    def slow_prepare(ctx, st):
-        time.sleep(0.2)
-        return (0.0, True, [])
+    def execute(**kwargs):
+        calls.append(kwargs)
+        entered.set()
+        assert release.wait(timeout=10), "first cycle was not released"
 
-    monkeypatch.setattr(bot_engine, "_prepare_run", slow_prepare)
+    monkeypatch.setattr(worker, "execute_run_all_trades_cycle", execute)
 
-    t = threading.Thread(target=bot_engine.run_all_trades_worker, args=(state, runtime))
-    t.start()
-    time.sleep(0.05)
-    bot_engine.run_all_trades_worker(state, runtime)
-    t.join()
-    assert any("RUN_ALL_TRADES_SKIPPED_OVERLAP" in r.message for r in caplog.records)
+    def run_first():
+        try:
+            worker.run_all_trades_worker_cycle(state, runtime)
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    try:
+        assert entered.wait(timeout=5), "first cycle never acquired the lock"
+        worker.run_all_trades_worker_cycle(state, runtime)
+        assert len(calls) == 1
+        assert any("RUN_ALL_TRADES_SKIPPED_OVERLAP" in r.message for r in caplog.records)
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert not errors
+    assert not bot_engine.run_lock.locked()
 
 
 def test_run_all_trades_missing_get_account(monkeypatch, caplog):

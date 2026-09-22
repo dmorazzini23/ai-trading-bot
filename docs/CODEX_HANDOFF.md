@@ -1,5 +1,21 @@
 # Current handoff
 
+## September 22 final CI isolation follow-through
+
+Published revision 7f18268dd reached 80.06% coverage (unchanged 80% requirement),
+7063 passed, two failed, four skipped in CI35648465789. Remaining failures came
+from global NumPy substitutes and a sleep-based overlap test reaching broker IO.
+Removed dependency substitutes from sentiment/SPY tests; overlap now synchronizes
+with events and exercises the real lock against isolated preparation/execution.
+Changed-file validator: lint, types, compile and five targeted tests passed.
+Nine ordered isolation/correlation regressions also passed before final cleanup.
+Next: publish this test repair to main and verify the full CI result. Production
+remains at bde5a6a4f: no deployment or restart during September 22 market hours.
+After-close deployment remains authorized and pending a passing release. Preserve
+local edits using /tmp/sep21-production-predeploy backups; refresh the release
+hash and broker/market checks before using its deployment script. Model readiness,
+research budgets and holdout boundaries remain unchanged.
+
 ## September 21 CI, deployment, and operating-status follow-through
 
 User authorized items 1–3: repair CI/80% coverage, deploy validated main after

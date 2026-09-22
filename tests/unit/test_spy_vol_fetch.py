@@ -1,83 +1,9 @@
 from __future__ import annotations
 
 import logging
-from types import ModuleType, SimpleNamespace
-
-import sys
+from types import SimpleNamespace
 
 import pytest
-
-# Provide a lightweight numpy stub so the heavy dependency is optional for these tests.
-if "numpy" not in sys.modules:  # pragma: no cover - import guard
-    numpy_stub = ModuleType("numpy")
-
-    def _stub_array(*args, **kwargs):
-        return []
-
-    def _stub_bool_array(arr):
-        try:
-            length = len(arr)  # type: ignore[arg-type]
-        except Exception:  # pragma: no cover - defensive
-            length = 0
-        return [False] * int(length)
-
-    numpy_stub.ndarray = list  # type: ignore[attr-defined]
-    numpy_stub.array = _stub_array  # type: ignore[attr-defined]
-    numpy_stub.asarray = lambda arr, dtype=None: list(arr) if hasattr(arr, "__iter__") else []  # type: ignore[attr-defined]
-    numpy_stub.diff = _stub_array  # type: ignore[attr-defined]
-    numpy_stub.where = lambda condition, x=None, y=None: []  # type: ignore[attr-defined]
-    numpy_stub.zeros_like = _stub_array  # type: ignore[attr-defined]
-    numpy_stub.isnan = _stub_bool_array  # type: ignore[attr-defined]
-    numpy_stub.float64 = float  # type: ignore[attr-defined]
-    numpy_stub.nan = float("nan")  # type: ignore[attr-defined]
-    numpy_stub.NaN = numpy_stub.nan  # type: ignore[attr-defined]
-    numpy_stub.inf = float("inf")  # type: ignore[attr-defined]
-    numpy_stub.random = SimpleNamespace(  # type: ignore[attr-defined]
-        seed=lambda *_args, **_kwargs: None,
-        normal=_stub_array,
-    )
-    sys.modules["numpy"] = numpy_stub
-
-if "portalocker" not in sys.modules:  # pragma: no cover - import guard
-    sys.modules["portalocker"] = ModuleType("portalocker")
-
-if "bs4" not in sys.modules:  # pragma: no cover - import guard
-    bs4_stub = ModuleType("bs4")
-    bs4_stub.BeautifulSoup = object  # type: ignore[attr-defined]
-    sys.modules["bs4"] = bs4_stub
-
-if "flask" not in sys.modules:  # pragma: no cover - import guard
-    flask_stub = ModuleType("flask")
-
-    class _Flask:  # pragma: no cover - simple stub
-        def __init__(self, *args, **kwargs) -> None:
-            self.blueprints: list[object] = []
-
-        def route(self, *args, **kwargs):
-            def decorator(func):
-                return func
-
-            return decorator
-
-        def register_blueprint(self, blueprint, *args, **kwargs):
-            self.blueprints.append(blueprint)
-
-    flask_stub.Flask = _Flask  # type: ignore[attr-defined]
-    flask_stub.jsonify = lambda *args, **kwargs: {}  # type: ignore[attr-defined]
-    sys.modules["flask"] = flask_stub
-
-if "requests" not in sys.modules:  # pragma: no cover - import guard
-    requests_stub = ModuleType("requests")
-    requests_stub.get = lambda *args, **kwargs: None  # type: ignore[attr-defined]
-    requests_stub.post = requests_stub.get  # type: ignore[attr-defined]
-    requests_stub.Session = SimpleNamespace  # type: ignore[attr-defined]
-    requests_stub.exceptions = SimpleNamespace(  # type: ignore[attr-defined]
-        RequestException=Exception,
-        Timeout=Exception,
-        ConnectionError=Exception,
-        HTTPError=Exception,
-    )
-    sys.modules["requests"] = requests_stub
 
 from ai_trading.core import bot_engine
 

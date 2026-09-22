@@ -1,67 +1,10 @@
 from __future__ import annotations
 
-import math
-import sys
-import types
-from typing import Any, cast
-
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def stub_numpy(monkeypatch):
-    """Provide a lightweight numpy stub so bot_engine imports succeed."""
-
-    numpy_stub = types.SimpleNamespace(
-        ndarray=list,
-        array=lambda data, dtype=None: list(data),
-        asarray=lambda data, dtype=float: list(data),
-        diff=lambda arr: [arr[i + 1] - arr[i] for i in range(len(arr) - 1)],
-        where=lambda cond, x, y: [
-            xi if cond_i else yi for cond_i, xi, yi in zip(cond, x, y, strict=False)
-        ],
-        zeros_like=lambda arr: [0 for _ in arr],
-        float64=float,
-        nan=float("nan"),
-        NaN=float("nan"),
-        isfinite=lambda value: math.isfinite(value)
-        if isinstance(value, (int, float))
-        else False,
-        random=types.SimpleNamespace(seed=lambda *_, **__: None),
-    )
-    monkeypatch.setitem(sys.modules, "numpy", numpy_stub)
-    yield
-
-
-@pytest.fixture(autouse=True)
-def stub_portalocker(monkeypatch):
-    """Stub portalocker to avoid optional dependency imports."""
-
-    portalocker_stub = types.SimpleNamespace(
-        LOCK_EX=1,
-        lock=lambda *_, **__: None,
-        unlock=lambda *_, **__: None,
-    )
-    monkeypatch.setitem(sys.modules, "portalocker", portalocker_stub)
-    yield
-
-
-@pytest.fixture(autouse=True)
-def stub_bs4(monkeypatch):
-    """Stub BeautifulSoup dependency."""
-
-    class _BeautifulSoup:  # pragma: no cover - trivial stub
-        def __init__(self, *_, **__):
-            pass
-
-    module = types.ModuleType("bs4")
-    setattr(cast(Any, module), "BeautifulSoup", _BeautifulSoup)
-    monkeypatch.setitem(sys.modules, "bs4", module)
-    yield
-
-
-@pytest.fixture(autouse=True)
-def reset_sentiment_state(stub_numpy, stub_portalocker, stub_bs4):
+def reset_sentiment_state():
     """Ensure sentiment circuit breaker starts from a clean slate."""
 
     from ai_trading.core import bot_engine as be
