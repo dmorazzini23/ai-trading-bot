@@ -1,5 +1,20 @@
 # Current handoff
 
+## September 22 exact NumPy contamination source
+
+Full CI run 35767890187 on 4c8c3ea54 again failed only the bot-engine
+correlation test (7065 passed, one failed, four skipped; 80.04% coverage).
+JUnit identified the `np.asarray` replacement as
+the lambda created inside
+`test_execution_engine_real_when_dotenv_unresolved`.
+That test installed a fake NumPy module, reloaded `bot_engine` under it, then
+reloaded `bot_engine` again before pytest removed the fake. Reproduced with the
+ordered execution-imports and correlation tests: one passed, one failed.
+Removed the unrelated fake NumPy setup from that test. The complete
+execution-imports file followed by the correlation tests now passes (10 tests);
+changed-file lint, mypy, compile and five mapped tests pass. Publish and verify
+full CI before deployment. Production and trading/model gates remain unchanged.
+
 ## September 22 NumPy isolation repair
 
 CI run 35744924423 on 99995f3b4: 7064 passed, one failed, four skipped,

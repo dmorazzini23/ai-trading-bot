@@ -78,27 +78,6 @@ def test_execution_engine_real_when_dotenv_unresolved(monkeypatch):
     _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     monkeypatch.setitem(sys.modules, "bs4", bs4_stub)
 
-    numpy_stub = types.ModuleType("numpy")
-    _set_module_attr(numpy_stub, "random", SimpleNamespace(seed=lambda *args, **kwargs: None))
-    _set_module_attr(numpy_stub, "nan", float("nan"))
-    _set_module_attr(numpy_stub, "NaN", float("nan"))
-    _set_module_attr(numpy_stub, "inf", float("inf"))
-    _set_module_attr(numpy_stub, "floating", float)
-    _set_module_attr(numpy_stub, "isfinite", lambda value: True)
-    _set_module_attr(numpy_stub, "asarray", lambda arr, dtype=None: arr)
-    _set_module_attr(numpy_stub, "array", lambda arr, dtype=None: arr)
-    _set_module_attr(numpy_stub, "cumsum", lambda arr: arr)
-    _set_module_attr(numpy_stub, "insert", lambda arr, index, value: arr)
-    _set_module_attr(numpy_stub, "polyfit", lambda *args, **kwargs: [0.0, 0.0])
-    _set_module_attr(numpy_stub, "std", lambda arr: 0.0)
-    _set_module_attr(numpy_stub, "mean", lambda arr: 0.0)
-    _set_module_attr(numpy_stub, "clip", lambda arr, a_min=None, a_max=None: arr)
-    _set_module_attr(numpy_stub, "where", lambda condition, x=None, y=None: x if condition else y)
-    _set_module_attr(numpy_stub, "full_like", lambda arr, fill_value: arr)
-    _set_module_attr(numpy_stub, "divide", lambda a, b, out=None, where=None: a)
-    _set_module_attr(numpy_stub, "finfo", lambda dtype: SimpleNamespace(eps=1e-9))
-    monkeypatch.setitem(sys.modules, "numpy", numpy_stub)
-
     from ai_trading.core import bot_engine
 
     bot_engine = importlib.reload(bot_engine)
