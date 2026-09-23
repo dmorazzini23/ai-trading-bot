@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
+from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
+from requests.exceptions import HTTPError
 
 import ai_trading.execution.live_trading as lt
 from ai_trading.execution.live_trading import ExecutionEngine
@@ -123,16 +126,71 @@ def test_live_low_level_submit_accepts_claimed_intent_identity(monkeypatch) -> N
     assert getattr(requests[0], "client_order_id") == "claimed-id"
 
 
-def test_live_timeout_does_not_blindly_retry_submission() -> None:
+@pytest.mark.parametrize("plain_text", [False, True])
+def test_live_low_level_native_504_keeps_claim_and_suppresses_failover(monkeypatch, plain_text: bool) -> None:
+    intent = SimpleNamespace(
+        intent_id="claimed-id", status="SUBMITTING", symbol="AAPL", side="buy",
+        quantity=2.0, metadata_json='{"source":"live_execution_engine"}',
+    )
+    store = SimpleNamespace(
+        assert_submit_owner=lambda: None,
+        get_intent=lambda _intent_id: intent,
+    )
+    engine = _engine("live", store)
+    attempts: list[str] = []
+
+    class Request:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    def _submit(*, order_data):
+        attempts.append(order_data.client_order_id)
+        response = SimpleNamespace(status_code=504)
+        raise NativeAlpacaAPIError(
+            "upstream timeout" if plain_text else json.dumps({"code": 50410000, "message": "request timed out"}),
+            HTTPError("http_504", response=response),
+        )
+
+    engine.trading_client = SimpleNamespace(submit_order=_submit)
+    engine._should_suppress_duplicate_client_order_id = lambda **_kwargs: False
+    engine._resolve_time_in_force = lambda _value: "day"
+    engine._recover_order_after_submit_no_result = lambda **_kwargs: (None, "unresolved")
+    engine._attempt_failover_submit = lambda *_args, **_kwargs: pytest.fail(
+        "ambiguous native submit must not fail over"
+    )
+    monkeypatch.setattr(
+        lt, "_ensure_request_models",
+        lambda: (Request, Request, SimpleNamespace(BUY="buy"), SimpleNamespace(DAY="day")),
+    )
+
+    with pytest.raises(NativeAlpacaAPIError):
+        engine._submit_order_to_alpaca({
+            "symbol": "AAPL", "side": "buy", "quantity": 2,
+            "client_order_id": "claimed-id", "type": "market",
+        })
+
+    assert attempts == ["claimed-id"]
+    assert intent.status == "SUBMITTING"
+
+
+@pytest.mark.parametrize("error_kind", ["timeout", "native_504", "native_504_plain_text"])
+def test_live_timeout_does_not_blindly_retry_submission(error_kind: str) -> None:
     engine = _engine("live", SimpleNamespace(assert_submit_owner=lambda: None))
     engine._acquire_submit_rate_limit_permit = lambda **_kwargs: (True, {})
     attempts: list[dict[str, object]] = []
 
     def _submit_order_to_alpaca(order_data: dict[str, object]) -> None:
         attempts.append(order_data)
+        if error_kind.startswith("native_504"):
+            response = SimpleNamespace(status_code=504)
+            raise NativeAlpacaAPIError(
+                "upstream timeout" if error_kind.endswith("plain_text") else json.dumps({"code": 50410000, "message": "request timed out"}),
+                HTTPError("http_504", response=response),
+            )
         raise TimeoutError("response lost after broker acceptance")
 
-    with pytest.raises(TimeoutError):
+    expected_error = NativeAlpacaAPIError if error_kind.startswith("native_504") else TimeoutError
+    with pytest.raises(expected_error):
         engine._execute_with_retry(
             _submit_order_to_alpaca,
             {"symbol": "AAPL", "side": "buy", "type": "market"},

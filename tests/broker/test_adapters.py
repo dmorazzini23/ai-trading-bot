@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from ai_trading.broker.adapters import (
     AlpacaBrokerAdapter,
     PaperBrokerAdapter,
@@ -91,6 +93,25 @@ def test_alpaca_adapter_passthrough() -> None:
     assert client.submitted_request.symbol == "AAPL"
     assert client.submitted_request.qty == 1
     _assert_submit_contract(result)
+
+
+def test_real_broker_adapters_reject_direct_live_submission(monkeypatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    alpaca_client = _DummyClient()
+    with pytest.raises(RuntimeError, match="canonical"):
+        AlpacaBrokerAdapter(client=alpaca_client).submit_order(
+            {"symbol": "AAPL", "side": "buy", "quantity": 1}
+        )
+    assert alpaca_client.submit_calls == 0
+
+    session = _FakeSession([])
+    tradier = TradierBrokerAdapter(
+        token="token", account_id="account", base_url="https://sandbox.tradier.com/v1",
+        session=session,
+    )
+    with pytest.raises(RuntimeError, match="canonical"):
+        tradier.submit_order({"symbol": "AAPL", "side": "buy", "quantity": 1})
+    assert session.calls == []
 
 
 def test_alpaca_adapter_builds_native_bracket_request_from_mapping() -> None:

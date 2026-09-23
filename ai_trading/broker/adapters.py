@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol, Sequence
 
+from ai_trading.config.management import get_env
+from ai_trading.core.runtime_contract import normalize_execution_mode
+
 OrderClass: Any
 OrderSide: Any
 PositionIntent: Any
@@ -109,6 +112,8 @@ class AlpacaBrokerAdapter:
         return list(orders)
 
     def submit_order(self, order_data: Mapping[str, Any]) -> Any:
+        if normalize_execution_mode(get_env("EXECUTION_MODE", "paper", cast=str)) == "live":
+            raise RuntimeError("Live submission requires the canonical OMS/pretrade path")
         submit = getattr(self.client, "submit_order", None)
         if not callable(submit):
             raise RuntimeError("Broker client does not expose submit_order")
@@ -592,6 +597,8 @@ class TradierBrokerAdapter:
         return []
 
     def submit_order(self, order_data: Mapping[str, Any]) -> dict[str, Any]:
+        if normalize_execution_mode(get_env("EXECUTION_MODE", "paper", cast=str)) == "live":
+            raise RuntimeError("Live submission requires the canonical OMS/pretrade path")
         symbol = str(order_data.get("symbol") or "").strip().upper()
         if not symbol:
             raise ValueError("Tradier order requires symbol")

@@ -212,6 +212,9 @@ if _AlpacaAPIError is not None and issubclass(_AlpacaAPIError, Exception):
     BROKER_READ_EXC = LIVE_TRADING_FALLBACK_EXC + (
         cast(type[Exception], _AlpacaAPIError),
     )
+BROKER_SUBMIT_EXC: tuple[type[Exception], ...] = (
+    cast(type[Exception], _AlpacaAPIError), TimeoutError, ConnectionError,
+)
 
 LIVE_TRADING_ORDER_LOOKUP_EXC: tuple[type[Exception], ...] = LIVE_TRADING_FALLBACK_EXC
 if _AlpacaAPIError is not None and issubclass(_AlpacaAPIError, Exception):
@@ -26148,7 +26151,7 @@ class ExecutionEngine:
                 position_intent=_enum_member(PositionIntent, "BUY_TO_CLOSE"),
             )
             response = client.submit_order(order_data=req)
-        except LIVE_TRADING_FALLBACK_EXC as exc:
+        except BROKER_SUBMIT_EXC as exc:
             logger.warning(
                 "COVER_ORDER_SUBMIT_FAILED",
                 extra={
@@ -26296,13 +26299,11 @@ class ExecutionEngine:
 
     @staticmethod
     def _is_opposite_conflict_error(exc: Exception) -> bool:
-        code = getattr(exc, "code", None)
+        metadata = _extract_api_error_metadata(exc)
+        code = metadata.get("code")
         if code is not None and str(code) == "40310000":
             return True
-        message = getattr(exc, "message", None)
-        if isinstance(message, dict):
-            message = message.get("message") or message.get("detail")
-        message_str = str(message or exc)
+        message_str = str(metadata.get("detail") or metadata.get("error") or exc)
         normalized = message_str.lower()
         tokens = {
             "cannot open a long buy while a short sell order is open",
@@ -33836,23 +33837,21 @@ class ExecutionEngine:
             else:
                 logger.error("Failed to get account info during validation")
                 return False
-        except (APIError, TimeoutError, ConnectionError, AttributeError) as e:
+        except (_AlpacaAPIError, TimeoutError, ConnectionError, AttributeError) as e:
             logger.error("CONNECTION_VALIDATION_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return False
 
     def _handle_nonretryable_api_error(
         self,
-        exc: APIError,
+        exc: Exception,
         *call_args: Any,
     ) -> NonRetryableBrokerError | None:
         """Return NonRetryableBrokerError when Alpaca reports capacity exhaustion."""
 
-        status = getattr(exc, "status_code", None)
-        code = getattr(exc, "code", None)
-        message = getattr(exc, "message", None)
-        if isinstance(message, dict):
-            code = message.get("code", code)
-            message = message.get("message")
+        metadata = _extract_api_error_metadata(exc)
+        status = metadata.get("status_code")
+        code = metadata.get("code")
+        message = metadata.get("detail") or metadata.get("error")
         payload = getattr(exc, "_error", None)
         if isinstance(payload, dict):
             code = payload.get("code", code)
@@ -34009,9 +34008,9 @@ class ExecutionEngine:
                     )
             try:
                 result = func(*args, **kwargs)
-            except (APIError, TimeoutError, ConnectionError) as exc:
+            except BROKER_SUBMIT_EXC as exc:
                 retry_after_seconds: float | None = None
-                if isinstance(exc, APIError):
+                if isinstance(exc, _AlpacaAPIError):
                     nonretryable = self._handle_nonretryable_api_error(exc, *args, **kwargs)
                     if nonretryable:
                         raise nonretryable
@@ -34087,7 +34086,7 @@ class ExecutionEngine:
         if isinstance(exc, TimeoutError):
             return "timeout"
 
-        if isinstance(exc, APIError):
+        if isinstance(exc, _AlpacaAPIError):
             status = getattr(exc, "status_code", None)
             try:
                 status_int = int(status) if status is not None else None
@@ -34877,8 +34876,8 @@ class ExecutionEngine:
                     str(ack_client_id or client_order_id_text or "").strip()
                 )
             return resp
-        except (APIError, TimeoutError, ConnectionError) as e:
-            if isinstance(e, APIError) and _is_duplicate_client_order_id_error(e):
+        except BROKER_SUBMIT_EXC as e:
+            if isinstance(e, _AlpacaAPIError) and _is_duplicate_client_order_id_error(e):
                 recovered = self._lookup_order_by_client_order_id(
                     client_order_id_text,
                     symbol=str(order_data.get("symbol") or ""),
@@ -34895,14 +34894,14 @@ class ExecutionEngine:
                         },
                     )
                     return cast(dict[str, Any], recovered)
+            error_metadata = _extract_api_error_metadata(e)
+            error_status = error_metadata.get("status_code")
+            error_code = error_metadata.get("code")
+            error_message = error_metadata.get("detail") or error_metadata.get("error") or str(e)
             ambiguous_submit = isinstance(e, (TimeoutError, ConnectionError))
-            if isinstance(e, APIError):
-                try:
-                    error_status = int(getattr(e, "status_code", 0) or 0)
-                except (TypeError, ValueError):
-                    error_status = 0
-                detail_text = str(getattr(e, "message", "") or e).strip().lower()
-                ambiguous_submit = error_status in {500, 502, 503, 504} or any(
+            if isinstance(e, _AlpacaAPIError):
+                detail_text = str(error_message).strip().lower()
+                ambiguous_submit = (isinstance(error_status, int) and 500 <= error_status < 600) or any(
                     token in detail_text
                     for token in (
                         "timeout",
@@ -34930,21 +34929,21 @@ class ExecutionEngine:
                     return cast(dict[str, Any], recovered)
             logger.error(
                 "ALPACA_ORDER_SUBMIT_ERROR status_code=%s code=%s message=%s",
-                getattr(e, "status_code", None),
-                getattr(e, "code", None),
-                getattr(e, "message", str(e)),
+                error_status,
+                error_code,
+                error_message,
                 extra={
                     "symbol": order_data.get("symbol"),
                     "side": order_data.get("side"),
                     "qty": order_data.get("quantity") or order_data.get("qty"),
                     "order_type": order_type,
-                    "status_code": getattr(e, "status_code", None),
-                    "code": getattr(e, "code", None),
-                    "message": getattr(e, "message", str(e)),
+                    "status_code": error_status,
+                    "code": error_code,
+                    "message": error_message,
                     "closing_position": closing_position,
                 },
             )
-            if isinstance(e, APIError) and self._is_opposite_conflict_error(e):
+            if isinstance(e, _AlpacaAPIError) and self._is_opposite_conflict_error(e):
                 symbol = str(order_data.get("symbol") or "")
                 desired_side = str(order_data.get("side") or "")
                 quantity = _safe_int(order_data.get("quantity") or order_data.get("qty"), 0)

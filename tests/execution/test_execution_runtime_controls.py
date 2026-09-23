@@ -11,7 +11,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
 from alpaca.trading.enums import OrderType
+from requests.exceptions import HTTPError
 
 from ai_trading.execution import live_trading as lt
 from ai_trading.telemetry import runtime_state
@@ -2754,7 +2756,8 @@ def test_live_cover_blocks_stale_broker_or_unresolved_intent_before_submit():
     assert calls == []
 
 
-def test_live_cover_lost_broker_response_keeps_intent_unresolved(monkeypatch):
+@pytest.mark.parametrize("error_kind", ["timeout", "native_504"])
+def test_live_cover_lost_broker_response_keeps_intent_unresolved(monkeypatch, error_kind):
     engine = _engine_stub()
     engine.execution_mode = "live"
     attempts: list[str] = []
@@ -2770,6 +2773,12 @@ def test_live_cover_lost_broker_response_keeps_intent_unresolved(monkeypatch):
 
     def _submit(*, order_data):
         attempts.append(order_data.client_order_id)
+        if error_kind == "native_504":
+            response = SimpleNamespace(status_code=504)
+            raise NativeAlpacaAPIError(
+                json.dumps({"code": 50410000, "message": "request timed out"}),
+                HTTPError("http_504", response=response),
+            )
         raise TimeoutError("accepted response lost")
 
     class MarketReq:

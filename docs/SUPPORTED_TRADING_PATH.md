@@ -54,6 +54,16 @@ successful replacement response does not guarantee the old order was replaced.
 The durable identity check is one
 boundary and does not independently prove the upstream model, risk and quote
 checks; those remain in `execute_order`.
+Direct `AlpacaBrokerAdapter` and `TradierBrokerAdapter` submissions now reject
+the configured live execution mode before calling the broker. The retained
+research/test coordinator and legacy bot/API submit facades also reject live
+orders outside the canonical OMS path. The two live SDK calls in the canonical
+engine are the opening/ordinary submit and the verified short-cover path;
+native Alpaca 504 errors keep the durable intent unresolved when broker lookup
+cannot recover the order and do not authorize a blind retry or alternate broker
+submission. This is a code-path
+boundary, not evidence that live trading is approved or that every broker
+failure has been observed in production.
 The existence of these helpers is not evidence of current runtime use. The current
 paper service reports `paper_trade`, diagnostic-only operation and a blocked
 qualified-model readiness gate; this is a September 23 observation, not a
