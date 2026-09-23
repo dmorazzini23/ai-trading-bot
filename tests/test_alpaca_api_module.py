@@ -38,6 +38,25 @@ def test_submit_order_shadow(monkeypatch):
     assert api.calls == 0
 
 
+@pytest.mark.parametrize("mode", ["live", "prod"])
+def test_direct_alpaca_submit_is_blocked_in_live_mode(monkeypatch, mode):
+    api = DummyAPI()
+    monkeypatch.setenv("EXECUTION_MODE", mode)
+    monkeypatch.setattr(
+        _REAL_ALPACA_API._AlpacaConfig,
+        "from_env",
+        staticmethod(
+            lambda: _REAL_ALPACA_API._AlpacaConfig(
+                "https://api.alpaca.markets", None, None, False
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Direct alpaca_api.submit_order"):
+        alpaca_api.submit_order("AAPL", "buy", qty=1, client=api, shadow=False)
+    assert api.calls == 0
+
+
 def test_submit_order_missing_submit(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     api = object()

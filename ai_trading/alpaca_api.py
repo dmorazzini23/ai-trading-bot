@@ -10,6 +10,7 @@ import types
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING, Type, cast
 from threading import RLock
+from ai_trading.core.runtime_contract import normalize_execution_mode
 
 _ALPACA_PY_REQUIRED = (
     "alpaca-py==0.42.1 is required; install with `pip install alpaca-py==0.42.1`"
@@ -1515,6 +1516,15 @@ def submit_order(
 
     cfg = _AlpacaConfig.from_env()
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
+    if (
+        not do_shadow
+        and normalize_execution_mode(_managed_env("EXECUTION_MODE", "paper", cast=str))
+        == "live"
+    ):
+        raise RuntimeError(
+            "Direct alpaca_api.submit_order is unavailable in live mode; "
+            "use the canonical execution engine with durable OMS ownership."
+        )
     if (
         shadow is None
         and client is not None

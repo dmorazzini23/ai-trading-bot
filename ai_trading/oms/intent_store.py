@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import threading
 from typing import Any, cast
@@ -51,7 +52,7 @@ try:
         update,
     )
     from sqlalchemy.engine import Engine
-    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
     from sqlalchemy.orm import sessionmaker
 
     _SQLALCHEMY_AVAILABLE = True
@@ -64,11 +65,22 @@ except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - exercised in
     Engine = Any  # type: ignore[assignment,misc]
     sessionmaker = None  # type: ignore[assignment,misc]
     IntegrityError = Exception  # type: ignore[assignment,misc]
+    SQLAlchemyError = Exception  # type: ignore[assignment,misc]
 
 
 _TERMINAL_STATUSES: frozenset[str] = TERMINAL_INTENT_STATUSES
 _BOOTSTRAPPED_DATABASE_URLS: set[str] = set()
 _BOOTSTRAP_LOCK = threading.RLock()
+_SUBMIT_OWNER_LOCK_KEY = int.from_bytes(
+    hashlib.sha256(b"ai-trading-oms-submit-owner-v1").digest()[:8],
+    "big",
+) & ((1 << 63) - 1)
+_SUBMIT_OWNER_HELD_SQL = (
+    "SELECT EXISTS (SELECT 1 FROM pg_locks "
+    "WHERE locktype = 'advisory' AND pid = pg_backend_pid() "
+    "AND granted AND mode = 'ExclusiveLock' AND objsubid = 1 "
+    "AND ((classid::bigint << 32) | objid::bigint) = :lock_key)"
+)
 
 
 @dataclass(frozen=True)
@@ -204,6 +216,10 @@ class IntentStore:
         self._database_url = database_url
         self._path = locator_path
         self._lock = threading.RLock()
+        self._submit_owner_connection: Any | None = None
+        self._submit_owner_pid: int | None = None
+        self._submit_owner_backend_pid: int | None = None
+        self._submit_owner_required = False
         if database_url.startswith("sqlite:///"):
             self._path.parent.mkdir(parents=True, exist_ok=True)
         connect_args: dict[str, Any] = {}
@@ -277,6 +293,108 @@ class IntentStore:
         """Return SQLAlchemy database URL backing this store."""
 
         return self._database_url
+
+    def acquire_submit_owner(self) -> bool:
+        """Hold one PostgreSQL session lock for this database's submit owner."""
+
+        if not self._database_url.startswith("postgresql"):
+            raise RuntimeError("OMS_SUBMIT_OWNER_REQUIRES_POSTGRESQL")
+        with self._lock:
+            if self._submit_owner_connection is not None:
+                self.assert_submit_owner()
+                return True
+            connection = self._engine.connect()
+            acquired = False
+            try:
+                backend_pid = connection.scalar(text("SELECT pg_backend_pid()"))
+                if backend_pid is None:
+                    raise RuntimeError("OMS_SUBMIT_OWNER_BACKEND_UNKNOWN")
+                acquired = bool(connection.scalar(
+                    text("SELECT pg_try_advisory_lock(:lock_key)"),
+                    {"lock_key": _SUBMIT_OWNER_LOCK_KEY},
+                ))
+                if not acquired:
+                    connection.rollback()
+                    return False
+                connection.commit()
+                held = connection.scalar(
+                    text(_SUBMIT_OWNER_HELD_SQL),
+                    {"lock_key": _SUBMIT_OWNER_LOCK_KEY},
+                )
+                connection.rollback()
+                if not bool(held):
+                    raise RuntimeError("OMS_SUBMIT_OWNER_LOCK_UNVERIFIED")
+                self._submit_owner_connection = connection
+                self._submit_owner_pid = os.getpid()
+                self._submit_owner_backend_pid = int(backend_pid)
+                self._submit_owner_required = True
+                return True
+            except (SQLAlchemyError, OSError, RuntimeError):
+                if acquired:
+                    try:
+                        connection.scalar(
+                            text("SELECT pg_advisory_unlock(:lock_key)"),
+                            {"lock_key": _SUBMIT_OWNER_LOCK_KEY},
+                        )
+                        connection.commit()
+                    except (SQLAlchemyError, OSError):
+                        connection.invalidate()
+                raise
+            finally:
+                if self._submit_owner_connection is not connection:
+                    connection.close()
+
+    def assert_submit_owner(self) -> None:
+        """Fail closed if the live owner session was lost or forked."""
+
+        with self._lock:
+            connection = self._submit_owner_connection
+            if (
+                not self._submit_owner_required
+                or connection is None
+                or self._submit_owner_pid != os.getpid()
+                or self._submit_owner_backend_pid is None
+            ):
+                raise RuntimeError("OMS_SUBMIT_OWNER_UNAVAILABLE")
+            try:
+                backend_pid = connection.scalar(text("SELECT pg_backend_pid()"))
+                held = connection.scalar(
+                    text(_SUBMIT_OWNER_HELD_SQL),
+                    {"lock_key": _SUBMIT_OWNER_LOCK_KEY},
+                )
+                connection.rollback()
+            except (SQLAlchemyError, OSError) as exc:
+                raise RuntimeError("OMS_SUBMIT_OWNER_UNAVAILABLE") from exc
+            if (
+                backend_pid is None
+                or int(backend_pid) != self._submit_owner_backend_pid
+                or not bool(held)
+            ):
+                raise RuntimeError("OMS_SUBMIT_OWNER_LOST")
+
+    def release_submit_owner(self) -> None:
+        """Release the advisory lock before returning its connection to the pool."""
+
+        with self._lock:
+            connection = self._submit_owner_connection
+            owner_pid = self._submit_owner_pid
+            self._submit_owner_connection = None
+            self._submit_owner_pid = None
+            self._submit_owner_backend_pid = None
+            self._submit_owner_required = False
+            if connection is None:
+                return
+            try:
+                if owner_pid == os.getpid():
+                    connection.scalar(
+                        text("SELECT pg_advisory_unlock(:lock_key)"),
+                        {"lock_key": _SUBMIT_OWNER_LOCK_KEY},
+                    )
+                    connection.commit()
+            except (SQLAlchemyError, OSError):
+                logger.warning("OMS_SUBMIT_OWNER_RELEASE_FAILED", exc_info=True)
+            finally:
+                connection.close()
 
     @staticmethod
     def _utcnow_iso() -> str:
@@ -591,6 +709,8 @@ class IntentStore:
     ) -> bool:
         """Claim a pending intent; an uncertain submission needs reconciliation."""
 
+        if self._submit_owner_required:
+            self.assert_submit_owner()
         assert _INTENTS_TABLE is not None
         stale_after = max(1, int(stale_after_seconds))
         now = datetime.now(UTC)
@@ -872,6 +992,7 @@ class IntentStore:
         """Dispose DB engine resources."""
 
         with self._lock:
+            self.release_submit_owner()
             if self._event_store is not None:
                 try:
                     self._event_store.close()

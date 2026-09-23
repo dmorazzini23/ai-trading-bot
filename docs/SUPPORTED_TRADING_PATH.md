@@ -29,9 +29,11 @@ approve a live profile or claim that all runtime-only settings are captured.
    evidence. The unsupported pre-September 7 legacy interval remains excluded;
    see `ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
 
-The direct cover-order and generic submit helpers in `live_trading.py`, plus
-`alpaca_api.py`, remain explicit submission surfaces to verify before any live
-approval. Their existence is not evidence of current runtime use. The current
+The canonical engine's market, limit, replacement and cover submissions now
+check the live OMS owner immediately before reaching the Alpaca SDK. The
+standalone `alpaca_api.submit_order` and `bot_engine.safe_submit_order` helpers
+reject live mode; they remain available for their supported paper/test use.
+The existence of these helpers is not evidence of current runtime use. The current
 paper service reports `paper_trade`, diagnostic-only operation and a blocked
 qualified-model readiness gate; this is a September 23 observation, not a
 permanent configuration guarantee.

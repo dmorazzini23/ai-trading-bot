@@ -109,6 +109,7 @@ from ai_trading.core.errors import ErrorAction, ErrorCategory, ErrorInfo, classi
 from ai_trading.core.retry import retry_idempotent
 from ai_trading.core.runtime_contract import (
     is_testing_mode as is_runtime_contract_testing_mode,
+    normalize_execution_mode,
     require_dependency,
     require_no_stubs,
 )
@@ -21793,6 +21794,11 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
     explicitly ``True``.
     """
 
+    if normalize_execution_mode(get_env("EXECUTION_MODE", "paper", cast=str)) == "live":
+        raise RuntimeError(
+            "Direct bot_engine.safe_submit_order is unavailable in live mode; "
+            "use the canonical execution engine with durable OMS ownership."
+        )
     pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
     alpaca_classes_available = True
     try:

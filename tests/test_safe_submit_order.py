@@ -79,6 +79,23 @@ class DummyAPI:
         self.client_order_ids: list[str] = []
 
 
+@pytest.mark.parametrize("mode", ["live", "production"])
+def test_direct_bot_engine_submit_is_blocked_in_live_mode(monkeypatch, mode):
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setenv("EXECUTION_MODE", mode)
+    api = DummyAPI()
+    calls: list[object] = []
+    api.submit_order = lambda **kwargs: calls.append(kwargs)
+
+    with pytest.raises(RuntimeError, match="Direct bot_engine.safe_submit_order"):
+        bot_engine.safe_submit_order(
+            api,
+            types.SimpleNamespace(symbol="AAPL", qty=1, side="buy"),
+        )
+    assert calls == []
+
+
 def test_safe_submit_order_pending_new(monkeypatch):
     """Test safe_submit_order function with mock dependencies."""
 

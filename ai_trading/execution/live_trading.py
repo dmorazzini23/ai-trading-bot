@@ -279,6 +279,7 @@ from ai_trading.execution.engine import (
     KNOWN_EXECUTE_ORDER_KWARGS,
     OrderManager,
 )
+from ai_trading.core.runtime_contract import normalize_execution_mode
 from ai_trading.execution.order_policy import (
     MarketData,
     OrderUrgency,
@@ -5608,7 +5609,7 @@ class ExecutionEngine:
         manager = getattr(self, "order_manager", None)
         store = getattr(manager, "_intent_store", None)
         if store is None:
-            if str(getattr(self, "execution_mode", "paper")).lower() == "live":
+            if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
                 return False, "oms_intent_store_unavailable"
         else:
             try:
@@ -5638,6 +5639,18 @@ class ExecutionEngine:
         if flatten_window_blocked:
             return False, flatten_window_detail
         return True, None
+
+    def _assert_submit_owner(self) -> None:
+        """Require the live OMS owner before any direct broker submit."""
+
+        if normalize_execution_mode(getattr(self, "execution_mode", "paper")) != "live":
+            return
+        manager = getattr(self, "order_manager", None)
+        store = getattr(manager, "_intent_store", None)
+        assert_owner = getattr(store, "assert_submit_owner", None)
+        if not callable(assert_owner):
+            raise RuntimeError("OMS_SUBMIT_OWNER_UNAVAILABLE")
+        assert_owner()
 
     def _eod_flatten_window_blocks_openings(self) -> tuple[bool, str | None]:
         active, context = _eod_flatten_window_active()
@@ -16931,7 +16944,7 @@ class ExecutionEngine:
     def _durable_order_lifecycle_required(self) -> bool:
         """Return whether broker submit must have a durable OMS intent first."""
 
-        execution_mode = str(getattr(self, "execution_mode", "") or "").strip().lower()
+        execution_mode = normalize_execution_mode(getattr(self, "execution_mode", "paper"))
         if execution_mode == "live":
             return True
         raw: Any = None
@@ -25284,6 +25297,7 @@ class ExecutionEngine:
     def safe_submit_order(self, *args: Any, **kwargs: Any) -> str:
         """Submit an order and always return a string identifier."""
 
+        self._assert_submit_owner()
         submit = getattr(self.trading_client, "submit_order", None)
         if not callable(submit):
             raise AttributeError("trading_client missing submit_order")
@@ -25957,6 +25971,7 @@ class ExecutionEngine:
         if cover_qty <= 0:
             return False
         try:
+            self._assert_submit_owner()
             market_cls, _limit_cls, side_enum, tif_enum = _ensure_request_models()
             req = market_cls(
                 symbol=symbol,
@@ -34210,6 +34225,7 @@ class ExecutionEngine:
     def _submit_order_to_alpaca(self, order_data: dict[str, Any]) -> dict[str, Any]:
         """Submit an order using Alpaca TradingClient."""
 
+        self._assert_submit_owner()
         closing_position = bool(
             order_data.get("closing_position")
             or order_data.get("close_position")

@@ -52,6 +52,7 @@ EXECUTION_ENGINE_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, register_reset_hook
 from ai_trading.config.management import get_env, is_test_runtime
+from ai_trading.core.runtime_contract import normalize_execution_mode
 from ai_trading.oms.lifecycle import resolve_terminal_intent_status
 from ai_trading.oms.intent_store import IntentStore
 from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES, normalize_intent_status
@@ -715,7 +716,7 @@ class OrderManager:
 
         enabled = _env_bool("AI_TRADING_OMS_INTENT_STORE_ENABLED", True)
         allow_in_tests = _env_bool("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", False)
-        execution_mode = str(get_env("EXECUTION_MODE", "paper") or "").strip().lower()
+        execution_mode = normalize_execution_mode(get_env("EXECUTION_MODE", "paper"))
         ledger_enabled = _env_bool("AI_TRADING_LEDGER_ENABLED", True)
         database_url = str(get_env("DATABASE_URL", "") or "").strip()
         if execution_mode == "live":
@@ -774,6 +775,11 @@ class OrderManager:
                 event_dual_write_enabled=event_dual_write_enabled,
             )
             resolved_url = str(getattr(self._intent_store, "database_url", "") or "")
+            if execution_mode == "live":
+                if not resolved_url.startswith("postgresql"):
+                    raise RuntimeError("OMS_SUBMIT_OWNER_REQUIRES_POSTGRESQL")
+                if not self._intent_store.acquire_submit_owner():
+                    raise RuntimeError("OMS_SUBMIT_OWNER_ALREADY_ACTIVE")
             parsed = urlparse(resolved_url) if resolved_url else None
             backend = "sqlite" if resolved_url.startswith("sqlite:") else "postgres"
             database_host = parsed.hostname if parsed else None
@@ -789,6 +795,9 @@ class OrderManager:
                 },
             )
         except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - defensive
+            if self._intent_store is not None:
+                self._intent_store.close()
+                self._intent_store = None
             logger.warning(
                 "OMS_INTENT_STORE_INIT_FAILED",
                 extra={
@@ -800,7 +809,6 @@ class OrderManager:
             )
             if execution_mode == "live":
                 raise RuntimeError("OMS_INTENT_STORE_INIT_FAILED") from exc
-            self._intent_store = None
 
     def configure_intent_store(self, intent_store: IntentStore | None) -> None:
         """Override intent store instance (used by tests/integration harnesses)."""
