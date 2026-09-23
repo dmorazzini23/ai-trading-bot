@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -60,15 +63,61 @@ def _load_state(*, profile_name: str = "live_canary") -> dict[str, Any]:
     path = _state_path(profile_name=profile_name)
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        if (
+            _events_path(profile_name=profile_name).exists()
+            or path.with_suffix(".initialized").exists()
+        ):
+            return {"state_error": "launch_profile_state_missing_history"}
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"state_error": "launch_profile_state_corrupt"}
+    if not isinstance(parsed, dict) or parsed.get("profile") != profile_name:
+        return {"state_error": "launch_profile_state_corrupt"}
+    for key in ("entry_attempts", "blocked_attempts"):
+        value = parsed.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return {"state_error": "launch_profile_state_corrupt"}
+    try:
+        datetime.strptime(str(parsed["date"]), "%Y-%m-%d")
+    except (KeyError, TypeError, ValueError):
+        return {"state_error": "launch_profile_state_corrupt"}
+    return parsed
+
+
+@contextmanager
+def _state_lock(*, profile_name: str):
+    path = _state_path(profile_name=profile_name).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _journal_attempts(*, profile_name: str, today: str) -> int:
+    path = _events_path(profile_name=profile_name)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return 0
+    attempts = 0
+    for line in lines:
+        event = json.loads(line)
+        if not isinstance(event, dict) or not isinstance(event.get("ts"), str):
+            raise ValueError("invalid launch profile event")
+        if event.get("profile") == profile_name and event["ts"][:10] == today and event.get("allowed") is True:
+            attempts += 1
+    return attempts
 
 
 def _write_state(state: Mapping[str, Any], *, profile_name: str = "live_canary") -> None:
     path = _state_path(profile_name=profile_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(dict(state), indent=2, sort_keys=True) + "\n")
+    atomic_write_text(path.with_suffix(".initialized"), "initialized\n")
 
 
 def _float(value: Any) -> float | None:
@@ -257,6 +306,13 @@ def _append_event(payload: Mapping[str, Any], *, profile_name: str = "live_canar
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(dict(payload), sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    dir_fd = os.open(path.parent, os.O_DIRECTORY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _profile_gate_active(profile: LaunchProfile) -> bool:
@@ -400,6 +456,31 @@ def evaluate_launch_profile_order(
 ) -> tuple[bool, dict[str, Any]]:
     resolved = profile or resolve_launch_profile()
     mode = str(execution_mode or "").strip().lower()
+    if mode not in {"paper", "live"} or not _profile_gate_active(resolved):
+        return _evaluate_launch_profile_order_locked(
+            order, profile=resolved, execution_mode=execution_mode
+        )
+    try:
+        with _state_lock(profile_name=resolved.name):
+            return _evaluate_launch_profile_order_locked(
+                order, profile=resolved, execution_mode=execution_mode
+            )
+    except OSError:
+        return False, {
+            "enabled": True,
+            "profile": resolved.name,
+            "reasons": ["launch_profile_state_lock_failed"],
+        }
+
+
+def _evaluate_launch_profile_order_locked(
+    order: Mapping[str, Any],
+    *,
+    profile: LaunchProfile | None = None,
+    execution_mode: str | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    resolved = profile or resolve_launch_profile()
+    mode = str(execution_mode or "").strip().lower()
     if mode not in {"paper", "live"}:
         return True, {
             "enabled": False,
@@ -456,7 +537,27 @@ def evaluate_launch_profile_order(
         live_capital_active=live_capital_active,
     )
     state = observe_launch_profile_state(resolved)
+    if state.get("state_error"):
+        return False, {
+            "enabled": True,
+            "profile": resolved.name,
+            "reasons": [state["state_error"]],
+        }
     today = _today_key()
+    if state.get("date") and str(state["date"]) > today:
+        return False, {
+            "enabled": True,
+            "profile": resolved.name,
+            "reasons": ["launch_profile_state_future_date"],
+        }
+    try:
+        journal_attempts = _journal_attempts(profile_name=resolved.name, today=today)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return False, {
+            "enabled": True,
+            "profile": resolved.name,
+            "reasons": ["launch_profile_event_history_corrupt"],
+        }
     if str(state.get("date") or "") != today:
         state = {
             "artifact_type": (
@@ -471,7 +572,7 @@ def evaluate_launch_profile_order(
             "blocked_attempts": 0,
             "last_event": None,
         }
-    attempts = int(_float(state.get("entry_attempts")) or 0.0)
+    attempts = max(int(state["entry_attempts"]), journal_attempts)
     reasons: list[str] = []
     if resolved.allowed_symbols and symbol not in resolved.allowed_symbols:
         reasons.append("symbol_not_allowlisted")
@@ -540,8 +641,8 @@ def evaluate_launch_profile_order(
     state["status"] = "ready" if allowed else "blocked"
     state["last_event"] = event
     try:
-        _write_state(state, profile_name=resolved.name)
         _append_event(event, profile_name=resolved.name)
+        _write_state(state, profile_name=resolved.name)
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         if allowed:
             return False, event | {"reasons": ["launch_profile_state_write_failed"]}

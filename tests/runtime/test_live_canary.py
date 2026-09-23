@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from pathlib import Path
 
+import ai_trading.runtime.live_canary as live_canary
 from ai_trading.runtime.live_canary import (
     evaluate_canary_order,
     evaluate_launch_profile_order,
@@ -41,6 +44,162 @@ def _approve_live_capital(monkeypatch, tmp_path: Path, *, status: str = "live_ca
         json.dumps({"artifact_type": "live_capital_readiness", "status": status}),
         encoding="utf-8",
     )
+
+
+def _valid_live_order() -> dict:
+    return {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 1,
+        "price_hint": 10.0,
+        "quote_age_ms": 100.0,
+        "spread_bps": 2.0,
+        "daily_loss_state": {"daily_loss_abs": 0.0},
+        "account_snapshot": {"equity": 1000.0},
+    }
+
+
+def test_canary_corrupt_state_never_resets_exhausted_budget(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_ORDER_COUNT", "1")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    state_path = tmp_path / "runtime" / "live_canary_state_latest.json"
+    state_path.write_text("{invalid", encoding="utf-8")
+
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+
+    assert not allowed
+    assert context["reasons"] == ["launch_profile_state_corrupt"]
+    assert state_path.read_text(encoding="utf-8") == "{invalid"
+    assert observe_live_canary_state()["state_error"] == "launch_profile_state_corrupt"
+
+
+def test_canary_invalid_count_and_future_state_block(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    state_path = tmp_path / "runtime" / "live_canary_state_latest.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state_path.write_text(json.dumps(state | {"entry_attempts": "0"}), encoding="utf-8")
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[1]["reasons"] == [
+        "launch_profile_state_corrupt"
+    ]
+    future_day = (date.fromisoformat(state["date"]) + timedelta(days=1)).isoformat()
+    state_path.write_text(json.dumps(state | {"date": future_day}), encoding="utf-8")
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[1]["reasons"] == [
+        "launch_profile_state_future_date"
+    ]
+
+
+def test_canary_missing_state_with_history_blocks(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    (tmp_path / "runtime" / "live_canary_state_latest.json").unlink()
+
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+
+    assert not allowed
+    assert context["reasons"] == ["launch_profile_state_missing_history"]
+
+
+def test_canary_missing_snapshot_and_journal_after_initialization_blocks(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    runtime_dir = tmp_path / "runtime"
+    assert (runtime_dir / "live_canary_state_latest.initialized").exists()
+    (runtime_dir / "live_canary_state_latest.json").unlink()
+    (runtime_dir / "live_canary_events.jsonl").unlink()
+
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+
+    assert not allowed
+    assert context["reasons"] == ["launch_profile_state_missing_history"]
+
+
+def test_canary_valid_prior_day_state_rolls_over(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_ORDER_COUNT", "1")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    state_path = tmp_path / "runtime" / "live_canary_state_latest.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    prior_day = (date.fromisoformat(state["date"]) - timedelta(days=1)).isoformat()
+    state["date"] = prior_day
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    events_path = tmp_path / "runtime" / "live_canary_events.jsonl"
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    event["ts"] = prior_day + event["ts"][10:]
+    events_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+
+    assert allowed
+    assert context["reasons"] == []
+    assert observe_live_canary_state()["entry_attempts"] == 1
+
+
+def test_canary_journal_preserves_attempt_after_snapshot_failure(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_ORDER_COUNT", "1")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    original_write = live_canary._write_state
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("simulated storage failure")
+
+    monkeypatch.setattr(live_canary, "_write_state", fail_write)
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+    assert not allowed
+    assert context["reasons"] == ["launch_profile_state_write_failed"]
+    monkeypatch.setattr(live_canary, "_write_state", original_write)
+
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+    assert not allowed
+    assert context["reasons"] == ["launch_profile_state_missing_history"]
+
+
+def test_canary_reconciles_journal_ahead_of_existing_state(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_ORDER_COUNT", "2")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    assert evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    original_write = live_canary._write_state
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("simulated storage failure")
+
+    monkeypatch.setattr(live_canary, "_write_state", fail_write)
+    assert not evaluate_canary_order(_valid_live_order(), execution_mode="live")[0]
+    monkeypatch.setattr(live_canary, "_write_state", original_write)
+
+    allowed, context = evaluate_canary_order(_valid_live_order(), execution_mode="live")
+
+    assert not allowed
+    assert "daily_order_count_cap_exceeded" in context["reasons"]
+    assert observe_live_canary_state()["entry_attempts"] == 2
+
+
+def test_canary_concurrent_attempts_do_not_exceed_cap(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_ORDER_COUNT", "1")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: evaluate_canary_order(_valid_live_order(), execution_mode="live"), range(4)))
+
+    assert sum(allowed for allowed, _ in results) == 1
+    assert observe_live_canary_state()["entry_attempts"] == 1
 
 
 def test_live_canary_allows_tightly_bounded_allowlisted_order(monkeypatch, tmp_path: Path):
