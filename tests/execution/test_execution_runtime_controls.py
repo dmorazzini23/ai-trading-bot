@@ -2325,6 +2325,59 @@ def test_pre_execution_order_checks_passes_broker_exposure_to_launch_profile_gat
     assert captured["open_orders"] == engine._broker_sync.open_orders
 
 
+def test_live_precheck_replaces_caller_exposure_with_new_broker_snapshot(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    broker_positions = (SimpleNamespace(symbol="AAPL", qty="3", market_price="100"),)
+    broker_orders = (SimpleNamespace(symbol="MSFT", qty="1", limit_price="50"),)
+    sync_calls: list[str] = []
+    engine.synchronize_broker_state = lambda: (sync_calls.append("synced") or SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=broker_positions, open_orders=broker_orders,
+    ))
+    engine._refresh_cycle_account = lambda: {"id": "broker-account", "equity": 1000}
+    monkeypatch.setattr(engine, "_enforce_opposite_side_policy", lambda *_args, **_kwargs: (True, None))
+    monkeypatch.setattr(engine, "_resolve_exposure_normalization_settings", lambda: {"block_openings": False})
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda _account: None)
+    monkeypatch.setattr(engine, "_runtime_gonogo_openings_allowed", lambda: (True, {}))
+    captured: dict[str, Any] = {}
+
+    def _capture(order, **kwargs):
+        captured.update(order)
+        captured["evaluated_execution_mode"] = kwargs["execution_mode"]
+        return False, {"profile": "live_canary", "reasons": ["test_stop"]}
+
+    monkeypatch.setattr(lt, "evaluate_launch_profile_order", _capture)
+    order = {"symbol": "AAPL", "side": "buy", "quantity": 1,
+             "client_order_id": "live-snapshot", "closing_position": False,
+             "positions": [], "open_orders": [], "account_snapshot": {"id": "caller"}}
+
+    assert engine._pre_execution_order_checks(order) is False
+    assert sync_calls == ["synced"]
+    assert captured["positions"] == broker_positions
+    assert captured["open_orders"] == broker_orders
+    assert captured["account_snapshot"]["id"] == "broker-account"
+    assert captured["evaluated_execution_mode"] == "live"
+
+
+def test_live_precheck_blocks_stale_broker_state_before_launch_gate(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=False, positions_fresh=True, open_orders_fresh=True,
+        positions=(), open_orders=(),
+    )
+    engine._refresh_cycle_account = lambda: {"id": "broker-account", "equity": 1000}
+    monkeypatch.setattr(engine, "_enforce_opposite_side_policy", lambda *_args, **_kwargs: (True, None))
+    monkeypatch.setattr(lt, "evaluate_launch_profile_order", lambda *_args, **_kwargs: pytest.fail("launch gate reached"))
+
+    assert engine._pre_execution_order_checks({
+        "symbol": "AAPL", "side": "buy", "quantity": 1,
+        "client_order_id": "live-stale", "closing_position": False,
+    }) is False
+    assert engine._last_pre_execution_order_check_failure["reason"] == "live_broker_snapshot_unavailable"
+
+
 def test_pre_execution_order_checks_blocks_openings_for_symbol_reentry_cooldown(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}

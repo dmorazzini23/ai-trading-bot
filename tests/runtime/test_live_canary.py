@@ -55,7 +55,9 @@ def _valid_live_order() -> dict:
         "quote_age_ms": 100.0,
         "spread_bps": 2.0,
         "daily_loss_state": {"daily_loss_abs": 0.0},
-        "account_snapshot": {"equity": 1000.0},
+        "account_snapshot": {"id": "paper-account", "equity": 1000.0},
+        "positions": [],
+        "open_orders": [],
     }
 
 
@@ -217,7 +219,9 @@ def test_live_canary_allows_tightly_bounded_allowlisted_order(monkeypatch, tmp_p
             "quote_age_ms": 100.0,
             "spread_bps": 5.0,
             "daily_loss_state": {"daily_loss_abs": 0.0},
-            "account_snapshot": {"equity": 10000.0},
+            "account_snapshot": {"id": "paper-account", "equity": 10000.0},
+            "positions": [],
+            "open_orders": [],
         },
         execution_mode="live",
     )
@@ -283,7 +287,9 @@ def test_live_canary_blocks_after_daily_order_cap(monkeypatch, tmp_path: Path):
         "quote_age_ms": 100.0,
         "spread_bps": 2.0,
         "daily_loss_state": {"daily_loss_abs": 0.0},
-        "account_snapshot": {"equity": 1000.0},
+        "account_snapshot": {"id": "paper-account", "equity": 1000.0},
+        "positions": [],
+        "open_orders": [],
     }
 
     first_allowed, _ = evaluate_canary_order(order, execution_mode="live")
@@ -367,7 +373,9 @@ def test_live_canary_writes_state_and_event_artifacts(monkeypatch, tmp_path: Pat
             "quote_age_ms": 100.0,
             "spread_bps": 2.0,
             "daily_loss_state": {"daily_loss_abs": 0.0},
-            "account_snapshot": {"equity": 1000.0},
+            "account_snapshot": {"id": "paper-account", "equity": 1000.0},
+            "positions": [],
+            "open_orders": [],
         },
         execution_mode="live",
     )
@@ -470,6 +478,72 @@ def test_live_canary_blocks_projected_gross_and_symbol_exposure(monkeypatch, tmp
     assert "max_gross_exposure_exceeded" in context["reasons"]
     assert "max_symbol_exposure_exceeded" in context["reasons"]
     assert context["exposure"]["evaluated"] is True
+
+
+def test_live_canary_requires_complete_position_and_open_order_snapshots(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+
+    allowed, context = evaluate_canary_order(
+        {"symbol": "AAPL", "side": "buy", "quantity": 1, "price_hint": 10.0,
+         "quote_age_ms": 100.0, "spread_bps": 2.0,
+         "account_snapshot": {"equity": 1000.0},
+         "daily_loss_state": {"daily_loss_abs": 0.0}},
+        execution_mode="live",
+    )
+    assert allowed is False
+    assert "account_identity_missing" in context["reasons"]
+    assert "positions_snapshot_missing" in context["reasons"]
+    assert "open_orders_snapshot_missing" in context["reasons"]
+
+
+def test_live_canary_rejects_cost_basis_only_position_and_unpriced_pending_order(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+
+    allowed, context = evaluate_canary_order(
+        {"symbol": "AAPL", "side": "buy", "quantity": 1, "price_hint": 10.0,
+         "quote_age_ms": 100.0, "spread_bps": 2.0,
+         "account_snapshot": {"equity": 1000.0},
+         "daily_loss_state": {"daily_loss_abs": 0.0},
+         "positions": [{"symbol": "MSFT", "qty": 1, "avg_entry_price": 100.0}],
+         "open_orders": [{"symbol": "MSFT", "remaining_qty": 1, "side": "buy"}]},
+        execution_mode="live",
+    )
+    assert allowed is False
+    assert "position_exposure_unverified" in context["reasons"]
+    assert "open_order_exposure_unverified" in context["reasons"]
+
+
+def test_live_canary_rejects_order_account_conflict(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    order = _valid_live_order() | {"account_id": "different-account"}
+
+    allowed, context = evaluate_canary_order(order, execution_mode="live")
+    assert allowed is False
+    assert "account_identity_conflict" in context["reasons"]
+
+
+def test_closing_flag_cannot_authorize_quantity_that_flips_long_to_short(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+
+    allowed, context = evaluate_canary_order(
+        {"symbol": "AAPL", "side": "sell", "quantity": 5, "price_hint": 10.0,
+         "quote_age_ms": 100.0, "spread_bps": 2.0, "closing_position": True,
+         "account_snapshot": {"equity": 1000.0},
+         "daily_loss_state": {"daily_loss_abs": 0.0},
+         "positions": [{"symbol": "AAPL", "qty": 4, "market_price": 10.0}],
+         "open_orders": []},
+        execution_mode="live",
+    )
+    assert allowed is False
+    assert "shorts_disabled" in context["reasons"]
 
 
 def test_live_canary_blocks_missing_quote_metadata_and_equity(monkeypatch, tmp_path: Path):

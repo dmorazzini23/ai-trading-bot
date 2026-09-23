@@ -68,6 +68,18 @@ risk-reducing status from fresh broker state.
 
 ## Acceptance before live capital
 
+The canonical live opening precheck now refreshes the broker position and
+open-order snapshot and account observation for each order, replaces any
+caller-supplied exposure arrays, and rejects stale/failed broker reads. The
+launch-profile evaluator rejects missing account identity, missing position or
+open-order snapshots, unknown position market values, unpriced pending orders
+and account conflicts. A closing label alone cannot prove a reduction whose
+quantity would flip the position. These checks improve the existing live
+opening path; they do not establish a durable high-water baseline, approved
+loss thresholds, or proof that every direct broker submission and live
+reduction path enforces this contract. The separate live-owner fence and
+model/replay gates still apply.
+
 Approval of the two numeric loss decisions; a single canonical evaluator wired
 to every opening submission path; same-account, timestamped broker evidence for
 all inputs; durable high-water and session baselines; corruption, rollover,

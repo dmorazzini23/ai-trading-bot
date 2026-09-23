@@ -142,12 +142,6 @@ def _extract_value(payload: Any, *keys: str) -> Any:
     return None
 
 
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _side_token(side: Any) -> str:
     return str(side or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -198,14 +192,13 @@ def _current_symbol_qty(order: Mapping[str, Any], symbol: str) -> float | None:
 
 
 def _order_closes_position(order: Mapping[str, Any], side: str, symbol: str) -> bool:
-    if _truthy(order.get("closing_position")) or _truthy(order.get("reduce_only")):
-        return True
     current_qty = _current_symbol_qty(order, symbol)
-    if current_qty is None:
+    quantity = _float(order.get("quantity") if order.get("quantity") not in (None, "") else order.get("qty"))
+    if current_qty is None or quantity is None or quantity <= 0.0:
         return False
-    if side == "sell" and current_qty > 0.0:
+    if side == "sell" and current_qty > 0.0 and quantity <= current_qty:
         return True
-    if side in {"buy", "cover", "buy_to_cover"} and current_qty < 0.0:
+    if side in {"buy", "cover", "buy_to_cover"} and current_qty < 0.0 and quantity <= abs(current_qty):
         return True
     return False
 
@@ -226,6 +219,7 @@ def _exposure_gate_reasons(
     side: str,
     notional: float,
     price_hint: float | None,
+    live_capital_active: bool,
 ) -> tuple[list[str], dict[str, Any]]:
     account = order.get("account_snapshot") or order.get("account")
     equity = _float(_extract_value(account, "equity", "last_equity", "portfolio_value"))
@@ -241,18 +235,40 @@ def _exposure_gate_reasons(
             return ["exposure_equity_missing"], context
         return [], context
 
+    strict_opening = live_capital_active and not _order_closes_position(order, side, symbol)
+    reasons: list[str] = []
+    if strict_opening:
+        account_id = _extract_value(account, "id", "account_id")
+        order_account_id = _extract_value(order, "account_id")
+        if not account_id:
+            reasons.append("account_identity_missing")
+        elif order_account_id and str(order_account_id) != str(account_id):
+            reasons.append("account_identity_conflict")
     gross_notional = 0.0
     symbol_notional = 0.0
     positions = order.get("positions")
     if isinstance(positions, Iterable) and not isinstance(positions, (str, bytes, Mapping)):
         for position in positions:
-            market_value = _position_market_value(position, fallback_price=price_hint)
+            pos_symbol = str(_extract_value(position, "symbol") or "").strip().upper()
+            if strict_opening:
+                qty = _position_qty(position)
+                market_value = _float(_extract_value(position, "market_value"))
+                if market_value is None:
+                    market_price = _float(_extract_value(position, "market_price", "current_price"))
+                    market_value = abs(qty) * market_price if qty is not None and market_price is not None and market_price > 0.0 else None
+                if not pos_symbol or qty is None or market_value is None:
+                    reasons.append("position_exposure_unverified")
+                    continue
+                market_value = abs(market_value)
+            else:
+                market_value = _position_market_value(position, fallback_price=price_hint)
             if market_value is None:
                 continue
             gross_notional += market_value
-            pos_symbol = str(_extract_value(position, "symbol") or "").strip().upper()
             if pos_symbol == symbol:
                 symbol_notional += market_value
+    elif strict_opening:
+        reasons.append("positions_snapshot_missing")
 
     open_orders = order.get("open_orders")
     if isinstance(open_orders, Iterable) and not isinstance(open_orders, (str, bytes, Mapping)):
@@ -261,19 +277,28 @@ def _exposure_gate_reasons(
                 _extract_value(open_order, "remaining_qty", "unfilled_qty", "qty", "quantity")
             )
             if open_qty is None or open_qty <= 0.0:
+                if strict_opening:
+                    reasons.append("open_order_exposure_unverified")
                 continue
             open_price = _float(
                 _extract_value(open_order, "price_hint", "limit_price", "price")
             )
-            if open_price is None:
+            if open_price is None and not strict_opening:
                 open_price = price_hint
             if open_price is None or open_price <= 0.0:
+                if strict_opening:
+                    reasons.append("open_order_exposure_unverified")
+                continue
+            open_symbol = str(_extract_value(open_order, "symbol") or "").strip().upper()
+            if strict_opening and not open_symbol:
+                reasons.append("open_order_exposure_unverified")
                 continue
             open_notional = abs(open_qty) * float(open_price)
             gross_notional += open_notional
-            open_symbol = str(_extract_value(open_order, "symbol") or "").strip().upper()
             if open_symbol == symbol:
                 symbol_notional += open_notional
+    elif strict_opening:
+        reasons.append("open_orders_snapshot_missing")
 
     exposure_delta = max(float(notional), 0.0)
     if exposure_delta > 0.0 and _order_closes_position(order, side, symbol):
@@ -293,7 +318,6 @@ def _exposure_gate_reasons(
             "projected_symbol_exposure": symbol_ratio,
         }
     )
-    reasons: list[str] = []
     if gross_ratio > float(profile.max_gross_exposure):
         reasons.append("max_gross_exposure_exceeded")
     if symbol_ratio > float(profile.max_symbol_exposure):
@@ -604,6 +628,7 @@ def _evaluate_launch_profile_order_locked(
         side=side,
         notional=notional,
         price_hint=price_hint,
+        live_capital_active=live_capital_active,
     )
     reasons.extend(exposure_reasons)
     loss_reasons, loss_context = _daily_loss_gate_reasons(

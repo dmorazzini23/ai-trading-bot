@@ -32498,22 +32498,48 @@ class ExecutionEngine:
                 quantity = adjusted_qty
 
         account_snapshot = order.get("account_snapshot")
-        if not closing_position and account_snapshot is None:
-            account_snapshot = self._get_account_snapshot()
+        live_opening = (
+            not closing_position
+            and normalize_execution_mode(getattr(self, "execution_mode", EXECUTION_MODE)) == "live"
+        )
+        if live_opening:
+            try:
+                broker_snapshot = self.synchronize_broker_state()
+                account_snapshot = self._refresh_cycle_account()
+            except LIVE_TRADING_FALLBACK_EXC:
+                broker_snapshot = None
+                account_snapshot = None
+            if (
+                not isinstance(order, dict)
+                or broker_snapshot is None
+                or not bool(getattr(broker_snapshot, "fresh", False))
+                or not bool(getattr(broker_snapshot, "positions_fresh", False))
+                or not bool(getattr(broker_snapshot, "open_orders_fresh", False))
+                or account_snapshot is None
+            ):
+                _mark_precheck_failure("live_broker_snapshot_unavailable")
+                logger.warning("LIVE_PRETRADE_BROKER_SNAPSHOT_UNAVAILABLE")
+                return False
+            order["account_snapshot"] = account_snapshot
+            order["positions"] = tuple(getattr(broker_snapshot, "positions", ()) or ())
+            order["open_orders"] = tuple(getattr(broker_snapshot, "open_orders", ()) or ())
+        elif not closing_position:
+            if account_snapshot is None:
+                account_snapshot = self._get_account_snapshot()
+                if isinstance(order, dict):
+                    order["account_snapshot"] = account_snapshot
             if isinstance(order, dict):
-                order["account_snapshot"] = account_snapshot
-        if isinstance(order, dict) and not closing_position:
-            broker_snapshot = getattr(self, "_broker_sync", None)
-            if broker_snapshot is None:
-                sync_fn = getattr(self, "synchronize_broker_state", None)
-                if callable(sync_fn):
-                    try:
-                        broker_snapshot = sync_fn()
-                    except LIVE_TRADING_FALLBACK_EXC:
-                        broker_snapshot = None
-            if broker_snapshot is not None:
-                order.setdefault("positions", tuple(getattr(broker_snapshot, "positions", ()) or ()))
-                order.setdefault("open_orders", tuple(getattr(broker_snapshot, "open_orders", ()) or ()))
+                broker_snapshot = getattr(self, "_broker_sync", None)
+                if broker_snapshot is None:
+                    sync_fn = getattr(self, "synchronize_broker_state", None)
+                    if callable(sync_fn):
+                        try:
+                            broker_snapshot = sync_fn()
+                        except LIVE_TRADING_FALLBACK_EXC:
+                            broker_snapshot = None
+                if broker_snapshot is not None:
+                    order.setdefault("positions", tuple(getattr(broker_snapshot, "positions", ()) or ()))
+                    order.setdefault("open_orders", tuple(getattr(broker_snapshot, "open_orders", ()) or ()))
 
         if not closing_position:
             exposure_settings = self._resolve_exposure_normalization_settings()
@@ -32576,7 +32602,7 @@ class ExecutionEngine:
                 return False
             launch_profile_allowed, launch_profile_context = evaluate_launch_profile_order(
                 order,
-                execution_mode=str(EXECUTION_MODE or ""),
+                execution_mode=normalize_execution_mode(getattr(self, "execution_mode", EXECUTION_MODE)),
             )
             if not launch_profile_allowed:
                 self.stats.setdefault("capacity_skips", 0)
@@ -36406,8 +36432,16 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         try:
             snapshot = self._update_broker_snapshot(open_orders, positions)
         except LIVE_TRADING_FALLBACK_EXC:
-            logger.debug("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
-            snapshot = super().synchronize_broker_state()
+            logger.warning("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
+            cached = super().synchronize_broker_state()
+            return replace(
+                cached,
+                fresh=False,
+                open_orders_fresh=False,
+                positions_fresh=False,
+                last_error="broker_sync_update_failed",
+                failed_components=("open_orders", "positions"),
+            )
         snapshot.fresh = True
         snapshot.open_orders_fresh = True
         snapshot.positions_fresh = True

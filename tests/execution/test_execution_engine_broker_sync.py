@@ -7,7 +7,7 @@ import pytest
 from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
 from requests.exceptions import HTTPError
 
-from ai_trading.execution.engine import ExecutionEngine
+from ai_trading.execution.engine import BrokerSyncResult, ExecutionEngine
 from ai_trading.execution.live_trading import LiveTradingExecutionEngine
 from ai_trading.oms.event_store import EventStore
 from ai_trading.oms.intent_store import IntentStore
@@ -50,6 +50,22 @@ def test_update_broker_snapshot_tracks_open_quantities() -> None:
     assert getattr(engine, "_position_tracker", {}).get("AAPL") == 6
     # Synchronize should return cached snapshot without mutation.
     assert engine.synchronize_broker_state() is snapshot
+
+
+def test_live_broker_sync_update_failure_never_marks_cached_state_fresh(monkeypatch) -> None:
+    engine = LiveTradingExecutionEngine.__new__(LiveTradingExecutionEngine)
+    engine.trading_client = object()
+    engine._broker_sync = BrokerSyncResult((), (), {}, {}, 1.0)
+    monkeypatch.setattr(engine, "_fetch_broker_state", lambda: ([], []))
+    monkeypatch.setattr(engine, "_fetch_account_state", lambda: (None, None))
+    monkeypatch.setattr(engine, "_reconcile_durable_intents", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_update_broker_snapshot", lambda *_args: (_ for _ in ()).throw(OSError("storage failed")))
+
+    snapshot = engine.synchronize_broker_state()
+    assert snapshot.fresh is False
+    assert snapshot.open_orders_fresh is False
+    assert snapshot.positions_fresh is False
+    assert snapshot.last_error == "broker_sync_update_failed"
 
 
 def test_update_broker_snapshot_preserves_fractional_quantities() -> None:
