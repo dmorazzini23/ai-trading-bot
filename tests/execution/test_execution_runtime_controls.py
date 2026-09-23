@@ -2604,6 +2604,154 @@ def test_submit_cover_order_uses_market_order_request(monkeypatch):
     assert not hasattr(req, "reduce_only")
 
 
+def test_live_cover_uses_fresh_broker_truth_and_durable_identity(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    events: list[str] = []
+
+    class MarketReq:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class Client:
+        def submit_order(self, *, order_data):
+            events.append("broker_submit")
+            assert order_data.qty == 2
+            return SimpleNamespace(id="broker-cover", client_order_id=order_data.client_order_id,
+                                   status="new", filled_qty="0")
+
+    class Store:
+        def get_open_intents(self):
+            return []
+
+    def _begin(**kwargs):
+        events.append("durable_claim")
+        assert kwargs["metadata"]["account_id"] == "account-1"
+        return kwargs["intent_id"]
+
+    def _sync(**kwargs):
+        events.append("durable_ack")
+        assert kwargs["order_id"] == "broker-cover"
+        return kwargs["intent_id"]
+
+    engine.trading_client = Client()
+    engine.order_manager = SimpleNamespace(_intent_store=Store(),
+                                           begin_external_order_lifecycle=_begin,
+                                           sync_external_order_state=_sync)
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", side="short"),),
+        open_orders=(),
+    )
+    engine._refresh_cycle_account = lambda: {"id": "account-1"}
+    engine._assert_submit_owner = lambda: events.append("owner_checked")
+    monkeypatch.setattr(lt, "MarketOrderRequest", MarketReq)
+    monkeypatch.setattr(lt, "OrderSide", SimpleNamespace(BUY="buy"))
+    monkeypatch.setattr(lt, "TimeInForce", SimpleNamespace(DAY="day"))
+
+    assert engine._submit_cover_order("AAPL", 2) is True
+    assert events == ["durable_claim", "owner_checked", "broker_submit", "durable_ack"]
+    assert engine._last_cover_order_quantity == 2
+
+
+def test_live_cover_blocks_stale_broker_or_unresolved_intent_before_submit():
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    calls: list[str] = []
+    engine.trading_client = SimpleNamespace(submit_order=lambda **_kwargs: calls.append("submit"))
+    engine._position_tracker = {"AAPL": -3}
+    engine._refresh_cycle_account = lambda: {"id": "account-1"}
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=False, positions_fresh=False, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", side="short"),),
+        open_orders=(),
+    )
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert calls == []
+
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="-3", side="long"),),
+        open_orders=(),
+    )
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert calls == []
+
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", side="short"),),
+        open_orders=(SimpleNamespace(symbol="AAPL"),),
+    )
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert calls == []
+
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", side="short"),),
+        open_orders=None,
+    )
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert calls == []
+
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", side="short"),),
+        open_orders=(),
+    )
+    engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(get_open_intents=lambda: [SimpleNamespace(symbol="AAPL")]),
+        begin_external_order_lifecycle=lambda **_kwargs: calls.append("claim"),
+    )
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert calls == []
+
+
+def test_live_cover_lost_broker_response_keeps_intent_unresolved(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    attempts: list[str] = []
+    unresolved: list[Any] = []
+
+    class Store:
+        def get_open_intents(self):
+            return list(unresolved)
+
+    def _begin(**kwargs):
+        unresolved.append(SimpleNamespace(symbol="AAPL", intent_id=kwargs["intent_id"]))
+        return kwargs["intent_id"]
+
+    def _submit(*, order_data):
+        attempts.append(order_data.client_order_id)
+        raise TimeoutError("accepted response lost")
+
+    class MarketReq:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    engine.trading_client = SimpleNamespace(submit_order=_submit)
+    engine.order_manager = SimpleNamespace(
+        _intent_store=Store(), begin_external_order_lifecycle=_begin,
+        record_external_submit_error=lambda **_kwargs: pytest.fail("uncertain intent reset"),
+    )
+    engine.synchronize_broker_state = lambda: SimpleNamespace(
+        fresh=True, positions_fresh=True, open_orders_fresh=True,
+        positions=(SimpleNamespace(symbol="AAPL", qty="3", side="short"),),
+        open_orders=(),
+    )
+    engine._refresh_cycle_account = lambda: {"id": "account-1"}
+    engine._assert_submit_owner = lambda: None
+    monkeypatch.setattr(lt, "MarketOrderRequest", MarketReq)
+    monkeypatch.setattr(lt, "OrderSide", SimpleNamespace(BUY="buy"))
+    monkeypatch.setattr(lt, "TimeInForce", SimpleNamespace(DAY="day"))
+
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert engine._submit_cover_order("AAPL", 2) is False
+    assert len(attempts) == 1
+    assert len(unresolved) == 1
+
+
 def test_order_flip_blocks_unconfirmed_cancellation(monkeypatch):
     engine = _engine_stub()
     order = SimpleNamespace(id="sell-1", side="sell", status="open")

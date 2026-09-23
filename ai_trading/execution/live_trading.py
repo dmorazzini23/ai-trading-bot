@@ -25297,6 +25297,8 @@ class ExecutionEngine:
     def safe_submit_order(self, *args: Any, **kwargs: Any) -> str:
         """Submit an order and always return a string identifier."""
 
+        if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
+            raise RuntimeError("DIRECT_LIVE_SUBMIT_REQUIRES_CANONICAL_PRETRADE")
         self._assert_submit_owner()
         submit = getattr(self.trading_client, "submit_order", None)
         if not callable(submit):
@@ -25964,12 +25966,86 @@ class ExecutionEngine:
         self._last_cover_order_quantity = 0
         if client is None:
             return False
-        short_qty = self._position_quantity(symbol)
+        live_mode = normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live"
+        manager = getattr(self, "order_manager", None)
+        intent_id: str | None = None
+        client_order_id: str | None = None
+        if live_mode:
+            try:
+                snapshot = self.synchronize_broker_state()
+                account = self._refresh_cycle_account()
+            except LIVE_TRADING_FALLBACK_EXC:
+                logger.warning("COVER_BROKER_STATE_UNAVAILABLE", exc_info=True)
+                return False
+            if (not bool(getattr(snapshot, "fresh", False))
+                    or not bool(getattr(snapshot, "positions_fresh", False))
+                    or not bool(getattr(snapshot, "open_orders_fresh", False))
+                    or getattr(snapshot, "positions", None) is None
+                    or getattr(snapshot, "open_orders", None) is None
+                    or not _extract_value(account, "id", "account_id")):
+                logger.warning("COVER_BROKER_STATE_UNAVAILABLE")
+                return False
+            matching = [
+                position for position in (getattr(snapshot, "positions", ()) or ())
+                if str(_extract_value(position, "symbol") or "").upper() == symbol.upper()
+            ]
+            if len(matching) != 1:
+                return False
+            position = matching[0]
+            position_qty = _safe_float(_extract_value(position, "qty", "quantity"))
+            position_side = self._normalized_order_side(_extract_value(position, "side"))
+            if (position_qty is None or position_qty == 0
+                    or position_side in {"buy", "sell"}
+                    or (position_side != "sell_short" and position_qty > 0)):
+                return False
+            short_qty = -abs(position_qty)
+            if any(
+                str(_extract_value(open_order, "symbol") or "").upper() == symbol.upper()
+                for open_order in (getattr(snapshot, "open_orders", ()) or ())
+            ):
+                logger.warning("COVER_OPEN_ORDER_CONFLICT", extra={"symbol": symbol})
+                return False
+        else:
+            short_qty = self._position_quantity(symbol)
         if short_qty >= 0:
             return False
         cover_qty = min(abs(short_qty), max(int(requested_qty), 0))
         if cover_qty <= 0:
             return False
+        if live_mode:
+            store = getattr(manager, "_intent_store", None)
+            begin_fn = getattr(manager, "begin_external_order_lifecycle", None)
+            if store is None or not callable(begin_fn):
+                return False
+            try:
+                if any(
+                    str(getattr(intent, "symbol", "")).upper() == symbol.upper()
+                    for intent in store.get_open_intents()
+                ):
+                    logger.warning("COVER_UNRESOLVED_INTENT", extra={"symbol": symbol})
+                    return False
+                client_order_id = _stable_order_id(
+                    symbol, "cover", quantity=cover_qty, order_type="market"
+                )
+                claimed = begin_fn(
+                    intent_id=client_order_id,
+                    idempotency_key=client_order_id,
+                    symbol=symbol.upper(),
+                    side="buy",
+                    quantity=float(cover_qty),
+                    decision_ts=datetime.now(UTC).isoformat(),
+                    metadata={
+                        "source": "opposite_side_cover",
+                        "closing_position": True,
+                        "account_id": str(_extract_value(account, "id", "account_id")),
+                    },
+                )
+                intent_id = str(claimed or "").strip() or None
+            except OMS_INTENT_STATUS_READ_EXC:
+                logger.warning("COVER_DURABLE_INTENT_UNAVAILABLE", exc_info=True)
+                return False
+            if intent_id is None:
+                return False
         try:
             self._assert_submit_owner()
             market_cls, _limit_cls, side_enum, tif_enum = _ensure_request_models()
@@ -25978,16 +26054,43 @@ class ExecutionEngine:
                 qty=cover_qty,
                 side=side_enum.BUY,
                 time_in_force=tif_enum.DAY,
-                client_order_id=_stable_order_id(symbol, "cover"),
+                client_order_id=client_order_id or _stable_order_id(symbol, "cover"),
                 position_intent=_enum_member(PositionIntent, "BUY_TO_CLOSE"),
             )
-            client.submit_order(order_data=req)
+            response = client.submit_order(order_data=req)
         except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.warning(
                 "COVER_ORDER_SUBMIT_FAILED",
-                extra={"symbol": symbol, "quantity": cover_qty, "error": str(exc)},
+                extra={
+                    "symbol": symbol, "quantity": cover_qty, "error": str(exc),
+                    "intent_id": intent_id,
+                    "submit_outcome_uncertain": bool(live_mode and intent_id),
+                },
             )
             return False
+        if live_mode:
+            order_id = _extract_value(response, "id", "order_id")
+            response_client_id = _extract_value(response, "client_order_id")
+            if not order_id or (response_client_id and str(response_client_id) != client_order_id):
+                logger.warning("COVER_ORDER_ACK_UNVERIFIED", extra={"symbol": symbol})
+                return False
+            sync_fn = getattr(manager, "sync_external_order_state", None)
+            if not callable(sync_fn):
+                return False
+            try:
+                synced_intent_id = sync_fn(
+                    intent_id=intent_id, order_id=str(order_id),
+                    client_order_id=client_order_id,
+                    status=_extract_value(response, "status") or "new",
+                    filled_qty=_extract_value(response, "filled_qty"),
+                    fill_price=_extract_value(response, "filled_avg_price", "avg_fill_price"),
+                )
+                if str(synced_intent_id or "") != intent_id:
+                    logger.warning("COVER_DURABLE_ACK_UNVERIFIED", extra={"symbol": symbol})
+                    return False
+            except OMS_INTENT_STATUS_READ_EXC:
+                logger.warning("COVER_DURABLE_ACK_FAILED", exc_info=True)
+                return False
         logger.info(
             "COVER_ORDER_SUBMITTED",
             extra={"symbol": symbol, "quantity": cover_qty},

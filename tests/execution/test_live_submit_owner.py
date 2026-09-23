@@ -24,7 +24,7 @@ def test_live_raw_submit_paths_fail_before_broker_without_owner(mode: str) -> No
     engine = _engine(mode, None)
     engine._position_quantity = lambda _symbol: -2
 
-    with pytest.raises(RuntimeError, match="OMS_SUBMIT_OWNER_UNAVAILABLE"):
+    with pytest.raises(RuntimeError, match="DIRECT_LIVE_SUBMIT_REQUIRES_CANONICAL_PRETRADE"):
         engine.safe_submit_order(order_data=object())
     with pytest.raises(RuntimeError, match="OMS_SUBMIT_OWNER_UNAVAILABLE"):
         engine._submit_order_to_alpaca({"symbol": "AAPL", "side": "buy"})
@@ -37,6 +37,8 @@ def test_paper_and_owned_live_paths_preserve_owner_check_boundary() -> None:
     live_engine = _engine("live", store)
     live_engine._assert_submit_owner()
     assert checked == ["checked"]
+    with pytest.raises(RuntimeError, match="DIRECT_LIVE_SUBMIT_REQUIRES_CANONICAL_PRETRADE"):
+        live_engine.safe_submit_order(order_data=object())
 
     paper_engine = _engine("paper", None)
     paper_engine._assert_submit_owner()

@@ -31,8 +31,15 @@ approve a live profile or claim that all runtime-only settings are captured.
 
 The canonical engine's market, limit, replacement and cover submissions now
 check the live OMS owner immediately before reaching the Alpaca SDK. The
-standalone `alpaca_api.submit_order` and `bot_engine.safe_submit_order` helpers
-reject live mode; they remain available for their supported paper/test use.
+standalone `alpaca_api.submit_order`, `bot_engine.safe_submit_order`, and
+`ExecutionEngine.safe_submit_order` helpers reject live mode; they remain
+available for their supported paper/test use. A live opposite-side cover now
+requires fresh broker positions and open orders, an account identity, and a
+durably claimed OMS intent before submission. An ambiguous broker response
+leaves that intent unresolved for identity-based reconciliation. The lower-level
+`ExecutionEngine._submit_order_to_alpaca` boundary and replacement paths still
+need proof that every live caller has completed the canonical pretrade and OMS
+claim before live activation.
 The existence of these helpers is not evidence of current runtime use. The current
 paper service reports `paper_trade`, diagnostic-only operation and a blocked
 qualified-model readiness gate; this is a September 23 observation, not a
