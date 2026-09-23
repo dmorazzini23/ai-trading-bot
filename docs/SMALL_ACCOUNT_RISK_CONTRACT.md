@@ -1,10 +1,14 @@
-# Small-account live risk contract — pending owner limits
+# Small-account live risk contract — selected limits, evidence gate pending
 
 This contract defines the evidence and calculations required before any new
-live exposure. It is **not activated**. The owner has not yet defined whether
-the stated 3% maximum drawdown means a daily limit, loss from starting capital,
-or peak-to-trough equity loss, nor supplied a separate daily-loss limit if
-needed. No numeric loss or drawdown threshold is approved by this document.
+live exposure. It is **not activated**. On September 23 the owner delegated
+selection of the earlier rough 3% estimate. The selected policy is a 3%
+peak-to-trough, cash-flow-adjusted account-equity drawdown ceiling and a
+separate 1% daily account-equity loss ceiling. These are limits on new exposure,
+not a guaranteed maximum realized loss or permission to trade live. At an
+initial verified $1,000 account balance, the reference amounts are $30 and
+$10; at $2,000 they are $60 and $20. Actual dollar limits must be computed from
+verified same-account baselines, not the paper account or these examples.
 The current paper profile and all model/replay/promotion gates remain in force.
 
 ## One account and one capital base
@@ -27,28 +31,39 @@ An accepted-but-unacknowledged order reserves its full requested quantity
 until identity and cumulative fill state are reconciled. Missing quantities,
 prices, sides, account IDs, timestamps or broker availability block new risk.
 
-## Loss definitions to be approved
+## Selected loss definitions and limits
 
-- **Daily loss:** adjusted equity at the start of the broker trading day minus
+- **Daily loss (1% ceiling):** adjusted equity at the start of the broker trading day minus
   current adjusted equity, floored at zero. This includes realized and
   unrealized P&L and actual posted fees; cash movements must be neutralized
   from the comparison. An estimated cost is disclosed separately and may be
-  reserved conservatively, but cannot become a verified fee.
+  reserved conservatively, but cannot become a verified fee. Divide by the
+  verified session-start adjusted equity, fixed for that trading day; block
+  new exposure at or above 1% or when the denominator is unavailable.
 - **Loss from starting capital:** approved starting-capital reference plus
   subsequent external cash flows minus current adjusted equity, floored at
   zero. A missing opening reference blocks this measurement; it must not be
   invented from later equity.
-- **Peak-to-trough drawdown:** highest verified cash-flow-adjusted equity since
+- **Peak-to-trough drawdown (3% ceiling):** highest verified cash-flow-adjusted equity since
   the approved start, minus current adjusted equity, divided by that peak.
   The high-water mark must persist across restarts and cannot reset at session
-  rollover. A corrupted or missing high-water record blocks new risk.
+  rollover. Block new exposure at or above 3%. A corrupted or missing
+  high-water record blocks new risk.
 
-The owner must choose the 3% meaning and approve a separate daily-loss bound
-if 3% is not daily. Limits must be expressed in both percentage and dollar
-terms for the actual account capital. The final enforcement must use the more
-restrictive of applicable limits and include a buffer for outstanding orders
-and unknown execution costs. A software threshold cannot guarantee realized
-loss when markets gap or broker execution is delayed.
+The owner has delegated the numeric choice above. The final enforcement must
+use the more restrictive of the daily and drawdown limits, apply them to
+realized and unrealized equity changes, and reserve capacity for outstanding
+orders and conservatively estimated execution costs. If the potential loss of
+an opening order cannot be bounded with verified exposure, it cannot consume
+the remaining budget safely and must be denied. A software threshold cannot
+guarantee realized loss when markets gap or broker execution is delayed. The
+existing `live_canary` profile's static $25 daily-loss default is not the
+selected 1% account-sized limit; it grants no authority to open live positions.
+These percentages are conservative operator choices within the owner's rough
+risk tolerance, not parameters optimized on paper trades or evidence of profit.
+[FINRA's stop-order guidance](https://www.finra.org/investors/insights/stop-orders-factors-consider-during-volatile-markets)
+notes that a triggered stop can execute far from its stop price during volatile
+markets. The account loss ceilings are opening gates, not price guarantees.
 
 ## Authorization and safe reduction
 
@@ -83,7 +98,7 @@ a verified source is implemented. A future implementation must derive loss
 from fresh same-account broker equity and reconciled cash/activity evidence,
 and block when any input is unknown. These checks do not establish a durable
 high-water baseline,
-approved loss thresholds, or proof that every direct broker submission and
+enforcement of the selected loss thresholds, or proof that every direct broker submission and
 live reduction path enforces this contract. The separate live-owner fence and
 model/replay gates still apply.
 
@@ -97,8 +112,8 @@ Consequently, a missing or date-only activity cannot certify that no intraday
 cash movement affected the equity comparison. Live loss evidence must remain
 blocked when that timing or completeness cannot be verified.
 
-Approval of the two numeric loss decisions; a single canonical evaluator wired
-to every opening submission path; same-account, timestamped broker evidence for
+The selected numeric limits must be implemented in a single canonical evaluator
+wired to every opening submission path, with same-account, timestamped broker evidence for
 all inputs; durable high-water and session baselines; corruption, rollover,
 restart, concurrent-submit, stale-state and ambiguous-order tests; an isolated
 broker fault/restore rehearsal; passing code and replay gates; after-close

@@ -1,5 +1,802 @@
 # Current handoff
 
+## September 23 owner decisions and CI (in progress)
+
+The owner explicitly authorized pushing local main through `18ce1c10e` to the
+public GitHub repository. The fast-forward push succeeded; GitHub CI run
+`35888651186` is in progress for that exact SHA. CodeQL, Workflow Lint and
+SBOM passed, as did the CI research, replay and determinism jobs; the main
+test job remains in progress. No deployment is authorized by a running check.
+The owner also delegated selection of the rough 3% risk limit:
+the proposed live-capital contract now uses 3% verified peak-to-trough equity
+drawdown and a separate 1% verified daily equity loss limit. At $1,000/$2,000
+initial capital those reference amounts are $30/$60 and $10/$20. This policy
+is not enforced yet: same-account cash-flow-adjusted loss evidence, durable
+baselines and canonical live wiring remain missing, so live openings stay
+blocked. See `docs/SMALL_ACCOUNT_RISK_CONTRACT.md`. All model, replay, cost,
+freshness, provenance, promotion and holdout gates remain unchanged.
+
+## September 23 off-host recovery evidence limit (`18ce1c10e`, pushed, not deployed)
+
+Read-only `GetBucketVersioning` on the configured S3 backup bucket returned
+`AccessDenied` (HTTP 403) at 11:22 UTC. The backup-sync timer is still disabled
+and inactive. The earlier complete prefix listing showed zero recovery objects;
+the enabled 30-day lifecycle rule therefore does not establish an off-host
+restore point. Verify versioning with an authorized identity, then after a
+CI-approved backup deployment, read back a real bundle and restore it in
+isolation. No AWS resource, timer or runtime state was changed.
+
+The `local only` labels below describe the state when each milestone was
+written. The commits through `18ce1c10e` are now pushed, but not deployed.
+
+## September 23 live low-level quantity guard (`c273deecd`, local, not deployed)
+
+The live `_submit_order_to_alpaca` claimed-intent check allowed a zero request
+quantity (and a zero intent quantity) to reach the Alpaca SDK. A broker-stub
+regression reproduced the zero request reaching `submit_order`. The guard now
+requires both quantities to be strictly positive before broker submission;
+valid positive claimed orders remain allowed. No strategy or owner threshold
+changed. Changed-file Ruff, mypy, compile and 20 mapped tests passed. Read-only
+health: service active with NRestarts=3, HTTP 503 solely for
+`required_model_stale`, fresh broker with zero positions/open orders; the
+non-sending incident snapshot stayed `blocked_qualification`. No order, alert,
+restart or deployment occurred. CI, after-close exposure review and deployment
+remain pending.
+
+## September 23 paper uncertain-order follow-up (`155f357be`, local, not deployed)
+
+The paper submit retry fix still let an accepted order with a lost response
+reset its durable intent from `SUBMITTING` to `PENDING_SUBMIT`; the opening gate
+then saw no unknown exposure. `execute_order` now retains `SUBMITTING` for
+ambiguous paper exceptions, failed 5xx/no-result outcomes and an empty broker
+response. Definite 400 rejections remain terminal. Parameterized live/paper,
+direct-timeout and definite-rejection tests passed with the execution and
+process-fault suites (65 tests plus the added direct-timeout test). Changed-file
+Ruff, mypy, compile and 44 mapped tests passed. Live read-only health: active
+service, HTTP 503 solely for `required_model_stale`, fresh broker and zero
+positions/open orders; non-sending snapshot `blocked_qualification`. CI,
+after-close release review and deployed
+session evidence are still pending. Do not restart or deploy during market
+hours, and do not infer any improvement in trade expectancy from this safety
+correction.
+
+A follow-up (`63a203c99`, local only) uses the real SQLite `IntentStore` and `OrderManager` with
+a simulated paper submit timeout. It confirms one submit claim remains
+`SUBMITTING`, blocks new openings and still permits closing. The repository
+changed-file validator passed Ruff, mypy, compile and 43 tests for this test-only
+change; no broker request or runtime mutation occurred.
+
+## Current decision and next gate (September 23)
+
+GitHub `main` now contains `18ce1c10e`, with CI in progress on that SHA.
+Before the push, `make secret-scan` passed on tracked files and an added-line
+scan across all 44 outgoing commits found zero likely live credential
+assignments. These checks do not replace a completed CI run.
+
+The local paper service remains deployed at the earlier release; nothing in
+these commits and nothing in this goal has been deployed. The paper service is
+active with NRestarts=3, fresh broker state and zero positions/open orders;
+readiness remains blocked by `required_model_stale`. Preserve the September
+9–December 8 holdout and all consumed research budgets. No strategy trial or
+live activation is authorized.
+Deployment remains on hold until CI, after-close exposure
+review, release identity and rollback checks pass.
+
+September 23 no-blind-retry correction (`f4344a294`, local only): a paper
+submit timeout or native 504 was retried up to three times after broker lookup
+failed, and the outer `bot_engine.submit_order` facade added another API-error
+retry layer. New tests reproduced three attempts for one ambiguous result.
+The engine now stops paper as well as live retries on ambiguous broker submit
+outcomes; the outer facade submits once through the engine. Definite 429
+rejections retain the engine's bounded retry with the same client order ID.
+Changed-file validation passed Ruff, mypy, compile and 23 mapped tests;
+48 execution/runtime tests and 23 process-fault/error tests passed separately.
+Read-only host smoke: service active, HTTP 503 for the existing
+`required_model_stale` gate, broker fresh with zero positions/open orders;
+non-sending snapshot `blocked_qualification`/`health_degraded`. No broker
+order, restart, alert or deployment occurred. Roll back the local fix by
+reverting `f4344a294`; CI and postdeployment session evidence remain required.
+
+| Goal area | Current status | Acceptance still missing |
+| --- | --- | --- |
+| Durable risk | Numeric policy selected; implementation blocked by source evidence | Verified same-account cash-flow-adjusted equity, durable baselines, 3% drawdown and 1% daily enforcement; live-path proof after CI/deployment. |
+| Crash recovery | Implemented and verified in isolated simulator; awaiting deployment/session evidence | CI, runtime adoption and naturally occurring uncertain-order reconciliation without duplicate submission. |
+| Disaster recovery | Local bundle and isolated restore verified; awaiting deployment and shared-store evidence | Scheduled backup/restore, off-host durability, real PostgreSQL two-owner drill and broker reconciliation on restored state. |
+| Supported path | Code-path guards/profile identity/extraction implemented; awaiting deployment | CI, reviewed release spec and postdeployment checks; live replacement child-OMS contract remains held. |
+| Unattended operation | Same-host connector and local alert state implemented; external dependency remains | Off-host failure detection, approved real delivery, operator receipt/acknowledgement and recovery drill. |
+| Accounting and evaluation | Synthetic account-size mechanics and cash audit implemented; fee/position evidence blocked | Precisely timed corporate actions, position boundaries and verified per-execution fees; no verified net strategy P&L. Retire the consumed negative replacement-model hypothesis. |
+
+Read-only September 23 10:45 UTC fee follow-up: the configured managed-secrets
+provider hydrated the existing paper credentials in process memory. A
+pagination-complete activity read from September 22 00:00 UTC returned eight
+broker fills, no fee activity rows, and no fill fee amount field.
+This does not prove zero fees or future posting completeness; verified net P&L
+remains unavailable. No order, data purchase, or source-record rewrite occurred.
+See `docs/ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
+
+Small-account evaluation follow-up (`ea30ee66d`, local only): `small_account_capacity`
+previously treated a missing estimated fee as a zero cash reserve while still
+returning feasible shares. A full-cash $1,000 fixture reproduced the optimistic
+result. Missing fee assumptions now return zero feasible shares with
+`estimated_fee_assumption_missing`; an explicitly supplied zero estimate remains
+an estimate, never a verified fee. Case/whitespace variants of the same symbol
+also silently overwrote position or pending-buy exposure; the evaluator now
+rejects those ambiguous inputs. Seven focused tests and changed-file Ruff,
+mypy and compile checks pass after the duplicate-symbol fix. This is offline
+mechanical evaluation, not a
+live risk gate or strategy trial. No runtime service changed. Run CI on this
+exact tip and retain the separate broker
+cash/equity and owner-limit acceptance gates.
+
+September 23 pre-push validation: a full local run was interrupted after
+multiple failures and a two-minute hang; **the full suite did not pass**. The
+focused triage fixed a genuine lazy Alpaca circular import and updated four
+regression fixtures/expectations for current broker error, account sync,
+missing-SDK, and staged unit behavior (`267dcdb0c`, local only). The changed-file
+validator passed Ruff, mypy, compile and 61 mapped tests; six import tests and
+11 focused HTTP/audit/socket tests also passed. The HTTP test hung inside even
+a minimal `asyncio.to_thread` call in the restricted sandbox and passed
+host-side. Ten audit/socket tests passed host-side with a temporary pycache.
+Other cached failures include sandbox-denied sockets/DNS and one ignored
+research scratch file scanned by a broad source test; these do not establish a
+passing CI run. No trading or strategy behavior changed. Next: obtain explicit
+approval for publishing the **final** commit range, run CI on that exact tip,
+resolve any CI failure, then review broker exposure and release identity after
+close before deployment. Keep deployment on hold meanwhile.
+
+CI-path test safety follow-up (`8afe4c61e`, local, not deployed): two full-suite tests used
+the real data-fetch path and could request Alpaca bars with CI's dummy
+credentials. The datetime test now uses a local Alpaca-style client and checks
+the timezone-aware arguments; the pretrade-health test supplies a local bar
+frame and asserts two checked symbols. Six tests in those files passed, plus
+changed-file Ruff, mypy and compile. No broker request or strategy trial ran.
+The full suite still has not been certified on the current tip; run CI after
+the public push is approved.
+
+Focused process-fault and live-submit tests were rechecked September 23:
+`22 passed` (`tests/integration/test_oms_process_faults.py` and
+`tests/execution/test_live_submit_owner.py`). The configured paper Trading API
+still has no observed complete per-fill total-fee evidence. Alpaca's separate
+Broker API Activity SSE can link some one-to-one fees, but period-wide charges
+have no parent execution; see `docs/ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
+No strategy, gate, order, deployment or notification changed in this check.
+
+Read-only infrastructure check at 09:17 UTC September 23: the installed
+`ai-trading-connectors.timer` is enabled and active, with a completed invocation
+at 09:17 and the next scheduled for 09:18. The runtime backup-sync timer is
+disabled and inactive. The deployed runtime environment names an S3 bucket and
+region, and the host AWS identity resolves, but `HeadBucket` returned HTTP 403
+and CloudWatch `DescribeAlarms` returned AccessDenied. The 403 does not prove
+that backup uploads are forbidden or that the bucket is absent; it does prevent
+this identity from validating off-host backup coverage through that read.
+CloudWatch alarm coverage also could not be inspected with the current identity.
+Follow-up at 10:48 UTC: `ListObjectsV2` succeeded for the configured backup
+prefix and returned zero keys with no truncation. The bucket has an enabled
+30-day lifecycle expiration rule covering that prefix; bucket versioning was
+not verified. `HeadBucket` 403 therefore did not prevent this narrower read.
+No off-host recovery bundle is currently visible at the configured prefix.
+After CI and release review, enable/test the backup unit, then read the remote
+bundle back and restore it in isolation before claiming off-host recovery.
+CloudWatch alarm coverage still needs authorized read evidence. No AWS resource
+was created or modified in these checks.
+
+Rollback for uninstalled commits is a scoped revert. For deployed code, use the
+reviewed release identity and isolated migration-aware restore process in
+`docs/RELEASE_IDENTITY.md` and `docs/RUNTIME_RECOVERY.md`; never overwrite an
+active OMS database or flatten exposure to make rollback convenient.
+
+## September 23 S3 backup handoff correction (`d86d5f721` local main, not deployed)
+
+The new recovery bundle already matches the uploader's `*.bak.*.gz` pattern and
+lives under its recursive runtime scan. A separate defect remained: with S3
+sync enabled, no staged archive made the script exit successfully; legacy-only
+archives could also appear to satisfy a sync while no authoritative recovery
+bundle was copied. The uploader now requires a `recovery_backups/recovery.bak.*.gz`
+member before calling AWS and returns nonzero when absent. Isolated fake-AWS
+tests cover empty/legacy-only inputs and positive bundle selection; no real S3
+write was made. Changed-file validation passed Ruff, mypy, compile, Bash syntax
+and 65 targeted tests. A read-only host smoke returned HTTP 503 for the existing
+`required_model_stale` gate; the non-sending incident snapshot reported
+`blocked_qualification` with `health_degraded`. An S3 read-back and restore
+remain required before claiming off-host recovery. Revert `d86d5f721` to roll
+back the local change; do not enable the timer before CI and release review.
+Follow-up `f8c9efaa8` fixes another uploader false success: S3 retention listing
+errors and object deletion errors were discarded after a successful upload. The
+script now returns nonzero with a safe failure class for either error. Two
+fake-AWS tests first reproduced zero exit status and now pass; a successful
+retention fixture also passes. Targeted validation passed Ruff, mypy, compile,
+Bash syntax and 68 tests. An ad hoc snapshot without the deployed environment
+initially probed the wrong port; repeating with packaged `:9001` reported
+`blocked_qualification` and `health_degraded`, matching direct HTTP 503
+`required_model_stale`. No S3 read/write, timer activation or notification was
+performed. CI, reviewed bucket list/delete permissions, remote read-back and
+isolated restore remain required. Roll back by reverting `f8c9efaa8`.
+Follow-up `1e72dd425`: an enabled retention pass also returned success for
+invalid days/delete-cap values and when the delete cap left older objects
+behind. Five isolated cases reproduced that false success; the script now
+returns nonzero for those cases. Eleven uploader tests and 73 targeted mapped
+tests passed with Ruff, mypy, compile and Bash syntax. The deployed environment
+has S3 sync enabled but uploader-side retention disabled; its 30-day setting
+does not prove remote retention, and bucket lifecycle could not be inspected.
+An ad hoc five-second health snapshot timed out while direct `/healthz` returned
+HTTP 503 for `required_model_stale`; a repeat with a ten-second bounded probe
+returned `blocked_qualification`/`health_degraded`. No live service or AWS
+resource changed. Before enabling remote retention, review its policy and
+permissions; before claiming off-host recovery, obtain a remote read-back and
+isolated restore. Roll back this local correction by reverting `1e72dd425`.
+
+## September 23 release identity preflight (`e455a40f8` local main, not deployed)
+
+The read-only `ai_trading.tools.release_identity` preflight compares a reviewed
+CI-tested commit, clean checkout, effective sanitized config/profile hashes,
+applied OMS migration and checkout migration head, and the exact configured
+model file/hash. It blocks missing or conflicting evidence, rejects extra spec
+fields, and writes a report without credentials or database URLs. The staged
+packaged unit checks identity before and after Alembic migration and syncs the
+runtime environment only once. Recovery bundles now include the spec and both
+identity reports. Six focused release tests plus recovery/manifest tests passed
+(16 total); the changed-file validator passed Ruff, mypy, compile, six mapped
+tests and `systemd-analyze verify`. The running unit was not replaced: the
+service remained active with NRestarts=0, HTTP 503 for `required_model_stale`,
+broker fresh with zero positions/open orders, and non-sending snapshot state
+`blocked_qualification`. A CI-approved candidate, valid release spec and model
+approval remain unavailable. An isolated SQLite migration rollback fixture
+(`0a0be6030` local main) passed:
+prior OMS revision and duplicate-sequence events were restored with
+`PRAGMA integrity_check=ok` after an upgrade to head. This does not establish
+rollback for a different deployed database engine or live broker state. Next:
+clean tested candidate and reviewed spec, deployment-engine rollback rehearsal,
+then CI/exposure review before after-close installation/restart. See
+`docs/RELEASE_IDENTITY.md`. Roll back the local unit change by reverting its
+commit; do not install the staged unit without the spec.
+The pre-migration check (`5671c6277` local main) also requires the applied
+revision to belong to the checkout's migration history; an unrelated revision
+blocks startup. Sixteen
+focused release/recovery/manifest tests passed after this change.
+
+Risk-contract investigation: the current live-profile daily-loss function
+accepts caller-provided `daily_loss_state` without account, timestamp or
+cash-flow proof. It is not a verified equity-loss control for the intended
+small live account. This is documented in `docs/SMALL_ACCOUNT_RISK_CONTRACT.md`
+(`020b2ecae` local main);
+no threshold or trading gate was relaxed. Next implementation needs a durable
+same-account equity baseline and activity reconciliation, then a fail-closed
+canonical evaluator and targeted live-path tests. The owner decision on 3%
+meaning and daily limit remains pending.
+
+Follow-up `443c8e429` local main (not deployed): canonical live openings discard
+strategy-provided `daily_loss_state`/`loss_state` after refreshing broker
+exposure, and the pure profile gate no longer reads a loss number from the
+account payload. This deliberately blocks live openings until a verified
+same-account, cash-flow-adjusted daily-loss source exists; paper behavior and
+closing-order paths are unchanged. The active service then restarted three
+times during Alpaca paper-account 504 timeouts: one native SDK `APIError`
+escaped `_fetch_account_state`, and subsequent startup AUTO sizing refused to
+guess capital after account timeouts. The local account-read patch catches the
+native error with the bounded read helper, clears stale cached account data,
+marks broker sync degraded with `failed_components=("account",)`, and blocks
+new openings while preserving the closing phase allowance. Targeted tests
+cover the 504, cached-account removal, opening block, and reduction allowance.
+The running unit has not been replaced; broker health later recovered fresh
+with zero positions/open orders, while readiness still reported
+`required_model_stale`. Changed-file validation passed Ruff, mypy, compile and
+338 mapped tests; 56 broker-sync/replay/degraded-gate checks also passed.
+Final host-side read-only checks: active service, NRestarts=3 (unchanged after
+07:54:51 UTC), HTTP 503 for `required_model_stale`, fresh broker with zero
+positions/open orders, non-sending state `blocked_qualification`. No restart,
+order, alert or deployment was performed by Codex. Next: CI and broker exposure
+review before any after-close deployment; build a durable equity/activity
+baseline before any live-capital proposal. Rollback is the scoped commit revert.
+Provider evidence boundary (`5ded97ef7` local main): Alpaca's prior-close
+`last_equity` and date-only
+nontrade activities cannot by themselves certify an intraday cash-flow-adjusted
+loss. The Trading API activity filter uses creation time and some charges post
+on a later day. This is now explicit in the risk contract; missing activity
+does not prove zero cash movement. The live loss gate remains blocked pending
+better source evidence or an approved conservative operational procedure.
+
+Broker contract review: Alpaca documents that `pending_new` orders cannot use
+its native replace endpoint and that a successful replacement response does
+not guarantee the old order was replaced. A safe cancel-and-resubmit therefore
+needs a new canonical decision, child OMS identity and parent/child reconciliation
+through fill/cancel races; the live helper remains held. See
+`docs/SUPPORTED_TRADING_PATH.md` and the official Alpaca order docs.
+
+Submission-path follow-up (`1653455b1` local main, not deployed): the real Alpaca/Tradier
+adapter submit methods now reject configured live mode before the client call.
+The short-cover and canonical low-level submit handlers now recognize the
+SDK's native `APIError` in addition to timeout/connection failures. For an
+ambiguous native 504, the live retry wrapper makes one attempt, retains the
+claimed OMS intent as `SUBMITTING`, and suppresses broker failover while
+identity-based reconciliation remains pending. Regression fixtures cover both
+adapters and native-504 cover/ordinary submissions. These changes preserve
+paper/test adapter behavior and do not relax live qualification or risk gates.
+Changed-file validation passed Ruff, mypy, compile and 316 mapped tests;
+314 focused adapter/execution/error tests and 30 replay/degraded-gate tests
+passed. The final mapped run included plain-text native-504
+regressions were added. Its sandboxed localhost smoke could not connect;
+the separate host-side read-only check did reach the service. Host checks:
+service active, NRestarts=3 (unchanged), HTTP 503
+for `required_model_stale`, fresh broker with zero positions/open orders;
+non-sending snapshot `blocked_qualification`. No order, alert, restart or
+deployment was performed by Codex. Next: CI and an after-close deployment
+review; the 3% meaning, daily loss limit and verified equity source remain
+outstanding. Roll back by reverting the scoped local commit.
+
+## September 23 local alert recovery and acknowledgement (`40ee9a8b7` local main, not deployed)
+
+The Slack incident helper previously retained its last signature when triggers
+cleared, so an identical future incident could be suppressed as a duplicate or
+by the previous incident's cooldown.
+It now records local resolution and preserves the prior incident while allowing
+the next occurrence to alert. A signature-matched `acknowledge_incident` tool
+records an operator locally without suppressing alerts or claiming notification
+receipt. A fake-webhook regression covers first alert, duplicate suppression,
+acknowledgement, silent recovery and recurrence. Changed-file validation passed
+Ruff, mypy, compile and 49 mapped tests. A non-sending snapshot reported
+`blocked_qualification`/`health_degraded`. No notification, service restart or
+deployment occurred. Off-host detection and actual delivery/acknowledgement
+remain external prerequisites for unattended live operation.
+Follow-up (`7c92d872c` local main, not deployed): a single unconfirmed health outage previously left pending state
+across a recovered probe or a deduplicated different incident. The next
+separate outage could then skip its first confirmation. Pending state now clears
+on either transition. Two isolated regressions and the full 51-test alert file
+passed with Ruff, mypy and compile; the non-sending snapshot remained
+`blocked_qualification`. No message or runtime action was sent.
+State-write follow-up (`5d86f7a90` local main, not deployed): the connector, acknowledgement and
+clear tools previously used unlocked read/modify/write on one incident JSON
+file. A concurrent timer run could overwrite an operator's local
+acknowledgement. They now share a same-host file lock and atomic fsynced
+replacement. A forced-overlap fake-webhook test and the full 52-test alert file
+passed with Ruff, mypy and compile. A non-sending snapshot remained
+`blocked_qualification`; no notification or deployment occurred. This remains
+local state, not verified external delivery or cross-host acknowledgement.
+
+## September 23 pending-order cancellation boundary (`ca7ff61d6` local main, not deployed)
+
+The live replacement helper introduced in `9f49d55ce` returns before its own
+cancel call, but pending-order maintenance can separately cancel the original
+when a replacement fails. That contradicted the earlier broad claim that the
+original always remained. Pending-order maintenance now checks broker closing
+`position_intent` or the matching durable OMS intent before automatic
+cancellation and preserves a verified closing order; stale opening orders
+retain the configured cancel policy. Fifteen targeted tests cover identity
+mismatch, opening and closing regressions. Changed-file validation passed Ruff,
+mypy, compile and 287 mapped tests; 28 replay/live gate tests passed. Host-side
+read-only health returned HTTP 503 solely for `required_model_stale`, broker
+fresh with zero positions/open orders, service active with NRestarts=0.
+The non-sending incident snapshot reported `health_degraded`. No restart,
+deployment or alert delivery occurred. The live replacement itself still needs
+a durable pretrade and identity contract. Rollback is a local commit revert.
+
+## September 23 low-level live submit boundary (`9f49d55ce` local main, not deployed)
+
+`_submit_order_to_alpaca` now requires a claimed canonical OMS intent with the
+same client ID, symbol, side and sufficient authorized quantity in live mode.
+After an ambiguous live broker result, `_execute_with_retry` makes no blind
+second submit; `execute_order` leaves the intent `SUBMITTING` instead of
+resetting it to `PENDING_SUBMIT` or marking an unverified rejection. The live
+cancel-and-resubmit limit replacement returns before canceling the original,
+because its new client ID has no durable replacement claim. Paper behavior is
+unchanged. Focused tests cover direct bypass, claimed-intent success, malformed
+quantities, lost and empty responses, and retained original order. The separate
+execution suite passed 705 tests after correcting a stale quote-policy test
+fixture that lacked a fake OMS store. The final finite-quantity and intent-ID
+guard then passed 45 focused tests; 28 replay/live gate tests passed. The
+changed-file validator passed lint, type, compile and 58 collected tests with
+`--market-hours --skip-runtime-smoke`; its default sandboxed localhost curl
+failed. Host-side read-only health returned HTTP
+503 for existing `required_model_stale`; broker was fresh with zero positions
+and open orders, service active with NRestarts=0. The non-sending incident
+snapshot completed and listed `edge_realism_gap_high`, `go_no_go_failed`,
+`go_no_go_failed_checks` and `health_degraded`; no alert was sent. No service
+restart or deployment occurred. The replacement path still needs a durable
+pretrade design before live activation. Rollback is a local commit revert.
+
+## September 23 direct-submit and short-cover follow-up (`fa6aaa380` local main, not deployed)
+
+The generic `ExecutionEngine.safe_submit_order` now rejects live mode because it
+does not carry canonical pretrade and OMS evidence. A live opposite-side short
+cover now refreshes broker positions, open orders and account identity; rejects
+stale, missing or conflicting position data and same-symbol pending orders or
+intents; claims a durable OMS intent before submitting with its client order
+identity; and records a verified broker acknowledgement. An ambiguous response
+leaves the intent unresolved so a later attempt cannot blindly resubmit.
+Paper behavior and strategy/model gates are unchanged. Focused tests cover
+successful cover, stale/conflicting state, an unresolved intent and a lost
+broker response. Changed-file validation passed Ruff, mypy, compile and 284
+mapped tests; 28 replay/live gate tests also passed. Its sandboxed curl failed;
+a separate host read-only health check returned HTTP 503 solely for existing
+`required_model_stale`, with fresh broker, zero positions/orders and active
+service (NRestarts=0). The non-sending incident snapshot reported
+`health_degraded`. The lower-level `_submit_order_to_alpaca` boundary and
+replacement callers still require pretrade/claim proof before live activation.
+No running service was changed or restarted. The scoped code and docs are
+committed on local main; continue the remaining direct-path proof. Rollback is
+a local commit revert.
+
+## September 23 live opening exposure evidence (`548fefd74` local main; awaiting deployment)
+
+The live-canary/profile exposure evaluator previously skipped positions or
+open orders with missing quantities/prices and used candidate price or cost
+basis as a fallback. It also trusted a caller's closing label without checking
+whether the requested quantity would flip the position. Live openings now fail
+closed on missing account identity, position/open-order snapshots, unknown
+current market value, unpriced pending orders, and account conflicts. A bounded
+reduction must fit the observed position. The canonical live precheck refreshes
+broker state and account for each opening, overwrites caller-supplied exposure
+arrays, and blocks stale/failed reads. A broker snapshot update failure remains
+stale, and the profile gate receives the engine's actual execution mode.
+
+Forty targeted profile/risk tests passed. Final
+`agent_validate_changed.sh --market-hours` passed Ruff, mypy, compile and 326
+mapped tests; its sandboxed localhost curl failed. Another 28 targeted
+replay/live gate tests passed. Separate host-side health reached the unchanged
+paper service: HTTP 503 from existing `required_model_stale`/replay flags,
+broker fresh with zero positions/open orders; active service and NRestarts=0.
+The non-sending incident snapshot reported `blocked_qualification`.
+
+This does not approve a 3% interpretation or daily-loss limit, implement a
+durable high-water mark, or prove every direct broker submit/reduction path.
+Next: close those paths with fresh same-account position/order evidence and
+durable OMS state, then validate an isolated live-profile simulation. No live
+activation, push or deployment occurred. Rollback is a local commit revert.
+
+## September 23 operational-state triage (`48e7308f3` local main; awaiting deployment)
+
+The separate connector timer was enabled and completed successfully at
+06:11 UTC; the older healthcheck timer was disabled. Its existing incident
+snapshot now labels healthy abstention, blocked qualification, degraded data,
+uncertain broker state, execution incident, unavailable monitoring and unknown
+degradation without changing `/healthz` readiness, alert triggers, delivery or
+trading gates. The label is advisory and is included in any future incident
+text. Forty-eight focused tests, Ruff, mypy and compile passed under
+`agent_validate_changed.sh --market-hours`; the sandboxed localhost curl was
+inaccessible. A separate host-side non-sending snapshot identified the current
+paper service as `blocked_qualification`, with existing `health_degraded`
+trigger, broker connected and `required_model_stale`. No notification was sent.
+
+This same-host timer can detect application failure while the host stays up;
+it cannot detect loss of the host or its own timer. Off-host heartbeat,
+notification approval, acknowledgement and recovery verification remain
+required for unattended live use. The commit is not pushed or deployed.
+Rollback is a local commit revert; preserve the original incident snapshot and
+readiness controls.
+
+## September 23 account equity boundary capture (`5a93ef693` local main; awaiting session evidence)
+
+`ai_trading.tools.broker_accounting_evidence.capture` now records the cash,
+equity, currency and observation time returned by the existing read-only broker
+account call. `reconcile_account_equity` and optional CLI account-boundary flags
+audit cash effects from identified broker executions and precisely timed USD
+cash activities between two same-account boundaries. Date-only charges, missing
+amounts, identity conflicts and any cash difference remain unverified. The
+report shows observed equity/position-value changes without granting verified
+net-strategy performance or allocating account fees to fills. September 22
+lacks the new boundaries, so its seven unknown verified fees remain unknown.
+No broker order, experiment, strategy change or protected holdout evaluation ran.
+
+Changed-file validation passed Ruff, mypy, compile and 10 mapped tests; the
+sandboxed health curl was inaccessible. After the CLI regression was added,
+12 focused tests plus file Ruff/mypy/compile passed. Separate read-only
+health at about 06:02 UTC reached the unchanged paper service: HTTP 503 from
+existing `required_model_stale`/replay flags, broker fresh with zero positions
+and open orders. This commit is neither pushed nor deployed. After CI and a
+safe after-close deployment, capture two future, time-aligned account
+boundaries and covering activities; inspect any date-only fees and corporate events as
+unresolved, then compare broker cash/equity with separate position and fee
+evidence. No historical net P&L claim follows from this patch.
+Corporate-action follow-up (`1e9eaa215` local main, not deployed): the cash audit now reports
+observed cash distributions and position-changing corporate actions with their
+timing relation to the boundary. A timestamped zero-cash split can still have
+`cash_reconciled` status, but its position effect remains explicitly unverified;
+a date-only split remains unplaced and makes the cash interval unverified.
+Fourteen focused/mapped tests, Ruff, mypy and compile passed. This does not
+resolve the absence of position boundaries, causal times for broker nontrade
+rows, or per-execution total fees. No source record or trading gate changed.
+
+## September 23 submit-owner fence (`2ea228e91` local main; awaiting PostgreSQL and deployment evidence)
+
+Live `OrderManager` initialization now requires an exclusive PostgreSQL session
+advisory lock on the authoritative OMS database. A second owner cannot start;
+lost or forked owner sessions fail closed at the submit claim and immediately
+before the canonical broker SDK call. Standalone `alpaca_api.submit_order` and
+`bot_engine.safe_submit_order` reject live mode. Paper/diagnostic behavior and
+all model, replay and research gates remain unchanged. No live order was sent.
+
+Changed-file validation (`bash scripts/agent_validate_changed.sh --market-hours`)
+passed Ruff, mypy, compile and 44 mapped tests; its sandboxed localhost curl
+could not connect. Separate read-only health at 05:54 UTC reached the unchanged
+paper service: HTTP 503 for existing `required_model_stale` and replay flags,
+fresh broker with zero positions/open orders, active service and NRestarts=0.
+The non-sending incident snapshot passed structurally and reported
+`health_degraded`. Synthetic two-process owner/loss tests pass, but there is no
+configured live PostgreSQL database to prove two real hosts, lock loss, or
+failover. Before deployment, run CI, check broker exposure, and perform an
+isolated same-database PostgreSQL standby/restore drill. Do not start live
+trading on this evidence alone. Rollback is the local commit revert; preserve
+the prior operational stop/revoke fence during recovery.
+
+## September 23 phased trading-system hardening (in progress)
+
+Goal: implement six areas in dependency order: risk-state integrity and an
+approved small-account risk contract; isolated OMS crash recovery; demonstrated
+backup/restore; supported runtime profile and path map; unattended operation and
+deployment identity; and account-size accounting/evaluation. No live activation,
+new strategy experiment, holdout use, or change to model/promotion gates is
+authorized. The owner's 3% drawdown meaning and a separate daily-loss limit
+were requested asynchronously; thresholds remain unchanged pending that answer.
+
+First risk-state milestone, committed locally as `687e516ca`:
+`ai_trading/runtime/live_canary.py`
+now rejects malformed, unreadable, future-dated, and missing historical canary
+state. A lock serializes enforced-profile evaluations. The event journal is
+fsynced before the snapshot so an ambiguous write consumes budget
+conservatively; same-day journal attempts are reconciled with the snapshot.
+A persistent initialization marker distinguishes a fresh empty directory from
+loss of both state and event files after initialization. New regression cases
+cover corruption, missing history, journal-ahead restart, valid rollover,
+future date, and concurrent attempts. `tests/runtime/test_live_canary.py`: 20
+passed. `agent_validate_changed.sh --market-hours` passed lint, type, compile,
+and 20 mapped tests; its sandboxed localhost curl failed. A separate read-only
+health call reached
+the active paper service: broker fresh with zero positions/open orders; readiness
+503 remains due to `required_model_stale`, and replay parity remains flagged.
+The service has not been restarted for this worktree change.
+
+Second OMS milestone, committed locally as `d29bf1049`: stale `SUBMITTING` intents previously
+became `FAILED` before broker lookup, and `claim_for_submit` could reclaim them
+after a timeout. Both permitted a duplicate after an accepted-but-lost broker
+response. Reconciliation now checks broker identity, links accepted/partial/
+terminal responses, and leaves unknown outcomes open with a warning; claiming
+is limited to `PENDING_SUBMIT`. Isolated process tests persist simulated broker
+acceptance, terminate before local acknowledgement, then verify restart,
+partial fill, fill/cancel race, and no duplicate claim. Focused OMS checks:
+21 passed after updating an older test that expected the unsafe stale close.
+The initial mapped validator had 718 passed/one failed at that old expectation;
+the rerun passed lint, type, compile and 45 mapped tests. Its sandboxed health
+curl failed; the separate read-only health result above remains the runtime
+check. Process tests do not contact the running service or broker.
+
+Follow-up OMS opening gate (`c63cda3cb` local main, not deployed): an unresolved
+durable `SUBMITTING` intent now blocks new openings across symbols after a
+process restart, even when the general execution-phase gate is disabled.
+Read failures block openings; a missing intent store blocks live openings.
+Orders classified as closing positions remain allowed by this gate; their
+separate pretrade controls still apply. A process-crash regression proves the
+opening gate remains closed while broker acceptance is unknown, then opens
+after identity-based reconciliation. Focused tests: 7 passed. Changed-file
+validation passed Ruff, mypy, compile and 280 mapped tests; the sandboxed
+localhost curl was inaccessible. A separate read-only host health check at
+05:08 UTC returned HTTP 503 from the unchanged paper service: broker fresh,
+zero positions/open orders, `required_model_stale`; service active with
+NRestarts=0. A non-sending incident snapshot reported `health_degraded`.
+This change is neither deployed nor a model/trading-gate relaxation.
+Commit `39d4bd879` adds a process test that injects a failed acknowledgement write after
+simulated broker acceptance, reopens the intent store, and verifies no reclaim,
+blocked openings and identity-based recovery without a second broker order.
+Its two focused process checks plus Ruff and mypy passed; it does not simulate
+a physical disk failure or interact with the running service.
+
+Follow-up claim contract (`c8c374140` local main, not deployed):
+`OrderManager.begin_external_order_lifecycle` previously ignored a `False`
+result from the durable submit claim and returned an intent ID anyway. It now
+returns no ID and leaves no new in-memory mapping when the claim is refused.
+When a paper engine has a configured durable store, that failure blocks the
+broker submit even if paper durability was otherwise optional; live remains
+fail-closed. Fake and real-store regressions cover claim refusal, crash-persisted
+`SUBMITTING`, and no second simulated broker attempt. Focused tests: 9 passed.
+Changed-file validation passed Ruff, mypy, compile and 60 mapped tests; its
+sandboxed curl could not connect. Separate host health at 05:33 UTC returned
+HTTP 503 solely for `required_model_stale`, broker fresh with zero positions and
+open orders; service active, NRestarts=0. Non-sending incident snapshot reported
+`health_degraded`. This prevents reuse of one claimed intent, but does not fence
+two owners creating *different* new intents on separate hosts; PostgreSQL or
+another shared ownership mechanism and all direct submit paths still need
+explicit verification before live or restored-host activation.
+
+Backup inventory: the installed `ai-trading-runtime-backup-sync.timer` is
+disabled. Its script only uploads archived `*.bak.*.gz` files; it does not
+snapshot the active OMS SQLite database. The deployed runtime has an active OMS
+database under `/var/lib/ai-trading-bot/runtime`. Consistent snapshot creation,
+integrity/retention/failure checks, isolated restore and ownership fencing are
+still required. No secrets were copied or printed.
+
+These commits are on local main and have not been pushed or deployed. The
+remaining risk contract, runtime-path, operations, and account-size evaluation
+phases are incomplete. This work does not establish live readiness. Preserve
+the pre-existing uncommitted handoff content and
+`docs/REMAINING_TASKS_HANDOFF_20260922.md`.
+
+### Recovery bundle milestone (`ddbacc1ac` local main, not deployed)
+
+`ai_trading/tools/runtime_recovery_backup.py` creates online SQLite snapshots
+of the two runtime databases, captures named runtime evidence and model files,
+and verifies per-file hashes and SQLite integrity. It excludes environment
+files and sensitive model filenames, writes mode-0600 bundles, records safe
+success/failure status, and applies explicit local retention. The packaged
+backup-sync unit now creates a bundle before optional S3 sync; its timer is
+configured for 23:30 UTC daily. It remains disabled on the host.
+
+Synthetic backup/restore tests: 3 passed, including restored OMS intent versus
+simulated broker acceptance, retention and corruption rejection, and failure
+status. Ruff, mypy, compile and mapped tests passed under
+`agent_validate_changed.sh --market-hours`; `systemd-analyze verify` passed.
+The validator's sandboxed curl could not connect. Separate local health at
+04:50 UTC reached the active paper service: fresh broker, zero positions/open
+orders, readiness degraded only by `required_model_stale`, replay parity still
+flagged; NRestarts=0. Non-sending incident snapshot passed.
+
+Latest isolated read-only-source rehearsal against deployed data: bundle
+creation/verification 43.73 seconds, isolated verify/restore 12.09 seconds,
+106 MiB archive, two integrity-checked restored SQLite databases, 2,135 OMS
+intents and 3,028 model files. The archive and restored manifest exist under
+`/tmp/goal-recovery-rehearsal-final` and `/tmp/goal-restored-final`. See
+`docs/RUNTIME_RECOVERY.md` for exact scope, recovery procedure, data-loss
+boundary and limitations. No production backup, service restart, broker order,
+remote sync, or live activation occurred. Local main is six commits ahead of
+origin/main. Next: finish risk-contract/submission-path verification and the
+other four goal areas.
+
+Backup completeness follow-up (`133b285f7` local main, not deployed): the bundle creator could
+previously succeed if any runtime SQLite file existed, even with the
+authoritative OMS or persistent rate-limiter database absent. New schema-2
+bundles resolve the configured stores and require their identities at creation
+and verification; non-SQLite or out-of-scope authoritative stores fail closed.
+Sensitive model-directory components are excluded. The deployed paper
+configuration resolves to the present `oms_intents_paper_monday.db` and
+`pretrade_rate_limiter.db`; no production bundle was created in this follow-up.
+Six isolated backup tests, Ruff, mypy and compile passed; the non-sending
+snapshot remained `blocked_qualification`. Legacy schema-1 bundles still
+verify integrity but cannot certify configured database completeness. The
+backup timer remains disabled; next is CI, after-close exposure review and a
+planned timer deployment plus an actual scheduled backup and restore check.
+Schema-2 isolated rehearsal (`62f421a02` local main) at 09:02 UTC used the deployed paper runtime
+environment and wrote only to `/tmp/goal-recovery-schema2-20260923`. A 105.43
+MiB bundle with 3,042 members was created/verified in 46.58 seconds and
+verified/restored in 12.45 seconds. Its required OMS and pretrade limiter
+databases passed integrity checks; the restored OMS had 2,135 terminal intents,
+none nonterminal, at revision `20260506_0001`. The configured `.pkl` model
+artifact was included. Running broker health remained
+fresh with zero positions/open orders; readiness still failed on
+`required_model_stale`. This read-only-source rehearsal does not replace an
+actual scheduled backup, off-host restore or real PostgreSQL owner drill.
+Owner-fence follow-up (`42c4c17fa` local main, not deployed): no PostgreSQL binary, server unit,
+or container runtime is available on this host. Two isolated shared-lock tests
+exercise two candidate OMS owners, contention, release, lock loss and process-ID
+mismatch; Ruff, mypy, compile and both tests passed. This verifies the local
+fence protocol only. A real PostgreSQL two-owner/failover drill against one
+shared database remains an explicit acceptance requirement before live or
+restored-host submission.
+
+Live-submit extraction (`b51897307` local main, not deployed): the oversized submit handler now
+uses a pure ambiguity classifier for native broker 5xx, timeout/connection and
+plain-text provider errors. Direct cases distinguish uncertain outcomes from
+ordinary 400 rejections without changing identity lookup or failover policy.
+The focused execution files passed 302 tests; the changed-file gate passed
+Ruff, mypy, compile and 18 mapped tests; 39 replay/degraded-gate tests passed.
+Read-only host health remained degraded for existing
+`required_model_stale`/replay flags, with fresh broker state and zero positions
+or open orders. No runtime restart, broker order or deployment occurred.
+
+### Small-account mechanics (`10291462c` local main, not deployed)
+
+`ai_trading/tools/small_account_capacity.py` evaluates explicit $1,000 and
+$2,000 long-only whole-share scenarios with pending buy commitments, cash
+reserve, minimum/maximum order notional, gross/symbol concentration and
+per-side cost assumptions. It keeps estimated market costs, estimated fees and
+unknown verified fees separate. Four synthetic tests pass, including both
+capital sizes, concentration, pending cash, high-price whole-share failure,
+invalid limits and fee provenance. Changed-file validation passed Ruff, mypy,
+compile and four mapped tests; the sandboxed health curl was inaccessible, with
+the separate health smoke above covering the service. No strategy trial or
+holdout evaluation ran. See `docs/SMALL_ACCOUNT_EVALUATION.md` for scope and
+retirement/observation/live-canary eligibility rules. Actual equity/cash
+reconciliation and the owner-approved 3%/daily-loss thresholds remain open.
+
+`docs/SMALL_ACCOUNT_RISK_CONTRACT.md` (`b77c3548f` local main) states the required account/equity,
+daily/starting/peak-loss, outstanding-order, stale-broker and safe-reduction
+semantics without selecting a numeric loss limit. The owner decision on the
+meaning of 3% and, if needed, a separate daily limit is still pending. This
+document is a contract draft; it is not wired into all submit paths and grants
+no live authority. Docs-only validation passed.
+
+### Runtime path and configuration identity (`07d0ca4d0` local main, not deployed)
+
+The startup run manifest and order lineage used different JSON serialization
+for the same sanitized `TradingConfig`, yielding different hashes. The
+canonical hash is now shared. The sanitized snapshot includes a digest of all
+declarative settings, with secret values represented only as configured/absent;
+the manifest separately captures the resolved launch-profile payload and hash
+for policy overrides outside the config schema. Tests verify sensitivity to an
+otherwise omitted position-size setting, stability across secret-value changes,
+manifest/order-hash agreement, and launch-profile override identity. The path,
+precedence, units and known identity gaps are mapped in
+`docs/SUPPORTED_TRADING_PATH.md`. Previous hashes have different scope and must
+not be rewritten. This does not yet bind the applied schema revision, exact
+loaded model artifact or checkout dirty state to a tested release.
+
+Focused tests: 21 passed; four related decision/manifest cases also passed.
+Changed-file validation passed Ruff, mypy, compile
+and 155 mapped tests; its sandboxed health curl could not connect. The first
+host health request timed out at 5 seconds; a bounded repeat returned HTTP 503
+in 2.82 seconds, broker fresh with zero positions/open orders and only
+`required_model_stale` as readiness failure. Service remained active with
+NRestarts=0; a non-sending incident snapshot reported existing degraded
+health and go/no-go flags. No restart, broker submission or deployment occurred.
+Read-only host timer status on September 23: the packaged healthcheck,
+runtime-backup-sync and runtime-report timers are all disabled. The health
+runner can send a webhook if configured, so installing/enabling it requires
+tested state classification and non-sending alert fixtures before notifications
+are approved. The same-host timer cannot detect total host loss; off-host
+heartbeat evidence remains an external dependency. No timer was enabled.
+
+## September 23 accounting and research decision
+
+Detailed evidence and acceptance criteria: `docs/ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
+September 22 has seven local fill rows, but eight broker executions: the MSFT
+end-of-day sell-2 row combines two sell-1 broker activities. The AMZN and MSFT
+end-of-day exits match same-account orders but have no strategy decision or
+resolved TCA. Reconciliation now names those gaps without inventing matches;
+broker accounting now flags execution-count mismatches even when order quantities
+match. Future EOD submissions carry causal trigger time and intent reason in
+order events. The original September 22 records remain unchanged.
+
+No September 22 fill has a verified total fee. Captured broker fills have no
+fee field; account-level fee rows have no execution reference and cannot be
+allocated. Net P&L remains unknown. The broker-backed September 7–18 quantity
+ledger and independent September 22 quantity interval may be reported separately;
+pre-anchor legacy history remains excluded. AAPL -3 / AMZN +1 predates the
+verified flat September 18 opening, with no supported exact origin.
+
+Retire the consumed September 21 replacement hypothesis (negative development
+economics). Replay remains blocked at 191/250 samples and negative candidate
+net edge. Keep `required_model_stale` and every reset/holdout/promotion gate.
+No new research trial was run or proposed.
+
+Commit `3c206654c` is on local and remote main. CI run 35813717726 passed:
+7,068 tests passed, four skipped, 80.07% coverage. CodeQL, SBOM, Workflow Lint,
+deterministic replay, offline replay and research backtest gates also passed.
+Locally, 73 focused tests passed; changed-file validator passed Ruff, mypy,
+compile and 75 mapped tests. The validator's sandboxed health curl could not
+connect, and a local full run stopped after 2,070 passes because the sandbox
+forbids a free-port test's socket creation; CI passed in its normal environment.
+
+At 03:45:38 UTC the direct paper broker check confirmed market closed, active
+account, zero positions and zero open orders. The service was restarted after
+close at 03:45:50 UTC. After warmup, health reports fresh broker connectivity,
+zero positions/open orders, `paper_diagnostics_only`, and only
+`required_model_stale` as a readiness failure; `replay_live_parity_gate_failed`
+remains an attention flag. Service active, NRestarts=0. Two yfinance ERROR rows
+reported an SPY daily backup download failure during startup; minute Alpaca IEX
+health then returned 391 rows and completed. No execution or readiness error
+was established. Monitor the next regular session and after-close audit without
+forcing trades or changing gates. The earlier uncommitted handoff content and
+`docs/REMAINING_TASKS_HANDOFF_20260922.md` were preserved outside the commit.
+
+## September 22 CI repair and after-close deployment completed
+
+Published 43abd3d0f after removing the NumPy substitute leaked by
+`tests/execution/test_execution_imports.py` into `bot_engine`. The directly
+ordered execution-imports and correlation tests pass (10 tests), and the
+leaking test now asserts that `bot_engine.np` remains canonical NumPy.
+Full CI run 35771599946 passed: 7066 tests passed, four skipped, zero failures,
+80.04% coverage. CodeQL, Workflow Lint, and SBOM also passed on that SHA.
+
+After 20:00 UTC, broker clock confirmed closed, paper broker reported zero
+positions/open orders, and the release/backups/research hashes passed preflight.
+Production main fast-forwarded from bde5a6a4f to 43abd3d0f; local notes were
+preserved in stash@{0} and /tmp/sep21-production-predeploy/local-work.tgz.
+Service restarted at 20:00:40 UTC and is active with NRestarts=0. After warmup,
+health returns 503 with only `required_model_stale` in readiness failures;
+`replay_live_parity_gate_failed` remains an attention flag. Import preflight and
+paper ExecutionEngine initialization appeared in the journal, with no structured
+error-level entries in the checked postrestart window. Non-sending incident
+snapshot passed structurally and reported degraded health. No model promotion,
+research trial, holdout evaluation, or trading gate change occurred. Next check:
+postdeployment paper session behavior during the next regular market session;
+do not infer model readiness or strategy performance from abstention.
+
 ## September 22 exact NumPy contamination source
 
 Full CI run 35767890187 on 4c8c3ea54 again failed only the bot-engine
