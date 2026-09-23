@@ -1,5 +1,29 @@
 # Current handoff
 
+## September 23 approved off-host restore and documentation tip
+
+The owner approved one postdeployment bundle upload and the documentation
+commit `be3aeaebf`. Exact-tip CI `35931333370` passed with 7,202 tests,
+four skipped and 80.17% coverage; research, replay, determinism, CodeQL,
+Workflow Lint and SBOM passed. The clean checkout is on `be3aeaebf`.
+The hash-only runtime release spec was updated after CI and its installed
+identity preflight passed. The running paper service was not restarted:
+active, NRestarts=0, health HTTP 503 solely for `required_model_stale`.
+
+Only the verified postdeployment recovery bundle
+`recovery.bak.20260923T202932Z-548c7e87.gz` was uploaded to the configured
+same-account S3 bucket with expected-owner and AES256. The 111,191,546-byte
+current object downloaded with the same version ID returned by upload; its
+SHA-256 matched the local bundle (`fd5de33bf744099d089f074bce26f99d6c8b7b8a51dd3b45a1638ff7a858f6dc`).
+An isolated restore passed bundle verification and both SQLite integrity
+checks; the restored OMS has 2,135 intents, 764 fills and 80,184 events.
+Version-pinned download was denied by IAM `s3:GetObjectVersion`, so restore
+from an older overwritten version is unproven. No broad sync, timer enable,
+S3 deletion, actual alert, broker order or live activation occurred. Scheduled
+off-host backup needs a reviewed unit installation and separate authorization
+for recurring upload scope; live readiness remains blocked by the risk/equity,
+model, monitoring and accounting evidence gaps below.
+
 ## September 23 after-close paper release (`5031ca47e`, deployed)
 
 Exact-tip CI `35913045555` passed: 7,202 tests passed, four skipped, 80.17%
@@ -18,12 +42,9 @@ Pre- and postdeployment local recovery bundles were created, verified and
 restored in new isolated directories. The postdeployment restore includes the
 release spec and model; source and restore each have 2,135 intents, 764 fills,
 80,184 OMS events and zero nonterminal intents. Both SQLite integrity checks
-passed. This does not prove off-host recovery or broker activity after a future
-snapshot. Automatic approval review rejected uploading sensitive runtime
-archives to S3. A read-only AWS expected-owner check confirmed that the empty
-configured backup prefix belongs to the active AWS account; explicit approval
-for a single encrypted bundle upload and read-back is pending. No S3 write,
-delete or actual alert was sent.
+passed. At release time, this did not prove off-host recovery or broker
+activity after a future snapshot; the subsequent single-bundle readback is
+recorded above.
 
 The installed service unit still lacks the staged release identity guards, and
 the installed backup unit is the older archive-only variant with its timer
@@ -33,9 +54,9 @@ backup or automatic identity enforcement from this manual release. The selected
 3% peak drawdown and 1% daily loss contract remains unenforced pending verified
 same-account equity/cash-flow evidence and live-path wiring; live openings
 remain blocked. Verified fees, legacy history, external monitoring and model
-qualification remain separate evidence gaps. The repo handoff update is a
-documentation-only change after the deployed `5031ca47e` code release; review
-its commit and CI before updating any future release specification or restart.
+qualification remain separate evidence gaps. The `be3aeaebf` handoff commit
+was documentation-only after the deployed `5031ca47e` code release; its CI
+and subsequent release-spec identity check are recorded above.
 
 ## September 23 owner decisions and CI repair
 
