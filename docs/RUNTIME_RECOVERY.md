@@ -26,8 +26,9 @@ extra, altered, or unsafe members and checks restored SQLite integrity.
 Environment files, credentials, private keys, and arbitrary runtime files are
 excluded. The archive is mode 0600 in a mode 0700 backup directory. Secrets
 must be restored from the approved external source; a bundle does not supply
-credentials or trading approval. Files that change while copied cause backup
-failure. The SQLite databases are each transaction-consistent, but the two
+credentials or trading approval. Files whose size or modification time changes
+while copied cause backup failure. The SQLite databases are each
+transaction-consistent, but the two
 databases and evidence files are captured sequentially, so the bundle is not
 one atomic cross-file instant. The broker remains the authority for actual
 orders, fills, cash and positions.
