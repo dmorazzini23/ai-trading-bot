@@ -67,7 +67,10 @@ non-sending incident check before unattended coverage can be claimed.
    broker submits. This is a second fence, not permission to skip stopping or
    revoking the old host. Two hosts pointed at different databases would not
    share the lock. The current paper SQLite deployment has no cross-host
-   database fence, and no live PostgreSQL drill has yet been performed.
+   database fence. An isolated shared-lock simulator checks two candidate
+   owners, contention, release, backend-lock loss and process-ID mismatch;
+   no local PostgreSQL server is installed, so real PostgreSQL contention and
+   failover remain unverified. Do not treat the simulator as cross-host proof.
 2. Fetch a complete bundle into a restricted directory. Verify it with
    `./venv/bin/python -m ai_trading.tools.runtime_recovery_backup --verify BUNDLE`.
    Inspect the manifest's code/config/policy identities and obtain the matching
