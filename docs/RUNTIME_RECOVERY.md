@@ -59,6 +59,10 @@ When S3 sync is enabled, its staging step fails if it cannot find a
 This closes a silent-success case in the uploader; it does not verify that S3
 accepted or retained the object. Off-host recovery still requires an authorized
 read-back and isolated restore from the remote object.
+The configured S3 retention pass now also fails the unit if object listing or
+deletion fails; an uploaded bundle is not evidence that retention succeeded.
+Inspect the unit journal for the safe failure class and resolve bucket permissions
+before counting the scheduled run as complete.
 
 ## Isolated restore procedure
 

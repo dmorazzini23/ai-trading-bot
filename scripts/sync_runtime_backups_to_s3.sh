@@ -71,6 +71,11 @@ fi
 
 cutoff_epoch="$(date -u -d "-${RETENTION_DAYS} days" +%s)"
 deleted=0
+listing_file="${tmpdir}/s3-listing.txt"
+if ! aws s3 ls "${DESTINATION}" --recursive --region "${AWS_REGION}" >"${listing_file}" 2>/dev/null; then
+  echo "S3 retention listing failed" >&2
+  exit 4
+fi
 
 while read -r date_str time_str _size key; do
   [[ -n "${key:-}" ]] || continue
@@ -87,10 +92,12 @@ while read -r date_str time_str _size key; do
     break
   fi
 
-  if aws s3 rm "s3://${S3_BUCKET}/${key}" --region "${AWS_REGION}" --only-show-errors >/dev/null 2>&1; then
-    deleted=$((deleted + 1))
+  if ! aws s3 rm "s3://${S3_BUCKET}/${key}" --region "${AWS_REGION}" --only-show-errors >/dev/null 2>&1; then
+    echo "S3 retention delete failed" >&2
+    exit 5
   fi
-done < <(aws s3 ls "${DESTINATION}" --recursive --region "${AWS_REGION}" 2>/dev/null || true)
+  deleted=$((deleted + 1))
+done < "${listing_file}"
 
 if [[ "${deleted}" -gt 0 ]]; then
   echo "S3 retention removed ${deleted} backup object(s) older than ${RETENTION_DAYS} day(s)"
