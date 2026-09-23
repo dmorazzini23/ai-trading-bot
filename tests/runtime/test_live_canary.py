@@ -325,6 +325,22 @@ def test_live_canary_blocks_missing_or_exceeded_daily_loss(monkeypatch, tmp_path
     assert "max_daily_loss_exceeded" in exceeded_context["reasons"]
 
 
+def test_live_canary_does_not_use_account_payload_as_loss_evidence(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    _approve_live_capital(monkeypatch, tmp_path)
+    _prime_runtime_state()
+    order = _valid_live_order()
+    order.pop("daily_loss_state")
+    order["account_snapshot"] = {
+        "id": "paper-account", "equity": 1000.0, "daily_loss_abs": 0.0,
+    }
+
+    allowed, context = evaluate_canary_order(order, execution_mode="live")
+
+    assert allowed is False
+    assert "daily_loss_state_missing" in context["reasons"]
+
+
 def test_live_canary_derives_quote_age_and_spread_from_runtime_state(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_QUOTE_AGE_MS", "50")

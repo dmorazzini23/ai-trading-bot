@@ -2393,7 +2393,9 @@ def test_live_precheck_replaces_caller_exposure_with_new_broker_snapshot(monkeyp
     monkeypatch.setattr(lt, "evaluate_launch_profile_order", _capture)
     order = {"symbol": "AAPL", "side": "buy", "quantity": 1,
              "client_order_id": "live-snapshot", "closing_position": False,
-             "positions": [], "open_orders": [], "account_snapshot": {"id": "caller"}}
+             "positions": [], "open_orders": [], "account_snapshot": {"id": "caller"},
+             "daily_loss_state": {"daily_loss_abs": 0},
+             "loss_state": {"realized_pnl": 100}}
 
     assert engine._pre_execution_order_checks(order) is False
     assert sync_calls == ["synced"]
@@ -2401,6 +2403,8 @@ def test_live_precheck_replaces_caller_exposure_with_new_broker_snapshot(monkeyp
     assert captured["open_orders"] == broker_orders
     assert captured["account_snapshot"]["id"] == "broker-account"
     assert captured["evaluated_execution_mode"] == "live"
+    assert "daily_loss_state" not in captured
+    assert "loss_state" not in captured
 
 
 def test_live_precheck_blocks_stale_broker_state_before_launch_gate(monkeypatch):

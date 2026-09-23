@@ -424,9 +424,6 @@ def _daily_loss_gate_reasons(
 
     loss_payload = order.get("daily_loss_state") or order.get("loss_state")
     if not isinstance(loss_payload, Mapping):
-        account = order.get("account_snapshot") or order.get("account")
-        loss_payload = account if isinstance(account, Mapping) else None
-    if not isinstance(loss_payload, Mapping):
         return ["daily_loss_state_missing"], context
 
     raw_loss = _extract_value(

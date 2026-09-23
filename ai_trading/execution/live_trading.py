@@ -5653,6 +5653,8 @@ class ExecutionEngine:
                 getattr(broker_snapshot, "positions_fresh", True)
             ):
                 failed_components.append("positions")
+            if "account" in (getattr(broker_snapshot, "failed_components", ()) or ()):
+                failed_components.append("account")
             components = ",".join(failed_components) or "broker_state"
             return (
                 False,
@@ -16405,7 +16407,7 @@ class ExecutionEngine:
             return None
         try:
             account = get_account()
-        except LIVE_TRADING_FALLBACK_EXC as exc:  # pragma: no cover - network variability
+        except BROKER_READ_EXC as exc:  # pragma: no cover - network variability
             logger.debug(
                 "BROKER_ACCOUNT_SNAPSHOT_FAILED",
                 extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
@@ -32714,6 +32716,11 @@ class ExecutionEngine:
             order["account_snapshot"] = account_snapshot
             order["positions"] = tuple(getattr(broker_snapshot, "positions", ()) or ())
             order["open_orders"] = tuple(getattr(broker_snapshot, "open_orders", ()) or ())
+            # A strategy-provided loss number has no broker account, activity,
+            # or session-baseline proof. Keep live openings blocked until a
+            # canonical reconciled equity-loss source supplies that evidence.
+            order.pop("daily_loss_state", None)
+            order.pop("loss_state", None)
         elif not closing_position:
             if account_snapshot is None:
                 account_snapshot = self._get_account_snapshot()
@@ -36603,9 +36610,9 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 logger.debug("BROKER_SYNC_INITIALIZE_FAILED", exc_info=True)
         open_orders, positions = self._fetch_broker_state()
         account_snapshot, _ = self._fetch_account_state()
-        if account_snapshot is not None:
-            self._cycle_account = account_snapshot
-            self._cycle_account_fetched = True
+        # Never reuse a prior cycle's account after a failed broker read.
+        self._cycle_account = account_snapshot
+        self._cycle_account_fetched = True
         open_orders_unknown = bool(
             getattr(self, "_broker_open_orders_unknown", False)
         )
@@ -36616,6 +36623,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 for component, failed in (
                     ("open_orders", open_orders_unknown),
                     ("positions", positions_unknown),
+                    ("account", account_snapshot is None),
                 )
                 if failed
             )
@@ -36684,16 +36692,32 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 last_error="broker_sync_update_failed",
                 failed_components=("open_orders", "positions"),
             )
-        snapshot.fresh = True
+        account_unknown = account_snapshot is None
+        snapshot.fresh = not account_unknown
         snapshot.open_orders_fresh = True
         snapshot.positions_fresh = True
-        snapshot.last_success_timestamp = float(snapshot.timestamp)
-        snapshot.last_error = None
-        snapshot.failed_components = ()
-        snapshot.consecutive_failures = 0
-        snapshot.stale_age_s = 0.0
-        self._broker_sync_last_success_mono = float(snapshot.timestamp)
-        self._broker_sync_consecutive_failures = 0
+        if account_unknown:
+            last_success = getattr(self, "_broker_sync_last_success_mono", None)
+            snapshot.last_success_timestamp = last_success
+            snapshot.last_error = "broker_account_unavailable"
+            snapshot.failed_components = ("account",)
+            snapshot.consecutive_failures = (
+                int(getattr(self, "_broker_sync_consecutive_failures", 0) or 0) + 1
+            )
+            snapshot.stale_age_s = (
+                max(monotonic_time() - float(last_success), 0.0)
+                if last_success is not None else None
+            )
+            self._broker_sync_consecutive_failures = snapshot.consecutive_failures
+            logger.warning("BROKER_SYNC_ACCOUNT_UNKNOWN")
+        else:
+            snapshot.last_success_timestamp = float(snapshot.timestamp)
+            snapshot.last_error = None
+            snapshot.failed_components = ()
+            snapshot.consecutive_failures = 0
+            snapshot.stale_age_s = 0.0
+            self._broker_sync_last_success_mono = float(snapshot.timestamp)
+            self._broker_sync_consecutive_failures = 0
         try:
             self._reconcile_pending_order_runtime_artifacts(
                 open_orders=getattr(snapshot, "open_orders", ()) or (),
@@ -36760,10 +36784,11 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         get_account = getattr(client, "get_account", None)
         if not callable(get_account):
             return (None, None)
-        try:
-            account = get_account()
-        except LIVE_TRADING_FALLBACK_EXC:
-            logger.debug("BROKER_ACCOUNT_FETCH_FAILED", exc_info=True)
+        succeeded, account, _ = self._execute_broker_read_with_retry(
+            "account", get_account
+        )
+        if not succeeded:
+            logger.warning("BROKER_ACCOUNT_FETCH_FAILED")
             return (None, None)
         return account, _extract_cash_balance(account)
 

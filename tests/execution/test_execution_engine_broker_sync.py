@@ -179,6 +179,65 @@ def test_live_engine_fetches_broker_state() -> None:
     assert getattr(engine, "_position_tracker", {}).get("AMD") == 2
 
 
+def test_live_broker_sync_account_504_does_not_crash_or_reuse_cached_account(
+    monkeypatch, caplog
+) -> None:
+    _disable_broker_read_delay(monkeypatch, attempts=1)
+
+    class _AccountFailureClient:
+        def get_orders(self, *, filter):
+            return []
+
+        def get_all_positions(self):
+            return []
+
+        def get_account(self):
+            raise _native_alpaca_error(504)
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = _AccountFailureClient()
+    engine._cycle_account = SimpleNamespace(id="stale-account")
+    engine._cycle_account_fetched = True
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.open_orders == ()
+    assert snapshot.positions == ()
+    assert snapshot.fresh is False
+    assert snapshot.open_orders_fresh is True
+    assert snapshot.positions_fresh is True
+    assert snapshot.failed_components == ("account",)
+    assert snapshot.last_error == "broker_account_unavailable"
+    assert engine._cycle_account is None
+    assert engine._cycle_account_fetched is True
+    engine._broker_freshness_enforcement_ready = True
+    opening_allowed, opening_reason = engine._execution_phase_allows_submits(
+        closing_position=False
+    )
+    assert opening_allowed is False
+    assert "account" in str(opening_reason)
+    assert engine._execution_phase_allows_submits(closing_position=True) == (True, None)
+    assert "BROKER_READ_GAVE_UP" in caplog.text
+    assert "BROKER_ACCOUNT_FETCH_FAILED" in caplog.text
+
+
+def test_live_opening_account_refresh_catches_native_alpaca_timeout(monkeypatch) -> None:
+    class _AccountFailureClient:
+        def get_account(self):
+            raise _native_alpaca_error(504)
+
+        def list_orders(self):
+            return []
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = _AccountFailureClient()
+    engine._cycle_account = SimpleNamespace(id="stale-account")
+
+    assert engine._refresh_cycle_account() is None
+    assert engine._cycle_account is None
+    assert engine._cycle_account_fetched is True
+
+
 def test_live_engine_broker_sync_fail_closes_on_open_order_fetch_failure(
     monkeypatch,
 ) -> None:
@@ -235,6 +294,9 @@ def test_live_engine_marks_cached_snapshot_stale_when_component_unknown(
 
         def get_all_positions(self):
             return [SimpleNamespace(symbol="AAPL", qty=3)]
+
+        def get_account(self):
+            return SimpleNamespace(id="account-1", cash="1000")
 
     engine = LiveTradingExecutionEngine(ctx=None)
     engine._update_broker_snapshot(
