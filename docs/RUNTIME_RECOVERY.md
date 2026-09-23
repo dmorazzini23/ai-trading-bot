@@ -51,8 +51,12 @@ season. Its retention is seven days and at most 14 local snapshots; the
 existing S3 sync has separate retention controls. The deployed runtime
 environment observed September 23 had S3 sync enabled and uploader-side S3
 retention disabled; its 30-day setting therefore does not establish remote
-retention. Bucket lifecycle policy could not be inspected with the current AWS
-identity.
+retention. At 10:48 UTC September 23, a read-only `ListObjectsV2` on the
+configured backup prefix succeeded with zero keys and no truncation. A separate
+read of the bucket lifecycle policy found one enabled 30-day expiration rule
+whose filter covers that prefix. Bucket versioning could not be verified in
+this check. The visible lifecycle rule does not establish a retained backup:
+there was no object in the configured prefix to read back or restore.
 
 A failed local backup exits nonzero, writes
 `runtime/recovery_backup_latest.json` with a safe reason
@@ -71,8 +75,9 @@ The configured S3 retention pass now also fails the unit if object listing or
 deletion fails; an uploaded bundle is not evidence that retention succeeded.
 When that pass is explicitly enabled, invalid days/delete-cap settings and a
 reached delete cap also fail the unit instead of reporting a complete run.
-Inspect the unit journal for the safe failure class and resolve bucket permissions
-before counting the scheduled run as complete.
+Inspect the unit journal for the safe failure class. Verify an uploaded bundle
+through remote read-back and isolated restore before counting the scheduled run
+as off-host recovery evidence.
 
 ## Isolated restore procedure
 

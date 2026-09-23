@@ -60,6 +60,14 @@ per-fill totals only with explicit broker source, USD currency and
 `per_fill_total` basis. There is no observed per-fill fee field for it to ingest
 here, so assigning charges to the seven local rows would be invented data.
 
+A read-only follow-up at 10:45 UTC September 23 loaded the packaged paper
+account credentials through the configured managed-secrets provider and
+paginated activities created since September 22 00:00 UTC. Pagination
+completed: eight `FILL` activities, zero `FEE`/`CFEE`/`PTC`/`PTR` activities,
+and no fill `fee_amount` field. This is an observation at that time, not proof
+of zero charges or a complete future posting interval. The captured snapshot
+was not altered, and no order or paid data request was made.
+
 Broker-backed fees remain distinct from configured cost estimates and unknown
 costs. Account-level charges may be reported by their own accounting date, but
 cannot certify a fill's total fee or net P&L. Seven unknown totals mean this

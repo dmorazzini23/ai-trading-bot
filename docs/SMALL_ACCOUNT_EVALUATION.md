@@ -5,14 +5,21 @@ opening buy at $1,000 and $2,000 starting capital. It is a pure, long-only,
 whole-share calculation. Callers must supply price, desired shares, existing
 position market values, pending buy commitments, cash reserve, minimum and
 maximum order notional, gross and symbol concentration limits, and per-side
-spread/slippage plus an estimated total fee. No limit in this tool is an
-approved live setting. Pending sell orders do not release capital until filled.
+spread/slippage plus an estimated total fee. Pending buy commitments must be
+supplied as worst-case reserved cash; the tool cannot verify their source or
+completeness. No limit in this tool is an approved live setting. Pending sell
+orders do not release capital until filled. Position and pending-buy inputs
+must be aggregated to one row per symbol; duplicate names after trimming and
+case normalization are rejected rather than silently overwriting exposure.
 
 The result reports whole shares affordable under cash, gross exposure, symbol
 exposure and order-notional limits; projected concentration; pending capital
 commitments; and binding reasons. Estimated market cost and estimated fee are
-separate from verified fees. When the fee assumption is unavailable, estimated
-total cost is unknown. Verified total fee remains unknown in every scenario
+separate from verified fees. When the fee assumption is unavailable, feasible
+shares are zero with `estimated_fee_assumption_missing`: an unknown charge
+cannot be treated as a zero cash reserve. Estimated total cost is also unknown.
+An explicit zero estimate remains only an assumption, never a verified broker
+fee. Verified total fee remains unknown in every scenario
 because a synthetic sizing calculation cannot verify a broker charge.
 
 This calculation assumes starting capital is unlevered equity and deducts

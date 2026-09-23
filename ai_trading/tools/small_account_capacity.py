@@ -21,6 +21,20 @@ def _amount(value: Decimal | int | float | str, name: str) -> Decimal:
     return parsed
 
 
+def _symbol_amounts(
+    values: Mapping[str, Decimal | int | float | str], name: str, amount_name: str
+) -> dict[str, Decimal]:
+    amounts: dict[str, Decimal] = {}
+    for raw_symbol, value in values.items():
+        if not isinstance(raw_symbol, str) or not raw_symbol.strip():
+            raise ValueError(f"{name}_symbol_invalid")
+        symbol = raw_symbol.strip().upper()
+        if symbol in amounts:
+            raise ValueError(f"{name}_symbol_duplicate")
+        amounts[symbol] = _amount(value, amount_name)
+    return amounts
+
+
 @dataclass(frozen=True)
 class CostAssumptions:
     entry_spread_bps: Decimal
@@ -94,13 +108,14 @@ def evaluate_capacity(
         raise ValueError("capacity_inputs_invalid")
     if gross_limit > 1 or symbol_limit > 1:
         raise ValueError("exposure_fraction_invalid")
-    position_amounts = {name.upper(): _amount(value, "position_usd") for name, value in positions_usd.items()}
-    pending_amounts = {name.upper(): _amount(value, "pending_buy_usd") for name, value in pending_buy_usd.items()}
+    position_amounts = _symbol_amounts(positions_usd, "positions_usd", "position_usd")
+    pending_amounts = _symbol_amounts(pending_buy_usd, "pending_buy_usd", "pending_buy_usd")
     position_gross = sum(position_amounts.values(), Decimal(0))
     pending_total = sum(pending_amounts.values(), Decimal(0))
     existing_gross = position_gross + pending_total
-    existing_symbol = position_amounts.get(symbol.upper(), Decimal(0)) + pending_amounts.get(
-        symbol.upper(), Decimal(0)
+    normalized_symbol = symbol.strip().upper()
+    existing_symbol = position_amounts.get(normalized_symbol, Decimal(0)) + pending_amounts.get(
+        normalized_symbol, Decimal(0)
     )
     available_cash = max(Decimal(0), capital - existing_gross - cash_reserve)
     entry_cost_per_share = price * (
@@ -108,7 +123,12 @@ def evaluate_capacity(
         + (validated_costs.entry_spread_bps + validated_costs.entry_slippage_bps)
         / Decimal(10_000)
     )
-    fee_reserve = validated_costs.estimated_total_fee_usd or Decimal(0)
+    fee_assumption_missing = validated_costs.estimated_total_fee_usd is None
+    fee_reserve = (
+        validated_costs.estimated_total_fee_usd
+        if validated_costs.estimated_total_fee_usd is not None
+        else Decimal(0)
+    )
     budgets = {
         "cash_limit": max(Decimal(0), available_cash - fee_reserve) / entry_cost_per_share,
         "gross_exposure_limit": max(Decimal(0), capital * gross_limit - existing_gross) / price,
@@ -122,7 +142,12 @@ def evaluate_capacity(
     feasible = max(0, min(requested_shares, *share_caps.values()))
     notional = price * feasible
     reasons = [name for name, cap in share_caps.items() if cap < requested_shares]
-    if feasible == 0 or notional < order_minimum:
+    if fee_assumption_missing:
+        # A zero reserve here would make an unknown fee look affordable.
+        reasons.append("estimated_fee_assumption_missing")
+        feasible = 0
+        notional = Decimal(0)
+    elif feasible == 0 or notional < order_minimum:
         reasons.append("minimum_order_or_whole_share_unmet")
         feasible = 0
         notional = Decimal(0)

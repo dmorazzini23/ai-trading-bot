@@ -83,9 +83,41 @@ def test_cost_estimate_is_separate_from_unknown_verified_fee() -> None:
         cash_reserve_usd="0",
         costs=_costs(None),
     )
-    assert unknown_fee.estimated_market_cost_usd == Decimal("0.14")
+    assert unknown_fee.feasible_shares == 0
+    assert "estimated_fee_assumption_missing" in unknown_fee.reasons
+    assert unknown_fee.estimated_market_cost_usd == 0
     assert unknown_fee.estimated_total_cost_usd is None
     assert unknown_fee.actual_total_fee_unknown
+
+
+def test_missing_fee_assumption_cannot_make_full_cash_order_look_affordable() -> None:
+    base = dict(
+        capital_usd="1000",
+        symbol="AAPL",
+        price_usd="1000",
+        requested_shares=1,
+        positions_usd={},
+        pending_buy_usd={},
+        max_gross_fraction="1",
+        max_symbol_fraction="1",
+        max_order_notional_usd="1000",
+        min_order_notional_usd="1",
+        cash_reserve_usd="0",
+    )
+    zero_fee_assumption = evaluate_capacity(
+        **base,
+        costs=CostAssumptions(0, 0, 0, 0, estimated_total_fee_usd=Decimal(0)),
+    )
+    unknown_fee = evaluate_capacity(
+        **base,
+        costs=CostAssumptions(0, 0, 0, 0, estimated_total_fee_usd=None),
+    )
+
+    assert zero_fee_assumption.feasible_shares == 1
+    assert zero_fee_assumption.actual_total_fee_unknown
+    assert unknown_fee.feasible_shares == 0
+    assert unknown_fee.estimated_total_cost_usd is None
+    assert "estimated_fee_assumption_missing" in unknown_fee.reasons
 
 
 def test_whole_share_and_cash_reserve_can_make_order_infeasible() -> None:
@@ -132,3 +164,31 @@ def test_invalid_limits_and_costs_reject_instead_of_sizing() -> None:
         evaluate_capacity(
             **(base | {"costs": CostAssumptions(-1, 0, 0, 0)})
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "amounts"),
+    [
+        ("positions_usd", {"AAPL": "400", " aapl ": "400"}),
+        ("pending_buy_usd", {"AAPL": "200", " aapl ": "200"}),
+    ],
+)
+def test_duplicate_normalized_symbol_cannot_hide_exposure(field, amounts) -> None:
+    inputs = dict(
+        capital_usd=1000,
+        symbol="AAPL",
+        price_usd=300,
+        requested_shares=1,
+        positions_usd={},
+        pending_buy_usd={},
+        max_gross_fraction=1,
+        max_symbol_fraction=1,
+        max_order_notional_usd=300,
+        min_order_notional_usd=1,
+        cash_reserve_usd=0,
+        costs=CostAssumptions(0, 0, 0, 0, estimated_total_fee_usd=Decimal(0)),
+    )
+    inputs[field] = amounts
+
+    with pytest.raises(ValueError, match=f"{field}_symbol_duplicate"):
+        evaluate_capacity(**inputs)
