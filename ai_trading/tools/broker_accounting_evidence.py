@@ -37,6 +37,16 @@ def daily_fee_totals(fees: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def capture(client: Any, *, after: str, max_pages: int = 100) -> dict[str, Any]:
     account = client.get_account()
     account_id = str(account.id)
+    account_boundary = {
+        "account_id": account_id,
+        "trading_mode": "paper",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "currency": getattr(account, "currency", None),
+        "cash": str(getattr(account, "cash", "")),
+        "equity": str(getattr(account, "equity", "")),
+        "portfolio_value": str(getattr(account, "portfolio_value", "")),
+        "source": "broker_get_account_observation",
+    }
     rows: list[dict[str, Any]] = []
     tokens = set()
     token = None
@@ -56,7 +66,118 @@ def capture(client: Any, *, after: str, max_pages: int = 100) -> dict[str, Any]:
         if token in tokens:
             break
         tokens.add(token)
-    return {"account_id": account_id, "trading_mode": "paper", "after": after, "fetched_at": datetime.now(UTC).isoformat(), "pagination_complete": complete, "activities": rows}
+    return {"account_id": account_id, "trading_mode": "paper", "after": after, "fetched_at": datetime.now(UTC).isoformat(), "pagination_complete": complete, "activities": rows, "account_boundary": account_boundary}
+
+
+def _aware_instant(value: Any) -> datetime | None:
+    """Accept only an explicit timezone-bearing instant, never an accounting date."""
+    if not isinstance(value, str) or "T" not in value:
+        return None
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return result.astimezone(UTC) if result.tzinfo is not None else None
+
+
+def reconcile_account_equity(
+    activities: dict[str, Any], opening: dict[str, Any], closing: dict[str, Any]
+) -> dict[str, Any]:
+    """Audit broker cash/equity boundaries without assigning charges to fills."""
+    account_id = activities.get("account_id")
+    mode = activities.get("trading_mode")
+    start = _aware_instant(opening.get("timestamp"))
+    end = _aware_instant(closing.get("timestamp"))
+    after = _aware_instant(activities.get("after"))
+    fetched = _aware_instant(activities.get("fetched_at"))
+    if (
+        not account_id or mode not in {"paper", "live"}
+        or activities.get("pagination_complete") is not True
+        or None in (start, end, after, fetched)
+        or not after < start < end <= fetched
+        or any(boundary.get("account_id") != account_id
+               or boundary.get("trading_mode") != mode
+               or boundary.get("currency") != "USD"
+               for boundary in (opening, closing))
+    ):
+        raise ValueError("complete same-account USD boundaries and covering activities required")
+    balances = [_number(boundary.get(field)) for boundary in (opening, closing)
+                for field in ("cash", "equity")]
+    if any(amount is None for amount in balances):
+        raise ValueError("broker cash and equity boundaries must be finite")
+    open_cash, open_equity, close_cash, close_equity = balances
+    assert open_cash is not None and open_equity is not None
+    assert close_cash is not None and close_equity is not None
+
+    seen: dict[str, dict[str, Any]] = {}
+    for row in activities.get("activities", []):
+        if not isinstance(row, dict) or not row.get("id"):
+            raise ValueError("activity identity missing")
+        key = str(row["id"])
+        if key in seen and seen[key] != row:
+            raise ValueError("conflicting activity identity")
+        seen[key] = row
+
+    fill_cash = Decimal(0)
+    other_cash = Decimal(0)
+    fee_cash = Decimal(0)
+    included: list[dict[str, Any]] = []
+    unresolved: list[dict[str, str]] = []
+    for key, row in sorted(seen.items()):
+        if row.get("account_id") not in (None, account_id):
+            raise ValueError("activity account conflict")
+        if row.get("trading_mode") not in (None, mode):
+            raise ValueError("activity trading-mode conflict")
+        activity_type = str(row.get("activity_type") or "unknown")
+        is_fill = activity_type == "FILL"
+        # FEE.date is a booked day, not a causal execution timestamp.
+        instant = _aware_instant(row.get("transaction_time") if is_fill else
+                                 row.get("executed_at") or row.get("transaction_time"))
+        if instant is None:
+            unresolved.append({"activity_id": key, "reason": "effective_instant_unavailable"})
+            continue
+        if not start < instant <= end:
+            continue
+        if row.get("status") not in (None, "executed"):
+            unresolved.append({"activity_id": key, "reason": "activity_not_executed"})
+            continue
+        if is_fill:
+            quantity = _number(row.get("qty"))
+            price = _number(row.get("price"))
+            if quantity is None or price is None or quantity <= 0 or price <= 0 or row.get("side") not in {"buy", "sell"} or not row.get("order_id"):
+                unresolved.append({"activity_id": key, "reason": "invalid_execution_cash_fields"})
+                continue
+            amount = quantity * price * (-1 if row["side"] == "buy" else 1)
+            fill_cash += amount
+        else:
+            amount = _number(row.get("net_amount"))
+            if amount is None or row.get("currency") != "USD":
+                unresolved.append({"activity_id": key, "reason": "cash_amount_or_currency_unavailable"})
+                continue
+            other_cash += amount
+            if activity_type in {"FEE", "CFEE", "PTC", "PTR"}:
+                fee_cash += amount
+        included.append({"activity_id": key, "activity_type": activity_type,
+                         "effective_at": instant.isoformat(), "cash_effect_usd": str(amount)})
+
+    expected_cash = open_cash + fill_cash + other_cash
+    difference = close_cash - expected_cash
+    return {
+        "status": "cash_reconciled" if not unresolved and difference == 0 else "unverified",
+        "account_id": account_id, "trading_mode": mode,
+        "opening_at": start.isoformat(), "closing_at": end.isoformat(),
+        "opening_cash_usd": str(open_cash), "closing_cash_usd": str(close_cash),
+        "opening_equity_usd": str(open_equity), "closing_equity_usd": str(close_equity),
+        "equity_change_usd": str(close_equity - open_equity),
+        "position_value_change_usd": str((close_equity - close_cash) - (open_equity - open_cash)),
+        "execution_cash_effect_usd": str(fill_cash),
+        "other_booked_cash_effect_usd": str(other_cash),
+        "booked_fee_cash_effect_usd": str(fee_cash),
+        "expected_closing_cash_usd": str(expected_cash), "cash_difference_usd": str(difference),
+        "included_activities": included, "unresolved_activities": unresolved,
+        "fee_allocation": "unknown_per_execution", "performance_authority": False,
+        "scope": "broker_boundary_and_cash_activity_audit_not_verified_net_strategy_return",
+    }
 
 
 def fee_record_coverage(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -224,9 +345,14 @@ def main() -> None:
     parser.add_argument("--opening-positions", type=Path)
     parser.add_argument("--closing-positions", type=Path)
     parser.add_argument("--ledger-output", type=Path)
+    parser.add_argument("--opening-account", type=Path)
+    parser.add_argument("--closing-account", type=Path)
+    parser.add_argument("--equity-output", type=Path)
     args = parser.parse_args()
     if any((args.opening_positions, args.closing_positions, args.ledger_output)) and not all((args.opening_positions, args.closing_positions, args.ledger_output)):
         parser.error("opening-positions, closing-positions and ledger-output must be supplied together")
+    if any((args.opening_account, args.closing_account, args.equity_output)) and not all((args.opening_account, args.closing_account, args.equity_output)):
+        parser.error("opening-account, closing-account and equity-output must be supplied together")
     if args.fetch_paper:
         from alpaca.trading.client import TradingClient
         from ai_trading.config.managed_secrets import hydrate_managed_secrets
@@ -240,6 +366,15 @@ def main() -> None:
     if args.ledger_output:
         ledger = rebuild_quantity_ledger(snapshot, json.loads(args.opening_positions.read_text()), json.loads(args.closing_positions.read_text()))
         atomic_write_text(args.ledger_output, json.dumps(ledger, indent=2, sort_keys=True) + "\n")
+    if args.equity_output:
+        def _boundary(path: Path) -> dict[str, Any]:
+            payload = json.loads(path.read_text())
+            boundary = payload.get("account_boundary", payload)
+            if not isinstance(boundary, dict):
+                raise ValueError("account boundary must be an object")
+            return dict(boundary)
+        equity = reconcile_account_equity(snapshot, _boundary(args.opening_account), _boundary(args.closing_account))
+        atomic_write_text(args.equity_output, json.dumps(equity, indent=2, sort_keys=True) + "\n")
     report = reconcile(snapshot, fills)
     report["fee_record_coverage"] = fee_record_coverage(snapshot)
     report["daily_account_fee_totals"] = daily_fee_totals(report["fee_activities"])

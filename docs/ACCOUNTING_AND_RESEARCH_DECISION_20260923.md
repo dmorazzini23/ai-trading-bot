@@ -70,6 +70,27 @@ an authoritative complete per-order allocation contract) with account, order,
 execution, amount, currency and total-fee semantics; otherwise retain unknown
 net P&L. Do not infer zero from absent fee activity.
 
+Future read-only activity captures now include a broker-observed account
+boundary (cash, equity, currency and observation time). The accounting CLI can
+compare two such boundaries with a complete, covering same-account activity
+snapshot using `--opening-account`, `--closing-account` and `--equity-output`.
+It calculates execution cash effects from broker quantity and price, and uses
+only explicitly timed USD `net_amount` rows for other cash activity. A row with
+only a booked date, including the paper `FEE` schema observed here, remains
+unresolved even if its date appears outside the interval; the booked date is
+not an effective instant. A cash difference of even one cent is reported as
+unverified. The output also reports the broker equity boundary change and
+position-value residual, but never labels them verified strategy return or
+allocates account charges to executions. The account observation precedes the
+activity pagination, so it is not an atomic broker ledger snapshot.
+
+The September 22 capture predates these account boundaries. No historical
+cash/equity reconciliation is claimed from the seven fills or the 73 date-only
+fee rows. A future interval needs two complete, same-account USD boundaries,
+covering activity pagination, effective timestamps and cash amounts for all
+relevant non-fill activity, plus position and per-execution fee evidence for
+verified net strategy reporting.
+
 ## Historical ledger boundary
 
 The original `trade_history.parquet` is preserved. The broker-backed rebuild
