@@ -61,7 +61,9 @@ orders outside the canonical OMS path. The two live SDK calls in the canonical
 engine are the opening/ordinary submit and the verified short-cover path;
 native Alpaca 504 errors keep the durable intent unresolved when broker lookup
 cannot recover the order and do not authorize a blind retry or alternate broker
-submission. This is a code-path
+submission. The pure `_broker_submit_outcome_ambiguous` classifier keeps the
+5xx/timeout decision outside the oversized submit handler and has direct
+JSON/plain-text provider-error coverage. This is a code-path
 boundary, not evidence that live trading is approved or that every broker
 failure has been observed in production.
 The existence of these helpers is not evidence of current runtime use. The current

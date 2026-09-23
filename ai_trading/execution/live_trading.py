@@ -1589,6 +1589,25 @@ def _is_duplicate_client_order_id_error(err: BaseException) -> bool:
     return any(token in detail for token in duplicate_tokens)
 
 
+def _broker_submit_outcome_ambiguous(
+    err: Exception, metadata: Mapping[str, Any] | None = None,
+) -> bool:
+    """A lost submit response requires identity lookup, never alternate submission."""
+
+    if isinstance(err, (TimeoutError, ConnectionError)):
+        return True
+    if not isinstance(err, _AlpacaAPIError):
+        return False
+    details = metadata if metadata is not None else _extract_api_error_metadata(err)
+    status = details.get("status_code")
+    if isinstance(status, int) and 500 <= status < 600:
+        return True
+    message = str(details.get("detail") or details.get("error") or err).strip().lower()
+    return any(token in message for token in (
+        "timeout", "connection reset", "internal server error", "gateway", "service unavailable",
+    ))
+
+
 def _resolve_expected_order_price(*sources: Any) -> float | None:
     """Return best-effort benchmark price for slippage attribution."""
 
@@ -34898,19 +34917,7 @@ class ExecutionEngine:
             error_status = error_metadata.get("status_code")
             error_code = error_metadata.get("code")
             error_message = error_metadata.get("detail") or error_metadata.get("error") or str(e)
-            ambiguous_submit = isinstance(e, (TimeoutError, ConnectionError))
-            if isinstance(e, _AlpacaAPIError):
-                detail_text = str(error_message).strip().lower()
-                ambiguous_submit = (isinstance(error_status, int) and 500 <= error_status < 600) or any(
-                    token in detail_text
-                    for token in (
-                        "timeout",
-                        "connection reset",
-                        "internal server error",
-                        "gateway",
-                        "service unavailable",
-                    )
-                )
+            ambiguous_submit = _broker_submit_outcome_ambiguous(e, error_metadata)
             if ambiguous_submit and client_order_id_text:
                 recovered, recovery_mode = self._recover_order_after_submit_no_result(
                     client_order_id=client_order_id_text,

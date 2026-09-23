@@ -173,6 +173,28 @@ def test_live_low_level_native_504_keeps_claim_and_suppresses_failover(monkeypat
     assert intent.status == "SUBMITTING"
 
 
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (504, "upstream timeout", True),
+        (500, json.dumps({"code": 50010000, "message": "server error"}), True),
+        (400, "bad request", False),
+        (400, "gateway timeout", True),
+    ],
+)
+def test_broker_submit_ambiguity_classifier(status: int, body: str, expected: bool) -> None:
+    error = NativeAlpacaAPIError(
+        body,
+        HTTPError("broker_error", response=SimpleNamespace(status_code=status)),
+    )
+    assert lt._broker_submit_outcome_ambiguous(error) is expected
+
+
+def test_broker_submit_ambiguity_classifier_handles_lost_transport() -> None:
+    assert lt._broker_submit_outcome_ambiguous(TimeoutError("response lost")) is True
+    assert lt._broker_submit_outcome_ambiguous(ConnectionError("connection closed")) is True
+
+
 @pytest.mark.parametrize("error_kind", ["timeout", "native_504", "native_504_plain_text"])
 def test_live_timeout_does_not_blindly_retry_submission(error_kind: str) -> None:
     engine = _engine("live", SimpleNamespace(assert_submit_owner=lambda: None))
