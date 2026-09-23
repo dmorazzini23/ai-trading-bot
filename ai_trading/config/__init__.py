@@ -270,6 +270,10 @@ def reload_env(path: str | None = None, override: bool = True) -> str | None:
     """Reload environment variables and refresh exported config constants."""
 
     result = _management_reload_env(path=path, override=override)
+    # Invalidate this package instance directly. A reimport can leave the
+    # parent package attribute pointing at an older instance, so management's
+    # best-effort lookup may have cleared a different settings cache.
+    _reset_cached_settings()
     _refresh_exported_runtime_constants()
     return result
 

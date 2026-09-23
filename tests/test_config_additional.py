@@ -77,6 +77,9 @@ def test_reload_env_clears_cached_settings(monkeypatch):
     first = current_config.get_settings()
 
     monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.44")
+    # Reloading the package elsewhere can leave its parent attribute pointing
+    # at an older module even though sys.modules holds the current one.
+    monkeypatch.setattr(importlib.import_module("ai_trading"), "config", object())
     current_config.reload_env(path=None)
     second = current_config.get_settings()
 

@@ -1,6 +1,19 @@
 # Current handoff
 
-## September 23 owner decisions and CI (in progress)
+## September 23 owner decisions and CI repair
+
+Owner-authorized push of `c4c5d3d75` succeeded. CI `35903372692` reduced the
+failure to the config-cache test: 7,201 passed, one failed, four skipped,
+80.15% coverage. CodeQL, Workflow Lint, SBOM, research, replay and seed jobs
+passed. Reproduction showed that `import ai_trading.config as config_pkg` can
+resolve a stale parent attribute after package reimport; management then
+invalidated another module instance. The public `config.reload_env` now clears
+its own cache after management reload. The adverse alias test failed before and
+passed after the fix. Changed-file validation passed Ruff, mypy, compile,
+85 mapped tests, live read-only health and a non-sending incident snapshot.
+Health remains degraded solely for `required_model_stale`, with fresh broker
+state and zero positions/open orders. The repair is local pending a new
+reviewed push and exact-tip CI; no runtime restart or deployment occurred.
 
 CI `35888651186` later failed on three tests with 7,199 passed, four skipped,
 and 80.15% coverage. The two retry tests inherited CI's `paper_observe`
@@ -79,8 +92,8 @@ change; no broker request or runtime mutation occurred.
 
 ## Current decision and next gate (September 23)
 
-GitHub `main` contains `18ce1c10e`; CI failed on that SHA, and local test fixes
-await a reviewed public push and exact-tip CI.
+GitHub `main` contains `c4c5d3d75`; CI failed on that SHA, and the local
+config-cache repair awaits a reviewed public push and exact-tip CI.
 Before the push, `make secret-scan` passed on tracked files and an added-line
 scan across all 44 outgoing commits found zero likely live credential
 assignments. These checks do not replace a completed CI run.
