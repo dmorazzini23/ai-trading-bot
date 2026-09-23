@@ -8,10 +8,14 @@ import hashlib
 import importlib
 import json
 import os
+import fcntl
 import urllib.error
 import urllib.request
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
+
+from ai_trading.runtime.atomic_io import atomic_write_text
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from tools.mcp_common import ToolSpec
@@ -218,6 +222,27 @@ def _incident_state_path(args: dict[str, Any]) -> Path:
     return _DEFAULT_INCIDENT_STATE
 
 
+def _with_incident_state_lock(
+    operation: Callable[[dict[str, Any]], dict[str, Any]],
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Serialize same-host incident state transitions across timer and operator calls."""
+
+    @wraps(operation)
+    def locked(args: dict[str, Any]) -> dict[str, Any]:
+        state_path = _incident_state_path(args)
+        lock_path = state_path.with_name(f"{state_path.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(fd, "a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return operation(args)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    return locked
+
+
 def _eod_state_path(args: dict[str, Any]) -> Path:
     raw = (
         str(args.get("state_path") or "").strip()
@@ -274,8 +299,7 @@ def _load_state(path: Path) -> dict[str, Any]:
 
 
 def _save_state(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, sort_keys=True, indent=2))
 
 
 def _parse_iso_ts(value: Any) -> datetime | None:
@@ -2092,6 +2116,7 @@ def tool_runtime_incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@_with_incident_state_lock
 def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     snapshot = _collect_runtime_snapshot(args)
     triggers = _evaluate_incident_triggers(snapshot, args)
@@ -2402,6 +2427,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@_with_incident_state_lock
 def tool_clear_incident_state(args: dict[str, Any]) -> dict[str, Any]:
     path = _incident_state_path(args)
     existed = path.exists()
@@ -2410,6 +2436,7 @@ def tool_clear_incident_state(args: dict[str, Any]) -> dict[str, Any]:
     return {"cleared": existed, "state_path": str(path)}
 
 
+@_with_incident_state_lock
 def tool_acknowledge_incident(args: dict[str, Any]) -> dict[str, Any]:
     """Record an operator acknowledgement without changing alert or trading gates."""
 

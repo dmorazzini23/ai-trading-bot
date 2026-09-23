@@ -436,6 +436,10 @@ message, suppress future alerts or prove the operator received a notification.
 An unconfirmed health-unavailable probe is cleared when health recovers or a
 different incident state is observed, so a later outage must earn its own
 second confirmation.
+Incident notification, acknowledgement and clear operations now share a
+same-host file lock and atomic state writes. This prevents an operator's local
+acknowledgement from being overwritten by a concurrent connector run; it is
+not a distributed acknowledgement system or proof of Slack delivery.
 Call `acknowledge_incident` with the reported `incident_signature` and an
 `operator` value. Confirm actual recovery
 from fresh health, broker and order evidence before treating the incident as
