@@ -54,8 +54,10 @@ retention disabled; its 30-day setting therefore does not establish remote
 retention. At 10:48 UTC September 23, a read-only `ListObjectsV2` on the
 configured backup prefix succeeded with zero keys and no truncation. A separate
 read of the bucket lifecycle policy found one enabled 30-day expiration rule
-whose filter covers that prefix. Bucket versioning could not be verified in
-this check. The visible lifecycle rule does not establish a retained backup:
+whose filter covers that prefix. A September 23 11:22 UTC read-only
+`GetBucketVersioning` call returned `AccessDenied` (HTTP 403), so the current
+identity cannot verify versioning. The backup-sync timer remained disabled and
+inactive at that time. The visible lifecycle rule does not establish a retained backup:
 there was no object in the configured prefix to read back or restore.
 
 A failed local backup exits nonzero, writes
