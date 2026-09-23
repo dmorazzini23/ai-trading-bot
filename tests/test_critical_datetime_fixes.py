@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
+
 
 class TestDatetimeTimezoneAwareness(unittest.TestCase):
     """Test that datetime objects are timezone-aware for Alpaca API compatibility."""
@@ -49,17 +51,28 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
                 self.assertIn("T", rfc3339_str, "Should produce valid RFC3339 format")
 
     def test_get_bars_datetime_parameters(self):
-        """Test that get_bars handles timezone-aware datetime parameters."""
+        """Test timezone-aware parameters through a local Alpaca-style client."""
         from ai_trading.data.fetch import get_bars
 
         start_dt = datetime.now(UTC)
         end_dt = start_dt + timedelta(hours=1)
+        observed: dict[str, Any] = {}
 
-        try:
-            get_bars("AAPL", "1Min", start_dt, end_dt)
-        except (ValueError, TypeError) as e:  # pragma: no cover - ensure no TZ errors
-            if "timezone" in str(e).lower():
-                self.fail(f"get_bars failed due to timezone issues: {e}")
+        class LocalBarsClient:
+            def get_bars(self, symbol, *, start, end, timeframe):
+                observed.update(symbol=symbol, start=start, end=end, timeframe=timeframe)
+                return pd.DataFrame({
+                    "timestamp": [start], "open": [1.0], "high": [1.0],
+                    "low": [1.0], "close": [1.0], "volume": [1],
+                })
+
+        result = get_bars("AAPL", "1Min", start_dt, end_dt, feed=cast(Any, LocalBarsClient()))
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertEqual(observed, {
+            "symbol": "AAPL", "start": start_dt, "end": end_dt, "timeframe": "1Min"
+        })
+        self.assertIsNotNone(observed["start"].tzinfo)
+        self.assertIsNotNone(observed["end"].tzinfo)
 
 
 class TestMetaLearningDataFetching(unittest.TestCase):
