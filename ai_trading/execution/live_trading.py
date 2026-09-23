@@ -24030,7 +24030,10 @@ class ExecutionEngine:
                 detail=str(exc) or "order execution failed",
                 submit_started_at=submit_started_at,
             )
-            if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
+            if (
+                normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live"
+                or _broker_submit_outcome_ambiguous(exc)
+            ):
                 logger.error(
                     "DURABLE_ORDER_SUBMIT_UNRESOLVED",
                     extra={
@@ -24136,9 +24139,10 @@ class ExecutionEngine:
                     )
                     if controlled_metrics_skip:
                         durable_error = "controlled_skip:metrics_improvement_control"
-                    elif (
-                        prior_status == "failed"
-                        and normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live"
+                    elif prior_status == "failed" and (
+                        normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live"
+                        or bool(prior_outcome.get("submit_no_result_failure"))
+                        or 500 <= _safe_int(prior_outcome.get("status_code"), 0) < 600
                     ):
                         logger.error(
                             "DURABLE_ORDER_SUBMIT_UNRESOLVED",
@@ -24212,25 +24216,15 @@ class ExecutionEngine:
                     ),
                     submit_started_at=submit_started_at,
                 )
-                if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
-                    logger.error(
-                        "DURABLE_ORDER_SUBMIT_UNRESOLVED",
-                        extra={
-                            "symbol": symbol,
-                            "client_order_id": missing_client_id,
-                            "intent_id": durable_intent_id,
-                            "reason": "submit_no_result",
-                        },
-                    )
-                else:
-                    self._record_durable_submit_error(
-                        intent_id=durable_intent_id,
-                        order_id=None,
-                        client_order_id=missing_client_id,
-                        error=(
-                            f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
-                        ),
-                    )
+                logger.error(
+                    "DURABLE_ORDER_SUBMIT_UNRESOLVED",
+                    extra={
+                        "symbol": symbol,
+                        "client_order_id": missing_client_id,
+                        "intent_id": durable_intent_id,
+                        "reason": "submit_no_result",
+                    },
+                )
                 _release_capacity_reservation("submit_no_result")
                 return None
 

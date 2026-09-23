@@ -945,12 +945,13 @@ def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine
     assert engine._last_submit_outcome.get("reason") == "durable_oms_unavailable"
 
 
-def test_live_lost_submit_response_keeps_claimed_intent_unresolved(engine_factory):
+@pytest.mark.parametrize("mode", ["live", "paper"])
+def test_lost_submit_response_keeps_claimed_intent_unresolved(engine_factory, mode):
     def _lost_response(_order_data):
         raise TimeoutError("broker accepted but response was lost")
 
     engine = engine_factory(execute_behavior=_lost_response)
-    engine.execution_mode = "live"
+    engine.execution_mode = mode
     engine._pre_execution_order_checks = lambda _order: True
     errors: list[dict[str, Any]] = []
     syncs: list[dict[str, Any]] = []
@@ -965,6 +966,7 @@ def test_live_lost_submit_response_keeps_claimed_intent_unresolved(engine_factor
 
         def record_external_submit_error(self, **kwargs):
             errors.append(kwargs)
+            intents[0].status = "PENDING_SUBMIT"
             return kwargs["intent_id"]
 
         def sync_external_order_state(self, **kwargs):
@@ -985,9 +987,10 @@ def test_live_lost_submit_response_keeps_claimed_intent_unresolved(engine_factor
     )
 
 
-def test_live_empty_submit_result_does_not_reset_intent(engine_factory):
+@pytest.mark.parametrize("mode", ["live", "paper"])
+def test_empty_submit_result_does_not_reset_intent(engine_factory, mode):
     engine = engine_factory()
-    engine.execution_mode = "live"
+    engine.execution_mode = mode
     engine._pre_execution_order_checks = lambda _order: True
     engine.submit_market_order = lambda *_args, **_kwargs: None
     engine._recover_order_after_submit_no_result = lambda **_kwargs: (None, "not_found")
@@ -1005,6 +1008,75 @@ def test_live_empty_submit_result_does_not_reset_intent(engine_factory):
     ) is None
     assert claimed == ["empty-result-id"]
     assert submit_errors == []
+
+
+def test_paper_definite_submit_rejection_closes_intent(engine_factory):
+    def _rejected(_order_data):
+        raise lt.APIError("invalid order", status_code=400)
+
+    engine = engine_factory(execute_behavior=_rejected)
+    engine.execution_mode = "paper"
+    engine._pre_execution_order_checks = lambda _order: True
+    intents: list[SimpleNamespace] = []
+
+    class DurableManager:
+        _intent_store = SimpleNamespace(get_open_intents=lambda: list(intents))
+
+        def begin_external_order_lifecycle(self, **kwargs):
+            intents.append(SimpleNamespace(status="SUBMITTING", symbol=kwargs["symbol"]))
+            return kwargs["intent_id"]
+
+        def record_external_submit_error(self, **kwargs):
+            intents[0].status = "PENDING_SUBMIT"
+            return kwargs["intent_id"]
+
+        def sync_external_order_state(self, **kwargs):
+            intents[0].status = str(kwargs["status"]).upper()
+            return kwargs["intent_id"]
+
+    engine.order_manager = DurableManager()
+
+    assert engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id="definite-reject-id"
+    ) is None
+    assert intents[0].status == "REJECTED"
+    assert engine._execution_phase_allows_submits(closing_position=False) != (
+        False, "oms_submit_outcome_unresolved"
+    )
+
+
+def test_paper_direct_submit_timeout_keeps_intent_unresolved(engine_factory):
+    engine = engine_factory()
+    engine.execution_mode = "paper"
+
+    def _timeout(*_args, **_kwargs):
+        raise TimeoutError("broker response lost")
+
+    engine.submit_market_order = _timeout
+    errors: list[dict[str, Any]] = []
+    intents: list[SimpleNamespace] = []
+
+    class DurableManager:
+        _intent_store = SimpleNamespace(get_open_intents=lambda: list(intents))
+
+        def begin_external_order_lifecycle(self, **kwargs):
+            intents.append(SimpleNamespace(status="SUBMITTING", symbol=kwargs["symbol"]))
+            return kwargs["intent_id"]
+
+        def record_external_submit_error(self, **kwargs):
+            errors.append(kwargs)
+            intents[0].status = "PENDING_SUBMIT"
+
+    engine.order_manager = DurableManager()
+
+    assert engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id="direct-timeout-id"
+    ) is None
+    assert errors == []
+    assert intents[0].status == "SUBMITTING"
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False, "oms_submit_outcome_unresolved"
+    )
 
 
 def test_paper_order_with_intent_store_does_not_submit_after_refused_claim(

@@ -64,8 +64,12 @@ cannot recover the order and do not authorize a blind retry or alternate broker
 submission. The paper submit wrapper now also stops after a timeout or 5xx
 whose lookup did not resolve broker acceptance. The outer `bot_engine.submit_order`
 facade no longer adds an independent API-error retry; definite rate-limit
-rejections still use the engine's bounded same-identity retry. Paper behavior
-does not provide the live durable-intent proof described above. The pure
+rejections still use the engine's bounded same-identity retry. On the supported
+paper path with a durable OMS claim, an ambiguous submit or empty broker response
+keeps the intent `SUBMITTING` until reconciliation; new opening orders are blocked
+while that exposure is unknown. A definite 400 rejection closes the intent.
+This has isolated regression coverage but still needs deployment and session
+evidence. Paper behavior does not provide live execution proof. The pure
 `_broker_submit_outcome_ambiguous` classifier keeps the
 5xx/timeout decision outside the oversized submit handler and has direct
 JSON/plain-text provider-error coverage. This is a code-path
