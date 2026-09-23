@@ -75,9 +75,14 @@ launch-profile evaluator rejects missing account identity, missing position or
 open-order snapshots, unknown position market values, unpriced pending orders
 and account conflicts. A closing label alone cannot prove a reduction whose
 quantity would flip the position. These checks improve the existing live
-opening path; they do not establish a durable high-water baseline, approved
-loss thresholds, or proof that every direct broker submission and live
-reduction path enforces this contract. The separate live-owner fence and
+opening path. Its daily-loss check currently accepts a caller-supplied
+`daily_loss_state` value without source identity, observation time, cash-flow
+adjustment or durable session baseline. That value is insufficient to authorize
+live risk; a future implementation must derive the loss from fresh same-account
+broker equity and reconciled cash/activity evidence, and block when any input
+is unknown. These checks do not establish a durable high-water baseline,
+approved loss thresholds, or proof that every direct broker submission and
+live reduction path enforces this contract. The separate live-owner fence and
 model/replay gates still apply.
 
 Approval of the two numeric loss decisions; a single canonical evaluator wired
