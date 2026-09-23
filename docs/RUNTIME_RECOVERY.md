@@ -48,19 +48,29 @@ The packaged backup-sync unit now creates and verifies the bundle before
 invoking the existing optional S3 archive sync. The timer is configured for
 23:30 UTC daily, after the regular US equity session in either daylight-saving
 season. Its retention is seven days and at most 14 local snapshots; the
-existing S3 sync has separate configured retention. A failed local backup
-exits nonzero, writes `runtime/recovery_backup_latest.json` with a safe reason
+existing S3 sync has separate retention controls. The deployed runtime
+environment observed September 23 had S3 sync enabled and uploader-side S3
+retention disabled; its 30-day setting therefore does not establish remote
+retention. Bucket lifecycle policy could not be inspected with the current AWS
+identity.
+
+A failed local backup exits nonzero, writes
+`runtime/recovery_backup_latest.json` with a safe reason
 class, and leaves no published partial bundle. A failed optional S3 sync fails
 the systemd unit and must be handled separately; local success is not proof of
 off-host durability. The service/timer changes require deployment and a
 non-sending incident check before unattended coverage can be claimed.
+
 When S3 sync is enabled, its staging step fails if it cannot find a
 `recovery_backups/recovery.bak.*.gz` bundle, even if legacy log archives exist.
 This closes a silent-success case in the uploader; it does not verify that S3
 accepted or retained the object. Off-host recovery still requires an authorized
 read-back and isolated restore from the remote object.
+
 The configured S3 retention pass now also fails the unit if object listing or
 deletion fails; an uploaded bundle is not evidence that retention succeeded.
+When that pass is explicitly enabled, invalid days/delete-cap settings and a
+reached delete cap also fail the unit instead of reporting a complete run.
 Inspect the unit journal for the safe failure class and resolve bucket permissions
 before counting the scheduled run as complete.
 

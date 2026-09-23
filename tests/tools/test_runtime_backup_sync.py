@@ -13,7 +13,13 @@ _SCRIPT = Path(__file__).resolve().parents[2] / "scripts/sync_runtime_backups_to
 
 
 def _sync_with_fake_aws(
-    tmp_path: Path, *, retention_enabled: bool = False, aws_failure: str = ""
+    tmp_path: Path,
+    *,
+    retention_enabled: bool = False,
+    aws_failure: str = "",
+    retention_days: str = "30",
+    max_deletes: str = "500",
+    list_two: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -27,6 +33,8 @@ def _sync_with_fake_aws(
         'if [ "$1 $2" = "s3 ls" ]; then\n'
         '  [ "$FAKE_AWS_FAILURE" = "list" ] && exit 5\n'
         "  echo '2020-01-01 00:00:00 10 pruned/recovery_backups/recovery.bak.20200101T000000Z-12345678.gz'\n"
+        '  [ "$FAKE_AWS_LIST_TWO" = "1" ] && '
+        "echo '2020-01-02 00:00:00 10 pruned/recovery_backups/recovery.bak.20200102T000000Z-12345678.gz'\n"
         "  exit 0\n"
         "fi\n"
         'if [ "$1 $2" = "s3 rm" ]; then\n'
@@ -45,8 +53,11 @@ def _sync_with_fake_aws(
         AI_TRADING_BACKUP_S3_SYNC_ENABLED="1",
         AI_TRADING_BACKUP_S3_BUCKET="isolated-test-bucket",
         AI_TRADING_BACKUP_S3_RETENTION_ENABLED="1" if retention_enabled else "0",
+        AI_TRADING_BACKUP_S3_RETENTION_DAYS=retention_days,
+        AI_TRADING_BACKUP_S3_RETENTION_MAX_DELETES=max_deletes,
         FAKE_AWS_STAGE_LIST=str(staged_list),
         FAKE_AWS_FAILURE=aws_failure,
+        FAKE_AWS_LIST_TWO="1" if list_two else "0",
     )
     result = subprocess.run(
         ["bash", str(_SCRIPT)],
@@ -115,3 +126,34 @@ def test_retention_success_reports_deleted_archive(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "S3 retention removed 1 backup object" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("retention_days", "max_deletes"),
+    [("invalid", "500"), ("0", "500"), ("30", "invalid"), ("30", "0")],
+)
+def test_enabled_retention_rejects_invalid_settings(
+    tmp_path: Path, retention_days: str, max_deletes: str
+) -> None:
+    _seed_recovery_bundle(tmp_path)
+
+    result, _ = _sync_with_fake_aws(
+        tmp_path,
+        retention_enabled=True,
+        retention_days=retention_days,
+        max_deletes=max_deletes,
+    )
+
+    assert result.returncode != 0
+    assert "S3 retention settings are invalid" in result.stderr
+
+
+def test_retention_delete_cap_is_reported_as_partial(tmp_path: Path) -> None:
+    _seed_recovery_bundle(tmp_path)
+
+    result, _ = _sync_with_fake_aws(
+        tmp_path, retention_enabled=True, max_deletes="1", list_two=True
+    )
+
+    assert result.returncode != 0
+    assert "S3 retention delete cap reached" in result.stderr

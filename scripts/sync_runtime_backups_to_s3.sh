@@ -60,13 +60,9 @@ if [[ "${RETENTION_ENABLED}" != "1" ]]; then
   exit 0
 fi
 
-if ! [[ "${RETENTION_DAYS}" =~ ^[0-9]+$ ]] || ! [[ "${RETENTION_MAX_DELETES}" =~ ^[0-9]+$ ]]; then
-  echo "S3 retention settings are invalid; skipping retention pass" >&2
-  exit 0
-fi
-
-if [[ "${RETENTION_DAYS}" -le 0 ]]; then
-  exit 0
+if ! [[ "${RETENTION_DAYS}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${RETENTION_MAX_DELETES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "S3 retention settings are invalid" >&2
+  exit 2
 fi
 
 cutoff_epoch="$(date -u -d "-${RETENTION_DAYS} days" +%s)"
@@ -88,8 +84,8 @@ while read -r date_str time_str _size key; do
   fi
 
   if [[ "${deleted}" -ge "${RETENTION_MAX_DELETES}" ]]; then
-    echo "S3 retention delete cap reached (${RETENTION_MAX_DELETES}); stopping pass"
-    break
+    echo "S3 retention delete cap reached (${RETENTION_MAX_DELETES}); retention incomplete" >&2
+    exit 6
   fi
 
   if ! aws s3 rm "s3://${S3_BUCKET}/${key}" --region "${AWS_REGION}" --only-show-errors >/dev/null 2>&1; then
