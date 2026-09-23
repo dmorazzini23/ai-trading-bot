@@ -1008,6 +1008,59 @@ def test_notify_incident_channel_dedupes(monkeypatch, tmp_path: Path) -> None:
     assert any("Triggered by" in str(block) for block in blocks)
 
 
+def test_incident_acknowledgement_and_recovery_allow_new_occurrence(monkeypatch, tmp_path: Path) -> None:
+    phase = {"active": True}
+    posts: list[dict[str, Any]] = []
+    snapshot = {
+        "go_no_go_gate_passed": True,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "runtime_gate_failed",
+        "provider_status": "healthy",
+        "provider_active": "alpaca",
+        "provider_reason": "data_available_netting",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+
+    def _collect(_args: dict[str, Any]) -> dict[str, Any]:
+        return {**snapshot, "health_ok": not phase["active"],
+                "health_status": "degraded" if phase["active"] else "healthy"}
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", lambda _url, payload, **_kwargs: posts.append(payload) or 200)
+    state_path = tmp_path / "incident.json"
+    args = {"state_path": str(state_path), "webhook_url": "https://hooks.slack.test/example"}
+
+    first = slack_srv.tool_notify_incident_channel(args)
+    assert first["sent"] is True
+    signature = first["incident_signature"]
+    assert slack_srv.tool_acknowledge_incident({**args, "incident_signature": "wrong", "operator": "operator"})["acknowledged"] is False
+    acknowledged = slack_srv.tool_acknowledge_incident({**args, "incident_signature": signature, "operator": "operator"})
+    assert acknowledged["acknowledged"] is True
+    assert acknowledged["reason"] == "recorded"
+    assert slack_srv.tool_notify_incident_channel(args)["sent"] is False
+    assert len(posts) == 1
+
+    phase["active"] = False
+    clear = slack_srv.tool_notify_incident_channel(args)
+    assert clear["reason"] == "no_incident_triggered"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["resolved_at"]
+    assert state["last_incident"]["acknowledged_by"] == "operator"
+    assert slack_srv.tool_acknowledge_incident({**args, "incident_signature": signature, "operator": "operator"})["acknowledged"] is False
+    assert len(posts) == 1
+
+    phase["active"] = True
+    recurrence = slack_srv.tool_notify_incident_channel(args)
+    assert recurrence["sent"] is True
+    assert recurrence["incident_signature"] == signature
+    assert len(posts) == 2
+
+
 def test_notify_incident_channel_confirms_health_unavailable_before_alert(
     monkeypatch, tmp_path: Path
 ) -> None:

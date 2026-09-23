@@ -427,11 +427,17 @@ The existing connector timer is a separate systemd process that probes the
 application each minute. On September 23 it was enabled while the older
 30-minute healthcheck timer was disabled. This detects application failure
 while the host and timer remain alive; it cannot detect loss of the host itself.
-The new state label enriches snapshots and incident text but does not add a
-notification destination, change alert triggers, acknowledge an incident or
-send a test notification. Off-host heartbeat detection, delivery approval,
-acknowledgement and recovery verification still need a separate demonstrated
-operational path before unattended live operation can be claimed.
+The state label enriches snapshots and incident text without changing
+notification destinations or alert triggers. When triggers clear, the Slack
+helper records a local `resolved_at` and retains the prior incident, so a later
+recurrence can alert again. The `acknowledge_incident` helper records the exact
+active incident signature and operator in that local state; it does not send a
+message, suppress future alerts or prove the operator received a notification.
+Call `acknowledge_incident` with the reported `incident_signature` and an
+`operator` value. Confirm actual recovery
+from fresh health, broker and order evidence before treating the incident as
+closed. Off-host heartbeat detection, delivery approval and demonstrated
+end-to-end acknowledgement remain prerequisites for unattended live operation.
 
 #### Read-only pre-open acceptance verdict
 

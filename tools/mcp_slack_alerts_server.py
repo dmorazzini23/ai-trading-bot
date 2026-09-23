@@ -2103,6 +2103,13 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     min_interval_minutes = _incident_min_interval_minutes(args)
     should_alert = bool(triggers) or force
     if not should_alert:
+        state_path = _incident_state_path(args)
+        prior = _load_state(state_path)
+        if prior.get("incident_signature") and prior.get("sent_at") and not prior.get("resolved_at"):
+            _save_state(state_path, {
+                "resolved_at": utc_now_iso(),
+                "last_incident": prior,
+            })
         return {
             "sent": False,
             "reason": "no_incident_triggered",
@@ -2395,6 +2402,35 @@ def tool_clear_incident_state(args: dict[str, Any]) -> dict[str, Any]:
     return {"cleared": existed, "state_path": str(path)}
 
 
+def tool_acknowledge_incident(args: dict[str, Any]) -> dict[str, Any]:
+    """Record an operator acknowledgement without changing alert or trading gates."""
+
+    signature = str(args.get("incident_signature") or "").strip()
+    operator = str(args.get("operator") or "").strip()
+    if not signature or not operator:
+        raise ValueError("incident_signature and operator are required")
+    path = _incident_state_path(args)
+    state = _load_state(path)
+    if state.get("incident_signature") != signature or not state.get("sent_at"):
+        return {"acknowledged": False, "reason": "active_incident_mismatch", "state_path": str(path)}
+    if state.get("acknowledged_at"):
+        return {
+            "acknowledged": True,
+            "reason": "already_acknowledged",
+            "acknowledged_at": state["acknowledged_at"],
+            "state_path": str(path),
+        }
+    state["acknowledged_at"] = utc_now_iso()
+    state["acknowledged_by"] = operator[:128]
+    _save_state(path, state)
+    return {
+        "acknowledged": True,
+        "reason": "recorded",
+        "acknowledged_at": state["acknowledged_at"],
+        "state_path": str(path),
+    }
+
+
 def tool_clear_eod_summary_state(args: dict[str, Any]) -> dict[str, Any]:
     path = _eod_state_path(args)
     existed = path.exists()
@@ -2407,6 +2443,7 @@ TOOLS = {
     "runtime_incident_snapshot": tool_runtime_incident_snapshot,
     "notify_incident_channel": tool_notify_incident_channel,
     "clear_incident_state": tool_clear_incident_state,
+    "acknowledge_incident": tool_acknowledge_incident,
     "runtime_eod_summary_snapshot": tool_runtime_eod_summary_snapshot,
     "notify_eod_summary": tool_notify_eod_summary,
     "clear_eod_summary_state": tool_clear_eod_summary_state,
@@ -2424,6 +2461,10 @@ TOOL_SPECS: list[ToolSpec] = [
     {
         "name": "clear_incident_state",
         "description": "Clear saved Slack incident dedupe state.",
+    },
+    {
+        "name": "acknowledge_incident",
+        "description": "Record a local operator acknowledgement for the exact active incident signature.",
     },
     {
         "name": "runtime_eod_summary_snapshot",
