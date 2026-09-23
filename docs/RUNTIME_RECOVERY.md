@@ -23,9 +23,19 @@ metadata; and regular model artifacts/JSON metadata under `models`.
 The bundle manifest records per-file size and SHA-256, creation time, and the
 run manifest's code/config/policy identities. Verification rejects missing,
 extra, altered, or unsafe members and checks restored SQLite integrity.
+For new schema-2 bundles, creation also resolves the configured OMS SQLite URL
+and persistent pretrade limiter path and requires those exact databases inside
+the runtime directory. Verification checks their names against the manifest's
+SQLite members. A missing configured database, an out-of-scope database or a
+non-SQLite authoritative store fails the backup and writes failure status;
+it cannot produce a misleading success bundle. Older schema-1 bundles remain
+readable, but their manifests do not certify configured-database completeness.
 
-Environment files, credentials, private keys, and arbitrary runtime files are
-excluded. The archive is mode 0600 in a mode 0700 backup directory. Secrets
+Environment files, known credential/private-key paths, and arbitrary runtime
+files are excluded, including model files under sensitive directory names.
+File-content screening is not a proof that a mislabeled model artifact contains
+no secret, so inspect new model sources before adding them to recovery scope.
+The archive is mode 0600 in a mode 0700 backup directory. Secrets
 must be restored from the approved external source; a bundle does not supply
 credentials or trading approval. Files whose size or modification time changes
 while copied cause backup failure. The SQLite databases are each

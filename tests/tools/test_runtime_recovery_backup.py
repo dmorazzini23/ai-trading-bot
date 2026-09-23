@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import io
 import sqlite3
+import tarfile
 from pathlib import Path
 
 import pytest
 
 from ai_trading.execution.engine import OrderManager
 from ai_trading.oms.intent_store import IntentStore
+from ai_trading.tools import runtime_recovery_backup as recovery
 from ai_trading.tools.runtime_recovery_backup import (
     create_backup,
     restore_to_directory,
@@ -53,6 +56,8 @@ def _seed(data_dir: Path) -> IntentStore:
     (models_dir / "registry_index.json").write_text("{}", encoding="utf-8")
     (models_dir / "trained_model.pkl").write_bytes(b"synthetic-model")
     (models_dir / "credentials.json").write_text("secret", encoding="utf-8")
+    (models_dir / "credentials").mkdir()
+    (models_dir / "credentials" / "account.json").write_text("nested-secret", encoding="utf-8")
     (data_dir / ".env").write_text("ALPACA_SECRET_KEY=never-back-up", encoding="utf-8")
     return store
 
@@ -60,7 +65,7 @@ def _seed(data_dir: Path) -> IntentStore:
 def test_bundle_restores_consistent_oms_and_reconciles_broker_truth(tmp_path: Path) -> None:
     data_dir = tmp_path / "source"
     _seed(data_dir)
-    bundle = create_backup(data_dir, destination=tmp_path / "backups")
+    bundle = create_backup(data_dir, destination=tmp_path / "backups", required_databases=("oms_intents.db", "pretrade_rate_limiter.db"))
 
     manifest = verify_backup(bundle)
     names = {entry["path"] for entry in manifest["entries"]}
@@ -71,11 +76,13 @@ def test_bundle_restores_consistent_oms_and_reconciles_broker_truth(tmp_path: Pa
     assert "models/registry_index.json" in names
     assert "models/trained_model.pkl" in names
     assert not any("credential" in name or ".env" in name for name in names)
+    assert "models/credentials/account.json" not in names
+    assert manifest["required_databases"] == ["oms_intents.db", "pretrade_rate_limiter.db"]
     assert manifest["credential_files_included"] is False
 
     restored_root = tmp_path / "restored"
     restore_to_directory(bundle, restored_root)
-    assert json.loads((restored_root / "manifest.json").read_text())["schema_version"] == 1
+    assert json.loads((restored_root / "manifest.json").read_text())["schema_version"] == 2
     assert bundle.stat().st_mode & 0o777 == 0o600
     restored_store = IntentStore(path=str(restored_root / "runtime" / "oms_intents.db"))
     intent = restored_store.get_intent("client-recovery-1")
@@ -103,8 +110,8 @@ def test_bundle_retention_and_corruption_detection(tmp_path: Path) -> None:
     data_dir = tmp_path / "source"
     _seed(data_dir)
     backup_dir = tmp_path / "backups"
-    first = create_backup(data_dir, destination=backup_dir, max_snapshots=1)
-    second = create_backup(data_dir, destination=backup_dir, max_snapshots=1)
+    first = create_backup(data_dir, destination=backup_dir, max_snapshots=1, required_databases=("oms_intents.db", "pretrade_rate_limiter.db"))
+    second = create_backup(data_dir, destination=backup_dir, max_snapshots=1, required_databases=("oms_intents.db", "pretrade_rate_limiter.db"))
     assert first != second
     assert not first.exists()
     assert second.exists()
@@ -121,8 +128,71 @@ def test_backup_failure_records_status_without_source_details(tmp_path: Path) ->
     (data_dir / "runtime").mkdir(parents=True)
     (data_dir / "models").mkdir()
     with pytest.raises(RuntimeError, match="runtime_databases_missing"):
-        create_backup(data_dir, destination=tmp_path / "backups")
+        create_backup(data_dir, destination=tmp_path / "backups", required_databases=("oms_intents.db",))
     status = json.loads((data_dir / "runtime" / "recovery_backup_latest.json").read_text())
     assert status["status"] == "failed"
     assert status["reason"] == "RuntimeError"
     assert status["bundle"] is None
+
+
+def test_backup_refuses_missing_configured_database(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "source"
+    _seed(data_dir)
+    runtime_dir = data_dir / "runtime"
+    (runtime_dir / "oms_intents.db").unlink()
+    settings = {
+        "DATABASE_URL": f"sqlite:///{runtime_dir / 'oms_intents.db'}",
+        "AI_TRADING_PRETRADE_RATE_LIMITER_PERSIST": True,
+        "AI_TRADING_PRETRADE_RATE_LIMITER_PATH": str(runtime_dir / "pretrade_rate_limiter.db"),
+    }
+    monkeypatch.setattr(recovery, "get_env", lambda key, default=None, **_kwargs: settings.get(key, default))
+    with pytest.raises(RuntimeError, match="required_runtime_database_missing"):
+        create_backup(data_dir, destination=tmp_path / "backups")
+    status = json.loads((data_dir / "runtime" / "recovery_backup_latest.json").read_text())
+    assert status["status"] == "failed"
+    assert status["bundle"] is None
+    assert list((tmp_path / "backups").glob("*.gz")) == []
+
+
+def test_configured_database_inventory_rejects_out_of_scope_or_non_sqlite(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "source"
+    runtime_dir = data_dir / "runtime"
+    runtime_dir.mkdir(parents=True)
+    settings = {
+        "DATABASE_URL": f"sqlite:///{runtime_dir / 'oms_intents.db'}",
+        "AI_TRADING_PRETRADE_RATE_LIMITER_PERSIST": True,
+        "AI_TRADING_PRETRADE_RATE_LIMITER_PATH": str(runtime_dir / "pretrade_rate_limiter.db"),
+    }
+    monkeypatch.setattr(recovery, "get_env", lambda key, default=None, **_kwargs: settings.get(key, default))
+    assert recovery._configured_sqlite_databases(data_dir) == ("oms_intents.db", "pretrade_rate_limiter.db")
+    settings["DATABASE_URL"] = "postgresql+psycopg://example.invalid/account"
+    with pytest.raises(RuntimeError, match="non_sqlite_database_backup_unavailable"):
+        recovery._configured_sqlite_databases(data_dir)
+    settings["DATABASE_URL"] = f"sqlite:///{tmp_path / 'other.db'}"
+    with pytest.raises(RuntimeError, match="oms_database_outside_backup_scope"):
+        recovery._configured_sqlite_databases(data_dir)
+
+
+def test_verifier_rejects_schema_two_bundle_missing_required_database(tmp_path: Path) -> None:
+    data_dir = tmp_path / "source"
+    _seed(data_dir)
+    bundle = create_backup(
+        data_dir,
+        destination=tmp_path / "backups",
+        required_databases=("oms_intents.db", "pretrade_rate_limiter.db"),
+    )
+    altered = tmp_path / "altered.gz"
+    with tarfile.open(bundle, "r:gz") as source, tarfile.open(altered, "w:gz") as target:
+        for member in source.getmembers():
+            stream = source.extractfile(member)
+            assert stream is not None
+            content = stream.read()
+            if member.name == "manifest.json":
+                manifest = json.loads(content)
+                manifest["required_databases"] = ["missing.db"]
+                content = json.dumps(manifest).encode()
+            replacement = tarfile.TarInfo(member.name)
+            replacement.size = len(content)
+            target.addfile(replacement, io.BytesIO(content))
+    with pytest.raises(RuntimeError, match="backup_required_database_missing"):
+        verify_backup(altered)

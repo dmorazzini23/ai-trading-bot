@@ -18,8 +18,12 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Sequence
 
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 
@@ -48,9 +52,41 @@ _RUNTIME_FILES = (
     "tca_records.jsonl",
     "broker_position_boundaries.jsonl",
 )
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _MODEL_SUFFIXES = {".pkl", ".joblib", ".json", ".onnx", ".pt", ".safetensors", ".zip"}
-_SENSITIVE_NAME_PARTS = {"secret", "credential", "token", "private_key", ".env"}
+_SENSITIVE_NAME_PARTS = {"secret", "credential", "token", "private_key", "api_key", "password", ".env"}
+
+
+def _configured_sqlite_databases(data_dir: Path) -> tuple[str, ...]:
+    """Identify the active local stores; refuse a database outside this bundle."""
+
+    runtime_dir = (data_dir / "runtime").resolve()
+    database_url = str(get_env("DATABASE_URL", "", cast=str) or "").strip()
+    if database_url:
+        try:
+            parsed = make_url(database_url)
+        except (ArgumentError, TypeError, ValueError) as exc:
+            raise RuntimeError("database_url_invalid_for_backup") from exc
+        if parsed.get_backend_name() != "sqlite" or not parsed.database:
+            raise RuntimeError("non_sqlite_database_backup_unavailable")
+        oms_path = Path(parsed.database).expanduser()
+    else:
+        oms_path = Path(str(get_env("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db", cast=str)))
+    if not oms_path.is_absolute():
+        oms_path = (Path.cwd() / oms_path).resolve()
+    if oms_path.parent.resolve() != runtime_dir or oms_path.suffix != ".db":
+        raise RuntimeError("oms_database_outside_backup_scope")
+    required = {oms_path.name}
+    if get_env("AI_TRADING_PRETRADE_RATE_LIMITER_PERSIST", True, cast=bool):
+        limiter_path = Path(str(get_env(
+            "AI_TRADING_PRETRADE_RATE_LIMITER_PATH", "runtime/pretrade_rate_limiter.db", cast=str,
+        )))
+        if not limiter_path.is_absolute():
+            limiter_path = data_dir / limiter_path
+        if limiter_path.parent.resolve() != runtime_dir or limiter_path.suffix != ".db":
+            raise RuntimeError("limiter_database_outside_backup_scope")
+        required.add(limiter_path.name)
+    return tuple(sorted(required))
 
 
 def _sha256(path: Path) -> str:
@@ -133,6 +169,7 @@ def create_backup(
     status_path: Path | None = None,
     retain_days: int = 7,
     max_snapshots: int = 14,
+    required_databases: Sequence[str] | None = None,
 ) -> Path:
     """Create a verified local bundle without pausing the running service."""
 
@@ -145,12 +182,17 @@ def create_backup(
         raise ValueError("retention_must_be_positive")
     started = time.monotonic()
     try:
+        required = tuple(required_databases) if required_databases is not None else _configured_sqlite_databases(data_dir)
+        if not required or any(Path(name).name != name or not name.endswith(".db") for name in required):
+            raise RuntimeError("required_databases_invalid")
         with tempfile.TemporaryDirectory(prefix=".recovery-stage-", dir=backup_dir) as raw_stage:
             stage = Path(raw_stage)
             entries: list[dict[str, Any]] = []
             databases = sorted(runtime_dir.glob("*.db"))
             if not databases:
                 raise RuntimeError("runtime_databases_missing")
+            if set(required) - {source.name for source in databases}:
+                raise RuntimeError("required_runtime_database_missing")
             for source in databases:
                 if source.is_symlink() or not source.is_file():
                     raise RuntimeError("database_source_not_regular_file")
@@ -169,9 +211,9 @@ def create_backup(
             for source in sorted(models_dir.rglob("*")):
                 if source.is_symlink() or not source.is_file():
                     continue
-                lowered_name = source.name.lower()
+                relative_parts = source.relative_to(models_dir).parts
                 if source.suffix.lower() not in _MODEL_SUFFIXES or any(
-                    marker in lowered_name for marker in _SENSITIVE_NAME_PARTS
+                    marker in part.lower() for part in relative_parts for marker in _SENSITIVE_NAME_PARTS
                 ):
                     continue
                 target = stage / "models" / source.relative_to(models_dir)
@@ -184,6 +226,7 @@ def create_backup(
                 "created_at": datetime.now(UTC).isoformat(),
                 "duration_seconds": round(time.monotonic() - started, 3),
                 "entries": entries,
+                "required_databases": list(required),
                 "run_identity": _run_identity(stage / "runtime"),
                 "credential_files_included": False,
                 "order_authority": "disabled_until_broker_reconciliation",
@@ -250,7 +293,8 @@ def verify_backup(bundle: Path) -> dict[str, Any]:
         manifest = json.load(manifest_file)
         if not isinstance(manifest, dict):
             raise RuntimeError("backup_manifest_invalid")
-        if manifest.get("schema_version") != _SCHEMA_VERSION:
+        schema_version = manifest.get("schema_version")
+        if schema_version not in {1, _SCHEMA_VERSION}:
             raise RuntimeError("backup_schema_unsupported")
         entries = manifest.get("entries")
         if not isinstance(entries, list) or not entries:
@@ -281,6 +325,17 @@ def verify_backup(bundle: Path) -> dict[str, Any]:
             ):
                 raise RuntimeError("backup_manifest_invalid")
             expected[name] = entry
+        if schema_version == _SCHEMA_VERSION:
+            required = manifest.get("required_databases")
+            if (
+                not isinstance(required, list)
+                or not required
+                or any(not isinstance(name, str) or Path(name).name != name or not name.endswith(".db") for name in required)
+                or not {f"runtime/{name}" for name in required}.issubset(
+                    name for name, entry in expected.items() if entry["kind"] == "sqlite"
+                )
+            ):
+                raise RuntimeError("backup_required_database_missing")
         actual = {member.name: member for member in archive.getmembers()}
         if set(actual) != set(expected) | {"manifest.json"}:
             raise RuntimeError("backup_members_mismatch")
