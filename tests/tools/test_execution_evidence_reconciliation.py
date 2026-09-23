@@ -27,6 +27,38 @@ def test_estimated_or_unverified_fees_cannot_certify_net_profit():
         assert report["entry_exit_links"][0]["net_pnl"] is None
 
 
+def test_eod_exit_gap_retains_missing_decision_and_tca_with_order_provenance():
+    fill = {
+        **_fill("eod-fill", "sell", 2, 100, "2026-09-22T19:55:15Z"),
+        "order_id": "broker-order",
+        "client_order_id": "eod-2026-09-22-MSFT-sell",
+        "symbol": "MSFT",
+        "account_id": "paper-account",
+        "trading_mode": "paper",
+    }
+    order = {
+        "order_id": "broker-order",
+        "client_order_id": fill["client_order_id"],
+        "symbol": "MSFT",
+        "order_role": "exit",
+        "account_id": "paper-account",
+        "trading_mode": "paper",
+    }
+    report = reconcile_evidence(decisions=[], orders=[order], fills=[fill], tca=[])
+    assert report["counts"]["decision_unmatched"] == 1
+    assert report["counts"]["tca_unmatched"] == 1
+    assert report["unmatched_fill_details"] == [{
+        "fill_id": "eod-fill", "order_id": "broker-order",
+        "client_order_id": "eod-2026-09-22-MSFT-sell", "symbol": "MSFT",
+        "side": "sell", "missing": ["decision", "tca"],
+        "operational_exit_evidence": "matched_order_role_exit_and_eod_client_order_id",
+    }]
+    other_account = {**order, "account_id": "different"}
+    report = reconcile_evidence(decisions=[], orders=[other_account], fills=[fill], tca=[])
+    assert report["unmatched_fill_details"][0]["operational_exit_evidence"] is None
+    assert report["counts"]["order_unmatched"] == 1
+
+
 def test_invalid_fill_cannot_disappear_into_an_otherwise_linked_report():
     fill = _fill("valid", "buy", 1, 100, "2026-01-02T15:00:00Z", 0)
     report = reconcile_evidence(decisions=[fill], orders=[fill], tca=[fill], fills=[fill, {**fill, "fill_id": "invalid", "fill_qty": -1}])

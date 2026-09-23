@@ -24109,7 +24109,7 @@ class ExecutionEngine:
             initial_status_explicit = False
 
         def _status_payload() -> dict[str, Any]:
-            return {
+            payload = {
                 "symbol": symbol,
                 "side": mapped_side,
                 "order_id": str(order_id) if order_id is not None else None,
@@ -24117,6 +24117,15 @@ class ExecutionEngine:
                 "quantity": qty,
                 "qty": qty,
             }
+            if isinstance(metadata_raw, Mapping):
+                for key in ("order_role", "decision_ts", "decision_ts_basis"):
+                    value = metadata_raw.get(key)
+                    if value not in (None, ""):
+                        payload[key] = value
+                reason = metadata_raw.get("reason")
+                if reason not in (None, ""):
+                    payload["order_intent_reason"] = str(reason)
+            return payload
 
         def _handle_status_transition(status_value: Any, *, source: str) -> None:
             nonlocal ack_logged, current_status, last_prev_status, last_new_status
@@ -24530,11 +24539,15 @@ class ExecutionEngine:
                 value = metadata_raw.get(key)
                 if value not in (None, ""):
                     submission_context[key] = str(value).strip().lower()
+            intent_reason = metadata_raw.get("reason")
+            if intent_reason not in (None, ""):
+                submission_context["order_intent_reason"] = str(intent_reason)
         for key in (
             "correlation_id",
             "source_timestamp",
             "decision_ts",
             "decision_timestamp",
+            "decision_ts_basis",
             "quote_timestamp",
             "order_role",
             "session",

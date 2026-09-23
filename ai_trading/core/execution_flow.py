@@ -903,6 +903,8 @@ def exit_all_positions(ctx: Any) -> None:
                     "eod_exit",
                     position=pos,
                 )
+                exit_metadata["decision_ts"] = datetime.now(UTC).isoformat()
+                exit_metadata["decision_ts_basis"] = "runtime_eod_flatten_trigger"
                 # Keep broker idempotency stable across cycles and restarts. A
                 # timeout is ambiguous, not evidence that no order was accepted.
                 session_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()

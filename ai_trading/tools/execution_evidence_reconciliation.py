@@ -31,6 +31,31 @@ def _identities(row: Mapping[str, Any]) -> set[tuple[str, str]]:
     return keys
 
 
+def _identity_index(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        for key in _identities(row):
+            index[key].append(row)
+    return index
+
+
+def _matched_source(
+    fill: Mapping[str, Any], identities: set[tuple[str, str]],
+    index: Mapping[tuple[str, str], list[dict[str, Any]]],
+) -> bool:
+    for key in identities:
+        for source in index.get(key, []):
+            if any(
+                source.get(field) not in (None, "")
+                and fill.get(field) not in (None, "")
+                and source[field] != fill[field]
+                for field in ("account_id", "trading_mode", "symbol")
+            ):
+                continue
+            return True
+    return False
+
+
 def _number(value: Any) -> Decimal | None:
     try:
         result = Decimal(str(value))
@@ -99,10 +124,11 @@ def _order_quantity_reconciliation(orders: list[dict[str, Any]], accepted: list[
 
 
 def reconcile_evidence(*, decisions: list[dict[str, Any]], orders: list[dict[str, Any]], fills: list[dict[str, Any]], tca: list[dict[str, Any]], opening_positions: Mapping[str, Any] | None = None, closing_positions: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    decision_keys = set().union(*(_identities(row) for row in decisions))
-    order_keys = set().union(*(_identities(row) for row in orders))
-    tca_keys = set().union(*(_identities(row) for row in tca if not row.get("pending_event") and row.get("fill_price") is not None))
+    decision_index = _identity_index(decisions)
+    order_index = _identity_index(orders)
+    tca_index = _identity_index([row for row in tca if not row.get("pending_event") and row.get("fill_price") is not None])
     counts: Counter[str] = Counter()
+    unmatched_fill_details: list[dict[str, Any]] = []
     unique: dict[str, dict[str, Any]] = {}
     ambiguous: set[str] = set()
     for row in fills:
@@ -129,8 +155,33 @@ def reconcile_evidence(*, decisions: list[dict[str, Any]], orders: list[dict[str
             counts["invalid_fill_rows"] += 1
             continue
         identities = _identities(row)
-        for name, source_keys in (("decision", decision_keys), ("order", order_keys), ("tca", tca_keys)):
-            counts[f"{name}_matched" if identities & source_keys else f"{name}_unmatched"] += 1
+        missing = []
+        for name, source_index in (("decision", decision_index), ("order", order_index), ("tca", tca_index)):
+            matched = _matched_source(row, identities, source_index)
+            counts[f"{name}_matched" if matched else f"{name}_unmatched"] += 1
+            if not matched:
+                missing.append(name)
+        if missing:
+            eod_exit_order = any(
+                order.get("account_id") == row.get("account_id")
+                and order.get("trading_mode") == row.get("trading_mode")
+                and order.get("symbol") == row.get("symbol")
+                and order.get("order_role") == "exit"
+                and str(order.get("client_order_id") or "").startswith("eod-")
+                for key in identities for order in order_index.get(key, [])
+            )
+            unmatched_fill_details.append({
+                "fill_id": fill_id,
+                "order_id": row.get("order_id"),
+                "client_order_id": row.get("client_order_id"),
+                "symbol": row["symbol"],
+                "side": row["side"],
+                "missing": missing,
+                "operational_exit_evidence": (
+                    "matched_order_role_exit_and_eod_client_order_id"
+                    if eod_exit_order else None
+                ),
+            })
         fee = _number(row.get("fee_amount"))
         fee_source = str(row.get("fee_source") or "legacy_unverified")
         counts[f"fee_source_{fee_source}"] += 1
@@ -167,7 +218,7 @@ def reconcile_evidence(*, decisions: list[dict[str, Any]], orders: list[dict[str
         unmatched_sells[symbol] += qty
     return {
         "artifact_type": "execution_evidence_reconciliation", "rows": {"decisions": len(decisions), "orders": len(orders), "fills": len(fills), "tca": len(tca)},
-        "accepted_unique_fills": len(accepted), "conflicting_fill_ids": len(ambiguous), "counts": dict(counts),
+        "accepted_unique_fills": len(accepted), "conflicting_fill_ids": len(ambiguous), "counts": dict(counts), "unmatched_fill_details": unmatched_fill_details,
         "observed_position_changes": {symbol: str(qty) for symbol, qty in net_change.items()},
         "unmatched_sell_quantity": {symbol: str(qty) for symbol, qty in unmatched_sells.items() if qty},
         "unclosed_observed_buy_quantity": {symbol: str(sum((lot["qty"] for lot in queue), Decimal(0))) for symbol, queue in lots.items() if queue},
@@ -210,8 +261,10 @@ def reconcile_session(*, session_date: str, account_id: str, boundaries: list[di
         elif row.get("account_id") == account_id and row.get("trading_mode") == "paper":
             selected_fills.append(row)
     identities = set().union(*(_identities(row) for row in selected_fills))
+    relevant_decisions = [row for row in decisions if _identities(row) & identities]
     relevant_orders = [row for row in orders if _identities(row) & identities or lower < pd.to_datetime(row.get("ts"), utc=True, errors="coerce") <= upper]
-    report = reconcile_evidence(decisions=decisions, orders=relevant_orders, fills=selected_fills, tca=tca, opening_positions=opening[1] if opening else None, closing_positions=closing[1] if closing else None)
+    relevant_tca = [row for row in tca if _identities(row) & identities]
+    report = reconcile_evidence(decisions=relevant_decisions, orders=relevant_orders, fills=selected_fills, tca=relevant_tca, opening_positions=opening[1] if opening else None, closing_positions=closing[1] if closing else None)
     gaps = []
     if invalid_timestamps:
         gaps.append("unclassifiable_fill_timestamps")

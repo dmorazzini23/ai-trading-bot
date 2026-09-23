@@ -98,6 +98,7 @@ def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str
     account = snapshot.get("account_id")
     broker_order_ids = {str(row["order_id"]) for key, row in unique.items() if key not in conflicts and row.get("activity_type") == "FILL" and row.get("order_id")}
     observed: dict[str, Any] = defaultdict(lambda: 0)
+    observed_execution_counts: Counter[str] = Counter()
     seen = set()
     fee_coverage: Counter[str] = Counter()
     recovered_order_links = 0
@@ -128,10 +129,12 @@ def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str
             rejected["fill_quantity_or_order_invalid"] += 1
             continue
         observed[str(row["order_id"])] += qty
+        observed_execution_counts[str(row["order_id"])] += 1
         fee = _number(row.get("fee_amount"))
         complete_fee = row.get("fee_basis") == "per_fill_total" and row.get("fee_currency") == "USD" and row.get("fee_source") in {"broker_payload", "broker_activity"} and fee is not None and fee >= 0
         fee_coverage["explicit_total_fee" if complete_fee else "total_fee_unknown"] += 1
     broker: dict[str, Any] = defaultdict(lambda: 0)
+    broker_execution_counts: Counter[str] = Counter()
     fees = []
     for key, row in unique.items():
         if key in conflicts:
@@ -143,11 +146,27 @@ def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str
                 rejected["broker_fill_fields_invalid"] += 1
                 continue
             broker[str(row["order_id"])] += qty
+            broker_execution_counts[str(row["order_id"])] += 1
         elif kind in {"FEE", "CFEE", "PTC", "PTR"}:
             amount = _number(row.get("net_amount"))
             fees.append({"activity_id": key, "activity_type": kind, "activity_sub_type": row.get("activity_sub_type"), "currency": row.get("currency"), "net_amount": str(amount) if amount is not None else None, "date": row.get("date"), "allocation_status": "unallocated_no_complete_per_fill_fee_contract"})
-    orders = [{"order_id": key, "broker_qty": str(broker.get(key, 0)), "recorded_qty": str(observed.get(key, 0)), "status": "quantity_matched" if broker.get(key, 0) == observed.get(key, 0) else "quantity_mismatch"} for key in sorted(set(broker) | set(observed))]
-    return {"status": "accounting_compared" if snapshot.get("pagination_complete") and snapshot.get("trading_mode") == "paper" and account else "accounting_incomplete", "activity_count": len(unique), "activity_types": dict(Counter(row.get("activity_type") for row in unique.values())), "recovered_order_account_links": recovered_order_links, "fee_coverage": dict(fee_coverage), "fee_activities": fees, "order_quantity_comparison": orders, "order_quantity_counts": dict(Counter(row["status"] for row in orders)), "rejection_counts": dict(rejected), "net_fee_validation": "unavailable_without_complete_per_fill_totals", "limitations": ["Accounting quantities alone do not establish fill identity or fee completeness.", "No fee activity does not establish zero execution fees.", "Unallocated charges and rebates are never distributed across fills."], "promotion_authority": False, "orders_sent": 0}
+    orders = [
+        {
+            "order_id": key,
+            "broker_qty": str(broker.get(key, 0)),
+            "recorded_qty": str(observed.get(key, 0)),
+            "status": "quantity_matched" if broker.get(key, 0) == observed.get(key, 0) else "quantity_mismatch",
+            "broker_execution_count": broker_execution_counts[key],
+            "recorded_fill_count": observed_execution_counts[key],
+            "execution_count_status": (
+                "count_matched_identity_unverified"
+                if broker_execution_counts[key] == observed_execution_counts[key]
+                else "count_mismatch"
+            ),
+        }
+        for key in sorted(set(broker) | set(observed))
+    ]
+    return {"status": "accounting_compared" if snapshot.get("pagination_complete") and snapshot.get("trading_mode") == "paper" and account else "accounting_incomplete", "activity_count": len(unique), "activity_types": dict(Counter(row.get("activity_type") for row in unique.values())), "recovered_order_account_links": recovered_order_links, "fee_coverage": dict(fee_coverage), "fee_activities": fees, "order_quantity_comparison": orders, "order_quantity_counts": dict(Counter(row["status"] for row in orders)), "execution_count_counts": dict(Counter(row["execution_count_status"] for row in orders)), "rejection_counts": dict(rejected), "net_fee_validation": "unavailable_without_complete_per_fill_totals", "limitations": ["Matching order quantities or execution counts do not establish individual fill identity or fee completeness.", "No fee activity does not establish zero execution fees.", "Unallocated charges and rebates are never distributed across fills."], "promotion_authority": False, "orders_sent": 0}
 
 
 def rebuild_quantity_ledger(snapshot: dict[str, Any], opening: dict[str, Any], closing: dict[str, Any]) -> dict[str, Any]:

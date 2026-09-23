@@ -36,6 +36,26 @@ def test_accounting_preserves_unallocated_fees_and_does_not_infer_zero():
     assert reconcile(snapshot, fills)["status"] == "accounting_incomplete"
 
 
+def test_accounting_flags_aggregated_local_fill_despite_matching_order_quantity():
+    snapshot = {
+        "account_id": "paper", "trading_mode": "paper", "pagination_complete": True,
+        "after": "2026-09-22T13:00:00Z",
+        "activities": [
+            {"id": "broker-1", "activity_type": "FILL", "order_id": "exit", "qty": "1"},
+            {"id": "broker-2", "activity_type": "FILL", "order_id": "exit", "qty": "1"},
+        ],
+    }
+    fills = [{
+        "account_id": "paper", "trading_mode": "paper", "fill_id": "aggregate",
+        "order_id": "exit", "fill_qty": 2, "ts": "2026-09-22T19:55:15Z",
+    }]
+    comparison = reconcile(snapshot, fills)["order_quantity_comparison"][0]
+    assert comparison["status"] == "quantity_matched"
+    assert comparison["broker_execution_count"] == 2
+    assert comparison["recorded_fill_count"] == 1
+    assert comparison["execution_count_status"] == "count_mismatch"
+
+
 def test_retirement_uses_development_evidence_only():
     fold = {"selected_candidates": 0, "abstention_diagnostics": {"scope": "inner_validation_only", "status": "abstained", "tested_percentiles": [{"mean_net_markout_bps": -5, "mean_gross_markout_bps": 1, "rejection_reasons": ["costs_exceed_positive_gross_edge"]}]}}
     report = review_candidate({"walk_forward": {"folds": [fold]}, "holdout_evaluation": {"mean_net_markout_bps": 100}})

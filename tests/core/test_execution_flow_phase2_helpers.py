@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -114,6 +115,11 @@ def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> 
         client_id = str(call.pop("client_order_id"))
         assert client_id.startswith("eod-")
         assert client_id.endswith(f"-{call['symbol']}-{call['side']}")
+        metadata = call["metadata"]
+        decision_ts = datetime.fromisoformat(metadata.pop("decision_ts"))
+        assert decision_ts.tzinfo is not None
+        assert decision_ts <= datetime.now(UTC)
+        assert metadata.pop("decision_ts_basis") == "runtime_eod_flatten_trigger"
     assert calls == [
         {
             "symbol": "AAPL",

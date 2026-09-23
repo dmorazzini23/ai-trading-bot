@@ -375,7 +375,14 @@ def test_execute_order_persists_runtime_order_and_fill_events(monkeypatch, tmp_p
     engine = _build_engine(_FillPriceClient())
     _prime_engine(engine, monkeypatch)
 
-    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+    result = engine.execute_order(
+        "AAPL", "buy", qty=5, order_type="limit", limit_price=100.0,
+        metadata={
+            "reason": "test_submission", "order_role": "entry",
+            "decision_ts": "2026-01-02T15:00:00+00:00",
+            "decision_ts_basis": "explicit_test_intent",
+        },
+    )
 
     assert result is not None
     order_events_path = tmp_path / "runtime" / "order_events.jsonl"
@@ -396,6 +403,13 @@ def test_execute_order_persists_runtime_order_and_fill_events(monkeypatch, tmp_p
             if line.strip()
         ]
     assert any(row.get("event") == "status_transition" for row in order_rows)
+    assert any(
+        row.get("event") == "status_transition"
+        and row.get("order_intent_reason") == "test_submission"
+        and row.get("decision_ts") == "2026-01-02T15:00:00+00:00"
+        and row.get("decision_ts_basis") == "explicit_test_intent"
+        for row in order_rows
+    )
     assert any(row.get("event") == "final_state" and row.get("status") == "filled" for row in order_rows)
     assert any(row.get("event") == "fill_recorded" and row.get("symbol") == "AAPL" for row in fill_rows)
 
