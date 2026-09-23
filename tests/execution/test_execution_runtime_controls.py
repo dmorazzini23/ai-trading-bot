@@ -569,6 +569,49 @@ def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
     assert any(record.message == "PENDING_NEW_TIMEOUT_ACTION" for record in caplog.records)
 
 
+@pytest.mark.parametrize(
+    ("closing_position", "recorded_broker_id", "broker_intent", "policy", "expected_cancel"),
+    [
+        (True, "broker-1", None, "replace_widen", []),
+        (True, "broker-1", None, "cancel", []),
+        (True, "different-order", None, "replace_widen", ["broker-1"]),
+        (False, "broker-1", None, "replace_widen", ["broker-1"]),
+        (False, "different-order", "SELL_TO_CLOSE", "replace_widen", []),
+        (False, "different-order", "BUY_TO_CLOSE", "replace_widen", ["broker-1"]),
+    ],
+)
+def test_live_pending_timeout_preserves_verified_closing_order(
+    monkeypatch, closing_position, recorded_broker_id, broker_intent, policy, expected_cancel
+):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    stale_order = SimpleNamespace(
+        id="broker-1", client_order_id="client-1", symbol="AAPL", side="sell",
+        qty="2", status="pending_new", type="limit", limit_price="100",
+        position_intent=broker_intent,
+        created_at=datetime.now(UTC) - timedelta(seconds=120),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(get_intent=lambda _client_id: SimpleNamespace(
+            intent_id="client-1", broker_order_id=recorded_broker_id, symbol="AAPL",
+            metadata_json=json.dumps({
+                "source": "live_execution_engine", "closing_position": closing_position,
+            }),
+        ))
+    )
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._replace_limit_order_with_marketable = lambda **_kwargs: None
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", policy)
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+
+    assert engine._apply_pending_new_timeout_policy() is bool(expected_cancel)
+    assert canceled == expected_cancel
+
+
 def test_pending_new_timeout_policy_idempotent_per_cycle(monkeypatch):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)

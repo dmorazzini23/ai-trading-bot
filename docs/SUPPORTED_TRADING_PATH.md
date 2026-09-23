@@ -41,10 +41,14 @@ leaves that intent unresolved for identity-based reconciliation. The lower-level
 from the canonical execution route, with matching client identity, symbol,
 side and authorized quantity. A lost live submit response is not blindly
 retried or moved back to a reusable intent state. Live cancel-and-resubmit
-limit replacements are held before cancellation until a durable replacement
-pretrade and identity contract is implemented. The original order remains
-available for broker reconciliation; this limitation must be resolved or
-explicitly accepted before live activation. The durable identity check is one
+limit replacements are held before the helper cancels anything until a durable
+replacement pretrade and identity contract is implemented. Pending-order
+maintenance may still cancel a stale opening order under its timeout policy.
+It preserves a broker-open closing order when the broker supplies a matching
+closing `position_intent` or a matching durable OMS intent verifies the closing
+purpose, even if that policy would otherwise cancel it.
+This limitation must be resolved or explicitly accepted before live
+activation. The durable identity check is one
 boundary and does not independently prove the upstream model, risk and quote
 checks; those remain in `execute_order`.
 The existence of these helpers is not evidence of current runtime use. The current
