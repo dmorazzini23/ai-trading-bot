@@ -34053,6 +34053,18 @@ class ExecutionEngine:
                     )
                     raise
 
+                if is_submit_call and _broker_submit_outcome_ambiguous(exc):
+                    logger.error(
+                        "BROKER_SUBMIT_OUTCOME_UNCERTAIN_NO_RETRY",
+                        extra={
+                            "symbol": submit_symbol,
+                            "side": submit_side,
+                            "order_type": submit_order_type,
+                            "reason": reason,
+                        },
+                    )
+                    raise
+
                 if attempt_index >= len(backoffs):
                     logger.error(
                         "ORDER_RETRY_GAVE_UP",

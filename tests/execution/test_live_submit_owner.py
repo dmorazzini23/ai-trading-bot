@@ -220,6 +220,37 @@ def test_live_timeout_does_not_blindly_retry_submission(error_kind: str) -> None
     assert len(attempts) == 1
 
 
+@pytest.mark.parametrize("error_kind", ["timeout", "native_504"])
+def test_paper_ambiguous_submit_is_not_retried_by_wrapper(
+    error_kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine("paper", None)
+    engine._acquire_submit_rate_limit_permit = lambda **_kwargs: (True, {})
+    engine._handle_nonretryable_api_error = lambda *_args, **_kwargs: None
+    engine._handle_execution_failure = lambda *_args: None
+    engine.stats = {"retry_count": 0}
+    attempts: list[str] = []
+    monkeypatch.setattr(lt.time, "sleep", lambda _seconds: None)
+
+    def _submit_order_to_alpaca(order_data: dict[str, str]) -> None:
+        attempts.append(order_data["client_order_id"])
+        if error_kind == "native_504":
+            raise NativeAlpacaAPIError(
+                json.dumps({"code": 50410000, "message": "request timed out"}),
+                HTTPError("http_504", response=SimpleNamespace(status_code=504)),
+            )
+        raise TimeoutError("response lost after broker acceptance")
+
+    expected_error = NativeAlpacaAPIError if error_kind == "native_504" else TimeoutError
+    with pytest.raises(expected_error):
+        engine._execute_with_retry(
+            _submit_order_to_alpaca,
+            {"symbol": "AAPL", "side": "buy", "type": "market", "client_order_id": "stable-1"},
+        )
+    assert attempts == ["stable-1"]
+    assert engine.stats["retry_count"] == 0
+
+
 def test_live_replacement_never_cancels_before_new_intent_is_supported() -> None:
     engine = _engine("live", SimpleNamespace(assert_submit_owner=lambda: None))
     engine._cancel_order_alpaca = lambda _order_id: pytest.fail("original order canceled")

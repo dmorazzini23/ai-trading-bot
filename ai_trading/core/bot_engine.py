@@ -21667,11 +21667,6 @@ def adjust_trailing_stop(position, new_stop: float) -> None:
     logger.debug("adjust_trailing_stop %s -> %.2f", position.symbol, new_stop)
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(APIError),
-)
 def submit_order(
     ctx: BotContext,
     symbol: str,
@@ -21681,7 +21676,7 @@ def submit_order(
     price: float | None = None,
     **exec_kwargs: Any,
 ) -> Any | None:
-    """Submit an order using the institutional execution engine."""
+    """Submit once through the engine, which owns broker retry and reconciliation."""
 
     try:
         return _submit_order_service(
