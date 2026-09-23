@@ -530,6 +530,36 @@ def _collect_gate_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _operational_state(health: dict[str, Any]) -> str:
+    """Classify a health observation without changing readiness or alert delivery."""
+    reason = str(health.get("reason") or "").strip().lower()
+    if reason == "health_payload_unavailable" or health.get("health_error"):
+        return "monitoring_unavailable"
+    flags = {str(flag).strip().lower() for flag in health.get("attention_flags") or []}
+    if flags & {"oms_invariants_failed", "oms_lifecycle_parity_failed", "service_halt_active", "execution_incident"}:
+        return "execution_incident"
+    broker = health.get("broker") or {}
+    broker_status = str(broker.get("status") or "unknown").strip().lower()
+    if broker.get("fresh") is False or broker_status not in {"connected", "reachable"}:
+        return "uncertain_broker_state"
+    provider = health.get("data_provider") or {}
+    provider_status = str(provider.get("status") or "unknown").strip().lower()
+    provider_reason = str(provider.get("reason") or "").strip().lower()
+    if (provider.get("safe_mode") or provider.get("using_backup")
+            or provider_status in {"degraded", "disconnected", "down", "unavailable", "error", "stale"}
+            or (provider_status in {"warming_up", "unknown"} and provider_reason != "market_closed")):
+        return "degraded_data"
+    if flags & {"required_model_stale", "replay_live_parity_gate_failed", "model_governance_failed", "promotion_blocked"}:
+        return "blocked_qualification"
+    if health.get("ok") is not True and str(health.get("status") or "").lower() != "healthy":
+        return "degraded_unclassified"
+    service_state = health.get("service_state") or {}
+    service_reason = str(service_state.get("reason") or "").strip().lower()
+    if service_reason in {"market_closed", "no_signal", "abstaining", "paper_observe"}:
+        return "healthy_abstention"
+    return "healthy_active"
+
+
 def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     report = _normalized_runtime_report_payload(_runtime_report_payload())
     go_no_go = report.get("go_no_go") or {}
@@ -634,6 +664,7 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "health_ok": bool(health.get("ok", False)),
         "health_status": str(health.get("status") or "unknown"),
         "health_reason": str(health.get("reason") or "unknown"),
+        "operational_state": _operational_state(health),
         "provider_status": str(data_provider.get("status") or "unknown"),
         "provider_active": str(data_provider.get("active") or "unknown"),
         "provider_reason": str(data_provider.get("reason") or "unknown"),
@@ -1634,6 +1665,7 @@ def _incident_message_text(snapshot: dict[str, Any], triggers: list[str]) -> str
                 f"of rejected, rejected_records={rejected_records})"
             ),
             f"- Health: {snapshot.get('health_status')} ({snapshot.get('health_reason')})",
+            f"- Operational state: {snapshot.get('operational_state') or 'unknown'}",
             (
                 f"- Data provider: {snapshot.get('provider_active')} / {snapshot.get('provider_status')} "
                 f"(reason={snapshot.get('provider_reason')}, backup={_fmt_bool(snapshot.get('using_backup'))})"
@@ -1684,6 +1716,7 @@ def _incident_message_blocks(snapshot: dict[str, Any], triggers: list[str]) -> l
                     "Health",
                     f"{snapshot.get('health_status') or 'unknown'} ({snapshot.get('health_reason') or 'n/a'})",
                 ),
+                _slack_field("Operational state", str(snapshot.get("operational_state") or "unknown")),
                 _slack_field(
                     "Provider",
                     (

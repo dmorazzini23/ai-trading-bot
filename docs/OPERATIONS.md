@@ -408,6 +408,31 @@ Important `attention_flags` include:
 - `oms_invariants_failed`
 - `oms_lifecycle_parity_failed`
 
+The non-sending incident snapshot also exposes `operational_state`. It labels
+the observation for triage; `/healthz` readiness and the runtime exposure gates
+remain authoritative. The labels are evaluated in priority order, so a broker
+problem is not hidden by a stale model:
+
+| State | Meaning | Operator response |
+| --- | --- | --- |
+| `healthy_abstention` | Healthy service, fresh broker, and an explicit closed-market or no-signal reason. | Continue observation; do not force trades. |
+| `blocked_qualification` | Model, replay, governance or promotion evidence blocks qualification. | Keep live new exposure blocked; repair evidence through governed processes. |
+| `degraded_data` | Provider safe mode, backup, stale or unexplained warm-up. | Check provider freshness and the existing halt/data gates before new exposure. |
+| `uncertain_broker_state` | Broker is stale, disconnected or unavailable. | Reconcile positions and open orders; do not infer flat exposure. |
+| `execution_incident` | OMS invariants, lifecycle parity or a halt flag failed. | Stop new exposure, preserve order identities and reconcile before recovery. |
+| `monitoring_unavailable` | The independent connector could not obtain a valid health payload. | Inspect service and host locally; treat readiness as unknown until the probe recovers. |
+| `degraded_unclassified` | Health is degraded without one of the above diagnoses. | Investigate the raw health fields; do not classify it as healthy abstention. |
+
+The existing connector timer is a separate systemd process that probes the
+application each minute. On September 23 it was enabled while the older
+30-minute healthcheck timer was disabled. This detects application failure
+while the host and timer remain alive; it cannot detect loss of the host itself.
+The new state label enriches snapshots and incident text but does not add a
+notification destination, change alert triggers, acknowledge an incident or
+send a test notification. Off-host heartbeat detection, delivery approval,
+acknowledgement and recovery verification still need a separate demonstrated
+operational path before unattended live operation can be claimed.
+
 #### Read-only pre-open acceptance verdict
 
 Before market open, run the acceptance gate from the repository as `aiuser`:

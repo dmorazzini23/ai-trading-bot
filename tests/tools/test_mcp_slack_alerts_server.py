@@ -8,6 +8,26 @@ from typing import Any
 from tools import mcp_slack_alerts_server as slack_srv
 
 
+def test_operational_states_distinguish_abstention_from_qualification_and_incidents() -> None:
+    healthy = {
+        "ok": True, "status": "healthy", "attention_flags": [],
+        "broker": {"status": "connected", "fresh": True},
+        "data_provider": {"status": "warming_up", "reason": "market_closed"},
+        "service_state": {"reason": "market_closed"},
+    }
+    assert slack_srv._operational_state(healthy) == "healthy_abstention"
+    qualified = {**healthy, "ok": False, "status": "degraded",
+                 "attention_flags": ["required_model_stale", "replay_live_parity_gate_failed"]}
+    assert slack_srv._operational_state(qualified) == "blocked_qualification"
+    assert qualified["ok"] is False
+    assert slack_srv._operational_state({**qualified, "data_provider": {"safe_mode": True}}) == "degraded_data"
+    assert slack_srv._operational_state({**healthy, "data_provider": {"status": "warming_up", "reason": "startup"}}) == "degraded_data"
+    assert slack_srv._operational_state({**qualified, "broker": {"status": "connected", "fresh": False}}) == "uncertain_broker_state"
+    assert slack_srv._operational_state({**qualified, "attention_flags": ["oms_invariants_failed"]}) == "execution_incident"
+    assert slack_srv._operational_state({**qualified, "reason": "health_payload_unavailable"}) == "monitoring_unavailable"
+    assert slack_srv._operational_state({**healthy, "ok": False, "status": "degraded"}) == "degraded_unclassified"
+
+
 def test_evaluate_incident_triggers_catches_regressions() -> None:
     snapshot = {
         "go_no_go_gate_passed": False,
@@ -900,6 +920,7 @@ def test_collect_runtime_snapshot_degrades_when_health_payload_fails(
     assert snapshot["health_ok"] is False
     assert snapshot["health_status"] == "degraded"
     assert snapshot["health_reason"] == "health_payload_unavailable"
+    assert snapshot["operational_state"] == "monitoring_unavailable"
     assert snapshot["provider_status"] == "unknown"
     assert snapshot["broker_status"] == "unknown"
 
