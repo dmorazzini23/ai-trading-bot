@@ -17,8 +17,9 @@ JSONL logs alone cannot restore either database.
 `python -m ai_trading.tools.runtime_recovery_backup` now uses SQLite's online
 backup API for each runtime `*.db` and checks each snapshot with
 `PRAGMA integrity_check`. It includes named order, fill, decision, TCA, OMS,
-and risk-state evidence files; the run manifest, effective policy and selected
-runtime metadata; and regular model artifacts/JSON metadata under `models`.
+and risk-state evidence files; the run manifest, release specification,
+pre/post migration identity reports, effective policy and selected runtime
+metadata; and regular model artifacts/JSON metadata under `models`.
 The bundle manifest records per-file size and SHA-256, creation time, and the
 run manifest's code/config/policy identities. Verification rejects missing,
 extra, altered, or unsafe members and checks restored SQLite integrity.

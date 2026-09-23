@@ -27,6 +27,9 @@ logger = get_logger(__name__)
 
 _RUNTIME_FILES = (
     "run_manifest.json",
+    "release_spec.json",
+    "release_identity_pre_migration.json",
+    "release_identity_preflight.json",
     "effective_policy.json",
     "live_capital_readiness_latest.json",
     "model_selection_overrides.json",

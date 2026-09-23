@@ -60,6 +60,16 @@ Production execution note:
 
 ## Packaged Services
 
+Before deploying a candidate, run the read-only release identity preflight
+described in [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md). It compares the tested
+commit, effective config/profile, applied migration and configured model bytes
+against a reviewed release specification. The packaged unit does not yet
+enforce this check on the currently running service. The staged unit enforces
+checks before and after Alembic migration and will refuse startup without a
+valid release specification. Review a passing report with CI, broker exposure
+and rollback evidence before installing the unit or restarting. Do not restart
+during market hours.
+
 Canonical production service:
 
 ```bash

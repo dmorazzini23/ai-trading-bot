@@ -48,7 +48,10 @@ It preserves a broker-open closing order when the broker supplies a matching
 closing `position_intent` or a matching durable OMS intent verifies the closing
 purpose, even if that policy would otherwise cancel it.
 This limitation must be resolved or explicitly accepted before live
-activation. The durable identity check is one
+activation. Alpaca's [replace-order contract](https://docs.alpaca.markets/us/reference/replaceorderforaccount)
+does not permit native replacement of `pending_new` orders and warns that a
+successful replacement response does not guarantee the old order was replaced.
+The durable identity check is one
 boundary and does not independently prove the upstream model, risk and quote
 checks; those remain in `execute_order`.
 The existence of these helpers is not evidence of current runtime use. The current

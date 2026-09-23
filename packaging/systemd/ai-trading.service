@@ -42,8 +42,10 @@ ExecStartPre=/usr/bin/install -d -m 775 \
 ExecStartPre=/usr/bin/find /var/lib/ai-trading-bot/runtime/research_reports -type f \
     -name after_hours_training*.json -exec /usr/bin/chmod 664 {} +
 ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh
+ExecStartPre=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.tools.release_identity --pre-migration --spec /var/lib/ai-trading-bot/runtime/release_spec.json --models-root /var/lib/ai-trading-bot/models --output /var/lib/ai-trading-bot/runtime/release_identity_pre_migration.json'
 ExecStartPre=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python -m alembic upgrade head'
-ExecStart=/bin/bash -lc '/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh; set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading'
+ExecStartPre=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.tools.release_identity --spec /var/lib/ai-trading-bot/runtime/release_spec.json --models-root /var/lib/ai-trading-bot/models --output /var/lib/ai-trading-bot/runtime/release_identity_preflight.json'
+ExecStart=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading'
 # Allow long-lived process; systemd will supervise restarts
 RuntimeMaxSec=infinity
 Restart=always

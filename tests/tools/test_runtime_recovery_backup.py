@@ -40,6 +40,13 @@ def _seed(data_dir: Path) -> IntentStore:
         json.dumps({"git_commit_hash": "synthetic", "resolved_config_hash": "test"}),
         encoding="utf-8",
     )
+    (runtime_dir / "release_spec.json").write_text(
+        json.dumps({"schema_version": 1, "tested_commit_sha": "synthetic"}),
+        encoding="utf-8",
+    )
+    (runtime_dir / "release_identity_preflight.json").write_text(
+        json.dumps({"status": "pass"}), encoding="utf-8",
+    )
     (runtime_dir / "live_canary_state_latest.json").write_text(
         json.dumps({"entry_attempts": 1}), encoding="utf-8"
     )
@@ -59,6 +66,8 @@ def test_bundle_restores_consistent_oms_and_reconciles_broker_truth(tmp_path: Pa
     names = {entry["path"] for entry in manifest["entries"]}
     assert "runtime/oms_intents.db" in names
     assert "runtime/pretrade_rate_limiter.db" in names
+    assert "runtime/release_spec.json" in names
+    assert "runtime/release_identity_preflight.json" in names
     assert "models/registry_index.json" in names
     assert "models/trained_model.pkl" in names
     assert not any("credential" in name or ".env" in name for name in names)
