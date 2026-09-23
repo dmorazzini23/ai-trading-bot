@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from ai_trading.execution.engine import OrderManager
+from ai_trading.execution.live_trading import ExecutionEngine
 from ai_trading.oms.intent_store import IntentStore
 
 pytest.importorskip("sqlalchemy")
@@ -127,6 +128,36 @@ def test_restart_after_broker_acceptance_does_not_resubmit(tmp_path: Path) -> No
     assert recovered.broker_order_id == f"broker-{intent_id}"
     assert recovered.submit_attempts == 1
     assert summary["marked_submitted"] == 1
+    assert broker.count() == 1
+
+
+def test_unknown_broker_outcome_blocks_new_opening_until_reconciled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, broker, intent_id = _start_crashed_submission(tmp_path)
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    engine.order_manager = manager
+    engine.execution_mode = "paper"
+    engine._broker_sync = None
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "0")
+
+    unresolved = manager.reconcile_open_intents(broker_orders=[])
+    assert unresolved["deferred_submitting"] == 1
+    assert store.get_intent(intent_id).status == "SUBMITTING"
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False,
+        "oms_submit_outcome_unresolved",
+    )
+    assert engine._execution_phase_allows_submits(closing_position=True) == (True, None)
+
+    manager.reconcile_open_intents(
+        broker_orders=[],
+        get_order_by_client_order_id_fn=broker.lookup,
+    )
+    assert store.get_intent(intent_id).status == "SUBMITTED"
+    assert engine._execution_phase_allows_submits(closing_position=False) == (True, None)
     assert broker.count() == 1
 
 

@@ -1927,6 +1927,65 @@ def test_broker_sync_unknown_blocks_openings_but_allows_reductions(monkeypatch):
     assert reduction_detail is None
 
 
+@pytest.mark.parametrize(
+    ("statuses", "expected_detail"),
+    [
+        (["SUBMITTING"], "oms_submit_outcome_unresolved"),
+        (["PENDING_SUBMIT", "SUBMITTED"], None),
+        ([], None),
+    ],
+)
+def test_unresolved_oms_submission_blocks_new_openings_only(
+    monkeypatch, statuses, expected_detail
+):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(
+            get_open_intents=lambda: [SimpleNamespace(status=status) for status in statuses]
+        )
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "0")
+
+    opening_allowed, opening_detail = engine._execution_phase_allows_submits(
+        closing_position=False,
+    )
+    reduction_allowed, reduction_detail = engine._execution_phase_allows_submits(
+        closing_position=True,
+    )
+
+    assert opening_allowed is (expected_detail is None)
+    assert opening_detail == expected_detail
+    assert reduction_allowed is True
+    assert reduction_detail is None
+
+
+def test_unreadable_oms_intents_fail_closed_for_openings(monkeypatch):
+    engine = _engine_stub()
+    engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(get_open_intents=lambda: (_ for _ in ()).throw(OSError("db unavailable")))
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "0")
+
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False,
+        "oms_intent_status_unavailable",
+    )
+    assert engine._execution_phase_allows_submits(closing_position=True) == (True, None)
+
+
+def test_live_openings_require_oms_intent_store(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+    engine.order_manager = SimpleNamespace(_intent_store=None)
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "0")
+
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False,
+        "oms_intent_store_unavailable",
+    )
+
+
 def test_execution_phase_gate_blocks_open_orders_during_eod_flatten_window(monkeypatch):
     engine = _engine_stub()
     engine.ctx = SimpleNamespace(state={"service_phase": "active"})

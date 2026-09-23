@@ -30,6 +30,8 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence, cast
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from ai_trading.logging import get_logger, log_throttled_event
 from ai_trading.telemetry import runtime_state
 from ai_trading.market.symbol_specs import get_tick_size
@@ -199,6 +201,10 @@ LIVE_TRADING_FALLBACK_EXC: tuple[type[Exception], ...] = (
     TimeoutError,
     TypeError,
     ValueError,
+)
+OMS_INTENT_STATUS_READ_EXC: tuple[type[Exception], ...] = (
+    *LIVE_TRADING_FALLBACK_EXC,
+    SQLAlchemyError,
 )
 
 BROKER_READ_EXC: tuple[type[Exception], ...] = LIVE_TRADING_FALLBACK_EXC
@@ -5599,6 +5605,22 @@ class ExecutionEngine:
                 False,
                 f"broker_sync_unknown components={components}",
             )
+        manager = getattr(self, "order_manager", None)
+        store = getattr(manager, "_intent_store", None)
+        if store is None:
+            if str(getattr(self, "execution_mode", "paper")).lower() == "live":
+                return False, "oms_intent_store_unavailable"
+        else:
+            try:
+                open_intents = store.get_open_intents()
+            except OMS_INTENT_STATUS_READ_EXC:
+                logger.error("OMS_INTENT_STATUS_UNAVAILABLE", exc_info=True)
+                return False, "oms_intent_status_unavailable"
+            if any(
+                str(getattr(intent, "status", "")).strip().upper() == "SUBMITTING"
+                for intent in open_intents
+            ):
+                return False, "oms_submit_outcome_unresolved"
         if not self._execution_phase_gate_enabled():
             return True, None
         phase = self._service_phase()
