@@ -8,6 +8,8 @@ import pytest
 
 import ai_trading.execution.live_trading as lt
 from ai_trading.execution import guards
+from ai_trading.execution.engine import OrderManager
+from ai_trading.oms.intent_store import IntentStore
 
 
 @pytest.fixture
@@ -1077,6 +1079,36 @@ def test_paper_direct_submit_timeout_keeps_intent_unresolved(engine_factory):
     assert engine._execution_phase_allows_submits(closing_position=False) == (
         False, "oms_submit_outcome_unresolved"
     )
+
+
+def test_paper_timeout_keeps_real_oms_intent_unresolved(
+    engine_factory, tmp_path, monkeypatch
+):
+    store = IntentStore(path=str(tmp_path / "paper-intents.db"))
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+    engine = engine_factory()
+    engine.execution_mode = "paper"
+    engine.order_manager = manager
+    engine._broker_sync = None
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "0")
+
+    def _timeout(*_args, **_kwargs):
+        raise TimeoutError("broker response lost")
+
+    engine.submit_market_order = _timeout
+    client_order_id = "paper-accepted-response-lost"
+    assert engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id=client_order_id
+    ) is None
+    intent = store.get_intent(client_order_id)
+    assert intent is not None
+    assert intent.status == "SUBMITTING"
+    assert intent.submit_attempts == 1
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False, "oms_submit_outcome_unresolved"
+    )
+    assert engine._execution_phase_allows_submits(closing_position=True) == (True, None)
 
 
 def test_paper_order_with_intent_store_does_not_submit_after_refused_claim(
