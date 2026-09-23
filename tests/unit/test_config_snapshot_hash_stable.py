@@ -39,6 +39,29 @@ def test_config_snapshot_hash_changes_when_effective_config_changes() -> None:
     assert config_snapshot_hash(baseline) != config_snapshot_hash(changed)
 
 
+def test_config_identity_covers_declared_position_limit_without_exposing_secrets() -> None:
+    base_env = {
+        "MAX_DRAWDOWN_THRESHOLD": "0.15",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": "1000",
+        "ALPACA_API_KEY": "key-one",
+        "ALPACA_SECRET_KEY": "secret-one",
+    }
+    baseline = TradingConfig.from_env(base_env)
+    changed_limit = TradingConfig.from_env(
+        {**base_env, "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": "2000"}
+    )
+    changed_secret = TradingConfig.from_env(
+        {**base_env, "ALPACA_SECRET_KEY": "secret-two"}
+    )
+
+    assert config_snapshot_hash(baseline) != config_snapshot_hash(changed_limit)
+    assert config_snapshot_hash(baseline) == config_snapshot_hash(changed_secret)
+    snapshot = baseline.snapshot_sanitized()
+    assert "secret-one" not in str(snapshot)
+    assert "key-one" not in str(snapshot)
+    assert len(snapshot["declared_settings_hash"]) == 64
+
+
 def test_log_config_effective_summary_emits_hash(caplog) -> None:
     caplog.set_level(logging.INFO, logger="ai_trading.main")
     cfg = TradingConfig.from_env(

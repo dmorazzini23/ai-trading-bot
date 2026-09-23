@@ -2,14 +2,14 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-from ai_trading.config.management import get_env
+from ai_trading.config.management import config_snapshot_hash, get_env
+from ai_trading.config.launch_profiles import launch_profile_payload
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 
@@ -79,11 +79,6 @@ def _redacted_cfg(cfg: Any) -> dict[str, Any]:
     return redacted
 
 
-def _config_hash(cfg_payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(cfg_payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _enabled_flags(cfg_payload: Mapping[str, Any]) -> list[str]:
     flags: list[str] = []
     for key, value in cfg_payload.items():
@@ -142,12 +137,15 @@ def build_run_manifest(
     effective_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg_payload = _redacted_cfg(cfg)
+    effective_launch_profile = launch_profile_payload()
     mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
     manifest = {
         "timestamp": datetime.now(UTC).isoformat(),
         "mode": mode,
         "account_id": _safe_account_id(cfg),
-        "resolved_config_hash": _config_hash(cfg_payload),
+        "resolved_config_hash": config_snapshot_hash(cfg_payload),
+        "launch_profile": effective_launch_profile,
+        "launch_profile_hash": config_snapshot_hash(effective_launch_profile),
         "enabled_feature_flags": _enabled_flags(cfg_payload),
         "git_commit_hash": _git_commit_hash(),
         "runtime_contract": dict(runtime_contract or {"stubs_enabled": False}),

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import ai_trading.runtime.run_manifest as run_manifest
+from ai_trading.config.management import TradingConfig, config_snapshot_hash
 from ai_trading.runtime.run_manifest import write_run_manifest
 
 
@@ -25,6 +26,34 @@ def test_run_manifest_written(tmp_path: Path) -> None:
     assert payload["mode"] == "paper"
     assert payload["runtime_contract"]["stubs_enabled"] is False
     assert payload["resolved_config_hash"]
+
+
+def test_run_manifest_hash_matches_decision_config_identity(monkeypatch) -> None:
+    monkeypatch.setattr(run_manifest, "_git_commit_hash", lambda: "abc123")
+    cfg = TradingConfig.from_env(
+        {
+            "MAX_DRAWDOWN_THRESHOLD": "0.15",
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": "1000",
+        }
+    )
+
+    manifest = run_manifest.build_run_manifest(cfg)
+
+    assert manifest["resolved_config_hash"] == config_snapshot_hash(cfg)
+
+
+def test_run_manifest_captures_effective_launch_profile_identity(monkeypatch) -> None:
+    monkeypatch.setattr(run_manifest, "_git_commit_hash", lambda: "abc123")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    cfg = TradingConfig.from_env({"MAX_DRAWDOWN_THRESHOLD": "0.15"})
+    original = run_manifest.build_run_manifest(cfg)
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_PAPER_TRADE_MAX_ORDER_COUNT", "2")
+    tightened = run_manifest.build_run_manifest(cfg)
+
+    assert original["launch_profile"]["max_order_count"] == 25
+    assert tightened["launch_profile"]["max_order_count"] == 2
+    assert original["launch_profile_hash"] != tightened["launch_profile_hash"]
+    assert original["resolved_config_hash"] == tightened["resolved_config_hash"]
 
 
 def test_run_manifest_git_hash_uses_bounded_timeout(monkeypatch) -> None:

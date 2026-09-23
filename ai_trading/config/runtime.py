@@ -2896,7 +2896,22 @@ class TradingConfig:
     def snapshot_sanitized(self) -> dict[str, Any]:
         mode_snapshot = self.mode_effective_snapshot()
         mode_snapshot["adaptive_enabled"] = bool(getattr(self, "trading_mode_adaptive_enabled", False))
+        declared_settings = {
+            spec.field: (
+                "configured" if self._values.get(spec.field) else "absent"
+            ) if spec.mask else self._values.get(spec.field)
+            for spec in CONFIG_SPECS
+        }
+        declared_settings_hash = hashlib.sha256(
+            json.dumps(
+                declared_settings,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
         data = {
+            "declared_settings_hash": declared_settings_hash,
             "risk": {
                 "capital_cap": self.capital_cap,
                 "dollar_risk_limit": self.dollar_risk_limit,
