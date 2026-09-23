@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from alembic.script.revision import RevisionError
 from alembic.util.exc import CommandError
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -47,6 +48,21 @@ def _schema_head(alembic_ini: Path) -> str | None:
     except (CommandError, OSError, RuntimeError, ValueError):
         return None
     return heads[0] if len(heads) == 1 else None
+
+
+def _schema_path_contains(alembic_ini: Path, revision: str) -> bool:
+    """Require the pre-migration revision to belong to this checkout's history."""
+
+    try:
+        config = Config(str(alembic_ini))
+        config.set_main_option("script_location", str(alembic_ini.parent / "migrations"))
+        scripts = ScriptDirectory.from_config(config)
+        return any(
+            script.revision == revision
+            for script in scripts.iterate_revisions("head", "base")
+        )
+    except (CommandError, RevisionError, OSError, RuntimeError, ValueError):
+        return False
 
 
 def _applied_schema_revision(database_url: str) -> str | None:
@@ -151,7 +167,9 @@ def verify_release_identity(
         "schema_revision": bool(expected_schema)
         and head_revision == expected_schema
         and applied_revision is not None
-        and (pre_migration or applied_revision == expected_schema),
+        and (applied_revision == expected_schema or (
+            pre_migration and _schema_path_contains(alembic_ini, applied_revision)
+        )),
         "model_artifact": bool(expected_model_hash)
         and model_hash is not None
         and model_hash == expected_model_hash,

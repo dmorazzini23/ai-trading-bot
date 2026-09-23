@@ -35,6 +35,7 @@ def test_release_identity_matches_exact_code_config_schema_and_model(
     commit = "a" * 40
     monkeypatch.setattr(release_identity, "_git_identity", lambda _root: (commit, False))
     monkeypatch.setattr(release_identity, "_schema_head", lambda _ini: "rev-current")
+    monkeypatch.setattr(release_identity, "_schema_path_contains", lambda _ini, _rev: True)
     monkeypatch.setattr(
         release_identity, "build_run_manifest",
         lambda _cfg: {
@@ -131,6 +132,13 @@ def test_release_identity_rejects_missing_database_and_model_escape(
     assert result["status"] == "blocked"
     assert result["checks"]["model_artifact"] is False
     assert result["checks"]["schema_revision"] is False
+
+
+def test_pre_migration_requires_known_revision_in_checkout_history() -> None:
+    alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+    assert release_identity._schema_path_contains(alembic_ini, "20260414_0001")
+    assert release_identity._schema_path_contains(alembic_ini, "20260506_0001")
+    assert not release_identity._schema_path_contains(alembic_ini, "unrelated_revision")
 
 
 def test_release_identity_cli_writes_non_secret_blocked_report(

@@ -57,8 +57,9 @@ checks the SHA and a clean checkout, but it cannot independently authenticate
 GitHub CI from an offline host. The model file must be under `--models-root`,
 must match `AI_TRADING_MODEL_PATH`, and must match the expected SHA-256. A
 missing model identity blocks the preflight, including in paper mode. The
-pre-migration phase requires a readable existing Alembic revision and a matching
-expected migration head; it permits an older applied revision. The final phase
+pre-migration phase requires a readable existing Alembic revision in the
+checkout's migration history and a matching expected head; it permits an older
+applied revision on that path. The final phase
 requires the applied revision to equal both the specification and the head. A
 missing SQLite database is never created by the check. PostgreSQL credentials
 are read from the managed runtime environment and are never written to the report.
