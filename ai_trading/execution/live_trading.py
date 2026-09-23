@@ -23954,12 +23954,22 @@ class ExecutionEngine:
                 detail=str(exc) or "order execution failed",
                 submit_started_at=submit_started_at,
             )
-            self._record_durable_submit_error(
-                intent_id=durable_intent_id,
-                order_id=None,
-                client_order_id=client_order_id,
-                error=str(exc) or "order execution failed",
-            )
+            if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
+                logger.error(
+                    "DURABLE_ORDER_SUBMIT_UNRESOLVED",
+                    extra={
+                        "symbol": symbol,
+                        "client_order_id": client_order_id,
+                        "intent_id": durable_intent_id,
+                    },
+                )
+            else:
+                self._record_durable_submit_error(
+                    intent_id=durable_intent_id,
+                    order_id=None,
+                    client_order_id=client_order_id,
+                    error=str(exc) or "order execution failed",
+                )
             _release_capacity_reservation("submit_exception")
             return None
         finally:
@@ -24050,6 +24060,21 @@ class ExecutionEngine:
                     )
                     if controlled_metrics_skip:
                         durable_error = "controlled_skip:metrics_improvement_control"
+                    elif (
+                        prior_status == "failed"
+                        and normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live"
+                    ):
+                        logger.error(
+                            "DURABLE_ORDER_SUBMIT_UNRESOLVED",
+                            extra={
+                                "symbol": symbol,
+                                "client_order_id": client_order_id,
+                                "intent_id": durable_intent_id,
+                                "reason": prior_reason,
+                            },
+                        )
+                        _release_capacity_reservation("submit_outcome_uncertain")
+                        return None
                     else:
                         self._record_durable_submit_error(
                             intent_id=durable_intent_id,
@@ -24111,14 +24136,25 @@ class ExecutionEngine:
                     ),
                     submit_started_at=submit_started_at,
                 )
-                self._record_durable_submit_error(
-                    intent_id=durable_intent_id,
-                    order_id=None,
-                    client_order_id=missing_client_id,
-                    error=(
-                        f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
-                    ),
-                )
+                if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
+                    logger.error(
+                        "DURABLE_ORDER_SUBMIT_UNRESOLVED",
+                        extra={
+                            "symbol": symbol,
+                            "client_order_id": missing_client_id,
+                            "intent_id": durable_intent_id,
+                            "reason": "submit_no_result",
+                        },
+                    )
+                else:
+                    self._record_durable_submit_error(
+                        intent_id=durable_intent_id,
+                        order_id=None,
+                        client_order_id=missing_client_id,
+                        error=(
+                            f"no_broker_response client_order_id={missing_client_id or 'unknown'}"
+                        ),
+                    )
                 _release_capacity_reservation("submit_no_result")
                 return None
 
@@ -33926,6 +33962,20 @@ class ExecutionEngine:
                 if reason is None:
                     raise
 
+                if is_submit_call and normalize_execution_mode(
+                    getattr(self, "execution_mode", "paper")
+                ) == "live":
+                    logger.error(
+                        "LIVE_SUBMIT_OUTCOME_UNCERTAIN",
+                        extra={
+                            "symbol": submit_symbol,
+                            "side": submit_side,
+                            "order_type": submit_order_type,
+                            "reason": reason,
+                        },
+                    )
+                    raise
+
                 if attempt_index >= len(backoffs):
                     logger.error(
                         "ORDER_RETRY_GAVE_UP",
@@ -34355,6 +34405,37 @@ class ExecutionEngine:
         """Submit an order using Alpaca TradingClient."""
 
         self._assert_submit_owner()
+        if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
+            client_id = str(order_data.get("client_order_id") or "").strip()
+            store = getattr(getattr(self, "order_manager", None), "_intent_store", None)
+            get_intent = getattr(store, "get_intent", None)
+            intent = get_intent(client_id) if client_id and callable(get_intent) else None
+            raw_metadata = getattr(intent, "metadata_json", None)
+            try:
+                metadata = json.loads(raw_metadata) if isinstance(raw_metadata, str) else {}
+            except (TypeError, ValueError):
+                metadata = {}
+            intent_qty = _safe_float(getattr(intent, "quantity", None))
+            order_qty = _safe_float(order_data.get("quantity", order_data.get("qty")))
+            if (
+                intent is None
+                or str(getattr(intent, "intent_id", "")) != client_id
+                or _normalize_status(getattr(intent, "status", None)) != "submitting"
+                or not isinstance(metadata, Mapping)
+                or metadata.get("source") != "live_execution_engine"
+                or str(getattr(intent, "symbol", "")).upper()
+                != str(order_data.get("symbol") or "").upper()
+                or str(getattr(intent, "side", "")).lower()
+                != str(order_data.get("side") or "").lower()
+                or intent_qty is None
+                or order_qty is None
+                or not math.isfinite(intent_qty)
+                or not math.isfinite(order_qty)
+                or intent_qty < 0
+                or order_qty < 0
+                or order_qty > intent_qty
+            ):
+                raise RuntimeError("LIVE_SUBMIT_DURABLE_PRETRADE_REQUIRED")
         closing_position = bool(
             order_data.get("closing_position")
             or order_data.get("close_position")
@@ -34888,6 +34969,12 @@ class ExecutionEngine:
     ) -> tuple[Any, str, float, float, Any, Any] | None:
         """Cancel an idle limit order and replace it with a marketable limit."""
 
+        if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
+            logger.warning(
+                "LIVE_REPLACEMENT_REQUIRES_DURABLE_PRETRADE",
+                extra={"symbol": symbol, "existing_order_id": existing_order_id},
+            )
+            return None
         if limit_price is None:
             return None
         try:

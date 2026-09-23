@@ -454,6 +454,7 @@ def test_live_mode_forces_realtime_nbbo_policy(monkeypatch, caplog) -> None:
 
     engine = DummyLiveEngine()
     engine.execution_mode = "live"
+    engine.order_manager._intent_store = SimpleNamespace(get_open_intents=lambda: [])
     config = SimpleNamespace(
         execution_mode="live",
         min_quote_freshness_ms=0,

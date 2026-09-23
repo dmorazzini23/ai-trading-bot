@@ -263,6 +263,7 @@ def test_execute_order_live_blocks_before_broker_submit_without_durable_intent(
 
     engine = engine_factory()
     engine.execution_mode = "live"
+    engine._pre_execution_order_checks = lambda _order: True
     engine.order_manager = SimpleNamespace(
         _intent_store=SimpleNamespace(get_open_intents=lambda: []),
         begin_external_order_lifecycle=lambda **_: None,
@@ -915,6 +916,7 @@ def test_execute_order_records_metrics_control_precheck_as_controlled_skip(engin
 def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine_factory):
     engine = engine_factory()
     engine.execution_mode = "live"
+    engine._pre_execution_order_checks = lambda _order: True
     submit_calls: list[dict[str, Any]] = []
 
     class DurableManager:
@@ -941,6 +943,68 @@ def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine
     assert submit_calls == []
     assert engine._last_submit_outcome.get("status") == "skipped"
     assert engine._last_submit_outcome.get("reason") == "durable_oms_unavailable"
+
+
+def test_live_lost_submit_response_keeps_claimed_intent_unresolved(engine_factory):
+    def _lost_response(_order_data):
+        raise TimeoutError("broker accepted but response was lost")
+
+    engine = engine_factory(execute_behavior=_lost_response)
+    engine.execution_mode = "live"
+    engine._pre_execution_order_checks = lambda _order: True
+    errors: list[dict[str, Any]] = []
+    syncs: list[dict[str, Any]] = []
+    intents: list[SimpleNamespace] = []
+
+    class DurableManager:
+        _intent_store = SimpleNamespace(get_open_intents=lambda: list(intents))
+
+        def begin_external_order_lifecycle(self, **kwargs):
+            intents.append(SimpleNamespace(status="SUBMITTING", symbol=kwargs["symbol"]))
+            return kwargs["intent_id"]
+
+        def record_external_submit_error(self, **kwargs):
+            errors.append(kwargs)
+            return kwargs["intent_id"]
+
+        def sync_external_order_state(self, **kwargs):
+            syncs.append(kwargs)
+            return kwargs["intent_id"]
+
+    engine.order_manager = DurableManager()
+
+    assert engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id="lost-response-id"
+    ) is None
+    assert len(intents) == 1
+    assert intents[0].status == "SUBMITTING"
+    assert errors == []
+    assert syncs == []
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False, "oms_submit_outcome_unresolved"
+    )
+
+
+def test_live_empty_submit_result_does_not_reset_intent(engine_factory):
+    engine = engine_factory()
+    engine.execution_mode = "live"
+    engine._pre_execution_order_checks = lambda _order: True
+    engine.submit_market_order = lambda *_args, **_kwargs: None
+    engine._recover_order_after_submit_no_result = lambda **_kwargs: (None, "not_found")
+    claimed: list[str] = []
+    submit_errors: list[dict[str, Any]] = []
+    engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(get_open_intents=lambda: []),
+        begin_external_order_lifecycle=lambda **kwargs: claimed.append(kwargs["intent_id"])
+        or kwargs["intent_id"],
+        record_external_submit_error=lambda **kwargs: submit_errors.append(kwargs),
+    )
+
+    assert engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id="empty-result-id"
+    ) is None
+    assert claimed == ["empty-result-id"]
+    assert submit_errors == []
 
 
 def test_paper_order_with_intent_store_does_not_submit_after_refused_claim(

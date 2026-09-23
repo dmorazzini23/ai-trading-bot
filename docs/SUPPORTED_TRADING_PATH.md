@@ -37,9 +37,16 @@ available for their supported paper/test use. A live opposite-side cover now
 requires fresh broker positions and open orders, an account identity, and a
 durably claimed OMS intent before submission. An ambiguous broker response
 leaves that intent unresolved for identity-based reconciliation. The lower-level
-`ExecutionEngine._submit_order_to_alpaca` boundary and replacement paths still
-need proof that every live caller has completed the canonical pretrade and OMS
-claim before live activation.
+`ExecutionEngine._submit_order_to_alpaca` now requires a `SUBMITTING` intent
+from the canonical execution route, with matching client identity, symbol,
+side and authorized quantity. A lost live submit response is not blindly
+retried or moved back to a reusable intent state. Live cancel-and-resubmit
+limit replacements are held before cancellation until a durable replacement
+pretrade and identity contract is implemented. The original order remains
+available for broker reconciliation; this limitation must be resolved or
+explicitly accepted before live activation. The durable identity check is one
+boundary and does not independently prove the upstream model, risk and quote
+checks; those remain in `execute_order`.
 The existence of these helpers is not evidence of current runtime use. The current
 paper service reports `paper_trade`, diagnostic-only operation and a blocked
 qualified-model readiness gate; this is a September 23 observation, not a
