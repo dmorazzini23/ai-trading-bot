@@ -74,3 +74,10 @@ positions and open orders, verify CI and model-governance evidence, perform an
 isolated migration-aware rollback rehearsal, and obtain any required live
 approval. A clean CI-tested release specification, unit installation and
 runtime verification remain outstanding.
+
+The isolated SQLite regression rehearsal starts from the prior OMS revision,
+preserves two duplicate-sequence events in a database snapshot, upgrades to
+the checkout head, verifies deduplication, then restores the snapshot and
+verifies the original revision, event sequences and database integrity. It
+does not exercise PostgreSQL rollback or prove recovery of a live broker state;
+those checks remain required for any different deployed database or migration.

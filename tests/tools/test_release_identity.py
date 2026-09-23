@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -164,3 +167,55 @@ def test_packaged_service_checks_identity_before_and_after_migration() -> None:
     start = unit.index("ExecStart=/bin/bash")
     assert sync < before < migrate < after < start
     assert unit.count("sync_env_runtime.sh") == 1
+
+
+def test_isolated_migration_rollback_restores_preupgrade_oms_state(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    database = tmp_path / "oms.db"
+    snapshot = tmp_path / "preupgrade.db"
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": str(repo_root),
+        "DATABASE_URL": f"sqlite:///{database}",
+    }
+
+    def migrate(target: str) -> None:
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", target],
+            cwd=repo_root, env=env, check=True, capture_output=True, text=True,
+            timeout=30,
+        )
+
+    migrate("20260414_0001")
+    with sqlite3.connect(database) as connection:
+        for event_id in (1, 2):
+            connection.execute(
+                """INSERT INTO oms_events
+                (event_uuid, intent_id, event_type, event_ts, event_source,
+                 idempotency_key, sequence_no, payload_json, created_at)
+                VALUES (?, 'intent-1', 'submit', '2026-09-23T00:00:00Z',
+                        'rehearsal', ?, 1, '{}', '2026-09-23T00:00:00Z')""",
+                (f"event-{event_id}", f"key-{event_id}"),
+            )
+    with sqlite3.connect(database) as source, sqlite3.connect(snapshot) as backup:
+        source.backup(backup)
+
+    migrate("head")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "20260506_0001",
+        )
+        assert connection.execute(
+            "SELECT COUNT(DISTINCT sequence_no) FROM oms_events"
+        ).fetchone() == (2,)
+
+    with sqlite3.connect(snapshot) as source, sqlite3.connect(database) as target:
+        source.backup(target)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "20260414_0001",
+        )
+        assert connection.execute(
+            "SELECT COUNT(DISTINCT sequence_no) FROM oms_events"
+        ).fetchone() == (1,)
