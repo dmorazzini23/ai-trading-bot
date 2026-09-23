@@ -49,7 +49,7 @@ def test_reconcile_missing_open_orders_does_not_fail_open_intent(
     assert intent.intent_id in open_intent_ids
 
 
-def test_reconcile_stale_submitting_intent_fails_closed(
+def test_reconcile_stale_submitting_intent_stays_unresolved(
     monkeypatch,
 ) -> None:
     class _Store:
@@ -82,14 +82,9 @@ def test_reconcile_stale_submitting_intent_fails_closed(
     summary = manager.reconcile_open_intents(broker_orders=[])
 
     assert summary["intents_checked"] == 1
-    assert summary["marked_failed"] == 1
-    assert store.closed == [
-        (
-            "intent-stale-submitting",
-            "FAILED",
-            "submit ack missing after 8000s",
-        )
-    ]
+    assert summary["marked_failed"] == 0
+    assert summary["deferred_submitting"] == 1
+    assert store.closed == []
 
 
 def test_reconcile_submitting_without_timestamp_defers() -> None:

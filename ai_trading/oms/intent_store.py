@@ -5,7 +5,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import hashlib
 import json
 import math
@@ -589,25 +589,16 @@ class IntentStore:
         *,
         stale_after_seconds: int = 180,
     ) -> bool:
-        """Acquire submit lease for an intent exactly once."""
+        """Claim a pending intent; an uncertain submission needs reconciliation."""
 
         assert _INTENTS_TABLE is not None
         stale_after = max(1, int(stale_after_seconds))
         now = datetime.now(UTC)
         now_iso = now.isoformat()
-        stale_cutoff_iso = (now - timedelta(seconds=stale_after)).isoformat()
         stmt = (
             update(_INTENTS_TABLE)
             .where(_INTENTS_TABLE.c.intent_id == intent_id)
-            .where(
-                (
-                    _INTENTS_TABLE.c.status == PENDING_SUBMIT_STATUS
-                )
-                | (
-                    (_INTENTS_TABLE.c.status == SUBMITTING_STATUS)
-                    & (_INTENTS_TABLE.c.updated_at <= stale_cutoff_iso)
-                )
-            )
+            .where(_INTENTS_TABLE.c.status == PENDING_SUBMIT_STATUS)
             .values(
                 status=status_for_submit_claim(),
                 submit_attempts=_INTENTS_TABLE.c.submit_attempts + 1,

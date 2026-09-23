@@ -1229,46 +1229,6 @@ class OrderManager:
                             summary["marked_submitted"] += 1
                 continue
 
-            # Fresh SUBMITTING intents can legitimately be in-flight and absent
-            # from broker snapshots for a short interval after restart.
-            if intent_status == "SUBMITTING":
-                updated_at = self._parse_iso_utc(intent.updated_at)
-                submit_stale_age_seconds: int | None = None
-                if updated_at is None:
-                    summary["deferred_submitting"] += 1
-                    continue
-                age_seconds = max(
-                    0.0,
-                    (now_utc - updated_at).total_seconds(),
-                )
-                if age_seconds < submitting_stale_seconds:
-                    summary["deferred_submitting"] += 1
-                    continue
-                submit_stale_age_seconds = int(age_seconds)
-
-                # If a submitting intent has aged past the reconciliation grace
-                # window and still cannot be matched or recovered, treat it as
-                # a failed submit instead of leaving the OMS wedged forever.
-                try:
-                    self._intent_store.close_intent(
-                        intent.intent_id,
-                        final_status="FAILED",
-                        last_error=(
-                            "submit ack missing after "
-                            f"{submit_stale_age_seconds if submit_stale_age_seconds is not None else 'stale'}s"
-                        ),
-                    )
-                except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
-                    logger.debug(
-                        "OMS_INTENT_RECONCILE_CLOSE_STALE_SUBMIT_FAILED",
-                        extra={"intent_id": intent.intent_id},
-                        exc_info=True,
-                    )
-                    summary["errors"] += 1
-                else:
-                    summary["marked_failed"] += 1
-                continue
-
             if intent_status in {"SUBMITTED", "SUBMITTING", "PARTIALLY_FILLED"}:
                 recovered_order: Any | None = None
                 if callable(get_order_by_id_fn) and intent.broker_order_id:
@@ -1299,6 +1259,23 @@ class OrderManager:
                             exc_info=True,
                         )
                         summary["errors"] += 1
+                if recovered_order is not None:
+                    recovered_id = self._extract_payload_value(
+                        recovered_order, "id", "order_id"
+                    )
+                    recovered_client = self._extract_payload_value(
+                        recovered_order, "client_order_id", "tag"
+                    )
+                    if not (
+                        (intent.broker_order_id and str(recovered_id) == str(intent.broker_order_id))
+                        or str(recovered_client or "") == str(intent.intent_id)
+                    ):
+                        logger.warning(
+                            "OMS_INTENT_RECONCILE_IDENTITY_MISMATCH",
+                            extra={"intent_id": intent.intent_id},
+                        )
+                        summary["errors"] += 1
+                        recovered_order = None
                 if recovered_order is not None:
                     recovered_status_raw = self._extract_payload_value(
                         recovered_order,
@@ -1373,6 +1350,66 @@ class OrderManager:
                             )
                             summary["errors"] += 1
                         continue
+                    recovered_order_id = self._extract_payload_value(
+                        recovered_order, "id", "order_id"
+                    )
+                    recovered_client_id = self._extract_payload_value(
+                        recovered_order, "client_order_id", "tag"
+                    )
+                    identity_matches = (
+                        recovered_order_id not in (None, "")
+                        and (
+                            str(recovered_order_id) == str(intent.broker_order_id)
+                            or str(recovered_client_id or "") == str(intent.intent_id)
+                        )
+                    )
+                    if identity_matches and intent_status == "SUBMITTING":
+                        try:
+                            if status_token == "PARTIALLY_FILLED":
+                                self.sync_external_order_state(
+                                    intent_id=intent.intent_id,
+                                    order_id=str(recovered_order_id),
+                                    client_order_id=str(recovered_client_id or intent.intent_id),
+                                    status=status_token,
+                                    filled_qty=self._extract_payload_value(
+                                        recovered_order, "filled_qty", "filled_quantity"
+                                    ),
+                                    fill_price=self._extract_payload_value(
+                                        recovered_order, "filled_avg_price", "avg_fill_price"
+                                    ),
+                                )
+                            else:
+                                self._intent_store.mark_submitted(
+                                    intent.intent_id, str(recovered_order_id)
+                                )
+                        except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
+                            logger.debug(
+                                "OMS_INTENT_RECONCILE_MARK_SUBMITTED_FAILED",
+                                extra={"intent_id": intent.intent_id},
+                                exc_info=True,
+                            )
+                            summary["errors"] += 1
+                        else:
+                            summary["marked_submitted"] += 1
+                        continue
+                if intent_status == "SUBMITTING":
+                    summary["deferred_submitting"] += 1
+                    updated_at = self._parse_iso_utc(intent.updated_at)
+                    if updated_at is None or (
+                        now_utc - updated_at
+                    ).total_seconds() >= submitting_stale_seconds:
+                        logger.warning(
+                            "OMS_SUBMIT_OUTCOME_UNRESOLVED",
+                            extra={
+                                "intent_id": intent.intent_id,
+                                "client_order_id": intent.intent_id,
+                                "age_seconds": (
+                                    max(0, int((now_utc - updated_at).total_seconds()))
+                                    if updated_at is not None
+                                    else None
+                                ),
+                            },
+                        )
                 # An intent missing from the broker's open-order snapshot is not
                 # terminal evidence on its own; broker-side fills/cancels can
                 # race the snapshot and are reconciled through explicit terminal

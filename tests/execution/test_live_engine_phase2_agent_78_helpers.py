@@ -578,7 +578,9 @@ def test_core_order_manager_external_lifecycle_and_reconcile(
     assert summary["intents_checked"] == 4
     assert summary["matched_open_orders"] == 1
     assert summary["marked_submitted"] == 1
-    assert summary["marked_failed"] == 2
+    assert summary["marked_failed"] == 1
+    assert summary["deferred_submitting"] == 1
+    assert not any(row[0] == "submitting-old" for row in reconcile_store.closed)
     assert ("open-match", "bo-1") in reconcile_store.submitted
     assert ("recover-fill", "FILLED", None) in reconcile_store.closed
     assert reconcile_store.fills["recover-fill"][0].fill_qty == 2.0
