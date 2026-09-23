@@ -115,3 +115,27 @@ plus snapshot/sync time; missed or failed runs have no bounded loss window.
 Evidence files may have per-file timestamp skew. The restored owner must
 reconcile all post-snapshot broker activity before new risk. Off-host restore
 and actual alert delivery remain unproven while the timer is disabled.
+
+## Schema-2 read-only-source rehearsal (September 23, 09:02 UTC)
+
+With the deployed paper runtime environment loaded, the new backup tool read
+the two configured SQLite databases and copied runtime/model files into an
+isolated `/tmp/goal-recovery-schema2-20260923` bundle. No production status
+file was written. The tool code was local and unpushed, while the run manifest
+describes the still-running service; this bundle is rehearsal evidence, not an
+approved operational restore point. Bundle creation and built-in verification
+took 46.58 seconds;
+verification and isolated restore took 12.45 seconds. The 105.43 MiB bundle
+contains 3,042 members, including 3,028 model files. The manifest names
+`oms_intents_paper_monday.db` and `pretrade_rate_limiter.db` as required; both
+restored databases passed `PRAGMA integrity_check`. The currently configured
+`.pkl` model artifact is included. The OMS snapshot contains
+2,135 terminal intents and no nonterminal intents, at revision
+`20260506_0001`. A separate simulator regression still covers restoration of
+an unresolved accepted order and identity-based recovery without a second
+submission. The contemporaneous running-service health check showed fresh
+broker state with zero positions/open orders and the existing
+`required_model_stale` readiness failure. This does not prove completeness of
+broker activity after the snapshot, off-host recovery, real PostgreSQL owner
+fencing, actual alert delivery or a bounded recovery-time objective. The timer
+remains disabled.
