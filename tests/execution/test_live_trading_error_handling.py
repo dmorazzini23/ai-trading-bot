@@ -1121,11 +1121,13 @@ def test_execute_order_applies_cycle_capacity_reservation(engine_factory, monkey
 
     monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
     engine = engine_factory()
-    engine._cycle_account = {
+    account = {
         "buying_power": "1000",
         "daytrading_buying_power": "1000",
         "non_marginable_buying_power": "1000",
     }
+    engine._cycle_account = account
+    engine._fetch_account_state = lambda: (account, None)
     engine._cycle_account_fetched = True
     engine._should_suppress_duplicate_intent = lambda *_args, **_kwargs: False
     engine._reserve_cycle_intent = lambda *_args, **_kwargs: True

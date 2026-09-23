@@ -245,17 +245,6 @@ def test_submit_order_rejects_invalid_limit_price_before_broker_submit(monkeypat
 
 
 def test_submit_order_recovers_on_duplicate_client_order_id(monkeypatch):
-    class _DuplicateClientOrderIdError(Exception):
-        def __init__(self):
-            super().__init__("client_order_id already exists")
-            self.status_code = 422
-            self.code = "duplicate_client_order_id"
-            self.message = "client_order_id already exists"
-            self._error = {
-                "code": "duplicate_client_order_id",
-                "message": "client_order_id already exists",
-            }
-
     engine = _make_engine(monkeypatch, response=None)
     recovered = {
         "id": "recovered-2",
@@ -269,11 +258,14 @@ def test_submit_order_recovers_on_duplicate_client_order_id(monkeypatch):
     client = _LookupTradingClient(
         None,
         lookup_order=recovered,
-        duplicate_error=_DuplicateClientOrderIdError(),
+        duplicate_error=live_trading.APIError(
+            "client_order_id already exists",
+            status_code=422,
+            code="duplicate_client_order_id",
+        ),
     )
     engine.trading_client = client
     monkeypatch.setattr(live_trading, "_runtime_env", lambda *_a, **_k: "")
-    monkeypatch.setattr(live_trading, "APIError", _DuplicateClientOrderIdError)
 
     result = engine._submit_order_to_alpaca(
         {

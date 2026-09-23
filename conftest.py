@@ -1225,26 +1225,9 @@ def _reset_runtime_singletons(
     )
     try:
         if is_alpaca_import_absence_test:
-            for module_name in [
-                name for name in tuple(sys.modules.keys()) if "alpaca" in name.lower()
-            ]:
-                try:
-                    sys.modules.pop(module_name, None)
-                except Exception:
-                    pass
-            sys.modules["alpaca"] = None
-            sys.modules.pop("ai_trading.core.bot_engine", None)
-            core_mod = sys.modules.get("ai_trading.core")
-            if isinstance(core_mod, types.ModuleType):
-                try:
-                    delattr(core_mod, "bot_engine")
-                except Exception:
-                    pass
-            for bot_engine_mod in _iter_live_modules("ai_trading.core.bot_engine"):
-                try:
-                    setattr(bot_engine_mod, "ALPACA_AVAILABLE", False)
-                except Exception:
-                    pass
+            # The test body owns the missing-SDK sentinel and restores modules.
+            # Installing it here precedes Freezegun's setup, which inspects
+            # lazy package exports while Alpaca is deliberately unavailable.
             yield
             return
         _reset_loaded_singletons()

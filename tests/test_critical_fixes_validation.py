@@ -226,10 +226,9 @@ class TestCriticalFixes(unittest.TestCase):
             "source /run/ai-trading-bot/ai-trading-runtime.env"
         )
         sync_idx = main_content.index("ExecStartPre=/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh")
+        preflight_idx = main_content.index("release_identity --pre-migration")
+        final_identity_idx = main_content.index("release_identity --spec")
         exec_start_idx = main_content.index("ExecStart=/bin/bash -lc")
-        exec_start_sync_idx = main_content.index(
-            "ExecStart=/bin/bash -lc '/home/aiuser/ai-trading-bot/scripts/sync_env_runtime.sh"
-        )
         exec_start_source_idx = main_content.index(
             "source /run/ai-trading-bot/ai-trading-runtime.env",
             exec_start_idx,
@@ -245,11 +244,13 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertLess(runtime_env_file_idx, health_port_idx)
         self.assertLess(env_src_idx, api_port_idx)
         self.assertLess(env_src_idx, health_port_idx)
-        self.assertLess(sync_idx, alembic_idx)
+        self.assertEqual(main_content.count("scripts/sync_env_runtime.sh"), 1)
+        self.assertLess(sync_idx, preflight_idx)
+        self.assertLess(preflight_idx, alembic_idx)
         self.assertLess(sync_idx, alembic_source_idx)
         self.assertLess(alembic_source_idx, alembic_idx)
-        self.assertLess(alembic_idx, exec_start_idx)
-        self.assertLess(exec_start_sync_idx, exec_start_source_idx)
+        self.assertLess(alembic_idx, final_identity_idx)
+        self.assertLess(final_identity_idx, exec_start_idx)
         self.assertLess(exec_start_source_idx, exec_start_python_idx)
         self.assertIn("RuntimeDirectoryPreserve=yes", main_content)
         self.assertNotIn("startup migration skipped", main_content)
