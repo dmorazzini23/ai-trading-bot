@@ -86,6 +86,13 @@ def test_live_low_level_submit_requires_claimed_canonical_intent() -> None:
     with pytest.raises(RuntimeError, match="LIVE_SUBMIT_DURABLE_PRETRADE_REQUIRED"):
         engine._submit_order_to_alpaca({**payload, "quantity": float("nan")})
 
+    with pytest.raises(RuntimeError, match="LIVE_SUBMIT_DURABLE_PRETRADE_REQUIRED"):
+        engine._submit_order_to_alpaca({**payload, "quantity": 0})
+
+    intent.quantity = 0.0
+    with pytest.raises(RuntimeError, match="LIVE_SUBMIT_DURABLE_PRETRADE_REQUIRED"):
+        engine._submit_order_to_alpaca({**payload, "quantity": 0})
+
 
 def test_live_low_level_submit_accepts_claimed_intent_identity(monkeypatch) -> None:
     intent = SimpleNamespace(

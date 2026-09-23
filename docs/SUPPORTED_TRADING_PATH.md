@@ -39,7 +39,7 @@ durably claimed OMS intent before submission. An ambiguous broker response
 leaves that intent unresolved for identity-based reconciliation. The lower-level
 `ExecutionEngine._submit_order_to_alpaca` now requires a `SUBMITTING` intent
 from the canonical execution route, with matching client identity, symbol,
-side and authorized quantity. A lost live submit response is not blindly
+side and a strictly positive authorized quantity. A lost live submit response is not blindly
 retried or moved back to a reusable intent state. Live cancel-and-resubmit
 limit replacements are held before the helper cancels anything until a durable
 replacement pretrade and identity contract is implemented. Pending-order

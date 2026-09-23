@@ -34514,8 +34514,8 @@ class ExecutionEngine:
                 or order_qty is None
                 or not math.isfinite(intent_qty)
                 or not math.isfinite(order_qty)
-                or intent_qty < 0
-                or order_qty < 0
+                or intent_qty <= 0
+                or order_qty <= 0
                 or order_qty > intent_qty
             ):
                 raise RuntimeError("LIVE_SUBMIT_DURABLE_PRETRADE_REQUIRED")
