@@ -1105,6 +1105,96 @@ def test_notify_incident_channel_confirms_health_unavailable_before_alert(
     assert len(posts) == 1
 
 
+def test_recovered_probe_does_not_confirm_a_later_separate_outage(monkeypatch, tmp_path: Path) -> None:
+    outage = {"active": True}
+    posts: list[dict[str, Any]] = []
+    unavailable = {
+        "go_no_go_gate_passed": True,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "health_payload_unavailable",
+        "provider_status": "unknown",
+        "provider_active": "unknown",
+        "provider_reason": "health_payload_unavailable",
+        "using_backup": False,
+        "broker_status": "unknown",
+    }
+
+    def _collect(_args: dict[str, Any]) -> dict[str, Any]:
+        if outage["active"]:
+            return unavailable
+        return {
+            **unavailable,
+            "health_ok": True,
+            "health_status": "healthy",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca",
+            "provider_reason": "data_available_netting",
+            "broker_status": "connected",
+        }
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", lambda _url, payload, **_kwargs: posts.append(payload) or 200)
+    state_path = tmp_path / "incident.json"
+    args = {"state_path": str(state_path), "webhook_url": "https://hooks.slack.test/example"}
+
+    first = slack_srv.tool_notify_incident_channel(args)
+    assert first["reason"] == "health_unavailable_confirmation_pending"
+    outage["active"] = False
+    assert slack_srv.tool_notify_incident_channel(args)["reason"] == "no_incident_triggered"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "pending_health_unavailable_signature" not in state
+    assert state["last_unconfirmed_signature"] == first["incident_signature"]
+    outage["active"] = True
+    later_first = slack_srv.tool_notify_incident_channel(args)
+    assert later_first["reason"] == "health_unavailable_confirmation_pending"
+    assert posts == []
+    later_second = slack_srv.tool_notify_incident_channel(args)
+    assert later_second["sent"] is True
+    assert len(posts) == 1
+
+
+def test_deduped_other_incident_clears_pending_outage_confirmation(monkeypatch, tmp_path: Path) -> None:
+    phase = {"reason": "runtime_gate_failed"}
+    posts: list[dict[str, Any]] = []
+
+    def _collect(_args: dict[str, Any]) -> dict[str, Any]:
+        reason = phase["reason"]
+        return {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.2,
+            "slippage_drag_bps": 7.0,
+            "health_ok": False,
+            "health_status": "degraded",
+            "health_reason": reason,
+            "provider_status": "unknown" if reason == "health_payload_unavailable" else "healthy",
+            "provider_active": "unknown" if reason == "health_payload_unavailable" else "alpaca",
+            "provider_reason": reason,
+            "using_backup": False,
+            "broker_status": "unknown" if reason == "health_payload_unavailable" else "connected",
+        }
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", lambda _url, payload, **_kwargs: posts.append(payload) or 200)
+    state_path = tmp_path / "incident.json"
+    args = {"state_path": str(state_path), "webhook_url": "https://hooks.slack.test/example"}
+
+    assert slack_srv.tool_notify_incident_channel(args)["sent"] is True
+    phase["reason"] = "health_payload_unavailable"
+    assert slack_srv.tool_notify_incident_channel(args)["reason"] == "health_unavailable_confirmation_pending"
+    phase["reason"] = "runtime_gate_failed"
+    assert slack_srv.tool_notify_incident_channel(args)["sent"] is False
+    assert "pending_health_unavailable_signature" not in json.loads(state_path.read_text(encoding="utf-8"))
+    phase["reason"] = "health_payload_unavailable"
+    assert slack_srv.tool_notify_incident_channel(args)["reason"] == "health_unavailable_confirmation_pending"
+    assert len(posts) == 1
+
+
 def test_notify_incident_channel_can_disable_health_unavailable_confirmation(
     monkeypatch, tmp_path: Path
 ) -> None:

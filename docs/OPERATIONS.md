@@ -433,6 +433,9 @@ helper records a local `resolved_at` and retains the prior incident, so a later
 recurrence can alert again. The `acknowledge_incident` helper records the exact
 active incident signature and operator in that local state; it does not send a
 message, suppress future alerts or prove the operator received a notification.
+An unconfirmed health-unavailable probe is cleared when health recovers or a
+different incident state is observed, so a later outage must earn its own
+second confirmation.
 Call `acknowledge_incident` with the reported `incident_signature` and an
 `operator` value. Confirm actual recovery
 from fresh health, broker and order evidence before treating the incident as

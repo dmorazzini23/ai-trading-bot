@@ -2105,10 +2105,15 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     if not should_alert:
         state_path = _incident_state_path(args)
         prior = _load_state(state_path)
-        if prior.get("incident_signature") and prior.get("sent_at") and not prior.get("resolved_at"):
+        if prior.get("incident_signature") and prior.get("sent_at"):
             _save_state(state_path, {
                 "resolved_at": utc_now_iso(),
                 "last_incident": prior,
+            })
+        elif prior.get("pending_health_unavailable_signature"):
+            _save_state(state_path, {
+                "unconfirmed_cleared_at": utc_now_iso(),
+                "last_unconfirmed_signature": prior["pending_health_unavailable_signature"],
             })
         return {
             "sent": False,
@@ -2120,6 +2125,12 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
 
     state_path = _incident_state_path(args)
     prior = _load_state(state_path)
+    requires_unavailable_confirmation = (
+        not force and _requires_health_unavailable_confirmation(snapshot, triggers, args)
+    )
+    if not requires_unavailable_confirmation and prior.get("pending_health_unavailable_signature"):
+        prior = {key: value for key, value in prior.items() if not key.startswith("pending_health_unavailable_")}
+        _save_state(state_path, prior)
     prior_fp = str(prior.get("fingerprint") or "")
     prior_signature = str(
         prior.get("incident_signature")
@@ -2143,10 +2154,7 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     trigger_set_changed = current_triggers != prior_triggers
     prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
     now = datetime.now(UTC)
-    if (
-        not force
-        and _requires_health_unavailable_confirmation(snapshot, triggers, args)
-    ):
+    if requires_unavailable_confirmation:
         pending_signature = str(prior.get("pending_health_unavailable_signature") or "")
         pending_seen_at = _parse_iso_ts(prior.get("pending_health_unavailable_seen_at"))
         if pending_signature != signature or pending_seen_at is None:
