@@ -23632,6 +23632,10 @@ class ExecutionEngine:
         order_type_submitted = order_type_normalized
         resolved_submission_tif = self._resolve_time_in_force(time_in_force)
         order: Any | None = None
+        durable_store_present = getattr(
+            getattr(self, "order_manager", None), "_intent_store", None
+        ) is not None
+        durable_required = self._durable_order_lifecycle_required() or durable_store_present
         try:
             durable_intent_id = self._begin_durable_order_lifecycle(
                 client_order_id=client_order_id,
@@ -23701,7 +23705,7 @@ class ExecutionEngine:
                 ),
             )
         except RuntimeError as exc:
-            if not self._durable_order_lifecycle_required():
+            if not durable_required:
                 durable_intent_id = None
             else:
                 detail = str(exc) or "durable OMS intent lifecycle unavailable before broker submit"
@@ -23726,7 +23730,7 @@ class ExecutionEngine:
                 )
                 _release_capacity_reservation("durable_oms_unavailable")
                 return None
-        if durable_intent_id is None and self._durable_order_lifecycle_required():
+        if durable_intent_id is None and durable_required:
             detail = "durable OMS intent lifecycle unavailable before broker submit"
             logger.error(
                 "DURABLE_ORDER_LIFECYCLE_UNAVAILABLE",

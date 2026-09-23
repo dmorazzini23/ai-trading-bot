@@ -153,6 +153,27 @@ def test_restart_after_broker_acceptance_does_not_resubmit(tmp_path: Path) -> No
     assert broker.count() == 1
 
 
+def test_existing_durable_submit_claim_cannot_begin_second_broker_attempt(
+    tmp_path: Path,
+) -> None:
+    store, broker, intent_id = _start_crashed_submission(tmp_path)
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+
+    assert manager.begin_external_order_lifecycle(
+        intent_id=intent_id,
+        idempotency_key="process-fault-key",
+        symbol="AAPL",
+        side="buy",
+        quantity=2.0,
+    ) is None
+    existing = store.get_intent(intent_id)
+    assert existing is not None
+    assert existing.status == "SUBMITTING"
+    assert existing.submit_attempts == 1
+    assert broker.count() == 1
+
+
 def test_unknown_broker_outcome_blocks_new_opening_until_reconciled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

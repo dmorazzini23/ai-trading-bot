@@ -264,6 +264,7 @@ def test_execute_order_live_blocks_before_broker_submit_without_durable_intent(
     engine = engine_factory()
     engine.execution_mode = "live"
     engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(get_open_intents=lambda: []),
         begin_external_order_lifecycle=lambda **_: None,
     )
     engine.submit_market_order = _submit_market_stub
@@ -917,6 +918,8 @@ def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine
     submit_calls: list[dict[str, Any]] = []
 
     class DurableManager:
+        _intent_store = SimpleNamespace(get_open_intents=lambda: [])
+
         def begin_external_order_lifecycle(self, **_kwargs):
             raise RuntimeError("intent store unavailable")
 
@@ -937,6 +940,30 @@ def test_execute_order_fails_closed_when_durable_lifecycle_creation_fails(engine
     assert result is None
     assert submit_calls == []
     assert engine._last_submit_outcome.get("status") == "skipped"
+    assert engine._last_submit_outcome.get("reason") == "durable_oms_unavailable"
+
+
+def test_paper_order_with_intent_store_does_not_submit_after_refused_claim(
+    engine_factory, monkeypatch
+):
+    engine = engine_factory()
+    engine.execution_mode = "paper"
+    monkeypatch.setattr(engine, "_durable_order_lifecycle_required", lambda: False)
+    submit_calls: list[dict[str, Any]] = []
+
+    class DurableManager:
+        _intent_store = SimpleNamespace(get_open_intents=lambda: [])
+
+        def begin_external_order_lifecycle(self, **_kwargs):
+            return None
+
+    engine.order_manager = DurableManager()
+    engine._submit_order_to_alpaca = lambda order_data: submit_calls.append(dict(order_data))
+
+    assert engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id="cid-claimed"
+    ) is None
+    assert submit_calls == []
     assert engine._last_submit_outcome.get("reason") == "durable_oms_unavailable"
 
 

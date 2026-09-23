@@ -103,6 +103,7 @@ class _FakeIntentStore:
         self.fills: dict[str, list[SimpleNamespace]] = {}
         self.closed: list[tuple[str, str, str | None]] = []
         self.raise_on_claim = False
+        self.refuse_claim = False
 
     def create_intent(self, **kwargs: Any) -> tuple[SimpleNamespace, bool]:
         record = SimpleNamespace(
@@ -118,11 +119,14 @@ class _FakeIntentStore:
         self.records[record.intent_id] = record
         return record, True
 
-    def claim_for_submit(self, intent_id: str, *, stale_after_seconds: int) -> None:
+    def claim_for_submit(self, intent_id: str, *, stale_after_seconds: int) -> bool:
         self.claimed.append((intent_id, stale_after_seconds))
         if self.raise_on_claim:
             raise RuntimeError("claim unavailable")
+        if self.refuse_claim:
+            return False
         self.records[intent_id].status = "SUBMITTING"
+        return True
 
     def get_intent(self, intent_id: str) -> SimpleNamespace | None:
         return self.records.get(intent_id)
@@ -240,6 +244,22 @@ def test_order_manager_external_lifecycle_returns_none_when_claim_fails() -> Non
         is None
     )
     assert store.claimed == [("intent-claim-fail", 90)]
+    assert manager._intent_by_order_id == {}
+    assert manager._intent_reported_fill_qty == {}
+
+
+def test_order_manager_external_lifecycle_refuses_already_claimed_intent() -> None:
+    store = _FakeIntentStore()
+    store.refuse_claim = True
+    manager = _order_manager_with_store(store)
+
+    assert manager.begin_external_order_lifecycle(
+        intent_id="intent-already-claimed",
+        idempotency_key="idem-already-claimed",
+        symbol="AAPL",
+        side="buy",
+        quantity=1,
+    ) is None
     assert manager._intent_by_order_id == {}
     assert manager._intent_reported_fill_qty == {}
 

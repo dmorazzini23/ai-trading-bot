@@ -883,12 +883,12 @@ class OrderManager:
             regime=str(regime) if regime not in (None, "") else None,
             metadata=dict(metadata or {}),
         )
-        self._intent_by_order_id[resolved_intent_id] = record.intent_id
-        self._intent_reported_fill_qty.setdefault(record.intent_id, 0.0)
         try:
-            store.claim_for_submit(
-                record.intent_id,
-                stale_after_seconds=max(1, int(stale_after_seconds)),
+            claimed = bool(
+                store.claim_for_submit(
+                    record.intent_id,
+                    stale_after_seconds=max(1, int(stale_after_seconds)),
+                )
             )
         except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:
             logger.warning(
@@ -896,9 +896,15 @@ class OrderManager:
                 extra={"intent_id": record.intent_id},
                 exc_info=True,
             )
-            self._intent_by_order_id.pop(resolved_intent_id, None)
-            self._intent_reported_fill_qty.pop(record.intent_id, None)
             return None
+        if not claimed:
+            logger.warning(
+                "OMS_EXTERNAL_INTENT_ALREADY_CLAIMED",
+                extra={"intent_id": record.intent_id},
+            )
+            return None
+        self._intent_by_order_id[resolved_intent_id] = record.intent_id
+        self._intent_reported_fill_qty.setdefault(record.intent_id, 0.0)
         return str(record.intent_id)
 
     def record_external_submit_error(

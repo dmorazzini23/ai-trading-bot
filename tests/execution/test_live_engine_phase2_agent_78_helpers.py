@@ -41,9 +41,10 @@ class _FakeIntentStore:
         self.intents[intent.intent_id] = intent
         return intent, True
 
-    def claim_for_submit(self, intent_id: str, *, stale_after_seconds: int) -> None:
+    def claim_for_submit(self, intent_id: str, *, stale_after_seconds: int) -> bool:
         self.claimed.append((intent_id, stale_after_seconds))
         self.intents[intent_id].status = "SUBMITTING"
+        return True
 
     def get_intent(self, intent_id: str) -> SimpleNamespace | None:
         return self.intents.get(intent_id)
