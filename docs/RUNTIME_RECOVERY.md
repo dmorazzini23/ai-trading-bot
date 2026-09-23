@@ -54,6 +54,11 @@ class, and leaves no published partial bundle. A failed optional S3 sync fails
 the systemd unit and must be handled separately; local success is not proof of
 off-host durability. The service/timer changes require deployment and a
 non-sending incident check before unattended coverage can be claimed.
+When S3 sync is enabled, its staging step fails if it cannot find a
+`recovery_backups/recovery.bak.*.gz` bundle, even if legacy log archives exist.
+This closes a silent-success case in the uploader; it does not verify that S3
+accepted or retained the object. Off-host recovery still requires an authorized
+read-back and isolated restore from the remote object.
 
 ## Isolated restore procedure
 

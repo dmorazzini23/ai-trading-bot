@@ -32,19 +32,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-staged=0
+recovery_staged=0
 while IFS= read -r -d '' file_path; do
   rel_path="${file_path#${RUNTIME_DIR}/}"
+  if [[ "${rel_path}" == recovery_backups/recovery.bak.*.gz ]]; then
+    recovery_staged=1
+  fi
   target_dir="${tmpdir}/$(dirname "${rel_path}")"
   mkdir -p "${target_dir}"
   # Prefer hard-links to avoid copy overhead; fall back to a regular copy if needed.
   ln "${file_path}" "${tmpdir}/${rel_path}" 2>/dev/null \
     || cp -p "${file_path}" "${tmpdir}/${rel_path}"
-  staged=1
 done < <(find "${RUNTIME_DIR}" -type f -name "*.bak.*.gz" -readable -print0 2>/dev/null)
 
-if [[ "${staged}" -eq 0 ]]; then
-  exit 0
+if [[ "${recovery_staged}" -eq 0 ]]; then
+  echo "Runtime recovery bundle missing from S3 sync input" >&2
+  exit 3
 fi
 
 aws s3 sync "${tmpdir}" "${DESTINATION}" \
