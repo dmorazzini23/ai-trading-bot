@@ -70,6 +70,15 @@ an authoritative complete per-order allocation contract) with account, order,
 execution, amount, currency and total-fee semantics; otherwise retain unknown
 net P&L. Do not infer zero from absent fee activity.
 
+Alpaca's newer [Activity SSE](https://docs.alpaca.markets/us/docs/activity-sse)
+does not close this gap for the configured paper Trading API client: the stream
+requires Broker API credentials. Its `FEE.details.parent_id` is optional for
+one-to-one charges, while period-wide regulatory and other volume-based fees
+have no parent execution ID. Access to that separate API, even if later
+obtained, would require a completeness and allocation contract before a
+verified *total* fee could be attached to each fill. No Broker API access or
+additional paid data was obtained for this review.
+
 Future read-only activity captures now include a broker-observed account
 boundary (cash, equity, currency and observation time). The accounting CLI can
 compare two such boundaries with a complete, covering same-account activity
