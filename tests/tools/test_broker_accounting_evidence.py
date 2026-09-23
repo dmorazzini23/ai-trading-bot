@@ -67,6 +67,35 @@ def test_equity_audit_reconciles_cash_and_reports_equity_without_claiming_net_st
     assert result["equity_change_usd"] == "10.00"
     assert result["performance_authority"] is False
     assert result["fee_allocation"] == "unknown_per_execution"
+    assert result["corporate_action_observations"][0]["activity_type"] == "DIV"
+    assert result["corporate_action_observations"][0]["kind"] == "cash_distribution"
+    assert result["position_effect_reconciliation"] == "not_verified_without_position_boundaries"
+
+
+def test_equity_audit_identifies_zero_cash_split_without_claiming_position_reconciliation():
+    activities, opening, closing = _equity_fixture()
+    activities["activities"].append({
+        "id": "split", "activity_type": "SSP", "symbol": "AAPL", "currency": "USD",
+        "net_amount": "0", "executed_at": "2026-09-22T18:30:00Z",
+    })
+    result = reconcile_account_equity(activities, opening, closing)
+    assert result["status"] == "cash_reconciled"
+    split = next(row for row in result["corporate_action_observations"] if row["activity_id"] == "split")
+    assert split["window_relation"] == "inside"
+    assert split["position_effect_reconciled"] is False
+    assert result["performance_authority"] is False
+
+
+def test_equity_audit_keeps_date_only_split_unplaced():
+    activities, opening, closing = _equity_fixture()
+    activities["activities"].append({
+        "id": "split", "activity_type": "SSP", "symbol": "AAPL",
+        "currency": "USD", "net_amount": "0", "date": "2026-09-22",
+    })
+    result = reconcile_account_equity(activities, opening, closing)
+    assert result["status"] == "unverified"
+    assert result["corporate_action_observations"][-1]["window_relation"] == "unplaced"
+    assert {row["activity_id"] for row in result["unresolved_activities"]} == {"split"}
 
 
 def test_equity_audit_leaves_date_only_fee_and_unknown_cash_movement_unverified():

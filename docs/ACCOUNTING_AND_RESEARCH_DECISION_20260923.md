@@ -83,6 +83,14 @@ unverified. The output also reports the broker equity boundary change and
 position-value residual, but never labels them verified strategy return or
 allocates account charges to executions. The account observation precedes the
 activity pagination, so it is not an atomic broker ledger snapshot.
+The audit now labels observed cash distributions and position-changing
+corporate actions separately. A precisely timed stock split with zero cash can
+pass cash reconciliation while its share-count effect remains unverified;
+date-only actions remain unplaced in the interval. Alpaca's
+[Trading API activity schema](https://docs.alpaca.markets/us/docs/account-activities)
+lists splits and dividends, but its nontrade object commonly supplies a date
+rather than a causal execution instant. Neither the cash audit nor that schema
+provides two position boundaries or a verified per-fill fee total.
 
 The September 22 capture predates these account boundaries. No historical
 cash/equity reconciliation is claimed from the seven fills or the 73 date-only

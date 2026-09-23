@@ -17,6 +17,16 @@ from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.tools.execution_evidence_reconciliation import _number, _read
 
 
+_POSITION_ACTION_TYPES = frozenset({
+    "ACATS", "FOPT", "JNLS", "MA", "NC", "OPASN", "OPEXP", "OPXRC",
+    "REORG", "SC", "SPLIT", "SSO", "SSP",
+})
+_DISTRIBUTION_ACTION_TYPES = frozenset({
+    "CGD", "DIV", "DIVCGL", "DIVCGS", "DIVFEE", "DIVFT", "DIVNRA",
+    "DIVROC", "DIVTW", "DIVTXEX",
+})
+
+
 def daily_fee_totals(fees: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Aggregate booked charges by reported date/currency, never by guessed fill."""
     groups: dict[tuple[str, str], dict[str, Any]] = {}
@@ -123,6 +133,7 @@ def reconcile_account_equity(
     fee_cash = Decimal(0)
     included: list[dict[str, Any]] = []
     unresolved: list[dict[str, str]] = []
+    corporate_actions: list[dict[str, Any]] = []
     for key, row in sorted(seen.items()):
         if row.get("account_id") not in (None, account_id):
             raise ValueError("activity account conflict")
@@ -133,6 +144,22 @@ def reconcile_account_equity(
         # FEE.date is a booked day, not a causal execution timestamp.
         instant = _aware_instant(row.get("transaction_time") if is_fill else
                                  row.get("executed_at") or row.get("transaction_time"))
+        if activity_type in _POSITION_ACTION_TYPES | _DISTRIBUTION_ACTION_TYPES:
+            corporate_actions.append({
+                "activity_id": key,
+                "activity_type": activity_type,
+                "kind": "position_change" if activity_type in _POSITION_ACTION_TYPES else "cash_distribution",
+                "symbol": row.get("symbol"),
+                "reported_date": row.get("date"),
+                "effective_at": instant.isoformat() if instant is not None else None,
+                "window_relation": (
+                    "unplaced" if instant is None else
+                    "inside" if start < instant <= end else "outside"
+                ),
+                "position_effect_reconciled": (
+                    False if activity_type in _POSITION_ACTION_TYPES else None
+                ),
+            })
         if instant is None:
             unresolved.append({"activity_id": key, "reason": "effective_instant_unavailable"})
             continue
@@ -175,6 +202,8 @@ def reconcile_account_equity(
         "booked_fee_cash_effect_usd": str(fee_cash),
         "expected_closing_cash_usd": str(expected_cash), "cash_difference_usd": str(difference),
         "included_activities": included, "unresolved_activities": unresolved,
+        "corporate_action_observations": corporate_actions,
+        "position_effect_reconciliation": "not_verified_without_position_boundaries",
         "fee_allocation": "unknown_per_execution", "performance_authority": False,
         "scope": "broker_boundary_and_cash_activity_audit_not_verified_net_strategy_return",
     }
