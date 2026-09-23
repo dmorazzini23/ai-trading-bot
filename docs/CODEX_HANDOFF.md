@@ -2,11 +2,22 @@
 
 ## September 23 owner decisions and CI (in progress)
 
+CI `35888651186` later failed on three tests with 7,199 passed, four skipped,
+and 80.15% coverage. The two retry tests inherited CI's `paper_observe`
+profile, whose zero order budget blocked submission before retry; that failure
+was reproduced locally. The config-cache test held a stale package reference
+after another test reimported `ai_trading.config`. The test fixture now selects
+`paper_trade` explicitly and the config test uses the currently registered
+package. The adverse-profile retry reproduction and the focused config group
+pass; `agent_validate_changed.sh --market-hours` passed Ruff, mypy, compile and
+11 mapped tests. No runtime or trading policy changed. The repaired local tip
+has not been pushed or validated by CI, so deployment remains on hold.
+
 The owner explicitly authorized pushing local main through `18ce1c10e` to the
 public GitHub repository. The fast-forward push succeeded; GitHub CI run
-`35888651186` is in progress for that exact SHA. CodeQL, Workflow Lint and
-SBOM passed, as did the CI research, replay and determinism jobs; the main
-test job remains in progress. No deployment is authorized by a running check.
+`35888651186` failed for that exact SHA. CodeQL, Workflow Lint and SBOM passed,
+as did the CI research, replay and determinism jobs. No deployment is authorized
+by the failed check.
 The owner also delegated selection of the rough 3% risk limit:
 the proposed live-capital contract now uses 3% verified peak-to-trough equity
 drawdown and a separate 1% verified daily equity loss limit. At $1,000/$2,000
@@ -68,7 +79,8 @@ change; no broker request or runtime mutation occurred.
 
 ## Current decision and next gate (September 23)
 
-GitHub `main` now contains `18ce1c10e`, with CI in progress on that SHA.
+GitHub `main` contains `18ce1c10e`; CI failed on that SHA, and local test fixes
+await a reviewed public push and exact-tip CI.
 Before the push, `make secret-scan` passed on tracked files and an added-line
 scan across all 44 outgoing commits found zero likely live credential
 assignments. These checks do not replace a completed CI run.

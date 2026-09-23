@@ -22,6 +22,9 @@ def _patch_settings(monkeypatch):
 
     from ai_trading.execution import live_trading
 
+    # The retry contract needs a trading-enabled paper profile. The default
+    # profile varies with the CI execution mode and may be paper_observe.
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     monkeypatch.setattr(live_trading, "get_execution_settings", lambda: _DummySettings)
     monkeypatch.setattr(live_trading, "get_alpaca_creds", lambda: ("key", "secret"))
     monkeypatch.setattr(live_trading, "get_alpaca_base_url", lambda: "https://paper-api")

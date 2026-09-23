@@ -1,4 +1,6 @@
 
+import importlib
+
 import pytest
 from ai_trading import config
 
@@ -67,13 +69,16 @@ def test_validate_alpaca_credentials_reads_testing_at_call_time(monkeypatch):
 
 def test_reload_env_clears_cached_settings(monkeypatch):
     """reload_env should invalidate cached config settings objects."""
+    # Other config tests reimport the package; use the current registered
+    # module so reload_env invalidates the same cache this test reads.
+    current_config = importlib.import_module("ai_trading.config")
     monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.31")
-    config._reset_cached_settings()
-    first = config.get_settings()
+    current_config._reset_cached_settings()
+    first = current_config.get_settings()
 
     monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.44")
-    config.reload_env(path=None)
-    second = config.get_settings()
+    current_config.reload_env(path=None)
+    second = current_config.get_settings()
 
     assert second is not first
     assert float(getattr(second, "capital_cap", 0.0)) == pytest.approx(0.44)
