@@ -87,6 +87,16 @@ approved loss thresholds, or proof that every direct broker submission and
 live reduction path enforces this contract. The separate live-owner fence and
 model/replay gates still apply.
 
+Alpaca [defines `last_equity`](https://docs.alpaca.markets/us/docs/account-plans)
+as equity at the prior trading day's 16:00 ET close, but
+[nontrade activity records](https://docs.alpaca.markets/us/docs/account-activities)
+can expose only a date rather than an exact instant. The
+[activity endpoint](https://docs.alpaca.markets/us/reference/getaccountactivities-2)
+also filters by creation time, while fees may be created the following day.
+Consequently, a missing or date-only activity cannot certify that no intraday
+cash movement affected the equity comparison. Live loss evidence must remain
+blocked when that timing or completeness cannot be verified.
+
 Approval of the two numeric loss decisions; a single canonical evaluator wired
 to every opening submission path; same-account, timestamped broker evidence for
 all inputs; durable high-water and session baselines; corruption, rollover,
