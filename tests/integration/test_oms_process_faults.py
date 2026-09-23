@@ -80,7 +80,29 @@ def _accept_then_crash(intent_db: str, broker_db: str, intent_id: str) -> None:
     os._exit(47)  # Broker accepted; local acknowledgement was never persisted.
 
 
-def _start_crashed_submission(tmp_path: Path) -> tuple[IntentStore, _BrokerSimulator, str]:
+def _accept_then_ack_write_fails(intent_db: str, broker_db: str, intent_id: str) -> None:
+    from sqlalchemy import event
+
+    store = IntentStore(path=intent_db)
+    if not store.claim_for_submit(intent_id):
+        os._exit(41)
+    broker_order = _BrokerSimulator(Path(broker_db)).accept(intent_id)
+
+    @event.listens_for(store._engine, "before_cursor_execute")
+    def fail_ack_write(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("UPDATE INTENTS"):
+            raise OSError("simulated acknowledgement storage failure")
+
+    try:
+        store.mark_submitted(intent_id, str(broker_order["id"]))
+    except OSError:
+        os._exit(53)
+    os._exit(54)
+
+
+def _start_crashed_submission(
+    tmp_path: Path, *, storage_failure: bool = False
+) -> tuple[IntentStore, _BrokerSimulator, str]:
     intent_db = tmp_path / "intents.db"
     broker_db = tmp_path / "broker.db"
     store = IntentStore(path=str(intent_db))
@@ -97,7 +119,7 @@ def _start_crashed_submission(tmp_path: Path) -> tuple[IntentStore, _BrokerSimul
     assert created
     assert intent.intent_id == intent_id
     process = multiprocessing.get_context("fork").Process(
-        target=_accept_then_crash,
+        target=_accept_then_ack_write_fails if storage_failure else _accept_then_crash,
         args=(str(intent_db), str(broker_db), intent_id),
     )
     process.start()
@@ -106,7 +128,7 @@ def _start_crashed_submission(tmp_path: Path) -> tuple[IntentStore, _BrokerSimul
         process.terminate()
         process.join(timeout=5)
         pytest.fail("fault worker did not terminate")
-    assert process.exitcode == 47
+    assert process.exitcode == (53 if storage_failure else 47)
     assert broker.count() == 1
     return store, broker, intent_id
 
@@ -157,6 +179,36 @@ def test_unknown_broker_outcome_blocks_new_opening_until_reconciled(
         get_order_by_client_order_id_fn=broker.lookup,
     )
     assert store.get_intent(intent_id).status == "SUBMITTED"
+    assert engine._execution_phase_allows_submits(closing_position=False) == (True, None)
+    assert broker.count() == 1
+
+
+def test_ack_storage_failure_survives_restart_without_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, broker, intent_id = _start_crashed_submission(tmp_path, storage_failure=True)
+    store = IntentStore(path=str(tmp_path / "intents.db"))
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    engine.order_manager = manager
+    engine.execution_mode = "paper"
+    engine._broker_sync = None
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "0")
+
+    unresolved = store.get_intent(intent_id)
+    assert unresolved is not None and unresolved.status == "SUBMITTING"
+    assert not store.claim_for_submit(intent_id, stale_after_seconds=1)
+    assert engine._execution_phase_allows_submits(closing_position=False) == (
+        False,
+        "oms_submit_outcome_unresolved",
+    )
+    manager.reconcile_open_intents(
+        broker_orders=[],
+        get_order_by_client_order_id_fn=broker.lookup,
+    )
+    recovered = store.get_intent(intent_id)
+    assert recovered is not None and recovered.status == "SUBMITTED"
     assert engine._execution_phase_allows_submits(closing_position=False) == (True, None)
     assert broker.count() == 1
 
