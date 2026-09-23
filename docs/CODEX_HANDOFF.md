@@ -1,5 +1,42 @@
 # Current handoff
 
+## September 23 after-close paper release (`5031ca47e`, deployed)
+
+Exact-tip CI `35913045555` passed: 7,202 tests passed, four skipped, 80.17%
+coverage; research, offline replay, determinism, CodeQL, Workflow Lint and
+SBOM passed. The paper broker clock was closed with zero positions and zero
+open orders. The clean-checkout release identity passed before and after the
+20:27:27 UTC service restart against the reviewed code, sanitized config,
+launch profile, schema `20260506_0001` and model SHA. The current service is
+active with NRestarts=0, fresh broker state and zero exposure; HTTP 503 reports
+only `required_model_stale`. A non-sending incident snapshot returned
+`blocked_qualification`, `should_alert=false`; bounded startup logs contained
+no structured ERROR/CRITICAL or traceback. No live activation or strategy
+change occurred.
+
+Pre- and postdeployment local recovery bundles were created, verified and
+restored in new isolated directories. The postdeployment restore includes the
+release spec and model; source and restore each have 2,135 intents, 764 fills,
+80,184 OMS events and zero nonterminal intents. Both SQLite integrity checks
+passed. This does not prove off-host recovery or broker activity after a future
+snapshot. Automatic approval review rejected uploading sensitive runtime
+archives to S3. A read-only AWS expected-owner check confirmed that the empty
+configured backup prefix belongs to the active AWS account; explicit approval
+for a single encrypted bundle upload and read-back is pending. No S3 write,
+delete or actual alert was sent.
+
+The installed service unit still lacks the staged release identity guards, and
+the installed backup unit is the older archive-only variant with its timer
+disabled. Host administrator installation of the reviewed packaged units,
+daemon reload and timer enablement remain required. Do not claim scheduled
+backup or automatic identity enforcement from this manual release. The selected
+3% peak drawdown and 1% daily loss contract remains unenforced pending verified
+same-account equity/cash-flow evidence and live-path wiring; live openings
+remain blocked. Verified fees, legacy history, external monitoring and model
+qualification remain separate evidence gaps. The repo handoff update is a
+documentation-only change after the deployed `5031ca47e` code release; review
+its commit and CI before updating any future release specification or restart.
+
 ## September 23 owner decisions and CI repair
 
 Owner-authorized push of `c4c5d3d75` succeeded. CI `35903372692` reduced the
