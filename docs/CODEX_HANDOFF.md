@@ -1,5 +1,26 @@
 # Current handoff
 
+## September 24 exact-tip validation and release identity
+
+The first backup-uploader CI run `35953054771` failed only because the runner
+does not create the repository `venv`; four uploader tests could not start the
+bundle verifier. The script now uses the repository interpreter when present
+and the runner's `python3` otherwise. All 13 focused uploader tests and the
+changed-file validation (62 mapped script tests) passed locally. Commit
+`d7bf43cba0b11547bca7672046634ce72605816d` is on clean `main`; exact-tip
+CI `35955032742` passed with 7,204 tests, four skipped and 80.17% coverage.
+CodeQL, Workflow Lint, SBOM, research, replay and determinism gates passed.
+
+The hash-only installed release spec was updated to that tested commit, with
+the old spec retained as a local rollback copy. Installed pre-migration and
+normal identity preflights passed. The paper service remained active with
+NRestarts=0; no further restart was needed. At 04:37 UTC, the paper broker was
+closed and active with zero positions and open orders. Health HTTP 503 still
+reported `required_model_stale`, and the backup timer remained disabled. The
+AWS MFA case, versioned S3 restore permission, recurring-upload approval and
+backup-unit installation remain open. No S3 transfer or trading change was
+made for this CI repair.
+
 ## September 24 AWS recovery hold and paper service guard activation
 
 The owner opened an AWS account MFA recovery case; IAM
