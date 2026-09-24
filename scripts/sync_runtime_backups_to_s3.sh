@@ -11,6 +11,9 @@ S3_PREFIX="${AI_TRADING_BACKUP_S3_PREFIX:-pruned/}"
 S3_OWNER="${AI_TRADING_BACKUP_S3_EXPECTED_BUCKET_OWNER:-}"
 AWS_REGION="${AI_TRADING_BACKUP_S3_REGION:-${AWS_REGION:-${AI_TRADING_AWS_REGION:-us-east-2}}}"
 PYTHON_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/venv/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
 
 if [[ -z "$S3_BUCKET" || ! "$S3_OWNER" =~ ^[0-9]{12}$ ]]; then
   echo "Backup S3 bucket and 12-digit expected bucket owner are required" >&2
