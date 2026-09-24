@@ -1,8 +1,9 @@
 # Runtime recovery boundary and rehearsal
 
-**Status (2026-09-23):** local backup and isolated restore implemented; the
-packaged timer has not been installed/enabled for this change. No service
-restart, live activation, or broker order was part of this work.
+**Status (2026-09-24):** local backup and isolated restore are implemented,
+and one manually uploaded S3 bundle was read back and restored. The paper
+service unit's release checks are active; the backup-sync timer remains
+disabled. No live activation or broker order was part of this work.
 
 ## Authoritative state and coverage
 
@@ -44,21 +45,27 @@ databases and evidence files are captured sequentially, so the bundle is not
 one atomic cross-file instant. The broker remains the authority for actual
 orders, fills, cash and positions.
 
-The packaged backup-sync unit now creates and verifies the bundle before
-invoking the existing optional S3 archive sync. The timer is configured for
-23:30 UTC daily, after the regular US equity session in either daylight-saving
-season. Its retention is seven days and at most 14 local snapshots; the
-existing S3 sync has separate retention controls. The deployed runtime
-environment observed September 23 had S3 sync enabled and uploader-side S3
-retention disabled; its 30-day setting therefore does not establish remote
-retention. At 10:48 UTC September 23, a read-only `ListObjectsV2` on the
-configured backup prefix succeeded with zero keys and no truncation. A separate
-read of the bucket lifecycle policy found one enabled 30-day expiration rule
-whose filter covers that prefix. A September 23 11:22 UTC read-only
-`GetBucketVersioning` call returned `AccessDenied` (HTTP 403), so the current
-identity cannot verify versioning. The backup-sync timer remained disabled and
-inactive at that time. The visible lifecycle rule does not establish a retained backup:
-there was no object in the configured prefix to read back or restore.
+The packaged backup-sync unit creates and verifies a bundle before invoking
+the optional uploader. The staged timer is configured for 23:30 UTC daily,
+after the regular US equity session in either daylight-saving season. Local
+retention is seven days and at most 14 snapshots. The uploader now selects
+only the newest regular recovery bundle, verifies it, requires a 12-digit
+`AI_TRADING_BACKUP_S3_EXPECTED_BUCKET_OWNER`, uploads with SSE-S3 and a SHA-256
+checksum, then downloads the current object and compares its bytes. It does
+not upload other runtime archives or delete remote objects. Remote retention
+depends on the reviewed bucket lifecycle, not uploader settings.
+
+On September 23 a read-only `ListObjectsV2` on the configured backup prefix
+succeeded with zero keys, and the bucket lifecycle policy had an enabled
+30-day expiration rule covering that prefix. `GetBucketVersioning` returned
+`AccessDenied`, but the later owner-approved single-bundle upload returned a
+version ID. The current object was downloaded, hash-checked and restored in
+isolation. A version-pinned read was denied `s3:GetObjectVersion`, so recovery
+of an overwritten version remains unproven. The September 24 uploader change
+has only been exercised with fake AWS; no real S3 write used it. The timer
+remains disabled. Its activation requires separate approval for daily uploads
+to the exact bucket/prefix, host installation of the reviewed backup unit and
+timer, and a verified read-back under that installed unit.
 
 A failed local backup exits nonzero, writes
 `runtime/recovery_backup_latest.json` with a safe reason
@@ -67,19 +74,13 @@ the systemd unit and must be handled separately; local success is not proof of
 off-host durability. The service/timer changes require deployment and a
 non-sending incident check before unattended coverage can be claimed.
 
-When S3 sync is enabled, its staging step fails if it cannot find a
-`recovery_backups/recovery.bak.*.gz` bundle, even if legacy log archives exist.
-This closes a silent-success case in the uploader; it does not verify that S3
-accepted or retained the object. Off-host recovery still requires an authorized
-read-back and isolated restore from the remote object.
-
-The configured S3 retention pass now also fails the unit if object listing or
-deletion fails; an uploaded bundle is not evidence that retention succeeded.
-When that pass is explicitly enabled, invalid days/delete-cap settings and a
-reached delete cap also fail the unit instead of reporting a complete run.
-Inspect the unit journal for the safe failure class. Verify an uploaded bundle
-through remote read-back and isolated restore before counting the scheduled run
-as off-host recovery evidence.
+When S3 sync is enabled, missing or corrupt recovery bundles, missing or
+invalid bucket-owner configuration, upload failure and read-back mismatch all
+fail the unit. A successful byte comparison proves that the current object was
+readable at that time; it does not prove future retention or version recovery.
+Inspect the unit journal for the safe failure class. Rehearse an isolated
+restore from a scheduled remote object before counting the timer as off-host
+recovery evidence.
 
 ## Isolated restore procedure
 

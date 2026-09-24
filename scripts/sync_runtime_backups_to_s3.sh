@@ -8,93 +8,64 @@ fi
 RUNTIME_DIR="${AI_TRADING_RUNTIME_DIR:-/var/lib/ai-trading-bot/runtime}"
 S3_BUCKET="${AI_TRADING_BACKUP_S3_BUCKET:-}"
 S3_PREFIX="${AI_TRADING_BACKUP_S3_PREFIX:-pruned/}"
+S3_OWNER="${AI_TRADING_BACKUP_S3_EXPECTED_BUCKET_OWNER:-}"
 AWS_REGION="${AI_TRADING_BACKUP_S3_REGION:-${AWS_REGION:-${AI_TRADING_AWS_REGION:-us-east-2}}}"
-RETENTION_ENABLED="${AI_TRADING_BACKUP_S3_RETENTION_ENABLED:-1}"
-RETENTION_DAYS="${AI_TRADING_BACKUP_S3_RETENTION_DAYS:-30}"
-RETENTION_MAX_DELETES="${AI_TRADING_BACKUP_S3_RETENTION_MAX_DELETES:-500}"
+PYTHON_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/venv/bin/python"
 
-if [[ -z "$S3_BUCKET" ]]; then
-  echo "AI_TRADING_BACKUP_S3_BUCKET is required" >&2
+if [[ -z "$S3_BUCKET" || ! "$S3_OWNER" =~ ^[0-9]{12}$ ]]; then
+  echo "Backup S3 bucket and 12-digit expected bucket owner are required" >&2
   exit 2
 fi
 
-# Normalize prefix so object keys are stable.
-S3_PREFIX="${S3_PREFIX#/}"
+if [[ ! "$S3_PREFIX" =~ ^[A-Za-z0-9][A-Za-z0-9/_-]*/?$ || "$S3_PREFIX" == *//* ]]; then
+  echo "Backup S3 prefix is invalid" >&2
+  exit 2
+fi
 if [[ -n "$S3_PREFIX" && "$S3_PREFIX" != */ ]]; then
   S3_PREFIX="${S3_PREFIX}/"
 fi
 
-DESTINATION="s3://${S3_BUCKET}/${S3_PREFIX}"
-
-tmpdir="$(mktemp -d)"
-cleanup() {
-  rm -rf "${tmpdir}"
-}
-trap cleanup EXIT
-
-recovery_staged=0
-while IFS= read -r -d '' file_path; do
-  rel_path="${file_path#${RUNTIME_DIR}/}"
-  if [[ "${rel_path}" == recovery_backups/recovery.bak.*.gz ]]; then
-    recovery_staged=1
+backup_dir="${RUNTIME_DIR}/recovery_backups"
+shopt -s nullglob
+bundle=""
+for candidate in "${backup_dir}"/recovery.bak.*.gz; do
+  name="${candidate##*/}"
+  [[ "$name" =~ ^recovery\.bak\.[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\.gz$ ]] || continue
+  [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+  if [[ -z "$bundle" || "$candidate" -nt "$bundle" ]]; then
+    bundle="$candidate"
   fi
-  target_dir="${tmpdir}/$(dirname "${rel_path}")"
-  mkdir -p "${target_dir}"
-  # Prefer hard-links to avoid copy overhead; fall back to a regular copy if needed.
-  ln "${file_path}" "${tmpdir}/${rel_path}" 2>/dev/null \
-    || cp -p "${file_path}" "${tmpdir}/${rel_path}"
-done < <(find "${RUNTIME_DIR}" -type f -name "*.bak.*.gz" -readable -print0 2>/dev/null)
-
-if [[ "${recovery_staged}" -eq 0 ]]; then
+done
+if [[ -z "$bundle" ]]; then
   echo "Runtime recovery bundle missing from S3 sync input" >&2
   exit 3
 fi
 
-aws s3 sync "${tmpdir}" "${DESTINATION}" \
-  --region "${AWS_REGION}" \
-  --sse AES256 \
-  --no-progress \
-  --only-show-errors
+"$PYTHON_BIN" -m ai_trading.tools.runtime_recovery_backup --verify "$bundle" >/dev/null
 
-if [[ "${RETENTION_ENABLED}" != "1" ]]; then
-  exit 0
-fi
+key="${S3_PREFIX}recovery_backups/${bundle##*/}"
+readback="$(mktemp)"
+trap 'rm -f "$readback"' EXIT
 
-if ! [[ "${RETENTION_DAYS}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${RETENTION_MAX_DELETES}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "S3 retention settings are invalid" >&2
-  exit 2
-fi
+aws s3api put-object \
+  --bucket "$S3_BUCKET" \
+  --key "$key" \
+  --body "$bundle" \
+  --expected-bucket-owner "$S3_OWNER" \
+  --server-side-encryption AES256 \
+  --checksum-algorithm SHA256 \
+  --region "$AWS_REGION" >/dev/null
 
-cutoff_epoch="$(date -u -d "-${RETENTION_DAYS} days" +%s)"
-deleted=0
-listing_file="${tmpdir}/s3-listing.txt"
-if ! aws s3 ls "${DESTINATION}" --recursive --region "${AWS_REGION}" >"${listing_file}" 2>/dev/null; then
-  echo "S3 retention listing failed" >&2
+aws s3api get-object \
+  --bucket "$S3_BUCKET" \
+  --key "$key" \
+  --expected-bucket-owner "$S3_OWNER" \
+  --region "$AWS_REGION" \
+  "$readback" >/dev/null
+
+if ! cmp -s "$bundle" "$readback"; then
+  echo "S3 recovery bundle read-back mismatch" >&2
   exit 4
 fi
 
-while read -r date_str time_str _size key; do
-  [[ -n "${key:-}" ]] || continue
-  [[ "${key}" == *.bak.*.gz ]] || continue
-
-  object_epoch="$(date -u -d "${date_str} ${time_str} UTC" +%s 2>/dev/null || true)"
-  [[ -n "${object_epoch}" ]] || continue
-  if [[ "${object_epoch}" -ge "${cutoff_epoch}" ]]; then
-    continue
-  fi
-
-  if [[ "${deleted}" -ge "${RETENTION_MAX_DELETES}" ]]; then
-    echo "S3 retention delete cap reached (${RETENTION_MAX_DELETES}); retention incomplete" >&2
-    exit 6
-  fi
-
-  if ! aws s3 rm "s3://${S3_BUCKET}/${key}" --region "${AWS_REGION}" --only-show-errors >/dev/null 2>&1; then
-    echo "S3 retention delete failed" >&2
-    exit 5
-  fi
-  deleted=$((deleted + 1))
-done < "${listing_file}"
-
-if [[ "${deleted}" -gt 0 ]]; then
-  echo "S3 retention removed ${deleted} backup object(s) older than ${RETENTION_DAYS} day(s)"
-fi
+echo "S3 recovery bundle uploaded and read back: $key"

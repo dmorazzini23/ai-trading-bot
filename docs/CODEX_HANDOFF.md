@@ -1,5 +1,34 @@
 # Current handoff
 
+## September 24 AWS recovery hold and paper service guard activation
+
+The owner opened an AWS account MFA recovery case; IAM
+`s3:GetObjectVersion` remains unavailable. No IAM change or S3 write occurred.
+The owner installed the reviewed `ai-trading.service` unit. It byte-matched
+the packaged file and systemd reported `NeedDaemonReload=no`. Both release
+identity preflights passed against the clean CI-tested checkout and installed
+release spec. Before the 03:39 UTC after-close restart, the paper broker was
+active and closed with zero positions and open orders; a fresh local recovery
+bundle `recovery.bak.20260924T033758Z-d33e3419.gz` verified successfully.
+The restart succeeded with NRestarts=0, and both automatic identity reports
+passed. Postrestart broker exposure remained zero. Health HTTP 503 still
+reported only `required_model_stale`; a non-sending incident snapshot flagged
+`health_degraded` but sent no alert. No live activation or strategy change.
+
+The local backup uploader now selects one newest regular recovery bundle,
+verifies it before transfer, requires the expected 12-digit bucket owner,
+uploads with SSE-S3/SHA-256, reads back the current object and compares bytes.
+It no longer uploads legacy archives or deletes remote objects. Thirteen
+isolated uploader tests and 75 changed-file mapped tests passed, along with
+Ruff, mypy, compile, Bash syntax and diff checks. This uploader change has
+not made a real S3 call. The backup timer is still disabled; the installed
+backup unit is the older variant. Next: exact-tip CI and release-spec update,
+then owner approval of the exact recurring upload scope, required bucket-owner
+configuration, host installation of the backup unit/timer, and a scheduled
+read-back/isolated restore. Version-pinned restore still needs the AWS case
+resolved and `s3:GetObjectVersion`. Live-risk/equity, model, monitoring and
+accounting evidence gates remain unchanged.
+
 ## September 23 approved off-host restore and documentation tip
 
 The owner approved one postdeployment bundle upload and the documentation
