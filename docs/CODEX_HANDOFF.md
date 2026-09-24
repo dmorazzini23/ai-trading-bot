@@ -1,5 +1,32 @@
 # Current handoff
 
+## September 24 after-close gate and performance review
+
+See `docs/GATE_AND_PERFORMANCE_REVIEW_20260924.md` for evidence and acceptance.
+The runtime go/no-go reconciliation compares unbounded local trade history to
+current broker positions; AAPL -3 / AMZN +1 is the documented pre-anchor
+legacy difference. The independent September 24 session audit was flat to
+flat with zero fills, and the broker activity capture had no September 23/24
+activities. No new current-session position discrepancy was established.
+The report now labels its reconstructed inventory diagnostic only and states
+that no verified broker ledger was applied; the numerical mismatch and gate
+block remain unchanged. Focused report/lineage tests: 75 passed. The first
+mapped validation encountered sandbox-denied bytecode writes under `.codex` in
+two audit tests. With a temporary `PYTHONPYCACHEPREFIX`, Ruff, mypy, compile,
+and all 792 mapped tests passed; the validator's sandboxed localhost curl was
+denied. A host health check passed its expected HTTP 503 response with only
+`required_model_stale` as readiness failure; service active, NRestarts=0.
+A read-only run on the actual report inputs retained both AAPL/AMZN
+mismatches and showed the diagnostic-only label.
+
+September 24 produced zero broker orders and fills. Net costs remain
+unverified; the existing cost comparison has one slippage pair and zero net
+cost pairs. Replay was 186/250 samples at -1.492 bps candidate net edge, and
+`required_model_stale` remained. The consumed September 21 hypothesis stays
+retired, holdout untouched, and no new experiment or gate change occurred.
+Complete exact-tip CI and installed release-identity checks before treating
+this report-metadata change as deployed.
+
 ## September 24 exact-tip validation and release identity
 
 The first backup-uploader CI run `35953054771` failed only because the runner

@@ -1782,6 +1782,9 @@ def test_build_report_preserves_ledger_discrepancy_when_broker_is_flat(
 
     trade = report["trade_history"]
     assert trade["reconciliation_open_positions_source"] == "trade_history"
+    assert trade["reconstructed_open_positions_authority"] == "diagnostic_only"
+    assert trade["reconciliation_evidence_scope"] == "unbounded_local_events"
+    assert trade["verified_broker_ledger_applied"] is False
     reconciliation = trade["open_position_reconciliation"]
     assert reconciliation["available"] is True
     assert reconciliation["source"] == "trade_history"

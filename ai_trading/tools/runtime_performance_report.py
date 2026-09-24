@@ -2698,11 +2698,11 @@ def _aggregate_closed_trades(
         "open_lot_count": int(open_lot_count),
         "open_positions": dict(sorted(reconciliation_positions.items())),
         "open_positions_basis": str(reconciliation_source or "trade_history"),
-        "reconstructed_open_positions_authority": (
-            "diagnostic_only"
-            if str(reconciliation_source or "trade_history") != "trade_history"
-            else "current_basis"
-        ),
+        # Both sources are local event reconstructions. A broker-backed
+        # opening boundary and complete activity interval are separate evidence.
+        "reconstructed_open_positions_authority": "diagnostic_only",
+        "reconciliation_evidence_scope": "unbounded_local_events",
+        "verified_broker_ledger_applied": False,
         "reconciliation_open_positions_source": str(
             reconciliation_source or "trade_history"
         ),
