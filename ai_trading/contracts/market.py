@@ -141,6 +141,7 @@ def position_snapshot_from_position(
         payload = {
             "symbol": getattr(position, "symbol", None),
             "qty": getattr(position, "qty", None),
+            "side": getattr(position, "side", None),
             "market_value": getattr(position, "market_value", None),
             "avg_entry_price": getattr(position, "avg_entry_price", None)
             or getattr(position, "avg_cost", None),
@@ -374,9 +375,14 @@ class PositionSnapshot:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> PositionSnapshot:
+        qty = float(payload.get("qty") or 0.0)
+        side_value = payload.get("side")
+        side = str(getattr(side_value, "value", side_value) or "").strip().lower()
+        if qty > 0.0 and side in {"short", "sell", "sell_short"}:
+            qty = -qty
         return cls(
             symbol=str(payload.get("symbol", "") or "").upper(),
-            qty=float(payload.get("qty") or 0.0),
+            qty=qty,
             market_value=_safe_float(payload.get("market_value")),
             avg_entry_price=_safe_float(payload.get("avg_entry_price")),
             provider=_safe_text(payload.get("provider")),

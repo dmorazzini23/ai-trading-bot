@@ -1,5 +1,22 @@
 # Current handoff
 
+## September 25 verified position gate
+
+See `docs/VERIFIED_POSITION_GATE_20260925.md`. The runtime go/no-go position
+check now fails closed without a recent raw broker activity/position bundle;
+unbounded local history remains a separate diagnostic. The bundle is rebuilt
+and checked for same-account identity, complete pagination, execution IDs,
+position-changing activities, matching quantities, a 60-second closing age,
+and agreement with a later current broker position read. A read-only 02:48 UTC
+paper capture matched flat-to-flat with zero executions and showed the old
+AAPL -3 / AMZN +1 discrepancy only in the diagnostic. Changed-file Ruff,
+mypy, compile, and 124 mapped tests passed; 293 runtime-control/after-hours
+integration tests passed. The validator's sandboxed localhost curl was denied;
+host HTTP 503 was expected for `required_model_stale`, with active service,
+fresh zero-exposure broker state and NRestarts=0. Exact-tip CI and installed
+release identity remain the deployment gates. Model/replay gates, research
+budgets, holdout, and AWS MFA recovery hold remain unchanged.
+
 ## September 24 after-close gate and performance review
 
 See `docs/GATE_AND_PERFORMANCE_REVIEW_20260924.md` for evidence and acceptance.

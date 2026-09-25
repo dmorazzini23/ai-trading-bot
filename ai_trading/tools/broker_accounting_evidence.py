@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 
 from ai_trading.config.management import get_env
+from ai_trading.contracts import position_snapshot_from_position
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.tools.execution_evidence_reconciliation import _number, _read
@@ -77,6 +78,25 @@ def capture(client: Any, *, after: str, max_pages: int = 100) -> dict[str, Any]:
             break
         tokens.add(token)
     return {"account_id": account_id, "trading_mode": "paper", "after": after, "fetched_at": datetime.now(UTC).isoformat(), "pagination_complete": complete, "activities": rows, "account_boundary": account_boundary}
+
+
+def capture_current_position_boundary(client: Any) -> dict[str, Any]:
+    """Record a complete paper position observation before activity capture."""
+    account_id = str(client.get_account().id)
+    positions: dict[str, str] = {}
+    for row in client.get_all_positions():
+        snapshot = position_snapshot_from_position(row, provider="alpaca")
+        if snapshot is None or snapshot.symbol in positions:
+            raise ValueError("invalid or duplicate broker position")
+        positions[snapshot.symbol] = str(snapshot.qty)
+    return {
+        "account_id": account_id,
+        "trading_mode": "paper",
+        "positions_complete": True,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "positions": positions,
+        "source": "broker_get_all_positions_observation",
+    }
 
 
 def _aware_instant(value: Any) -> datetime | None:
@@ -337,6 +357,10 @@ def rebuild_quantity_ledger(snapshot: dict[str, Any], opening: dict[str, Any], c
         raise ValueError("complete same-account paper snapshots and covering broker pagination required")
     unique: dict[str, dict[str, Any]] = {}
     for row in snapshot.get("activities", []):
+        if row.get("activity_type") in _POSITION_ACTION_TYPES:
+            action_time = _aware_instant(row.get("transaction_time"))
+            if action_time is None or start < action_time <= end:
+                raise ValueError("position-changing non-fill activity requires separate quantity evidence")
         if row.get("activity_type") != "FILL":
             continue
         key = str(row.get("id") or "")
@@ -370,31 +394,60 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fetch-paper", action="store_true")
+    parser.add_argument("--capture-closing-positions", action="store_true")
     parser.add_argument("--lookback-days", type=int, default=90)
     parser.add_argument("--opening-positions", type=Path)
     parser.add_argument("--closing-positions", type=Path)
     parser.add_argument("--ledger-output", type=Path)
+    parser.add_argument("--position-evidence-output", type=Path)
     parser.add_argument("--opening-account", type=Path)
     parser.add_argument("--closing-account", type=Path)
     parser.add_argument("--equity-output", type=Path)
     args = parser.parse_args()
     if any((args.opening_positions, args.closing_positions, args.ledger_output)) and not all((args.opening_positions, args.closing_positions, args.ledger_output)):
         parser.error("opening-positions, closing-positions and ledger-output must be supplied together")
+    if args.position_evidence_output and not args.ledger_output:
+        parser.error("position-evidence-output requires opening-positions, closing-positions and ledger-output")
+    if args.capture_closing_positions and not (args.fetch_paper and args.opening_positions and args.closing_positions):
+        parser.error("capture-closing-positions requires fetch-paper and both position paths")
     if any((args.opening_account, args.closing_account, args.equity_output)) and not all((args.opening_account, args.closing_account, args.equity_output)):
         parser.error("opening-account, closing-account and equity-output must be supplied together")
     if args.fetch_paper:
         from alpaca.trading.client import TradingClient
         from ai_trading.config.managed_secrets import hydrate_managed_secrets
+        from ai_trading.env import ensure_dotenv_loaded
+        ensure_dotenv_loaded()
         hydrate_managed_secrets(required_keys=("ALPACA_API_KEY", "ALPACA_SECRET_KEY"))
         client = TradingClient(api_key=get_env("ALPACA_API_KEY"), secret_key=get_env("ALPACA_SECRET_KEY"), paper=True)
-        snapshot = capture(client, after=(datetime.now(UTC) - timedelta(days=args.lookback_days)).isoformat())
+        if args.capture_closing_positions:
+            opening = json.loads(args.opening_positions.read_text())
+            opening_time = _aware_instant(opening.get("timestamp"))
+            if opening_time is None:
+                raise ValueError("opening position timestamp must be timezone-aware")
+            closing = capture_current_position_boundary(client)
+            atomic_write_text(args.closing_positions, json.dumps(closing, indent=2, sort_keys=True) + "\n")
+            after = (opening_time - timedelta(seconds=1)).isoformat()
+        else:
+            after = (datetime.now(UTC) - timedelta(days=args.lookback_days)).isoformat()
+        snapshot = capture(client, after=after)
         atomic_write_text(args.snapshot, json.dumps(snapshot, indent=2) + "\n")
     else:
         snapshot = json.loads(args.snapshot.read_text())
     fills, _, source = _read(args.fills)
     if args.ledger_output:
-        ledger = rebuild_quantity_ledger(snapshot, json.loads(args.opening_positions.read_text()), json.loads(args.closing_positions.read_text()))
+        opening_positions = json.loads(args.opening_positions.read_text())
+        closing_positions = json.loads(args.closing_positions.read_text())
+        ledger = rebuild_quantity_ledger(snapshot, opening_positions, closing_positions)
         atomic_write_text(args.ledger_output, json.dumps(ledger, indent=2, sort_keys=True) + "\n")
+        if args.position_evidence_output:
+            atomic_write_text(
+                args.position_evidence_output,
+                json.dumps({
+                    "snapshot": snapshot,
+                    "opening": opening_positions,
+                    "closing": closing_positions,
+                }, indent=2, sort_keys=True) + "\n",
+            )
     if args.equity_output:
         def _boundary(path: Path) -> dict[str, Any]:
             payload = json.loads(path.read_text())

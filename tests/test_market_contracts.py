@@ -211,3 +211,10 @@ def test_position_snapshot_from_position_extracts_object_fields() -> None:
     assert payload["symbol"] == "AMD"
     assert payload["qty"] == 3.0
     assert payload["provider"] == "alpaca"
+
+
+def test_position_snapshot_from_position_signs_positive_short_quantity() -> None:
+    position = type("Position", (), {"symbol": "AMZN", "qty": "1", "side": "short"})()
+    snapshot = position_snapshot_from_position(position, provider="alpaca")
+    assert snapshot is not None
+    assert snapshot.qty == -1.0

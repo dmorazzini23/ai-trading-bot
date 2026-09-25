@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -1316,6 +1317,8 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
 def _broker_open_positions_unavailable(reason: str) -> dict[str, Any]:
     return {
         "broker_open_positions_available": False,
+        "broker_account_id": None,
+        "broker_positions_observed_at": None,
         "broker_open_position_count": 0,
         "broker_open_positions": {},
         "broker_open_position_snapshots": {},
@@ -1379,6 +1382,8 @@ def _fetch_broker_open_positions_snapshot() -> dict[str, Any]:
     from ai_trading.alpaca_api import _get_rest
 
     client = _get_rest(bars=False)
+    account = client.get_account() if hasattr(client, "get_account") else None
+    account_id = str(getattr(account, "id", "") or "")
     positions_raw: Any
     if hasattr(client, "get_all_positions"):
         positions_raw = client.get_all_positions() or []
@@ -1397,8 +1402,8 @@ def _fetch_broker_open_positions_snapshot() -> dict[str, Any]:
     broker_position_snapshots: dict[str, dict[str, Any]] = {}
     for row in positions_raw:
         snapshot = position_snapshot_from_position(row, provider="alpaca")
-        if snapshot is None:
-            continue
+        if snapshot is None or snapshot.symbol in broker_positions:
+            raise ValueError("invalid or duplicate broker position")
         broker_positions[snapshot.symbol] = float(snapshot.qty)
         broker_position_snapshots[snapshot.symbol] = snapshot.to_dict()
 
@@ -1406,6 +1411,8 @@ def _fetch_broker_open_positions_snapshot() -> dict[str, Any]:
     broker_position_snapshots = dict(sorted(broker_position_snapshots.items()))
     return {
         "broker_open_positions_available": True,
+        "broker_account_id": account_id or None,
+        "broker_positions_observed_at": datetime.now(UTC).isoformat(),
         "broker_open_position_count": len(broker_positions),
         "broker_open_positions": broker_positions,
         "broker_open_position_snapshots": broker_position_snapshots,
@@ -2582,6 +2589,7 @@ def _aggregate_closed_trades(
     broker_open_positions_available: bool = False,
     reconciliation_open_positions: Mapping[str, Any] | None = None,
     reconciliation_source: str = "trade_history",
+    verified_position_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     reconstructed_open_positions = dict(sorted(open_positions.items()))
     if isinstance(reconciliation_open_positions, Mapping):
@@ -2687,6 +2695,24 @@ def _aggregate_closed_trades(
             )[:10],
         }
 
+    diagnostic_reconciliation = _build_open_position_reconciliation()
+    verified_applied = bool(verified_position_scope and verified_position_scope.get("available"))
+    if verified_applied and verified_position_scope is not None:
+        reconciliation_positions = dict(verified_position_scope["reconstructed_positions"])
+        broker_open_positions = dict(verified_position_scope["broker_positions"])
+        broker_open_positions_available = True
+        reconciliation_source = "verified_broker_quantity_ledger"
+        gate_reconciliation = _build_open_position_reconciliation()
+    else:
+        gate_reconciliation = {
+            "available": False,
+            "reason": (
+                str(verified_position_scope.get("reason"))
+                if verified_position_scope is not None
+                else "verified_broker_position_evidence_missing"
+            ),
+        }
+
     summary: dict[str, Any] = {
         "records": records_count,
         "pnl_source": source,
@@ -2698,16 +2724,20 @@ def _aggregate_closed_trades(
         "open_lot_count": int(open_lot_count),
         "open_positions": dict(sorted(reconciliation_positions.items())),
         "open_positions_basis": str(reconciliation_source or "trade_history"),
-        # Both sources are local event reconstructions. A broker-backed
-        # opening boundary and complete activity interval are separate evidence.
+        # Local history remains a diagnostic even when a separate broker
+        # interval supplies the position gate.
         "reconstructed_open_positions_authority": "diagnostic_only",
-        "reconciliation_evidence_scope": "unbounded_local_events",
-        "verified_broker_ledger_applied": False,
+        "reconciliation_evidence_scope": (
+            "bounded_broker_activity_interval" if verified_applied else "unbounded_local_events"
+        ),
+        "verified_broker_ledger_applied": verified_applied,
+        "verified_broker_ledger": dict(verified_position_scope or {}),
         "reconciliation_open_positions_source": str(
             reconciliation_source or "trade_history"
         ),
         "reconciliation_open_position_count": int(len(reconciliation_positions)),
-        "open_position_reconciliation": _build_open_position_reconciliation(),
+        "open_position_reconciliation": gate_reconciliation,
+        "diagnostic_open_position_reconciliation": diagnostic_reconciliation,
     }
     if not closed_trades:
         summary["pnl_available"] = False
@@ -3350,11 +3380,112 @@ def _choose_reconciliation_positions(
     return None, "trade_history"
 
 
+def _verified_broker_position_scope(
+    path: Path | None,
+    *,
+    broker_snapshot: Mapping[str, Any],
+    now: datetime | None = None,
+    max_age_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Validate a bounded broker quantity audit for a recent position gate."""
+
+    if path is None:
+        return {"available": False, "reason": "verified_broker_position_evidence_missing"}
+    try:
+        evidence_bytes = path.read_bytes()
+        payload = json.loads(evidence_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"available": False, "reason": "verified_broker_position_evidence_unreadable"}
+    if not isinstance(payload, Mapping):
+        return {"available": False, "reason": "verified_broker_position_evidence_invalid"}
+    snapshot = payload.get("snapshot")
+    opening = payload.get("opening")
+    closing = payload.get("closing")
+    if not all(isinstance(item, dict) for item in (snapshot, opening, closing)):
+        return {"available": False, "reason": "verified_broker_position_evidence_invalid"}
+
+    def _instant(value: Any) -> datetime | None:
+        if not isinstance(value, str) or "T" not in value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
+
+    assert isinstance(snapshot, dict) and isinstance(opening, dict) and isinstance(closing, dict)
+    start = _instant(opening.get("timestamp"))
+    end = _instant(closing.get("timestamp"))
+    after = _instant(snapshot.get("after"))
+    fetched = _instant(snapshot.get("fetched_at"))
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    if any(value is None for value in (start, end, after, fetched)):
+        return {"available": False, "reason": "verified_broker_position_timestamps_invalid"}
+    assert start is not None and end is not None and after is not None and fetched is not None
+    if not after < start < end <= fetched <= current:
+        return {"available": False, "reason": "verified_broker_position_interval_uncovered"}
+    if (current - end).total_seconds() > max_age_seconds:
+        return {"available": False, "reason": "verified_broker_position_evidence_stale"}
+    observed = _instant(broker_snapshot.get("broker_positions_observed_at"))
+    if (
+        broker_snapshot.get("broker_open_positions_available") is not True
+        or str(broker_snapshot.get("broker_account_id") or "") != snapshot.get("account_id")
+        or observed is None
+        or not fetched <= observed <= current
+        or (observed - end).total_seconds() > max_age_seconds
+        or not isinstance(broker_snapshot.get("broker_open_positions"), Mapping)
+    ):
+        return {"available": False, "reason": "current_broker_position_identity_or_time_unverified"}
+    if _position_delta_score(
+        _normalise_position_map(closing.get("positions")),
+        _normalise_position_map(broker_snapshot["broker_open_positions"]),
+    )[0] > 1e-6:
+        return {"available": False, "reason": "current_broker_positions_differ_from_ledger_closing"}
+
+    from ai_trading.tools.broker_accounting_evidence import rebuild_quantity_ledger
+
+    try:
+        ledger = rebuild_quantity_ledger(snapshot, opening, closing)
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return {"available": False, "reason": "verified_broker_position_ledger_invalid"}
+    if ledger["status"] != "matched":
+        return {
+            "available": False,
+            "reason": "verified_broker_position_ledger_mismatched",
+            "differences": ledger["position_reconciliation"]["differences"],
+        }
+    reconstructed = _normalise_position_map(opening["positions"])
+    for execution in ledger["executions"]:
+        symbol = str(execution["symbol"]).strip().upper()
+        change = float(execution["qty"])
+        reconstructed[symbol] = reconstructed.get(symbol, 0.0) + (
+            change if execution["side"] == "buy" else -change
+        )
+    reconstructed = {symbol: qty for symbol, qty in reconstructed.items() if abs(qty) > 1e-9}
+    return {
+        "available": True,
+        "evidence_path": str(path),
+        "evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "account_id": snapshot["account_id"],
+        "opening_timestamp": start.isoformat(),
+        "closing_timestamp": end.isoformat(),
+        "activity_fetched_at": fetched.isoformat(),
+        "current_broker_observed_at": observed.isoformat(),
+        "broker_execution_count": len(ledger["executions"]),
+        "ledger_status": ledger["status"],
+        "reconstructed_positions": reconstructed,
+        "broker_positions": _normalise_position_map(closing["positions"]),
+        "historical_scope": ledger["historical_scope"],
+        "promotion_authority": False,
+    }
+
+
 def summarize_trade_history(
     path: Path,
     *,
     tca_path: Path | None = None,
     fill_events_path: Path | None = None,
+    verified_position_evidence_path: Path | None = None,
     allow_trusted_pickle: bool = False,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
@@ -3363,6 +3494,10 @@ def summarize_trade_history(
         "records": 0,
     }
     summary.update(_summarize_broker_open_positions())
+    verified_position_scope = _verified_broker_position_scope(
+        verified_position_evidence_path,
+        broker_snapshot=summary,
+    )
     if tca_path is not None:
         summary["tca_path"] = str(tca_path)
         summary["tca_exists"] = bool(tca_path.exists())
@@ -3523,6 +3658,7 @@ def summarize_trade_history(
             broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
             reconciliation_open_positions=reconciliation_positions,
             reconciliation_source=reconciliation_source,
+            verified_position_scope=verified_position_scope,
         )
         if cost_enrichment is not None:
             aggregated["cost_enrichment"] = cost_enrichment
@@ -3576,6 +3712,7 @@ def summarize_trade_history(
             broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
             reconciliation_open_positions=reconciliation_positions,
             reconciliation_source=reconciliation_source,
+            verified_position_scope=verified_position_scope,
         )
     if same_day_fill_closed_trades:
         same_day_aggregated = _aggregate_closed_trades(
@@ -3588,6 +3725,7 @@ def summarize_trade_history(
             broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
             reconciliation_open_positions=reconciliation_positions,
             reconciliation_source=reconciliation_source,
+            verified_position_scope=verified_position_scope,
         )
         aggregated["same_day_fill_pair_stats"] = {
             "pnl_source": "same_day_fill_pairs",
@@ -4732,6 +4870,7 @@ def build_report(
     tca_path: Path | None = None,
     gate_log_path: Path | None = None,
     fill_events_path: Path | None = None,
+    verified_position_evidence_path: Path | None = None,
     edge_realism_state_path: Path | None = None,
     policy_ablation_state_path: Path | None = None,
     policy_runtime_toggles_path: Path | None = None,
@@ -4743,6 +4882,7 @@ def build_report(
         trade_history_path,
         tca_path=tca_path,
         fill_events_path=fill_events_path,
+        verified_position_evidence_path=verified_position_evidence_path,
         allow_trusted_pickle=allow_trusted_pickle,
     )
     gate_summary = summarize_gate_effectiveness(
@@ -6417,6 +6557,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional path to fill events jsonl used for reconciliation.",
     )
     parser.add_argument(
+        "--verified-position-evidence-path",
+        type=Path,
+        default=None,
+        help="Optional JSON bundle with broker activities and opening/closing positions.",
+    )
+    parser.add_argument(
         "--edge-realism-state-path",
         default=None,
         help="Optional path to edge realism state json for calibration diagnostics.",
@@ -6533,6 +6679,7 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(paths.get("fill_events"), Path)
             else None
         ),
+        verified_position_evidence_path=args.verified_position_evidence_path,
         edge_realism_state_path=(
             Path(paths["edge_realism_state"])
             if isinstance(paths.get("edge_realism_state"), Path)

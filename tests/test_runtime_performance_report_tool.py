@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -108,6 +109,27 @@ def test_fetch_broker_open_positions_hydrates_managed_secrets(monkeypatch) -> No
     assert summary["broker_open_positions_available"] is True
     assert summary["broker_open_positions"] == {"AAPL": 3.5}
     assert summary["broker_open_position_count"] == 1
+
+
+@pytest.mark.parametrize("positions", [
+    [SimpleNamespace(symbol="AAPL", qty="bad")],
+    [SimpleNamespace(symbol="AAPL", qty="1"), SimpleNamespace(symbol="AAPL", qty="2")],
+])
+def test_fetch_broker_open_positions_rejects_invalid_or_duplicate_rows(
+    monkeypatch, positions,
+) -> None:
+    import ai_trading.alpaca_api as alpaca_api
+
+    class Client:
+        def get_account(self):
+            return SimpleNamespace(id="paper")
+
+        def get_all_positions(self):
+            return positions
+
+    monkeypatch.setattr(alpaca_api, "_get_rest", lambda *, bars=False: Client())
+    with pytest.raises(ValueError, match="invalid or duplicate broker position"):
+        rpt._fetch_broker_open_positions_snapshot()
 
 
 def test_summarize_oms_invariants_times_out(monkeypatch) -> None:
@@ -1499,7 +1521,8 @@ def test_build_report_reports_reconstructed_open_position_counts(
     assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
     assert trade["open_lot_count"] == 1
     assert trade["open_positions"] == {"AAPL": 10.0}
-    reconciliation = trade["open_position_reconciliation"]
+    assert trade["open_position_reconciliation"]["available"] is False
+    reconciliation = trade["diagnostic_open_position_reconciliation"]
     assert reconciliation["available"] is True
     assert reconciliation["symbol_mismatch_count"] == 0
 
@@ -1550,7 +1573,8 @@ def test_build_report_flags_broker_vs_reconstructed_position_mismatch(
         gate_summary_path=gate_summary_path,
     )
 
-    reconciliation = report["trade_history"]["open_position_reconciliation"]
+    assert report["trade_history"]["open_position_reconciliation"]["available"] is False
+    reconciliation = report["trade_history"]["diagnostic_open_position_reconciliation"]
     assert reconciliation["available"] is True
     assert reconciliation["symbol_mismatch_count"] == 1
     assert reconciliation["top_mismatches"][0]["symbol"] == "AAPL"
@@ -1624,7 +1648,8 @@ def test_build_report_prefers_fill_events_for_reconciliation(
     assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
     assert trade["open_positions"] == {"AAPL": 7.0}
     assert trade["reconciliation_open_positions_source"] == "fill_events"
-    reconciliation = trade["open_position_reconciliation"]
+    assert trade["open_position_reconciliation"]["available"] is False
+    reconciliation = trade["diagnostic_open_position_reconciliation"]
     assert reconciliation["available"] is True
     assert reconciliation["source"] == "fill_events"
     assert reconciliation["symbol_mismatch_count"] == 0
@@ -1709,7 +1734,8 @@ def test_build_report_preserves_extreme_mismatch_even_with_legacy_fallback_enabl
     assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
     assert trade["open_positions"] == {"AAPL": 9.0}
     assert trade["reconciliation_open_positions_source"] == "fill_events"
-    reconciliation = trade["open_position_reconciliation"]
+    assert trade["open_position_reconciliation"]["available"] is False
+    reconciliation = trade["diagnostic_open_position_reconciliation"]
     assert reconciliation["available"] is True
     assert reconciliation["source"] == "fill_events"
     assert reconciliation["symbol_mismatch_count"] == 2
@@ -1785,10 +1811,118 @@ def test_build_report_preserves_ledger_discrepancy_when_broker_is_flat(
     assert trade["reconstructed_open_positions_authority"] == "diagnostic_only"
     assert trade["reconciliation_evidence_scope"] == "unbounded_local_events"
     assert trade["verified_broker_ledger_applied"] is False
-    reconciliation = trade["open_position_reconciliation"]
+    assert trade["open_position_reconciliation"]["available"] is False
+    reconciliation = trade["diagnostic_open_position_reconciliation"]
     assert reconciliation["available"] is True
     assert reconciliation["source"] == "trade_history"
     assert reconciliation["symbol_mismatch_count"] == 1
+
+
+def _position_evidence(now: datetime) -> tuple[dict[str, object], dict[str, object]]:
+    opening_time = now - timedelta(seconds=50)
+    closing_time = now - timedelta(seconds=20)
+    fetched_time = now - timedelta(seconds=10)
+    observed_time = now - timedelta(seconds=5)
+    account_id = "paper-account"
+    opening = {
+        "account_id": account_id,
+        "trading_mode": "paper",
+        "positions_complete": True,
+        "timestamp": opening_time.isoformat(),
+        "positions": {},
+    }
+    closing = {**opening, "timestamp": closing_time.isoformat(), "positions": {"AAPL": "1"}}
+    snapshot = {
+        "account_id": account_id,
+        "trading_mode": "paper",
+        "pagination_complete": True,
+        "after": (now - timedelta(minutes=2)).isoformat(),
+        "fetched_at": fetched_time.isoformat(),
+        "activities": [{
+            "id": "broker-fill-1", "activity_type": "FILL", "order_id": "broker-order-1",
+            "symbol": "AAPL", "side": "buy", "qty": "1",
+            "transaction_time": (now - timedelta(seconds=30)).isoformat(),
+        }],
+    }
+    broker = {
+        "broker_open_positions_available": True,
+        "broker_account_id": account_id,
+        "broker_positions_observed_at": observed_time.isoformat(),
+        "broker_open_positions": {"AAPL": 1.0},
+    }
+    return {"snapshot": snapshot, "opening": opening, "closing": closing}, broker
+
+
+def test_verified_broker_interval_replaces_only_position_gate_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    bundle, broker = _position_evidence(now)
+    evidence_path = tmp_path / "position_evidence.json"
+    evidence_path.write_text(json.dumps(bundle), encoding="utf-8")
+    history_path = tmp_path / "trade_history.json"
+    history_path.write_text(json.dumps([{
+        "symbol": "AAPL", "side": "buy", "qty": 3, "entry_price": 100.0,
+        "entry_time": "2026-09-01T15:00:00Z",
+    }]), encoding="utf-8")
+    gate_path = tmp_path / "gate.json"
+    gate_path.write_text(json.dumps({"total_records": 0}), encoding="utf-8")
+    monkeypatch.setattr(rpt, "_summarize_broker_open_positions", lambda: broker)
+
+    trade = rpt.build_report(
+        trade_history_path=history_path,
+        gate_summary_path=gate_path,
+        verified_position_evidence_path=evidence_path,
+    )["trade_history"]
+
+    assert trade["verified_broker_ledger_applied"] is True
+    assert trade["reconciliation_evidence_scope"] == "bounded_broker_activity_interval"
+    assert trade["reconstructed_open_positions"] == {"AAPL": 3.0}
+    assert trade["diagnostic_open_position_reconciliation"]["symbol_mismatch_count"] == 1
+    assert trade["open_position_reconciliation"]["available"] is True
+    assert trade["open_position_reconciliation"]["symbol_mismatch_count"] == 0
+    assert trade["open_position_reconciliation"]["source"] == "verified_broker_quantity_ledger"
+    assert trade["verified_broker_ledger"]["promotion_authority"] is False
+
+
+@pytest.mark.parametrize("defect,expected", [
+    ("pagination", "verified_broker_position_ledger_invalid"),
+    ("account", "current_broker_position_identity_or_time_unverified"),
+    ("current_position", "current_broker_positions_differ_from_ledger_closing"),
+    ("conflicting_fill", "verified_broker_position_ledger_invalid"),
+    ("position_action", "verified_broker_position_ledger_invalid"),
+    ("stale", "verified_broker_position_evidence_stale"),
+])
+def test_verified_position_scope_fails_closed_on_incomplete_or_stale_evidence(
+    tmp_path: Path, defect: str, expected: str,
+) -> None:
+    now = datetime(2026, 9, 25, 2, 30, tzinfo=UTC)
+    bundle, broker = _position_evidence(now)
+    snapshot = bundle["snapshot"]
+    assert isinstance(snapshot, dict)
+    if defect == "pagination":
+        snapshot["pagination_complete"] = False
+    elif defect == "account":
+        broker["broker_account_id"] = "different-account"
+    elif defect == "current_position":
+        broker["broker_open_positions"] = {}
+    elif defect == "conflicting_fill":
+        fill = snapshot["activities"][0]
+        snapshot["activities"].append({**fill, "qty": "2"})
+    elif defect == "position_action":
+        snapshot["activities"].append({
+            "id": "split-1", "activity_type": "SPLIT",
+            "transaction_time": (now - timedelta(seconds=25)).isoformat(),
+        })
+    else:
+        now += timedelta(minutes=3)
+    path = tmp_path / "position_evidence.json"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    scope = rpt._verified_broker_position_scope(path, broker_snapshot=broker, now=now)
+
+    assert scope["available"] is False
+    assert scope["reason"] == expected
 
 
 def test_build_report_scopes_trade_history_to_canary_symbols(

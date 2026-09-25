@@ -1,10 +1,11 @@
 import json
 import sys
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from ai_trading.tools.broker_accounting_evidence import capture, main, reconcile, reconcile_account_equity
+from ai_trading.tools.broker_accounting_evidence import capture, capture_current_position_boundary, main, reconcile, reconcile_account_equity
 from ai_trading.tools.candidate_abstention_review import review_candidate
 
 
@@ -35,6 +36,74 @@ def test_activity_capture_records_a_time_stamped_broker_account_boundary():
     assert boundary["cash"] == "975.00"
     assert boundary["equity"] == "1010.00"
     assert boundary["timestamp"] <= snapshot["fetched_at"]
+
+
+def test_current_position_boundary_preserves_account_and_signed_quantities():
+    class Client:
+        def get_account(self):
+            return SimpleNamespace(id="paper")
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AAPL", qty="2", side="long"),
+                    SimpleNamespace(symbol="AMZN", qty="1", side="short")]
+
+    boundary = capture_current_position_boundary(Client())
+    assert boundary["account_id"] == "paper"
+    assert boundary["positions_complete"] is True
+    assert boundary["positions"] == {"AAPL": "2.0", "AMZN": "-1.0"}
+    assert boundary["source"] == "broker_get_all_positions_observation"
+
+
+def test_fetch_paper_cli_captures_a_current_position_bundle(tmp_path, monkeypatch):
+    import alpaca.trading.client as trading_client
+    from ai_trading.config import managed_secrets
+    from ai_trading import env
+    from ai_trading.tools import broker_accounting_evidence as tool
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def get_account(self):
+            return SimpleNamespace(id="paper")
+
+        def get_all_positions(self):
+            return []
+
+        def get(self, _path, *, data):
+            assert data["after"]
+            return []
+
+    monkeypatch.setattr(trading_client, "TradingClient", Client)
+    monkeypatch.setattr(managed_secrets, "hydrate_managed_secrets", lambda **_kwargs: None)
+    monkeypatch.setattr(env, "ensure_dotenv_loaded", lambda: None)
+    monkeypatch.setattr(tool, "get_env", lambda _name: "test-credential")
+    opening_path = tmp_path / "opening.json"
+    opening_path.write_text(json.dumps({
+        "account_id": "paper", "trading_mode": "paper", "positions_complete": True,
+        "timestamp": (datetime.now(UTC) - timedelta(seconds=20)).isoformat(),
+        "positions": {},
+    }))
+    fills_path = tmp_path / "fills.jsonl"
+    fills_path.write_text("")
+    paths = {name: tmp_path / f"{name}.json" for name in (
+        "closing", "snapshot", "report", "ledger", "bundle",
+    )}
+    monkeypatch.setattr(sys, "argv", [
+        "broker_accounting_evidence", "--fetch-paper", "--capture-closing-positions",
+        "--opening-positions", str(opening_path), "--closing-positions", str(paths["closing"]),
+        "--snapshot", str(paths["snapshot"]), "--fills", str(fills_path),
+        "--output", str(paths["report"]), "--ledger-output", str(paths["ledger"]),
+        "--position-evidence-output", str(paths["bundle"]),
+    ])
+
+    main()
+
+    bundle = json.loads(paths["bundle"].read_text())
+    assert bundle["snapshot"]["pagination_complete"] is True
+    assert bundle["snapshot"]["after"] < bundle["opening"]["timestamp"]
+    assert bundle["closing"]["account_id"] == "paper"
+    assert json.loads(paths["ledger"].read_text())["status"] == "matched"
 
 
 def _equity_fixture():

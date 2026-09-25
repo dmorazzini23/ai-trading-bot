@@ -57,16 +57,20 @@ def test_conflicting_execution_is_rejected(evidence):
 def test_cli_writes_separate_ledger_and_preserves_sources(evidence, tmp_path, monkeypatch):
     from ai_trading.tools import broker_accounting_evidence as tool
     snapshot, opening, closing = evidence
-    paths = {name: tmp_path / (name + ".json") for name in ["snapshot", "opening", "closing", "fills", "output", "ledger"]}
+    paths = {name: tmp_path / (name + ".json") for name in ["snapshot", "opening", "closing", "fills", "output", "ledger", "bundle"]}
     for name, payload in [("snapshot",snapshot),("opening",opening),("closing",closing),("fills",[])]:
         paths[name].write_text(json.dumps(payload))
     original = paths["snapshot"].read_bytes()
     monkeypatch.setattr("sys.argv", ["accounting", "--snapshot", str(paths["snapshot"]), "--fills", str(paths["fills"]),
         "--output", str(paths["output"]), "--opening-positions", str(paths["opening"]),
-        "--closing-positions", str(paths["closing"]), "--ledger-output", str(paths["ledger"])])
+        "--closing-positions", str(paths["closing"]), "--ledger-output", str(paths["ledger"]),
+        "--position-evidence-output", str(paths["bundle"])])
     tool.main()
     assert json.loads(paths["ledger"].read_text())["status"] == "matched"
     assert paths["snapshot"].read_bytes() == original
+    assert json.loads(paths["bundle"].read_text()) == {
+        "snapshot": snapshot, "opening": opening, "closing": closing,
+    }
     assert json.loads(paths["output"].read_text())["orders_sent"] == 0
 
 
@@ -78,3 +82,14 @@ def test_boundary_interval_excludes_opening_and_includes_closing(evidence):
     report = rebuild_quantity_ledger(*evidence)
     assert [r["fill_id"] for r in report["executions"]] == ["closing"]
     assert report["status"] == "matched"
+
+
+def test_position_changing_non_fill_activity_blocks_quantity_audit(evidence):
+    snapshot, opening, _closing = evidence
+    snapshot["activities"].append({
+        "id": "split-1",
+        "activity_type": "SPLIT",
+        "transaction_time": "2026-09-18T16:00:00Z",
+    })
+    with pytest.raises(ValueError, match="position-changing non-fill"):
+        rebuild_quantity_ledger(*evidence)
