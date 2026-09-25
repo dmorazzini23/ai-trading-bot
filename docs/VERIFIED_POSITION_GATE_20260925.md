@@ -21,6 +21,18 @@ conflicting, mismatched, or unreadable evidence leaves
 `open_position_reconciliation.available=false` and the required gate blocked.
 The report records the bundle path and SHA-256 for review.
 
+The September 25 follow-up candidate supplies this bundle to the paper
+execution go/no-go path automatically. It uses the latest complete broker-sync
+position boundary from before the current New York market open as the opening,
+then captures a new closing paper position and all broker activities since
+that opening. The report still checks the raw bundle and makes an independent
+current broker position read. Each capture is written as a separate mode-600
+runtime artifact under `runtime/verified_position_evidence/`. If the pre-open
+boundary or any later evidence is unavailable, the gate remains blocked.
+This capture does not reconcile history before that opening, certify per-fill
+fees, or remove the replay/model/trade-history gates. It has not yet been
+deployed to the running service.
+
 For an after-close check, copy one recent, complete paper account record from
 `runtime/broker_position_boundaries.jsonl` into a separate opening JSON file.
 Run `ai_trading.tools.broker_accounting_evidence` with `--fetch-paper`,

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_trading.tools.broker_accounting_evidence import capture, capture_current_position_boundary, main, reconcile, reconcile_account_equity
+from ai_trading.tools.broker_accounting_evidence import capture, capture_current_position_boundary, capture_paper_position_gate_evidence, main, reconcile, reconcile_account_equity
 from ai_trading.tools.candidate_abstention_review import review_candidate
 
 
@@ -52,6 +52,88 @@ def test_current_position_boundary_preserves_account_and_signed_quantities():
     assert boundary["positions_complete"] is True
     assert boundary["positions"] == {"AAPL": "2.0", "AMZN": "-1.0"}
     assert boundary["source"] == "broker_get_all_positions_observation"
+
+
+def test_paper_position_gate_capture_uses_last_same_day_preopen_boundary(tmp_path):
+    boundaries = tmp_path / "boundaries.jsonl"
+    rows = [
+        {
+            "timestamp": timestamp,
+            "account_id": "paper",
+            "trading_mode": "paper",
+            "positions": {},
+            "positions_complete": True,
+            "invalid_positions": 0,
+            "identity_verified": True,
+            "source": "broker_sync",
+        }
+        for timestamp in (
+            "2026-09-25T13:20:00Z",
+            "2026-09-25T13:29:00Z",
+            "2026-09-25T13:31:00Z",
+        )
+    ]
+    boundaries.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    class Client:
+        def get_account(self):
+            return SimpleNamespace(id="paper")
+
+        def get_all_positions(self):
+            return []
+
+        def get(self, path, *, data):
+            assert path == "/account/activities"
+            assert data["after"] == "2026-09-25T13:28:59+00:00"
+            return []
+
+    output = capture_paper_position_gate_evidence(
+        Client(),
+        boundaries_path=boundaries,
+        output_dir=tmp_path / "evidence",
+        now=datetime(2026, 9, 25, 14, 0, tzinfo=UTC),
+    )
+    bundle = json.loads(output.read_text())
+    assert bundle["opening"]["timestamp"] == "2026-09-25T13:29:00Z"
+    assert bundle["closing"]["account_id"] == "paper"
+    assert bundle["snapshot"]["pagination_complete"] is True
+    assert output.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("fault", ["wrong_account", "incomplete", "malformed"])
+def test_paper_position_gate_capture_rejects_unverified_opening(tmp_path, fault):
+    row = {
+        "timestamp": "2026-09-25T13:29:00Z",
+        "account_id": "paper",
+        "trading_mode": "paper",
+        "positions": {},
+        "positions_complete": True,
+        "invalid_positions": 0,
+        "identity_verified": True,
+        "source": "broker_sync",
+    }
+    if fault == "wrong_account":
+        row["account_id"] = "other"
+    if fault == "incomplete":
+        row["positions_complete"] = False
+    boundaries = tmp_path / "boundaries.jsonl"
+    boundaries.write_text("{broken\n" if fault == "malformed" else json.dumps(row) + "\n")
+
+    class Client:
+        def get_account(self):
+            return SimpleNamespace(id="paper")
+
+        def get_all_positions(self):
+            raise AssertionError("unverified opening must stop before closing capture")
+
+    with pytest.raises(ValueError):
+        capture_paper_position_gate_evidence(
+            Client(),
+            boundaries_path=boundaries,
+            output_dir=tmp_path / "evidence",
+            now=datetime(2026, 9, 25, 14, 0, tzinfo=UTC),
+        )
+    assert not (tmp_path / "evidence").exists()
 
 
 def test_fetch_paper_cli_captures_a_current_position_bundle(tmp_path, monkeypatch):

@@ -27143,6 +27143,7 @@ class ExecutionEngine:
         gate_log_path: Path | None,
         performance_report_module: Any,
         now_mono: float,
+        verified_position_evidence_path: Path | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Run a bounded one-shot reconciliation retry and re-evaluate go/no-go."""
 
@@ -27342,6 +27343,7 @@ class ExecutionEngine:
                     trade_history_path=trade_history_path,
                     gate_summary_path=gate_summary_path,
                     gate_log_path=gate_log_path,
+                    verified_position_evidence_path=verified_position_evidence_path,
                 )
                 retry_decision_raw = performance_report_module.evaluate_go_no_go(
                     retry_report,
@@ -32235,10 +32237,61 @@ class ExecutionEngine:
             resolved_gate_log_path = gate_summary_path.parent / "gate_effectiveness.jsonl"
         report: Mapping[str, Any] = {}
         execution_allowed = True
+        verified_position_evidence_path: Path | None = None
+        position_capture_context: dict[str, Any] = {"attempted": False}
 
         try:
             from ai_trading.tools import runtime_performance_report as performance_report
 
+            if bool(require_open_position_reconciliation) and execution_mode_raw == "paper":
+                boundaries_configured = str(
+                    _runtime_env(
+                        "AI_TRADING_BROKER_POSITION_BOUNDARIES_PATH",
+                        "runtime/broker_position_boundaries.jsonl",
+                    )
+                    or "runtime/broker_position_boundaries.jsonl"
+                )
+                boundaries_path = resolve_runtime_artifact_path(
+                    boundaries_configured,
+                    default_relative="runtime/broker_position_boundaries.jsonl",
+                )
+                if boundaries_path.is_file():
+                    position_capture_context = {"attempted": True}
+                    try:
+                        from alpaca.trading.client import TradingClient
+                        from ai_trading.config.management import get_env
+                        from ai_trading.tools.broker_accounting_evidence import (
+                            capture_paper_position_gate_evidence,
+                        )
+
+                        paper_client = TradingClient(
+                            api_key=get_env("ALPACA_API_KEY"),
+                            secret_key=get_env("ALPACA_SECRET_KEY"),
+                            paper=True,
+                        )
+                        verified_position_evidence_path = (
+                            capture_paper_position_gate_evidence(
+                                paper_client,
+                                boundaries_path=boundaries_path,
+                                output_dir=boundaries_path.parent / "verified_position_evidence",
+                            )
+                        )
+                        position_capture_context["available"] = True
+                        position_capture_context["path"] = str(verified_position_evidence_path)
+                    except BROKER_READ_EXC as exc:
+                        position_capture_context.update(
+                            {"available": False, "reason": type(exc).__name__}
+                        )
+                        logger.warning(
+                            "PAPER_POSITION_GATE_CAPTURE_FAILED",
+                            extra={"error_type": type(exc).__name__},
+                        )
+                else:
+                    position_capture_context = {
+                        "attempted": False,
+                        "available": False,
+                        "reason": "broker_position_boundaries_missing",
+                    }
             canonical_thresholds = performance_report.resolve_runtime_gonogo_thresholds()
             if isinstance(canonical_thresholds, Mapping):
                 merged_thresholds = dict(canonical_thresholds)
@@ -32248,6 +32301,7 @@ class ExecutionEngine:
                 trade_history_path=trade_history_path,
                 gate_summary_path=gate_summary_path,
                 gate_log_path=gate_log_path,
+                verified_position_evidence_path=verified_position_evidence_path,
             )
             decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
             allowed = bool(decision.get("gate_passed"))
@@ -32266,6 +32320,7 @@ class ExecutionEngine:
                 "after_close_tighten": after_close_tighten_context,
                 "session_tighten": session_tighten_context,
                 "threshold_lock": threshold_lock_context,
+                "position_evidence_capture": position_capture_context,
                 "paths": {
                     "trade_history": str(trade_history_path),
                     "gate_summary": str(gate_summary_path),
@@ -32318,6 +32373,7 @@ class ExecutionEngine:
                         gate_log_path=gate_log_path,
                         performance_report_module=performance_report,
                         now_mono=now_mono,
+                        verified_position_evidence_path=verified_position_evidence_path,
                     )
                 )
                 context["reconciliation_retry"] = retry_context

@@ -1,5 +1,29 @@
 # Current handoff
 
+## September 25 paper position gate follow-through (candidate, not deployed)
+
+The paper execution go/no-go path previously called the report without a
+verified position bundle, making `open_position_reconciliation_available`
+fail on every evaluation. The candidate now selects the latest complete,
+same-account broker-sync position boundary from before the current New York
+market open, captures a fresh closing paper position and complete broker
+activities from that boundary, and passes the raw bundle to the report. The
+report still rebuilds and checks the interval and makes a separate current
+broker position read. Missing, malformed, cross-account, stale, incomplete,
+or mismatched evidence remains blocking; retry evaluation retains the bundle.
+An explicit read-only 17:08 UTC paper probe matched flat-to-flat with zero
+executions and zero gated position mismatches. The older AAPL -3 / AMZN +1
+diagnostic remained visible. Overall go/no-go still failed closed on
+closed-trade, win-rate, acceptance-rate, replay and live-sample checks. No
+orders or strategy changes were made. Focused broker/runtime tests: 98 passed.
+Market-hours changed-file validation passed Ruff, mypy, compile, and 311
+mapped tests; its sandboxed curl could not reach localhost. Host health was
+the expected HTTP 503 for `required_model_stale`, with broker fresh and flat,
+active service, NRestarts=0. A non-sending incident snapshot passed
+structurally. Secret scan passed. Exact-tip CI remains pending. Do not restart
+during market hours. Review broker exposure, recovery backup and release
+identity after close before any paper deployment.
+
 ## September 25 verified position gate
 
 See `docs/VERIFIED_POSITION_GATE_20260925.md`. The runtime go/no-go position
@@ -27,8 +51,10 @@ mismatch count separately. The 97 focused report tests passed. Changed-file
 validation passed Ruff, mypy, compile and 16 mapped tests; its sandboxed curl
 could not reach localhost. Host smoke found the active paper service with
 NRestarts=0 and expected HTTP 503 solely for `required_model_stale`.
-Deployment remains on hold pending the follow-up commit, exact-tip CI success,
-fresh broker exposure review, and release identity checks.
+The follow-up `68fe3aab3` passed exact-tip CI (`36092481768`: 7,217 passed,
+four skipped, 80.18% coverage) and was deployed to the paper service after
+close at 04:19 UTC. Pre/post release identity passed; the broker was flat,
+health remained HTTP 503 solely for `required_model_stale`, and NRestarts=0.
 
 ## September 24 after-close gate and performance review
 

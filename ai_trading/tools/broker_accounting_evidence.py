@@ -5,9 +5,10 @@ import argparse
 import json
 from collections import Counter, defaultdict
 from decimal import Decimal
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -108,6 +109,72 @@ def _aware_instant(value: Any) -> datetime | None:
     except ValueError:
         return None
     return result.astimezone(UTC) if result.tzinfo is not None else None
+
+
+def capture_paper_position_gate_evidence(
+    client: Any,
+    *,
+    boundaries_path: Path,
+    output_dir: Path,
+    now: datetime | None = None,
+) -> Path:
+    """Capture a broker activity interval anchored before today's market open."""
+
+    observed_at = (now or datetime.now(UTC)).astimezone(UTC)
+    eastern = ZoneInfo("America/New_York")
+    session_date = observed_at.astimezone(eastern).date()
+    midnight = datetime.combine(session_date, time.min, tzinfo=eastern).astimezone(UTC)
+    market_open = datetime.combine(session_date, time(9, 30), tzinfo=eastern).astimezone(UTC)
+    if observed_at <= market_open:
+        raise ValueError("paper position gate requires a prior same-day pre-open boundary")
+
+    account_id = str(client.get_account().id)
+    opening: dict[str, Any] | None = None
+    opening_time: datetime | None = None
+    with boundaries_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError("broker position boundary log is malformed") from exc
+            if not isinstance(row, dict):
+                raise ValueError("broker position boundary row is invalid")
+            timestamp = _aware_instant(row.get("timestamp"))
+            if timestamp is None:
+                raise ValueError("broker position boundary timestamp is invalid")
+            if midnight <= timestamp < market_open and (
+                opening_time is None or timestamp > opening_time
+            ):
+                opening, opening_time = row, timestamp
+
+    if opening is None or opening_time is None:
+        raise ValueError("same-day pre-open broker position boundary missing")
+    if (
+        opening.get("account_id") != account_id
+        or opening.get("trading_mode") != "paper"
+        or opening.get("source") != "broker_sync"
+        or opening.get("identity_verified") is not True
+        or opening.get("positions_complete") is not True
+        or opening.get("invalid_positions") != 0
+        or not isinstance(opening.get("positions"), dict)
+    ):
+        raise ValueError("same-day pre-open broker position boundary unverified")
+
+    closing = capture_current_position_boundary(client)
+    snapshot = capture(
+        client,
+        after=(opening_time - timedelta(seconds=1)).isoformat(),
+    )
+    if (
+        closing.get("account_id") != account_id
+        or snapshot.get("account_id") != account_id
+    ):
+        raise ValueError("paper position gate account identity changed")
+    bundle = {"opening": opening, "closing": closing, "snapshot": snapshot}
+    output = output_dir / f"position_gate_{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json"
+    return atomic_write_text(output, json.dumps(bundle, sort_keys=True) + "\n")
 
 
 def reconcile_account_equity(

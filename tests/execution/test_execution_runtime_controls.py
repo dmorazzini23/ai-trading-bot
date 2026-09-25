@@ -3073,6 +3073,119 @@ def test_runtime_gonogo_monitor_only_for_paper_mode_by_default(monkeypatch, tmp_
     assert context["execution_mode"] == "paper"
 
 
+def test_runtime_gonogo_passes_fresh_paper_position_bundle_to_report(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    boundaries = tmp_path / "runtime" / "broker_position_boundaries.jsonl"
+    boundaries.parent.mkdir(parents=True)
+    boundaries.write_text("{}\n")
+    evidence = tmp_path / "runtime" / "verified_position_evidence" / "bundle.json"
+    seen: dict[str, Any] = {}
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+
+    from alpaca.trading import client as trading_client
+    from ai_trading.tools import broker_accounting_evidence as broker_evidence
+    from ai_trading.tools import runtime_performance_report as runtime_report
+
+    monkeypatch.setattr(
+        trading_client,
+        "TradingClient",
+        lambda **kwargs: seen.setdefault("client_kwargs", kwargs),
+    )
+
+    def capture(_client, *, boundaries_path, output_dir):
+        seen["boundaries_path"] = boundaries_path
+        seen["output_dir"] = output_dir
+        return evidence
+
+    def build_report(**kwargs):
+        seen["report_kwargs"] = kwargs
+        return {"trade_history": {}, "gate_effectiveness": {}}
+
+    monkeypatch.setattr(broker_evidence, "capture_paper_position_gate_evidence", capture)
+    monkeypatch.setattr(runtime_report, "build_report", build_report)
+    monkeypatch.setattr(
+        runtime_report,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": False,
+            "failed_checks": ["closed_trades"],
+            "thresholds": {},
+            "observed": {},
+        },
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is False
+    assert seen["client_kwargs"]["paper"] is True
+    assert seen["boundaries_path"] == boundaries
+    assert seen["output_dir"] == evidence.parent
+    assert seen["report_kwargs"]["verified_position_evidence_path"] == evidence
+    assert context["position_evidence_capture"]["available"] is True
+
+
+def test_runtime_gonogo_keeps_position_gate_unavailable_after_capture_failure(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    boundaries = tmp_path / "runtime" / "broker_position_boundaries.jsonl"
+    boundaries.parent.mkdir(parents=True)
+    boundaries.write_text("{}\n")
+    seen: dict[str, Any] = {}
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_SOFT_ENFORCE_IN_PAPER", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+
+    from alpaca.trading import client as trading_client
+    from ai_trading.tools import broker_accounting_evidence as broker_evidence
+    from ai_trading.tools import runtime_performance_report as runtime_report
+
+    monkeypatch.setattr(trading_client, "TradingClient", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        broker_evidence,
+        "capture_paper_position_gate_evidence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad boundary")),
+    )
+
+    def build_report(**kwargs):
+        seen.update(kwargs)
+        return {"trade_history": {}, "gate_effectiveness": {}}
+
+    monkeypatch.setattr(runtime_report, "build_report", build_report)
+    monkeypatch.setattr(
+        runtime_report,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": False,
+            "failed_checks": ["open_position_reconciliation_available"],
+            "thresholds": {},
+            "observed": {},
+        },
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is False
+    assert seen["verified_position_evidence_path"] is None
+    assert context["position_evidence_capture"] == {
+        "attempted": True,
+        "available": False,
+        "reason": "ValueError",
+    }
+
+
 def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path):
     engine = _engine_stub()
     engine.execution_mode = "paper"
@@ -3463,6 +3576,50 @@ def test_runtime_gonogo_reconciliation_retry_can_recover_gate(monkeypatch):
     assert retry["attempted"] is True
     assert retry["gate_passed_after"] is True
     assert context["reason"] == "reconciliation_retry_passed"
+
+
+def test_runtime_gonogo_retry_preserves_position_bundle(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED",
+        "1",
+    )
+    monkeypatch.setattr(
+        engine,
+        "synchronize_broker_state",
+        lambda: SimpleNamespace(open_orders=(), positions=()),
+    )
+    seen: list[Path | None] = []
+    evidence = tmp_path / "position_bundle.json"
+
+    def build_report(**kwargs):
+        seen.append(kwargs.get("verified_position_evidence_path"))
+        return {"trade_history": {}}
+
+    report_module = SimpleNamespace(
+        build_report=build_report,
+        evaluate_go_no_go=lambda *_args, **_kwargs: {
+            "gate_passed": True,
+            "failed_checks": [],
+            "thresholds": {},
+            "observed": {},
+        },
+    )
+    decision, context = engine._attempt_runtime_gonogo_reconciliation_retry(
+        failed_checks=["open_position_reconciliation_available"],
+        observed={},
+        thresholds={},
+        trade_history_path=tmp_path / "trades.json",
+        gate_summary_path=tmp_path / "gates.json",
+        gate_log_path=None,
+        performance_report_module=report_module,
+        now_mono=100.0,
+        verified_position_evidence_path=evidence,
+    )
+
+    assert decision is not None and decision["gate_passed"] is True
+    assert context["attempted"] is True
+    assert seen == [evidence]
 
 
 def test_runtime_gonogo_reconciliation_retry_runs_with_mixed_failed_checks(
