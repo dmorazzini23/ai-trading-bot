@@ -6373,12 +6373,25 @@ def format_text_report(report: dict[str, Any]) -> str:
                 lines.append(f"- Broker positions note: {broker_error}")
         reconciliation = trade.get("open_position_reconciliation")
         if isinstance(reconciliation, Mapping):
+            if reconciliation.get("available"):
+                lines.append(
+                    "- Open-position reconciliation: available=True "
+                    f"mismatches={int(_as_int(reconciliation.get('symbol_mismatch_count')) or 0)} "
+                    f"max_abs_delta_qty={float(_as_float(reconciliation.get('max_abs_delta_qty')) or 0.0):.4f} "
+                    f"abs_delta_ratio={float(_as_float(reconciliation.get('abs_delta_ratio')) or 0.0):.4f}"
+                )
+            else:
+                lines.append(
+                    "- Open-position reconciliation: available=False "
+                    f"reason={reconciliation.get('reason') or 'unknown'}"
+                )
+        diagnostic_reconciliation = trade.get("diagnostic_open_position_reconciliation")
+        if isinstance(diagnostic_reconciliation, Mapping):
             lines.append(
-                "- Open-position reconciliation: "
-                f"available={bool(reconciliation.get('available'))} "
-                f"mismatches={int(_as_int(reconciliation.get('symbol_mismatch_count')) or 0)} "
-                f"max_abs_delta_qty={float(_as_float(reconciliation.get('max_abs_delta_qty')) or 0.0):.4f} "
-                f"abs_delta_ratio={float(_as_float(reconciliation.get('abs_delta_ratio')) or 0.0):.4f}"
+                "- Diagnostic open-position reconciliation: "
+                f"available={bool(diagnostic_reconciliation.get('available'))} "
+                "mismatches="
+                f"{int(_as_int(diagnostic_reconciliation.get('symbol_mismatch_count')) or 0)}"
             )
         cost_attr = trade.get("cost_attribution")
         if isinstance(cost_attr, Mapping):

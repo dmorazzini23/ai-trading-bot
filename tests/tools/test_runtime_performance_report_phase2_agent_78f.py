@@ -138,7 +138,8 @@ def test_fifo_reconstruction_aggregates_partial_lots_and_fill_source_rollups(
     assert summary["reconstructed_open_positions"] == {"AAPL": 2.0}
     assert summary["open_positions"] == {"AAPL": 2.0}
     assert summary["open_positions_basis"] == "trade_history"
-    assert summary["open_position_reconciliation"]["symbol_mismatch_count"] == 0
+    assert summary["open_position_reconciliation"]["available"] is False
+    assert summary["diagnostic_open_position_reconciliation"]["symbol_mismatch_count"] == 0
     assert summary["slippage_root_cause_attribution"]["overall_slippage_drag_bps"] == pytest.approx(100.0097103877)
     rpr._runtime_fee_bps_fallback.cache_clear()
 
@@ -201,7 +202,8 @@ def test_runtime_report_exposes_same_day_fill_pnl_and_broker_position_basis(
 
     assert summary["open_positions_basis"] == "trade_history"
     assert summary["open_positions"] == {"AMZN": 1.0}
-    assert summary["open_position_reconciliation"]["symbol_mismatch_count"] == 1
+    assert summary["open_position_reconciliation"]["available"] is False
+    assert summary["diagnostic_open_position_reconciliation"]["symbol_mismatch_count"] == 1
     same_day_rows = {
         row["date"]: row
         for row in summary["same_day_fill_pair_stats"]["daily_trade_stats"]

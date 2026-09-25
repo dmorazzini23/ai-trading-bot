@@ -17,6 +17,19 @@ fresh zero-exposure broker state and NRestarts=0. Exact-tip CI and installed
 release identity remain the deployment gates. Model/replay gates, research
 budgets, holdout, and AWS MFA recovery hold remain unchanged.
 
+The first exact-tip CI run for `5cc70e826` (`36090302137`) failed on three
+older report tests that expected local-history comparisons in the gated
+`open_position_reconciliation` field. The gate correctly requires a verified
+broker bundle; local-history comparisons now live in
+`diagnostic_open_position_reconciliation`. Those tests were updated, and text
+rendering now states the unavailable gate reason while showing the diagnostic
+mismatch count separately. The 97 focused report tests passed. Changed-file
+validation passed Ruff, mypy, compile and 16 mapped tests; its sandboxed curl
+could not reach localhost. Host smoke found the active paper service with
+NRestarts=0 and expected HTTP 503 solely for `required_model_stale`.
+Deployment remains on hold pending the follow-up commit, exact-tip CI success,
+fresh broker exposure review, and release identity checks.
+
 ## September 24 after-close gate and performance review
 
 See `docs/GATE_AND_PERFORMANCE_REVIEW_20260924.md` for evidence and acceptance.

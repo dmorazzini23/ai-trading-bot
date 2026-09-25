@@ -264,10 +264,15 @@ def test_trade_history_direct_rows_enriches_costs_and_rendering(
         {"name": "MSFT", "net_pnl": -8.0}
     ]
     reconciliation = summary["open_position_reconciliation"]
-    assert reconciliation["available"] is True
-    assert reconciliation["symbol_mismatch_count"] == 2
+    assert reconciliation == {
+        "available": False,
+        "reason": "verified_broker_position_evidence_missing",
+    }
+    diagnostic = summary["diagnostic_open_position_reconciliation"]
+    assert diagnostic["available"] is True
+    assert diagnostic["symbol_mismatch_count"] == 2
     assert {
-        item["reason"] for item in reconciliation["top_mismatches"]
+        item["reason"] for item in diagnostic["top_mismatches"]
     } == {"missing_in_broker", "quantity_mismatch"}
 
     text = rpr.format_text_report(
@@ -292,7 +297,11 @@ def test_trade_history_direct_rows_enriches_costs_and_rendering(
     )
     assert "- TCA enrichment: matched_legs=2 enriched_trades=1" in text
     assert "- Closed trades by fill source: {'live': 1, 'reconcile_backfill': 1}" in text
-    assert "- Open-position reconciliation: available=True mismatches=2" in text
+    assert (
+        "- Open-position reconciliation: available=False "
+        "reason=verified_broker_position_evidence_missing"
+    ) in text
+    assert "- Diagnostic open-position reconciliation: available=True mismatches=2" in text
     assert "- Execution vs alpha: realized_edge_bps=50.0" in text
     assert "- Post-trade attribution: alpha_error_bps=-5.0" in text
 
