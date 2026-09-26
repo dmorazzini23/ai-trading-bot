@@ -21,6 +21,7 @@ def audit_quotes(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
     """Estimate observed spread distributions, never certify fees or impact."""
     rejected: Counter[str] = Counter()
     alignment: Counter[str] = Counter()
+    timing: Counter[str] = Counter()
     buckets: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     seen = set()
     for row in rows:
@@ -31,6 +32,8 @@ def audit_quotes(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
                 raise ValueError('timezone missing')
             bid, ask = float(m['raw_quote_bid']), float(m['raw_quote_ask'])
             age = float(m['quote_age_ms'])
+            reported_age = age
+            elapsed_ms = None
             if m.get('recorded_at'):
                 recorded = pd.Timestamp(m['recorded_at'])
                 elapsed_ms = (recorded - ts).total_seconds() * 1000
@@ -45,6 +48,23 @@ def audit_quotes(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
         if ts < now - timedelta(days=7) or ts > now:
             rejected['outside_seven_day_window'] += 1
             continue
+        if elapsed_ms is not None and elapsed_ms > 1000:
+            timing['quote_to_record_over_1000ms'] += 1
+            if reported_age <= 1000:
+                timing['reported_fresh_but_record_stale'] += 1
+        if m.get('quote_observed_at'):
+            try:
+                observed = pd.Timestamp(m['quote_observed_at'])
+                observed_age_ms = (observed - ts).total_seconds() * 1000
+                if observed.tzinfo is None or not np.isfinite(observed_age_ms) or observed_age_ms < 0:
+                    raise ValueError('invalid quote observation time')
+                timing['quote_observation_time_valid'] += 1
+                if observed_age_ms <= 1000:
+                    timing['quote_fresh_at_observation'] += 1
+            except (TypeError, ValueError):
+                timing['quote_observation_time_invalid'] += 1
+        else:
+            timing['quote_observation_time_missing'] += 1
         if age > 1000:
             rejected['quote_age_over_1000ms'] += 1
             continue
@@ -76,7 +96,7 @@ def audit_quotes(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
     for (symbol, liquidity, size), spreads in sorted(buckets.items()):
         p50, p90 = np.quantile(spreads, [.5, .9]).tolist()
         results.append({'symbol': symbol, 'liquidity': liquidity, 'intended_notional_bucket_usd': size, 'samples': len(spreads), 'spread_p50_bps': p50, 'spread_p90_bps': p90, 'research_round_trip_scenarios_bps': {'median_spread_plus_buffers': p50 + 6, 'p90_spread_plus_buffers': p90 + 6}, 'sufficient_quote_support': len(spreads) >= 30})
-    return {'rows_read': len(rows), 'rows_used': sum(len(v) for v in buckets.values()), 'rejection_counts': dict(rejected), 'decision_alignment_counts': dict(alignment), 'buckets': results, 'cost_basis': 'one_full_spread_per_round_trip_plus_4bps_slippage_and_2bps_fee_assumptions', 'fee_buffer_observed': False, 'impact_calibrated': False, 'size_measures': 'intended_notional_not_displayed_depth_or_realized_impact', 'evidence_type': 'quote_observation_research_scenarios_not_execution_validation', 'promotion_authority': False}
+    return {'rows_read': len(rows), 'rows_used': sum(len(v) for v in buckets.values()), 'rejection_counts': dict(rejected), 'decision_alignment_counts': dict(alignment), 'quote_timing_counts': dict(timing), 'buckets': results, 'cost_basis': 'one_full_spread_per_round_trip_plus_4bps_slippage_and_2bps_fee_assumptions', 'fee_buffer_observed': False, 'impact_calibrated': False, 'size_measures': 'intended_notional_not_displayed_depth_or_realized_impact', 'evidence_type': 'quote_observation_research_scenarios_not_execution_validation', 'promotion_authority': False}
 
 
 def audit_bars(frame: pd.DataFrame) -> dict[str, Any]:

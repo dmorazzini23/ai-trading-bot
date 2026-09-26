@@ -24,7 +24,15 @@ def test_quotes_are_deduplicated_and_not_certified_execution_costs():
     row['metrics']['decision_ts_basis'] = 'explicit'
     assert audit_quotes([row], now)['decision_alignment_counts'] == {'aligned_to_explicit_decision': 1}
     row['metrics']['recorded_at'] = '2026-09-07T20:00:06Z'
-    assert audit_quotes([row], now)['rejection_counts'] == {'quote_age_over_1000ms': 1}
+    row['metrics']['quote_observed_at'] = '2026-09-07T20:00:00.100Z'
+    delayed = audit_quotes([row], now)
+    assert delayed['rejection_counts'] == {'quote_age_over_1000ms': 1}
+    assert delayed['quote_timing_counts'] == {
+        'quote_to_record_over_1000ms': 1,
+        'reported_fresh_but_record_stale': 1,
+        'quote_observation_time_valid': 1,
+        'quote_fresh_at_observation': 1,
+    }
 
 
 def test_bar_audit_finds_invalid_ohlc_and_duplicates():

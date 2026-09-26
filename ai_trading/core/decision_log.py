@@ -292,6 +292,11 @@ class DecisionRecorder:
         )
         if quote_timestamp:
             metrics_payload.setdefault("quote_timestamp", quote_timestamp)
+        quote_observed_at = normalize_evidence_timestamp(
+            quote_snapshot.get("updated")
+        )
+        if quote_timestamp and quote_observed_at is not None:
+            metrics_payload.setdefault("quote_observed_at", quote_observed_at.isoformat())
         quote_status = _first_text(
             metrics_payload.get("quote_status"),
             quote_snapshot.get("status"),

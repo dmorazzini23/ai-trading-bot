@@ -1,5 +1,29 @@
 # Current handoff
 
+## September 26 bounded economics and quote-timing evidence
+
+See `docs/ECONOMIC_AND_EVIDENCE_PLAN_20260926.md`. The consumed replacement
+trial implies only +0.2214 bps gross per selected bar-open proxy trade against
+10 bps assumed round-trip cost; all five folds were net negative. The slower
+ETF study remains inconclusive with a consumed budget. Neither supports a
+model, strategy or gate change. The September 25 seven-day quote audit had
+2,412/2,414 rows rejected at the one-second record-time gate; reported
+quote age was measured at an earlier quote-gate observation. Decision records
+now preserve that observation time separately, and the audit exposes the
+timing gap without admitting stale quotes. The proposed weekly relative
+strength candidate is a draft for a separate data preflight and frozen-trial
+approval. No trial or holdout evaluation occurred. Pending: changed-file
+validation, exact-tip CI for this patch, and after-close release checks before
+any runtime deployment. Broker per-fill fees and historical operational-exit
+TCA remain unavailable; `required_model_stale` remains unresolved.
+
+The September 25 position-gate change at `4051d0a560bfe20935283818efd11e91ba4abf4c`
+passed exact-tip CI (`36178793885`: 7,224 passed, four skipped, 80.18%
+coverage) and was deployed to paper after close at 20:02 UTC. The broker was
+flat; release identity and backup checks passed, service had zero restarts,
+and health stayed HTTP 503 solely for `required_model_stale`. The older
+candidate note below is retained as its predeployment record.
+
 ## September 25 paper position gate follow-through (candidate, not deployed)
 
 The paper execution go/no-go path previously called the report without a
