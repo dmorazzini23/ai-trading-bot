@@ -337,6 +337,8 @@ def test_signal_ml_shadow_uses_symbol_quote_snapshot(monkeypatch, tmp_path):
         quote_age_ms=125.0,
         quote_timestamp="2026-05-01T14:30:01+00:00",
     )
+    quote_state = bot_engine.runtime_state.observe_symbol_quote_status("AAPL")
+    assert bot_engine._ml_shadow_quote_snapshot("AAPL")["quote_observed_at"] == quote_state["quote_observed_at"]
     shadow_path = tmp_path / "ml_shadow.jsonl"
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_LOG_PATH", str(shadow_path))

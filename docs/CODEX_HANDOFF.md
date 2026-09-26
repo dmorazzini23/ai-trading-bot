@@ -12,10 +12,20 @@ quote age was measured at an earlier quote-gate observation. Decision records
 now preserve that observation time separately, and the audit exposes the
 timing gap without admitting stale quotes. The proposed weekly relative
 strength candidate is a draft for a separate data preflight and frozen-trial
-approval. No trial or holdout evaluation occurred. Pending: changed-file
-validation, exact-tip CI for this patch, and after-close release checks before
-any runtime deployment. Broker per-fill fees and historical operational-exit
-TCA remain unavailable; `required_model_stale` remains unresolved.
+approval. No trial or holdout evaluation occurred. Exact-tip CI and after-close
+release checks are pending before any runtime deployment. Broker per-fill fees
+and historical operational-exit TCA remain unavailable;
+`required_model_stale` remains unresolved.
+
+Follow-up provenance correction: quote observation time is set only when a
+timestamped bid and ask are published to telemetry; status-only updates leave
+that timestamp unchanged. The first patch's use of the generic telemetry
+`updated` time was too broad and was corrected before deployment. Focused
+tests passed (33); follow-up changed-file validation passed Ruff, mypy,
+compile and 463 mapped tests. Both validator runs could not connect to
+localhost from the sandbox; a separate host health check returned HTTP 503
+only for `required_model_stale`, with fresh broker state and zero exposure.
+The clean follow-up commit and exact-tip CI are pending.
 
 The September 25 position-gate change at `4051d0a560bfe20935283818efd11e91ba4abf4c`
 passed exact-tip CI (`36178793885`: 7,224 passed, four skipped, 80.18%

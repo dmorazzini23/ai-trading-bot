@@ -7211,6 +7211,7 @@ def _ml_shadow_quote_snapshot(symbol: str | None = None) -> dict[str, Any]:
         "age_sec": _finite_float_or_none(quote.get("age_sec")),
         "quote_age_ms": _finite_float_or_none(quote.get("quote_age_ms")),
         "quote_timestamp": quote.get("quote_timestamp"),
+        "quote_observed_at": quote.get("quote_observed_at"),
         "symbol": quote.get("symbol"),
         "updated": quote.get("updated"),
     }

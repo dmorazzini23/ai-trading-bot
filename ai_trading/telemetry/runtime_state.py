@@ -65,6 +65,7 @@ _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "last_price": None,
     "quote_age_ms": None,
     "quote_timestamp": None,
+    "quote_observed_at": None,
     "symbol": None,
     "spread_bps": None,
     "max_spread_bps": None,
@@ -406,6 +407,8 @@ def update_quote_status(
             pass
     if quote_timestamp is not None:
         updates["quote_timestamp"] = str(quote_timestamp)
+        if bid is not None and ask is not None:
+            updates["quote_observed_at"] = _now_iso()
     if spread_bps is not None:
         try:
             updates["spread_bps"] = max(0.0, float(spread_bps))

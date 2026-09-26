@@ -107,6 +107,10 @@ def test_quote_status_tracks_symbol_snapshots_independently() -> None:
     assert aapl["ask"] == 100.02
     assert aapl["quote_age_ms"] == 250.0
     assert aapl["quote_timestamp"] == "2026-05-01T14:30:00+00:00"
+    assert aapl["quote_observed_at"] is not None
+    observed_at = aapl["quote_observed_at"]
+    runtime_state.update_quote_status(allowed=False, symbol="AAPL", status="blocked")
+    assert runtime_state.observe_symbol_quote_status("AAPL")["quote_observed_at"] == observed_at
     assert aapl["spread_bps"] == 2.0
     assert aapl["max_spread_bps"] == 10.0
     assert aapl["max_quote_age_ms"] == 1000.0

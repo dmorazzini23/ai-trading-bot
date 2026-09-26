@@ -50,7 +50,8 @@ The record reads a prior quote-gate telemetry snapshot. Thus the reported age
 describes an earlier observation, while record capture happens later. It is
 not evidence that the quote remained fresh when the decision was recorded.
 
-Future decision records now retain the telemetry update time as
+Future decision records now retain the time a timestamped bid and ask were
+published to telemetry as
 `quote_observed_at`, separate from the exchange quote timestamp,
 `decision_ts`, and `recorded_at`. The quote audit reports counts of fresh
 reported age with stale record-time age and of valid observation times. Its

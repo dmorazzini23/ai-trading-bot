@@ -203,7 +203,7 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
             "ask": 100.1,
             "quote_age_ms": 250.0,
             "quote_timestamp": "2026-07-21T14:29:59.750000+00:00",
-            "updated": "2026-07-21T14:30:00+00:00",
+            "quote_observed_at": "2026-07-21T14:30:00+00:00",
             "anomaly_spread_bps": 5.0,
             "execution_profile": "paper_sampling_passive",
             "market_regime": "sideways",
