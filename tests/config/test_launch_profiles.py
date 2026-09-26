@@ -74,6 +74,31 @@ def test_provider_authority_allows_healthy_alpaca_quotes_for_paper_trade(monkeyp
     assert context["reasons"] == []
 
 
+def test_live_quote_authority_checks_quote_source_independently(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    profile = resolve_launch_profile()
+    provider = {"active": "alpaca", "status": "healthy", "using_backup": False}
+
+    for source in ("yahoo", "not_alpaca", "latest_quote"):
+        allowed, context = provider_authority_allows(
+            profile=profile,
+            provider_state=provider,
+            quote_state={"source": source, "allowed": True, "synthetic": False},
+            execution_mode="live",
+        )
+        assert allowed is False
+        assert "execution_quote_not_alpaca" in context["reasons"]
+
+    allowed, context = provider_authority_allows(
+        profile=profile,
+        provider_state=provider,
+        quote_state={"source": "alpaca", "allowed": True, "synthetic": False},
+        execution_mode="live",
+    )
+    assert allowed is True
+    assert context["reasons"] == []
+
+
 def test_provider_authority_strict_live_fails_closed_on_unknown_state(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     profile = resolve_launch_profile()

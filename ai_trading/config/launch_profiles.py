@@ -319,8 +319,9 @@ def provider_authority_allows(
     policy = resolved.execution_quote_authority.lower()
     reasons: list[str] = []
     if policy == "alpaca_only":
-        source_text = f"{active} {quote_source}"
-        if "alpaca" not in source_text:
+        alpaca_provider = active == "alpaca" or active.startswith(("alpaca-", "alpaca_"))
+        alpaca_quote = quote_source == "alpaca" or quote_source.startswith(("alpaca-", "alpaca_"))
+        if not alpaca_provider or ((mode == "live" or resolved.name.startswith("live_")) and not alpaca_quote):
             reasons.append("execution_quote_not_alpaca")
     if mode == "live" or resolved.name.startswith("live_"):
         if resolved.provider_policy == "strict_live" and not active:

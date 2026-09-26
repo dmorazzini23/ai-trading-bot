@@ -26,6 +26,15 @@ def audit_quotes(rows: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
     seen = set()
     for row in rows:
         m = row.get('metrics') or {}
+        quote_status = str(m.get('quote_status') or '').strip().lower()
+        quote_quality = str(m.get('quote_quality_status') or '').strip().lower()
+        quote_source = str(m.get('raw_quote_source') or m.get('quote_source') or '').strip().lower()
+        if m.get('quote_allowed') is False or (quote_status and quote_status not in {'ready', 'ok', 'fresh'}) or quote_quality == 'anomalous':
+            rejected['quote_not_allowed'] += 1
+            continue
+        if m.get('quote_synthetic') is True or quote_source in {'synthetic', 'fallback', 'reference_price'}:
+            rejected['synthetic_quote'] += 1
+            continue
         try:
             ts = pd.Timestamp(m['quote_timestamp'])
             if ts.tzinfo is None or pd.isna(ts):

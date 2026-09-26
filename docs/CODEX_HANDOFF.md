@@ -1,5 +1,24 @@
 # Current handoff
 
+## September 26 repository audit repair candidate
+
+The audit found seven defects in execution-lineage matching, live quote-source
+authority, research decision/quote evidence, replay-refresh locking, the legacy
+money validation check, and this handoff's release status. The code and focused
+regressions are patched locally. Final changed-file validation passed Ruff,
+mypy, compile, shell syntax, and 523 mapped tests; repository-wide Ruff, mypy,
+strict typing, and Python compilation also passed. A full local pytest attempt
+reached 99% but was stopped after sandbox-specific port/bytecode failures, an
+ignored research artifact scanned by a test, and a two-minute HTTP test hang;
+it is not a full-suite pass. A host read-only health check returned HTTP 503
+only for the existing `required_model_stale` readiness failure, with fresh
+broker connectivity, zero positions/open orders, and NRestarts=0. A non-sending
+incident snapshot completed. The revised seven-day quote audit still admitted
+2 of 2,414 rows, both ready Alpaca quotes. Exact-tip CI is pending. Do not
+deploy until CI and broker exposure review pass. Model, replay, cost,
+freshness, provenance, promotion, research-budget, and holdout gates remain
+unchanged.
+
 ## September 26 bounded economics and quote-timing evidence
 
 See `docs/ECONOMIC_AND_EVIDENCE_PLAN_20260926.md`. The consumed replacement
@@ -13,7 +32,7 @@ now preserve that observation time separately, and the audit exposes the
 timing gap without admitting stale quotes. The proposed weekly relative
 strength candidate is a draft for a separate data preflight and frozen-trial
 approval. No trial or holdout evaluation occurred. Exact-tip CI and after-close
-release checks are pending before any runtime deployment. Broker per-fill fees
+paper deployment of `6bf408b69` completed before this audit. Broker per-fill fees
 and historical operational-exit TCA remain unavailable;
 `required_model_stale` remains unresolved.
 
@@ -25,7 +44,8 @@ tests passed (33); follow-up changed-file validation passed Ruff, mypy,
 compile and 463 mapped tests. Both validator runs could not connect to
 localhost from the sandbox; a separate host health check returned HTTP 503
 only for `required_model_stale`, with fresh broker state and zero exposure.
-The clean follow-up commit and exact-tip CI are pending.
+The clean follow-up commit passed exact-tip CI and was deployed to paper after
+close; the audit repair candidate above is a separate local patch.
 
 The September 25 position-gate change at `4051d0a560bfe20935283818efd11e91ba4abf4c`
 passed exact-tip CI (`36178793885`: 7,224 passed, four skipped, 80.18%

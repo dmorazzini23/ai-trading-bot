@@ -82,6 +82,21 @@ def test_opposite_order_side_does_not_complete_chain():
     assert reset.execution_chain(decisions, orders, fills)["complete_chains"] == 0
 
 
+@pytest.mark.parametrize("field,value", [
+    ("account_id", "other-account"),
+    ("trading_mode", "live"),
+    ("side", "sell"),
+])
+def test_decision_identity_conflicts_do_not_complete_chain(field, value):
+    decisions, orders, fills = complete_inputs()
+    decisions[0][field] = value
+
+    result = reset.execution_chain(decisions, orders, fills)
+
+    assert result["status"] == "evidence_pending"
+    assert result["gap_counts"]["decision_identity_mismatch"] == 1
+
+
 def test_window_counts_exclusions_and_hashes_source(tmp_path):
     path = tmp_path / "rows.jsonl"
     path.write_text('\n'.join([json.dumps({"ts": ts}) for ts in ("2026-09-08T14:00:00Z", "2024-01-01T00:00:00Z", "2027-01-01T00:00:00Z", "2026-09-08T00:00:00")] + ['bad', '[]']))

@@ -41,17 +41,38 @@ def _identity_index(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[di
 
 def _matched_source(
     fill: Mapping[str, Any], identities: set[tuple[str, str]],
-    index: Mapping[tuple[str, str], list[dict[str, Any]]],
+    index: Mapping[tuple[str, str], list[dict[str, Any]]], kind: str,
 ) -> bool:
+    try:
+        fill_time = pd.Timestamp(fill.get("ts"))
+        if pd.isna(fill_time) or fill_time.tzinfo is None:
+            return False
+    except (TypeError, ValueError):
+        return False
     for key in identities:
         for source in index.get(key, []):
             if any(
                 source.get(field) not in (None, "")
                 and fill.get(field) not in (None, "")
                 and source[field] != fill[field]
-                for field in ("account_id", "trading_mode", "symbol")
+                for field in ("account_id", "trading_mode", "symbol", "side", "order_id", "client_order_id")
             ):
                 continue
+            metrics = source.get("metrics") if isinstance(source.get("metrics"), Mapping) else {}
+            evidence_time = (
+                (metrics.get("decision_ts") or source.get("decision_ts") or source.get("ts"))
+                if kind == "decision"
+                else (source.get("submit_started_at") or source.get("submitted_at") or source.get("created_at"))
+                if kind == "order"
+                else None
+            )
+            if evidence_time is not None:
+                try:
+                    parsed_time = pd.Timestamp(evidence_time)
+                    if pd.isna(parsed_time) or parsed_time.tzinfo is None or parsed_time > fill_time:
+                        continue
+                except (TypeError, ValueError):
+                    continue
             return True
     return False
 
@@ -157,7 +178,7 @@ def reconcile_evidence(*, decisions: list[dict[str, Any]], orders: list[dict[str
         identities = _identities(row)
         missing = []
         for name, source_index in (("decision", decision_index), ("order", order_index), ("tca", tca_index)):
-            matched = _matched_source(row, identities, source_index)
+            matched = _matched_source(row, identities, source_index, name)
             counts[f"{name}_matched" if matched else f"{name}_unmatched"] += 1
             if not matched:
                 missing.append(name)

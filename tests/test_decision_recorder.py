@@ -198,6 +198,8 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
         safe_float=lambda value: float(value) if value is not None else None,
         quote_snapshot_func=lambda _symbol: {
             "status": "fresh",
+            "allowed": False,
+            "synthetic": True,
             "source": "alpaca_iex",
             "bid": 100.0,
             "ask": 100.1,
@@ -249,6 +251,8 @@ def test_decision_recorder_preserves_quote_and_regime_metadata() -> None:
     assert record.metrics["raw_quote_ask"] == 100.1
     assert record.metrics["raw_quote_spread_bps"] == pytest.approx(9.99500249874909)
     assert record.metrics["raw_quote_source"] == "alpaca_iex"
+    assert record.metrics["quote_allowed"] is False
+    assert record.metrics["quote_synthetic"] is True
     assert record.metrics["raw_quote_age_ms"] == 250.0
     assert record.metrics["quote_quality_status"] == "anomalous"
     assert (

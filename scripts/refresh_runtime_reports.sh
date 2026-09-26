@@ -30,6 +30,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.governance.replay_live_parity import _load_latest_replay_governance_snapshot
 from ai_trading.tools.replay_governance import run_replay_governance
+from ai_trading.utils.process_manager import acquire_lock, release_lock
 from ai_trading.tools.runtime_performance_report import (
     build_report,
     evaluate_go_no_go,
@@ -132,11 +133,8 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
             "max_age_hours": max_age_hours,
             "source_age_hours": source_age_hours,
         }
-    lock_path = runtime_root / "replay_governance_refresh.lock"
-    try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
+    lock_name = "runtime-report-replay-governance"
+    if not acquire_lock(lock_name, timeout=0):
         return {
             "attempted": False,
             "reason": "refresh_already_running",
@@ -146,7 +144,6 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
             "source_age_hours": source_age_hours,
         }
     try:
-        os.write(lock_fd, f"{datetime.now().isoformat()}\n".encode("utf-8"))
         payload = run_replay_governance(
             [
                 "--force",
@@ -181,11 +178,7 @@ def _maybe_refresh_replay_governance() -> dict[str, Any]:
         )
         return failure
     finally:
-        os.close(lock_fd)
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
+        release_lock(lock_name)
 
 
 replay_refresh = _maybe_refresh_replay_governance()

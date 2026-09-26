@@ -303,6 +303,8 @@ class DecisionRecorder:
         )
         if quote_status:
             metrics_payload.setdefault("quote_status", quote_status.lower())
+        metrics_payload["quote_allowed"] = quote_snapshot.get("allowed") is True
+        metrics_payload["quote_synthetic"] = quote_snapshot.get("synthetic") is True
         quote_source = _first_text(
             metrics_payload.get("quote_source"),
             quote_snapshot.get("source"),

@@ -104,6 +104,11 @@ def execution_chain(decisions: list[dict[str, Any]], orders: list[dict[str, Any]
         if len(candidates) != 1:
             gaps.add("decision_missing_or_ambiguous")
         decision = next(iter(candidates.values())) if len(candidates) == 1 else {}
+        if decision and any(
+            decision.get(field) not in (None, "") and decision.get(field) != fill.get(field)
+            for field in ("account_id", "trading_mode", "side")
+        ):
+            gaps.add("decision_identity_mismatch")
         metrics = decision.get("metrics") or {}
         decision_time = stamp(metrics.get("decision_ts"))
         quote_time = stamp(metrics.get("quote_timestamp"))

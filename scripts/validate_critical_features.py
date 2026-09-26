@@ -27,7 +27,7 @@ def run_command(cmd, description):
 def main():
     """Run all validation checks."""
     logging.info('=== Profit-Critical Features Validation ===')
-    checks = [('python validate_profit_critical.py', 'Core features validation'), ('python -c "\nimport sys\nsys.path.insert(0, \'ai_trading/math\')\nfrom money import Money\nfrom decimal import Decimal\nresult = Money(\'1.005\').quantize(Decimal(\'0.01\'))\nassert str(result) in (\'1.00\',\'1.01\'), f\'Expected 1.00 or 1.01, got {result}\'\nlogging.info(\'Money math determinism: PASSED\')\nlogging.info(f\'Money(1.005).quantize(0.01) = {result}\')\n" ', 'Money math determinism'), ('python smoke_backtest.py', 'Backtest cost validation (net < gross)')]
+    checks = [('python validate_profit_critical.py', 'Core features validation'), ('python -c "\nimport logging\nfrom ai_trading.math.money import Money\nfrom decimal import Decimal\nresult = Money(\'1.005\').quantize(Decimal(\'0.01\'))\nassert str(result) in (\'1.00\',\'1.01\'), f\'Expected 1.00 or 1.01, got {result}\'\nlogging.info(\'Money math determinism: PASSED\')\nlogging.info(f\'Money(1.005).quantize(0.01) = {result}\')\n" ', 'Money math determinism'), ('python smoke_backtest.py', 'Backtest cost validation (net < gross)')]
     logging.info('Running validation checks...')
     results = []
     for cmd, description in checks:

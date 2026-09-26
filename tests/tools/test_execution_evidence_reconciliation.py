@@ -89,6 +89,54 @@ def test_complete_paper_session_and_missing_boundary_fail_closed():
     assert report["status"] == "evidence_gaps"
 
 
+@pytest.mark.parametrize("source,change", [
+    ("decision", {"side": "sell"}),
+    ("decision", {"ts": "2026-09-25T14:32:00Z"}),
+    ("decision", {"ts": "2026-09-25T14:30:00"}),
+    ("order", {"side": "sell"}),
+    ("order", {"submitted_at": "2026-09-25T14:32:00Z"}),
+    ("order", {"order_id": "different-order"}),
+    ("tca", {"side": "sell"}),
+])
+def test_session_rejects_conflicting_or_noncausal_fill_links(source, change):
+    from ai_trading.tools.execution_evidence_reconciliation import reconcile_session
+
+    fill = {**_fill("fill", "buy", 1, 100, "2026-09-25T14:31:00Z", 0),
+            "order_id": "broker-order", "client_order_id": "client-order",
+            "account_id": "paper", "trading_mode": "paper"}
+    decision = {"client_order_id": "client-order", "symbol": "AAPL", "side": "buy",
+                "account_id": "paper", "trading_mode": "paper", "ts": "2026-09-25T14:30:00Z"}
+    order = {"order_id": "broker-order", "client_order_id": "client-order",
+             "symbol": "AAPL", "side": "buy", "account_id": "paper", "trading_mode": "paper",
+             "submitted_at": "2026-09-25T14:30:30Z", "ts": "2026-09-25T14:32:00Z",
+             "filled_qty": 1}
+    tca = {"client_order_id": "client-order", "symbol": "AAPL", "side": "buy",
+           "account_id": "paper", "trading_mode": "paper", "fill_price": 100,
+           "ts": "2026-09-25T14:32:00Z"}
+    boundaries = [
+        {"account_id": "paper", "trading_mode": "paper", "positions_complete": True,
+         "positions": {}, "timestamp": "2026-09-25T13:25:00Z"},
+        {"account_id": "paper", "trading_mode": "paper", "positions_complete": True,
+         "positions": {"AAPL": 1}, "timestamp": "2026-09-25T20:05:00Z"},
+    ]
+    inputs = {"decision": decision, "order": order, "tca": tca}
+    baseline = reconcile_session(
+        session_date="2026-09-25", account_id="paper", boundaries=boundaries,
+        decisions=[decision], orders=[order], fills=[fill], tca=[tca],
+    )
+    assert baseline["status"] == "paper_session_reconciled"
+
+    inputs[source] = {**inputs[source], **change}
+    report = reconcile_session(
+        session_date="2026-09-25", account_id="paper", boundaries=boundaries,
+        decisions=[inputs["decision"]], orders=[inputs["order"]], fills=[fill],
+        tca=[inputs["tca"]],
+    )
+
+    assert report["status"] == "evidence_gaps"
+    assert report["counts"][f"{source}_unmatched"] == 1
+
+
 def test_partial_fifo_exit_keeps_unknown_fees_and_open_inventory_explicit():
     buy = _fill("buy", "buy", 10, 100, "2026-01-02T15:00:00Z")
     sell = _fill("sell", "sell", 4, 110, "2026-01-02T16:00:00Z")

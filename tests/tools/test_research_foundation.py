@@ -35,6 +35,29 @@ def test_quotes_are_deduplicated_and_not_certified_execution_costs():
     }
 
 
+def test_unavailable_or_synthetic_quotes_do_not_count_as_spread_support():
+    now = datetime(2026, 9, 8, tzinfo=UTC)
+    base = {'symbol': 'SPY', 'metrics': {
+        'quote_timestamp': '2026-09-07T20:00:00Z',
+        'recorded_at': '2026-09-07T20:00:00.100Z',
+        'raw_quote_bid': 99.99, 'raw_quote_ask': 100.01,
+        'quote_age_ms': 100,
+    }}
+    rows = [
+        {'symbol': 'SPY', 'metrics': {**base['metrics'], 'quote_status': 'unavailable'}},
+        {'symbol': 'SPY', 'metrics': {**base['metrics'], 'quote_status': 'synthetic'}},
+        {'symbol': 'SPY', 'metrics': {**base['metrics'], 'raw_quote_source': 'synthetic'}},
+        {'symbol': 'SPY', 'metrics': {**base['metrics'], 'quote_quality_status': 'anomalous'}},
+        {'symbol': 'SPY', 'metrics': {**base['metrics'], 'quote_allowed': False}},
+        {'symbol': 'SPY', 'metrics': {**base['metrics'], 'quote_synthetic': True}},
+    ]
+
+    result = audit_quotes(rows, now)
+
+    assert result['rows_used'] == 0
+    assert result['rejection_counts'] == {'quote_not_allowed': 4, 'synthetic_quote': 2}
+
+
 def test_bar_audit_finds_invalid_ohlc_and_duplicates():
     frame = pd.DataFrame({'timestamp': ['2025-01-02T15:00Z'] * 2, 'open': [10, 10], 'close': [10, 15], 'low': [9, 9], 'high': [11, 11]})
     result = audit_bars(frame)
