@@ -148,18 +148,28 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     # Stub Alpaca modules so native get_orders receives a GetOrdersRequest.
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
+    common_enums_mod = types.ModuleType("alpaca.common.enums")
+
+    class Sort:
+        ASC = "asc"
 
     class QueryOrderStatus:
         OPEN = "open"
         ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, status=None):
+        def __init__(self, *, status=None, limit=None, direction=None, after=None):
             self.status = status
+            self.limit = limit
+            self.direction = direction
+            self.after = after
 
+    _set_module_attr(common_enums_mod, "Sort", Sort)
     _set_module_attr(enums_mod, "QueryOrderStatus", QueryOrderStatus)
     _set_module_attr(requests_mod, "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.common", types.ModuleType("alpaca.common"))
+    monkeypatch.setitem(sys.modules, "alpaca.common.enums", common_enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)
@@ -251,18 +261,28 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
 
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
+    common_enums_mod = types.ModuleType("alpaca.common.enums")
+
+    class Sort:
+        ASC = "asc"
 
     class QueryOrderStatus:
         OPEN = "open"
         ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, status=None):
+        def __init__(self, *, status=None, limit=None, direction=None, after=None):
             self.status = status
+            self.limit = limit
+            self.direction = direction
+            self.after = after
 
+    _set_module_attr(common_enums_mod, "Sort", Sort)
     _set_module_attr(enums_mod, "QueryOrderStatus", QueryOrderStatus)
     _set_module_attr(requests_mod, "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.common", types.ModuleType("alpaca.common"))
+    monkeypatch.setitem(sys.modules, "alpaca.common.enums", common_enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)

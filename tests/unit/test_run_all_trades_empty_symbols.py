@@ -11,21 +11,31 @@ import ai_trading.core.bot_engine as eng
 def test_run_all_trades_handles_empty_symbols(monkeypatch):
     """run_all_trades_worker should warn and return when no symbols are provided."""
 
-    # Stub Alpaca modules so _validate_trading_api can shim list_orders
+    # Stub Alpaca request modules used by native order lookup.
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
+    common_enums_mod = types.ModuleType("alpaca.common.enums")
+
+    class Sort:
+        ASC = "asc"
 
     class QueryOrderStatus:
         OPEN = "open"
         ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, status=None):
+        def __init__(self, *, status=None, limit=None, direction=None, after=None):
             self.status = status
+            self.limit = limit
+            self.direction = direction
+            self.after = after
 
+    setattr(cast(Any, common_enums_mod), "Sort", Sort)
     setattr(cast(Any, enums_mod), "QueryOrderStatus", QueryOrderStatus)
     setattr(cast(Any, requests_mod), "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.common", types.ModuleType("alpaca.common"))
+    monkeypatch.setitem(sys.modules, "alpaca.common.enums", common_enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)

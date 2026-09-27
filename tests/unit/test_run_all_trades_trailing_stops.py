@@ -56,18 +56,28 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     # Stub Alpaca modules so _validate_trading_api works
     enums_mod = cast(Any, types.ModuleType("alpaca.trading.enums"))
     requests_mod = cast(Any, types.ModuleType("alpaca.trading.requests"))
+    common_enums_mod = cast(Any, types.ModuleType("alpaca.common.enums"))
+
+    class Sort:
+        ASC = "asc"
 
     class QueryOrderStatus:
         OPEN = "open"
         ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, status=None):
+        def __init__(self, *, status=None, limit=None, direction=None, after=None):
             self.status = status
+            self.limit = limit
+            self.direction = direction
+            self.after = after
 
+    common_enums_mod.Sort = Sort
     enums_mod.QueryOrderStatus = QueryOrderStatus
     requests_mod.GetOrdersRequest = GetOrdersRequest
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.common", types.ModuleType("alpaca.common"))
+    monkeypatch.setitem(sys.modules, "alpaca.common.enums", common_enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)

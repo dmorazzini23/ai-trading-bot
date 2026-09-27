@@ -14,13 +14,19 @@ in-memory paper order ID collisions, and the OMS missing-API failure count.
 The audit utility now compiles read-only plugin files in memory. Regression
 tests cover each defect. Changed-file validation passed Ruff, mypy, Python
 compilation and 500 mapped tests on the final code; its sandbox-local curl
-could not reach port
-9001. A separate host read-only health check returned HTTP 503 solely for
-`required_model_stale`, with a fresh connected paper broker and zero positions
-or open orders. A non-sending incident snapshot classified the service as
-`blocked_qualification`; `health_degraded` remained actionable because of the
-same stale-model reason. Current candidate exact-tip CI, broker exposure review and
-release checks remain pending; do not restart on this candidate yet.
+could not reach port 9001. A separate host read-only health check returned
+HTTP 503 solely for `required_model_stale`, with a fresh connected paper broker
+and zero positions or open orders. A non-sending incident snapshot classified
+the service as `blocked_qualification`; `health_degraded` remained actionable
+because of the same stale-model reason. Commit `d1db4aac8` was pushed, but CI
+`36294360918` failed only five older Alpaca request test doubles that lacked
+the new pagination fields (7,248 passed, 5 failed, 80.20% coverage). The four
+test files were corrected; the five failures and all eight mapped tests pass
+locally. The corrected read-only order query found zero paper broker orders and
+positions. A fresh recovery bundle was created and restored in isolation, and
+temporary candidate release identity checks passed. The installed release spec
+and running service still name `3e9511b21`; a new exact-tip CI pass and fresh
+broker exposure review are required before restart.
 
 No model, replay, cost, freshness, provenance, promotion, research-budget or
 holdout gate was relaxed. No strategy trial or training was run. The historical

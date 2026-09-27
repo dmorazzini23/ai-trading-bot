@@ -33,21 +33,31 @@ import ai_trading.core.bot_engine as eng
 
 
 def test_run_all_trades_handles_api_error(monkeypatch, caplog):
-    # Provide Alpaca stubs so the shim forwards a GetOrdersRequest
+    # Provide Alpaca stubs for native GetOrdersRequest construction.
     enums_mod = types.ModuleType("alpaca.trading.enums")
     requests_mod = types.ModuleType("alpaca.trading.requests")
+    common_enums_mod = types.ModuleType("alpaca.common.enums")
+
+    class Sort:
+        ASC = "asc"
 
     class QueryOrderStatus:
         OPEN = "open"
         ALL = "all"
 
     class GetOrdersRequest:
-        def __init__(self, *, status=None):
+        def __init__(self, *, status=None, limit=None, direction=None, after=None):
             self.status = status
+            self.limit = limit
+            self.direction = direction
+            self.after = after
 
+    cast(Any, common_enums_mod).Sort = Sort
     cast(Any, enums_mod).QueryOrderStatus = QueryOrderStatus
     cast(Any, requests_mod).GetOrdersRequest = GetOrdersRequest
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.common", types.ModuleType("alpaca.common"))
+    monkeypatch.setitem(sys.modules, "alpaca.common.enums", common_enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)
