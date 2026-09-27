@@ -296,6 +296,21 @@ def test_preflight_capacity_respects_global_open_order_cap(monkeypatch):
     assert check.reason == "max_open_orders_global"
 
 
+def test_preflight_capacity_blocks_when_open_order_snapshot_fails() -> None:
+    class Broker:
+        def list_orders(self, status: str = "open") -> list[Any]:
+            raise TimeoutError("broker order snapshot timed out")
+
+    check = lt.preflight_capacity(
+        "MSFT", "buy", 250.0, 2, Broker(),
+        account=SimpleNamespace(buying_power="100000"),
+    )
+
+    assert check.can_submit is False
+    assert check.suggested_qty == 0
+    assert check.reason == "broker_open_orders_unavailable"
+
+
 def test_preflight_capacity_respects_per_symbol_open_order_cap(monkeypatch):
     monkeypatch.setenv("EXECUTION_MAX_OPEN_ORDERS_PER_SYMBOL", "1")
     monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", raising=False)

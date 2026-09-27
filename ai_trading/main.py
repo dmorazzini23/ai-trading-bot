@@ -2571,6 +2571,7 @@ def run_cycle() -> None:
                             extra=extra,
                             exc_info=True,
                         )
+                        return
                     else:
                         extra = {
                             "canceled_ids": pending_ids[:20],

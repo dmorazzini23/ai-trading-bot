@@ -1,8 +1,11 @@
 # Release identity preflight
 
-**Status (2026-09-23):** the read-only verifier and packaged unit checks are
-implemented locally. This unit has not been installed, and no CI-approved
-deployment candidate has been verified. It grants no live-trading authority.
+**Status (2026-09-27):** the packaged paper service has the pre-migration and
+post-migration release checks installed. Commit `3e9511b21` passed exact-tip
+CI and both checks before the September 27 paper restart. The installed
+release specification still names that commit. This does not grant
+live-trading authority; a new commit requires its own CI result, exposure
+review, release specification and restart checks.
 
 The preflight compares one reviewed release specification with the current
 checkout, effective sanitized configuration, launch profile, applied OMS
@@ -64,7 +67,7 @@ requires the applied revision to equal both the specification and the head. A
 missing SQLite database is never created by the check. PostgreSQL credentials
 are read from the managed runtime environment and are never written to the report.
 
-A passing preflight is one deployment prerequisite. The staged packaged unit
+A passing preflight is one deployment prerequisite. The installed packaged unit
 syncs the runtime environment once, verifies identity before migration, runs
 Alembic, then verifies identity again before starting the service. It does not
 resync `.env` between the check and start. Installing this unit without a valid
@@ -73,8 +76,8 @@ model passes freshness, replay or promotion gates, that broker exposure is
 safe, or that rollback across a schema change works. Before deployment, review
 positions and open orders, verify CI and model-governance evidence, perform an
 isolated migration-aware rollback rehearsal, and obtain any required live
-approval. A clean CI-tested release specification, unit installation and
-runtime verification remain outstanding.
+approval. A clean CI-tested release specification and runtime verification
+are required for every new release.
 
 The isolated SQLite regression rehearsal starts from the prior OMS revision,
 preserves two duplicate-sequence events in a database snapshot, upgrades to

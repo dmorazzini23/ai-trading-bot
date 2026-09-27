@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import ast
 import json
-import py_compile
 import sys
 from pathlib import Path
 from typing import Dict
@@ -81,15 +80,16 @@ def scan_repo(root: Path) -> Dict[str, int]:
     ]
     for path in py_files:
         skip_sensitive_metrics = _is_under_prefix(path, root, SAFE_PREFIXES)
-        if not skip_sensitive_metrics:
-            try:
-                py_compile.compile(str(path), doraise=True)
-            except py_compile.PyCompileError:
-                metrics["py_compile_failures"] += 1
         try:
             source = path.read_text()
         except Exception:
             continue
+        if not skip_sensitive_metrics:
+            try:
+                # Compile without writing bytecode into read-only plugin hooks.
+                compile(source, str(path), "exec")
+            except (SyntaxError, ValueError, TypeError):
+                metrics["py_compile_failures"] += 1
         try:
             tree = ast.parse(source)
         except Exception:

@@ -20,33 +20,24 @@ def test_audit_repo_runs_clean():
     assert metrics["py_compile_failures"] == 0
 
 
-def test_scan_repo_skips_sensitive_checks(tmp_path, monkeypatch):
-    """SAFE_PREFIXES should bypass py_compile and exec/eval metrics."""
+def test_scan_repo_skips_sensitive_checks(tmp_path):
+    """SAFE_PREFIXES bypass compilation and exec/eval metrics."""
     safe_prefix = ("tools", "ci")
     assert safe_prefix in audit_repo.SAFE_PREFIXES
     safe_dir = tmp_path.joinpath(*safe_prefix)
     safe_dir.mkdir(parents=True)
 
     safe_file = safe_dir / "uses_exec.py"
-    safe_file.write_text("exec('danger')\n")
+    safe_file.write_text("return 1\nexec('danger')\n")
 
     regular_file = tmp_path / "regular.py"
-    regular_file.write_text("exec('ok')\n")
-
-    compiled_paths: list[Path] = []
-
-    def fake_compile(filename: str, *args, **kwargs) -> None:
-        compiled_paths.append(Path(filename))
-
-    monkeypatch.setattr(audit_repo.py_compile, "compile", fake_compile)
+    regular_file.write_text("return 1\nexec('ok')\n")
 
     metrics = audit_repo.scan_repo(tmp_path)
 
-    compiled_paths = [p.resolve() for p in compiled_paths]
-    assert regular_file.resolve() in compiled_paths
-    assert safe_file.resolve() not in compiled_paths
+    assert metrics["py_compile_failures"] == 1
     assert metrics["exec_eval_count"] == 1
-    assert metrics["py_compile_failures"] == 0
+    assert not list(tmp_path.rglob("*.pyc"))
 
 
 def test_scan_repo_reports_zero_exec_eval_for_repo_root():
@@ -54,4 +45,3 @@ def test_scan_repo_reports_zero_exec_eval_for_repo_root():
     repo_root = Path(__file__).resolve().parents[2]
     metrics = audit_repo.scan_repo(repo_root)
     assert metrics["exec_eval_count"] == 0
-

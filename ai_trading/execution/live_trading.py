@@ -2109,11 +2109,11 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
             else:
                 open_orders = list(orders)
         except LIVE_TRADING_FALLBACK_EXC as exc:
-            logger.debug(
+            logger.warning(
                 "BROKER_CAPACITY_OPEN_ORDERS_ERROR",
                 extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
             )
-            open_orders = []
+            return CapacityCheck(False, 0, "broker_open_orders_unavailable")
 
     open_notional = Decimal("0")
     countable_orders = 0
@@ -30197,7 +30197,19 @@ class ExecutionEngine:
         pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
         pending_ages: list[float] = []
         pending_count = 0
-        for order in self._list_open_orders_snapshot():
+        client = self._capacity_broker(getattr(self, "trading_client", None))
+        if client is None:
+            open_orders = []
+        else:
+            try:
+                open_orders = list_alpaca_orders(client, status="open")
+            except LIVE_TRADING_FALLBACK_EXC as exc:
+                logger.warning(
+                    "PENDING_NEW_PRESSURE_BROKER_ORDERS_UNAVAILABLE",
+                    extra={"cause": exc.__class__.__name__},
+                )
+                return False, {"enabled": True, "reason": "broker_open_orders_unavailable"}
+        for order in open_orders:
             status = _normalize_status(_extract_value(order, "status"))
             if status not in pending_statuses:
                 continue

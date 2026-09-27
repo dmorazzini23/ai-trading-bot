@@ -331,9 +331,11 @@ def test_live_engine_retries_native_alpaca_transient_read_and_recovers(
     class _TransientClient:
         def __init__(self) -> None:
             self.order_attempts = 0
+            self.statuses: list[str] = []
 
         def get_orders(self, *, filter):
             self.order_attempts += 1
+            self.statuses.append(getattr(filter.status, "value", filter.status))
             if self.order_attempts == 1:
                 raise _native_alpaca_error(status_code)
             return [SimpleNamespace(symbol="AMD", side="buy", qty=1)]
@@ -347,7 +349,7 @@ def test_live_engine_retries_native_alpaca_transient_read_and_recovers(
 
     snapshot = engine.synchronize_broker_state()
 
-    assert client.order_attempts == 2
+    assert client.statuses == ["open", "open", "all"]
     assert len(snapshot.open_orders) == 1
     assert len(snapshot.positions) == 1
     assert "BROKER_READ_RETRY_SCHEDULED" in caplog.text
@@ -401,9 +403,11 @@ def test_live_engine_retries_timeout_then_recovers(monkeypatch, caplog) -> None:
     class _TimeoutClient:
         def __init__(self) -> None:
             self.order_attempts = 0
+            self.statuses: list[str] = []
 
         def get_orders(self, *, filter):
             self.order_attempts += 1
+            self.statuses.append(getattr(filter.status, "value", filter.status))
             if self.order_attempts < 3:
                 raise TimeoutError("temporary timeout")
             return []
@@ -419,7 +423,7 @@ def test_live_engine_retries_timeout_then_recovers(monkeypatch, caplog) -> None:
 
     assert snapshot.open_orders == ()
     assert snapshot.positions == ()
-    assert client.order_attempts == 3
+    assert client.statuses == ["open", "open", "open", "all"]
     assert "BROKER_READ_RECOVERED" in caplog.text
 
 
@@ -487,7 +491,7 @@ def test_live_engine_fetches_native_alpaca_orders_with_filter_request() -> None:
 
     assert snapshot.open_orders
     assert client.filter is not None
-    assert getattr(client.filter, "status", None).value == "open"
+    assert getattr(client.filter, "status", None).value == "all"
     assert engine.open_order_totals("AMD") == (3, 0)
 
 
@@ -516,7 +520,7 @@ def test_pending_policy_snapshot_uses_native_alpaca_order_filter() -> None:
 
     assert len(orders) == 1
     assert client.filter is not None
-    assert getattr(client.filter, "status", None).value == "open"
+    assert getattr(client.filter, "status", None).value == "all"
 
 
 def test_live_engine_preserves_fractional_open_order_quantities() -> None:

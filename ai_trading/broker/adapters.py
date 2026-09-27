@@ -3,9 +3,10 @@ from __future__ import annotations
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol, Sequence
+from uuid import uuid4
 
 from ai_trading.config.management import get_env
 from ai_trading.core.runtime_contract import normalize_execution_mode
@@ -152,10 +153,29 @@ def list_alpaca_orders(
     after: datetime | None = None,
     limit: int | None = None,
 ) -> list[Any]:
-    """List orders using the native alpaca-py request model when available."""
+    """List orders, using a complete snapshot for unrestricted open queries."""
 
     getter = getattr(client, "get_orders", None)
     if callable(getter):
+        if (
+            status == "open"
+            and after is None
+            and limit is None
+            and _callable_accepts_keyword(getter, "filter")
+        ):
+            from ai_trading.core.alpaca_client import list_open_orders
+
+            orders = list_open_orders(client)
+            if not symbols:
+                return list(orders)
+            wanted = {str(symbol).strip().upper() for symbol in symbols}
+            return [
+                order for order in orders
+                if str(
+                    order.get("symbol") if isinstance(order, Mapping)
+                    else getattr(order, "symbol", "")
+                ).strip().upper() in wanted
+            ]
         request_kwargs: dict[str, Any] = {"status": _alpaca_order_status(status)}
         if symbols:
             request_kwargs["symbols"] = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
@@ -707,7 +727,7 @@ class PaperBrokerAdapter:
     def submit_order(self, order_data: Mapping[str, Any]) -> dict[str, Any]:
         qty = order_data.get("quantity", order_data.get("qty"))
         side = _normalize_broker_side(order_data.get("side"))
-        order_id = f"paper-{int(datetime.now(UTC).timestamp() * 1000)}"
+        order_id = f"paper-{uuid4().hex}"
         payload: dict[str, Any] = {
             "id": order_id,
             "status": "accepted",

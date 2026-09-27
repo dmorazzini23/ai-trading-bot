@@ -2079,6 +2079,7 @@ class _TCALegEvent:
     price: float
     timestamp: datetime
     fee_cost: float
+    fee_evidence: str
     slippage_cost: float
 
 
@@ -2320,7 +2321,22 @@ def _as_tca_leg_event(row: dict[str, Any]) -> _TCALegEvent | None:
         return None
     if status and status not in {"filled", "partially_filled"}:
         return None
-    fee_cost, _ = _resolve_fee_amount_with_source(row, qty, price)
+    fee_cost, fee_source = _resolve_fee_amount_with_source(row, qty, price)
+    declared_source = str(row.get("fee_source") or "").strip().lower()
+    verified_fee = (
+        declared_source in {"broker_payload", "broker_activity"}
+        and row.get("fee_basis") == "per_fill_total"
+        and row.get("fee_currency") == "USD"
+        and fee_source is not None
+    )
+    if verified_fee:
+        fee_evidence = "verified"
+    elif fee_source is None or fee_cost == 0.0:
+        # TCA generation can write fees=0 when no fee was supplied. That is
+        # an unknown fee, not broker evidence of a zero charge.
+        fee_evidence = "unknown"
+    else:
+        fee_evidence = "estimated"
     slippage_cost, _ = _resolve_slippage_cost_with_source(
         row,
         qty=qty,
@@ -2334,6 +2350,7 @@ def _as_tca_leg_event(row: dict[str, Any]) -> _TCALegEvent | None:
         price=price,
         timestamp=timestamp,
         fee_cost=fee_cost,
+        fee_evidence=fee_evidence,
         slippage_cost=slippage_cost,
     )
 
@@ -2382,6 +2399,7 @@ def _enrich_direct_trades_with_tca_costs(
     enriched_trades = 0
     trades_with_fee = 0
     trades_with_slippage = 0
+    trades_with_unknown_fee = 0
     for trade in direct_trades:
         symbol = str(trade.get("symbol", "") or "").strip().upper()
         side = str(trade.get("side", "") or "").strip().lower()
@@ -2425,9 +2443,23 @@ def _enrich_direct_trades_with_tca_costs(
         if entry_event is None and exit_event is None:
             continue
 
+        fee_events = [event for event in (entry_event, exit_event) if event is not None]
+        direct_fee_source = trade.get("_fee_source")
+        if len(fee_events) < 2 or any(
+            event.fee_evidence == "unknown" for event in fee_events
+        ):
+            fee_evidence = "unknown"
+        elif all(event.fee_evidence == "verified" for event in fee_events):
+            fee_evidence = "verified"
+        else:
+            fee_evidence = "estimated"
+
         trade["fee_cost"] = abs(float(trade.get("fee_cost", 0.0) or 0.0)) + abs(fee_add)
         trade["slippage_cost"] = abs(float(trade.get("slippage_cost", 0.0) or 0.0)) + abs(slippage_add)
-        trade["_fee_source"] = "tca_matched"
+        trade["_fee_source"] = (
+            "tca_matched" if fee_evidence != "unknown" else direct_fee_source
+        )
+        trade["_fee_evidence"] = fee_evidence
         trade["_slippage_source"] = "tca_matched"
         gross_pnl = float(trade.get("gross_pnl", 0.0) or 0.0)
         net_pnl = gross_pnl - float(trade.get("fee_cost", 0.0) or 0.0) - float(
@@ -2437,6 +2469,8 @@ def _enrich_direct_trades_with_tca_costs(
         entry_notional = abs(float(trade.get("entry_notional", 0.0) or 0.0))
         trade["net_edge_bps"] = (net_pnl / entry_notional * 10000.0) if entry_notional > 0 else None
         enriched_trades += 1
+        if fee_evidence == "unknown":
+            trades_with_unknown_fee += 1
         if float(trade.get("fee_cost", 0.0) or 0.0) > 0:
             trades_with_fee += 1
         if float(trade.get("slippage_cost", 0.0) or 0.0) > 0:
@@ -2452,6 +2486,7 @@ def _enrich_direct_trades_with_tca_costs(
         "matched_exit_legs": int(matched_exit_legs),
         "matched_legs": int(matched_entry_legs + matched_exit_legs),
         "enriched_trades": int(enriched_trades),
+        "trades_with_unknown_fee": int(trades_with_unknown_fee),
         "trades_with_nonzero_fee": int(trades_with_fee),
         "trades_with_nonzero_slippage": int(trades_with_slippage),
     }
@@ -2762,6 +2797,7 @@ def _aggregate_closed_trades(
     nonzero_fee_trades = 0
     nonzero_slippage_trades = 0
     fee_sources: dict[str, int] = defaultdict(int)
+    fee_evidence_counts: dict[str, int] = defaultdict(int)
     slippage_sources: dict[str, int] = defaultdict(int)
     total_entry_notional = 0.0
     slippage_by_symbol: dict[str, dict[str, Any]] = {}
@@ -2800,6 +2836,8 @@ def _aggregate_closed_trades(
         fee_cost = abs(float(row.get("fee_cost", 0.0) or 0.0))
         slippage_cost = float(row.get("slippage_cost", 0.0) or 0.0)
         fee_source = row.get("_fee_source")
+        fee_evidence = str(row.get("_fee_evidence") or "not_assessed")
+        fee_evidence_counts[fee_evidence] += 1
         slippage_source = row.get("_slippage_source")
         notional = abs(float(row.get("entry_notional", 0.0) or 0.0))
         fill_source = _normalise_fill_source(
@@ -3078,15 +3116,28 @@ def _aggregate_closed_trades(
         ),
     }
 
+    unknown_fee_count = fee_evidence_counts.get("unknown", 0)
+    if unknown_fee_count:
+        pnl_basis = "incomplete_fee_evidence"
+    elif fee_evidence_counts.get("not_assessed", 0):
+        pnl_basis = "reported_trade_pnl_fee_unassessed"
+    elif fee_evidence_counts.get("estimated", 0):
+        pnl_basis = "costed_estimate"
+    else:
+        pnl_basis = "verified_fee_basis"
     summary.update(
         {
-            "pnl_available": True,
-            "pnl_sum": sum(pnl_values),
-            "pnl_avg": sum(pnl_values) / len(pnl_values),
-            "pnl_median": median(pnl_values),
-            "win_rate": len(wins) / len(pnl_values),
-            "profit_factor": profit_factor,
-            "total_fee_cost": total_fee_cost,
+            "pnl_available": not bool(unknown_fee_count),
+            "pnl_basis": pnl_basis,
+            "pnl_unavailable_reason": (
+                "fee_evidence_unknown" if unknown_fee_count else None
+            ),
+            "pnl_sum": sum(pnl_values) if not unknown_fee_count else None,
+            "pnl_avg": sum(pnl_values) / len(pnl_values) if not unknown_fee_count else None,
+            "pnl_median": median(pnl_values) if not unknown_fee_count else None,
+            "win_rate": len(wins) / len(pnl_values) if not unknown_fee_count else None,
+            "profit_factor": profit_factor if not unknown_fee_count else None,
+            "total_fee_cost": total_fee_cost if not unknown_fee_count else None,
             "total_slippage_cost": total_slippage_cost,
             "total_entry_notional": float(total_entry_notional),
             "slippage_drag_bps": (
@@ -3100,6 +3151,8 @@ def _aggregate_closed_trades(
                 "nonzero_fee_trades": int(nonzero_fee_trades),
                 "nonzero_slippage_trades": int(nonzero_slippage_trades),
                 "fee_sources": dict(sorted(fee_sources.items())),
+                "fee_evidence": dict(sorted(fee_evidence_counts.items())),
+                "attributed_fee_cost": total_fee_cost,
                 "slippage_sources": dict(sorted(slippage_sources.items())),
             },
             "side_totals": side_totals,
@@ -6340,13 +6393,22 @@ def format_text_report(report: dict[str, Any]) -> str:
     ]
 
     if trade.get("pnl_available"):
+        pnl_basis = str(trade.get("pnl_basis") or "")
+        pnl_label = {
+            "reported_trade_pnl_fee_unassessed": "Reported pnl sum (fees unassessed)",
+            "costed_estimate": "Realized net pnl estimate",
+        }.get(pnl_basis, "Realized net pnl sum")
+        fee_label = {
+            "reported_trade_pnl_fee_unassessed": "Attributed fee cost (coverage unassessed)",
+            "costed_estimate": "Estimated fee cost",
+        }.get(pnl_basis, "Verified fee cost")
         lines.extend(
             [
                 f"- Trade records: {trade.get('records')} (realized={trade.get('pnl_records')} source={trade.get('pnl_source')})",
-                f"- Realized net pnl sum: {trade.get('pnl_sum'):.4f}",
+                f"- {pnl_label}: {trade.get('pnl_sum'):.4f}",
                 f"- Win rate: {trade.get('win_rate'):.2%}",
                 f"- Profit factor: {trade.get('profit_factor')}",
-                f"- Total fee cost: {float(trade.get('total_fee_cost', 0.0) or 0.0):.4f}",
+                f"- {fee_label}: {float(trade.get('total_fee_cost', 0.0) or 0.0):.4f}",
                 f"- Total slippage cost: {float(trade.get('total_slippage_cost', 0.0) or 0.0):.4f}",
                 (
                     "- Slippage drag (bps): "
@@ -6446,7 +6508,12 @@ def format_text_report(report: dict[str, Any]) -> str:
                     f"net_edge_bps={latest_reconcile.get('net_edge_bps')}"
                 )
     else:
-        lines.append("- Realized pnl: unavailable (no usable closed-trade records found)")
+        reason = (
+            "incomplete fee evidence"
+            if trade.get("closed_trades")
+            else "no usable closed-trade records found"
+        )
+        lines.append(f"- Realized pnl: unavailable ({reason})")
 
     if gate.get("valid"):
         lines.extend(

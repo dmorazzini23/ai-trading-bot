@@ -101,15 +101,7 @@ def _fetch_broker_orders(client: Any) -> list[Any]:
     list_orders = getattr(client, "list_orders", None)
     get_orders = getattr(client, "get_orders", None)
     if callable(get_orders) or callable(list_orders):
-        try:
-            return list_alpaca_orders(client, status="open")
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            if not callable(list_orders):
-                raise
-            try:
-                return list(list_orders(status="open") or [])
-            except TypeError:
-                return list(list_orders() or [])
+        return list_alpaca_orders(client, status="open")
     return []
 
 

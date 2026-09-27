@@ -63,12 +63,12 @@ Production execution note:
 Before deploying a candidate, run the read-only release identity preflight
 described in [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md). It compares the tested
 commit, effective config/profile, applied migration and configured model bytes
-against a reviewed release specification. The packaged unit does not yet
-enforce this check on the currently running service. The staged unit enforces
-checks before and after Alembic migration and will refuse startup without a
-valid release specification. Review a passing report with CI, broker exposure
-and rollback evidence before installing the unit or restarting. Do not restart
-during market hours.
+against a reviewed release specification. The installed packaged unit enforces
+checks before and after Alembic migration and refuses startup without a valid
+release specification. Its last verified paper start was September 27, 2026,
+using CI-tested commit `3e9511b21`. For each subsequent candidate, review a
+passing report with CI, broker exposure and rollback evidence before updating
+the release specification or restarting. Do not restart during market hours.
 
 Canonical production service:
 

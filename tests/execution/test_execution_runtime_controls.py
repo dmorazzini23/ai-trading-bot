@@ -4274,7 +4274,7 @@ def test_runtime_pending_new_pressure_guard_blocks_openings(monkeypatch):
         SimpleNamespace(status="pending_new", created_at=now_dt - timedelta(seconds=180))
         for _ in range(10)
     ]
-    monkeypatch.setattr(engine, "_list_open_orders_snapshot", lambda: list(orders))
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": list(orders))
     monkeypatch.setenv("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED", "1")
     monkeypatch.setenv(
         "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MIN_PENDING_ORDERS",
@@ -4298,7 +4298,7 @@ def test_runtime_pending_new_pressure_guard_allows_when_pending_is_light(monkeyp
         SimpleNamespace(status="pending_new", created_at=now_dt - timedelta(seconds=30))
         for _ in range(3)
     ]
-    monkeypatch.setattr(engine, "_list_open_orders_snapshot", lambda: list(orders))
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": list(orders))
     monkeypatch.setenv("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED", "1")
     monkeypatch.setenv(
         "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MIN_PENDING_ORDERS",
@@ -4313,6 +4313,22 @@ def test_runtime_pending_new_pressure_guard_allows_when_pending_is_light(monkeyp
 
     assert allowed is True
     assert context["reason"] == "below_pending_order_threshold"
+
+
+def test_pending_new_pressure_guard_blocks_when_broker_snapshot_fails(monkeypatch):
+    engine = _engine_stub()
+
+    class Broker:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            raise TimeoutError("broker order read timed out")
+
+    engine.trading_client = Broker()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED", "1")
+
+    allowed, context = engine._runtime_pending_new_pressure_allows_openings()
+
+    assert allowed is False
+    assert context["reason"] == "broker_open_orders_unavailable"
 
 
 def test_symbol_intraday_slippage_budget_blocks_symbol_when_drag_breaches(

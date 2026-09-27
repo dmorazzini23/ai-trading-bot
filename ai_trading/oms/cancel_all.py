@@ -75,7 +75,7 @@ def cancel_all_open_orders(ctx: Any) -> CancelAllResult:
         return CancelAllResult(
             total_open=0,
             cancelled=0,
-            failed=0,
+            failed=1,
             reason_code="CANCEL_ALL_TRIGGERED",
             errors=[{"error": "missing_api"}],
         )

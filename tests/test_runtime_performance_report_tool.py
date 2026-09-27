@@ -240,6 +240,8 @@ def test_build_report_treats_reward_as_realized_pnl(tmp_path: Path) -> None:
     assert trade["pnl_available"] is True
     assert trade["pnl_sum"] == pytest.approx(1.5)
     assert trade["closed_trades"] == 2
+    assert trade["pnl_basis"] == "reported_trade_pnl_fee_unassessed"
+    assert "Reported pnl sum (fees unassessed)" in rpt.format_text_report(report)
 
 
 def test_promotion_counts_exclude_ten_thousand_historical_and_shadow_rows(
@@ -1407,9 +1409,111 @@ def test_build_report_enriches_direct_rows_with_tca_costs(tmp_path: Path) -> Non
     assert trade["cost_enrichment"]["matched_legs"] == 2
     assert trade["cost_enrichment"]["enriched_trades"] == 1
     assert trade["cost_attribution"]["fee_sources"]["tca_matched"] == 1
+    assert trade["cost_attribution"]["fee_evidence"]["estimated"] == 1
     assert trade["cost_attribution"]["slippage_sources"]["tca_matched"] == 1
     assert trade["daily_expectancy"][0]["fee_cost"] == pytest.approx(2.0)
     assert trade["daily_expectancy"][0]["slippage_cost"] == pytest.approx(1.106, rel=1e-6)
+
+
+@pytest.mark.parametrize("fee_fields", [{}, {"fees": 0.0}])
+def test_tca_match_without_fee_evidence_does_not_claim_net_pnl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fee_fields: dict[str, float]
+) -> None:
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_FEE_BPS_FALLBACK", "0")
+    monkeypatch.setenv("AI_TRADING_ESTIMATED_FEE_BPS", "0")
+    monkeypatch.setenv("AI_TRADING_POLICY_FEE_BPS", "0")
+    rpt._runtime_fee_bps_fallback.cache_clear()
+    trade_path = tmp_path / "trade_history.json"
+    gate_path = tmp_path / "gate_effectiveness_summary.json"
+    tca_path = tmp_path / "tca.jsonl"
+    trade_path.write_text(json.dumps([{
+        "symbol": "AAPL", "side": "buy", "qty": 10,
+        "entry_price": 100.0, "exit_price": 101.0,
+        "entry_time": "2026-02-01T14:30:00+00:00",
+        "exit_time": "2026-02-01T15:00:00+00:00", "reward": 10.0,
+    }]), encoding="utf-8")
+    gate_path.write_text("{}", encoding="utf-8")
+    tca_path.write_text("\n".join(json.dumps({
+        "symbol": "AAPL", "side": side, "qty": 10,
+        "fill_price": price, "ts": timestamp, **fee_fields,
+    }) for side, price, timestamp in (
+        ("buy", 100.0, "2026-02-01T14:30:00+00:00"),
+        ("sell", 101.0, "2026-02-01T15:00:00+00:00"),
+    )) + "\n", encoding="utf-8")
+
+    report = rpt.build_report(
+        trade_history_path=trade_path,
+        gate_summary_path=gate_path,
+        tca_path=tca_path,
+    )
+    trade = report["trade_history"]
+
+    assert trade["closed_trades"] == 1
+    assert trade["pnl_available"] is False
+    assert trade["pnl_unavailable_reason"] == "fee_evidence_unknown"
+    assert trade["pnl_sum"] is None
+    assert trade["total_fee_cost"] is None
+    assert trade["cost_attribution"]["fee_sources"].get("tca_matched", 0) == 0
+    assert trade["cost_attribution"]["fee_evidence"]["unknown"] == 1
+    assert trade["cost_enrichment"]["trades_with_unknown_fee"] == 1
+    assert "incomplete fee evidence" in rpt.format_text_report(report)
+    rpt._runtime_fee_bps_fallback.cache_clear()
+
+
+def test_tca_verified_zero_fee_requires_explicit_per_fill_basis(tmp_path: Path) -> None:
+    trade_path = tmp_path / "trade_history.json"
+    gate_path = tmp_path / "gate_effectiveness_summary.json"
+    tca_path = tmp_path / "tca.jsonl"
+    trade_path.write_text(json.dumps([{
+        "symbol": "AAPL", "side": "buy", "qty": 10,
+        "entry_price": 100.0, "exit_price": 101.0,
+        "entry_time": "2026-02-01T14:30:00+00:00",
+        "exit_time": "2026-02-01T15:00:00+00:00", "reward": 10.0,
+    }]), encoding="utf-8")
+    gate_path.write_text("{}", encoding="utf-8")
+    tca_path.write_text("\n".join(json.dumps({
+        "symbol": "AAPL", "side": side, "qty": 10,
+        "fill_price": price, "ts": timestamp, "fees": 0.0,
+        "fee_source": "broker_activity", "fee_basis": "per_fill_total",
+        "fee_currency": "USD",
+    }) for side, price, timestamp in (
+        ("buy", 100.0, "2026-02-01T14:30:00+00:00"),
+        ("sell", 101.0, "2026-02-01T15:00:00+00:00"),
+    )) + "\n", encoding="utf-8")
+
+    trade = rpt.build_report(
+        trade_history_path=trade_path,
+        gate_summary_path=gate_path,
+        tca_path=tca_path,
+    )["trade_history"]
+
+    assert trade["pnl_available"] is True
+    assert trade["total_fee_cost"] == 0.0
+    assert trade["cost_attribution"]["fee_evidence"]["verified"] == 1
+    assert trade["cost_attribution"]["fee_sources"]["tca_matched"] == 1
+
+
+def test_partial_tca_fee_evidence_does_not_complete_round_trip() -> None:
+    direct_trades = rpt._direct_closed_trades([{
+        "symbol": "AAPL", "side": "buy", "qty": 10,
+        "entry_price": 100.0, "exit_price": 101.0,
+        "entry_time": "2026-02-01T14:30:00+00:00",
+        "exit_time": "2026-02-01T15:00:00+00:00",
+        "reward": 10.0, "fee": 0.0,
+    }])
+    enriched, coverage = rpt._enrich_direct_trades_with_tca_costs(
+        direct_trades,
+        tca_records=[{
+            "symbol": "AAPL", "side": "buy", "qty": 10,
+            "fill_price": 100.0, "ts": "2026-02-01T14:30:00+00:00",
+            "fees": 1.0,
+        }],
+    )
+
+    assert coverage["matched_legs"] == 1
+    assert coverage["trades_with_unknown_fee"] == 1
+    assert enriched[0]["_fee_evidence"] == "unknown"
+    assert enriched[0]["_fee_source"] != "tca_matched"
 
 
 def test_resolve_fee_amount_uses_env_fallback_bps(monkeypatch: pytest.MonkeyPatch) -> None:

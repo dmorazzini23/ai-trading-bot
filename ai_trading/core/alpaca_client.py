@@ -5,6 +5,8 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any
 import sys
+from collections.abc import Mapping
+from datetime import datetime, timedelta
 from importlib import import_module
 from types import ModuleType
 
@@ -130,37 +132,41 @@ def _validate_trading_api(api: Any) -> bool:
     return True
 
 
-def _orders_request(status: str) -> Any:
+def _orders_request(status: str, *, after: datetime | None = None) -> Any:
     """Build a native alpaca-py GetOrdersRequest for a query status."""
 
     try:
+        from alpaca.common.enums import Sort
         from alpaca.trading.enums import QueryOrderStatus
         from alpaca.trading.requests import GetOrdersRequest
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         raise RuntimeError("alpaca-py trading order request classes unavailable") from exc
 
     status_value: Any = getattr(QueryOrderStatus, str(status).upper(), status)
-    return GetOrdersRequest(status=status_value)
+    return GetOrdersRequest(
+        status=status_value,
+        limit=500,
+        direction=Sort.ASC,
+        after=after,
+    )
 
 
-def _get_orders_by_status(api: Any, status: str) -> Any:
+def _get_orders_by_status(
+    api: Any, status: str, *, after: datetime | None = None
+) -> Any:
     get_orders = getattr(api, "get_orders", None)
     if not callable(get_orders):
         raise RuntimeError("Alpaca client missing native get_orders method")
-    return get_orders(filter=_orders_request(status))
+    return get_orders(filter=_orders_request(status, after=after))
 
 
 def list_open_orders(api: Any):
-    """Return orders considered open using the native alpaca-py order query.
+    """Return a complete active-order snapshot or raise on an incomplete page.
 
-    Some broker/API combinations do not include ``pending_new``/``accepted``
-    orders in ``status="open"`` responses. This helper widens coverage by
-    falling back to ``status="all"`` and filtering known active statuses.
+    The broker's ``open`` filter can omit early active statuses. Query ``all``
+    even when ``open`` is nonempty, then page by submission time. A full page
+    without an advancing timestamp cannot be safely treated as complete.
     """
-
-    open_orders = _get_orders_by_status(api, "open")
-    if open_orders:
-        return open_orders
 
     active_statuses = {
         "open",
@@ -174,21 +180,61 @@ def list_open_orders(api: Any):
         "held",
     }
 
-    try:
-        all_orders = _get_orders_by_status(api, "all")
-    except TypeError:
-        return open_orders
-
     filtered: list[Any] = []
-    for order in all_orders or []:
-        status_raw = getattr(order, "status", "")
+    seen_ids: set[str] = set()
+
+    def add_active(order: Any, *, from_open_query: bool) -> None:
+        status_raw = order.get("status", "") if isinstance(order, Mapping) else getattr(order, "status", "")
         status_value = getattr(status_raw, "value", status_raw)
         try:
             status_text = str(status_value).strip().lower()
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             status_text = ""
-        if status_text in active_statuses:
-            filtered.append(order)
+        if status_text not in active_statuses and not (from_open_query and not status_text):
+            return
+        order_id = order.get("id") if isinstance(order, Mapping) else getattr(order, "id", None)
+        client_order_id = order.get("client_order_id") if isinstance(order, Mapping) else getattr(order, "client_order_id", None)
+        keys = {
+            f"id:{order_id}" if order_id not in (None, "") else "",
+            f"client:{client_order_id}" if client_order_id not in (None, "") else "",
+        } - {""}
+        if seen_ids.intersection(keys):
+            return
+        seen_ids.update(keys)
+        filtered.append(order)
+
+    for order in _get_orders_by_status(api, "open") or []:
+        add_active(order, from_open_query=True)
+
+    after: datetime | None = None
+    previous_last: datetime | None = None
+    while True:
+        page = list(_get_orders_by_status(api, "all", after=after) or [])
+        if len(page) > 500:
+            raise RuntimeError("Alpaca all-orders page exceeds requested limit")
+        for order in page:
+            add_active(order, from_open_query=False)
+        if len(page) < 500:
+            break
+        last = (
+            page[-1].get("submitted_at")
+            if isinstance(page[-1], Mapping)
+            else getattr(page[-1], "submitted_at", None)
+        )
+        if not isinstance(last, datetime) or last.tzinfo is None:
+            raise RuntimeError("Cannot paginate Alpaca orders without submitted_at")
+        if previous_last is not None and last <= previous_last:
+            raise RuntimeError("Alpaca all-orders pagination did not advance")
+        if any(
+            (order.get("id") if isinstance(order, Mapping) else getattr(order, "id", None))
+            in (None, "")
+            for order in page
+        ):
+            raise RuntimeError("Cannot paginate Alpaca orders without broker IDs")
+        previous_last = last
+        # Overlap the boundary timestamp. A tied 500-order page fails closed
+        # on the next iteration instead of silently dropping tied orders.
+        after = last - timedelta(microseconds=1)
     return filtered
 
 

@@ -3,6 +3,8 @@ import types
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 try:
     import alpaca.trading.requests as alpaca_requests
 except ModuleNotFoundError:
@@ -146,6 +148,46 @@ def test_cancel_all_open_orders_handles_enum_status():
     bot_engine.cancel_all_open_orders(runtime)
 
     assert cancelled == ["enum"]
+
+
+def test_cancel_all_open_orders_cancels_accepted_and_partially_filled() -> None:
+    cancelled: list[str] = []
+
+    class DummyAPI(_NativeAPIBase):
+        def get_orders(self, *args: Any, **kwargs: Any) -> list[Any]:
+            return [
+                SimpleNamespace(id="accepted", status="accepted"),
+                SimpleNamespace(id="partial", status="partially_filled"),
+                SimpleNamespace(id="closed", status="filled"),
+            ]
+
+        def cancel_order_by_id(self, order_id: str) -> None:
+            cancelled.append(order_id)
+
+    bot_engine.cancel_all_open_orders(_Runtime(api=DummyAPI()))
+
+    assert cancelled == ["accepted", "partial"]
+
+
+def test_cancel_all_open_orders_surfaces_api_error_after_other_cancels() -> None:
+    cancelled: list[str] = []
+
+    class DummyAPI(_NativeAPIBase):
+        def get_orders(self, *args: Any, **kwargs: Any) -> list[Any]:
+            return [
+                SimpleNamespace(id="first", status="accepted"),
+                SimpleNamespace(id="second", status="partially_filled"),
+            ]
+
+        def cancel_order_by_id(self, order_id: str) -> None:
+            cancelled.append(order_id)
+            if order_id == "first":
+                raise bot_engine.APIError("cancel denied")
+
+    with pytest.raises(RuntimeError, match="Failed to cancel 1 active broker order"):
+        bot_engine.cancel_all_open_orders(_Runtime(api=DummyAPI()))
+
+    assert cancelled == ["first", "second"]
 
 
 def test_cancel_all_open_orders_uses_cancel_orders_request(monkeypatch):

@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.execution.reconcile import (
     ReconciliationResult,
     reconcile_positions_and_orders,
@@ -92,7 +94,21 @@ def test_reconciliation_uses_native_alpaca_order_filter():
     reconcile_positions_and_orders(ctx)
 
     assert broker.filter is not None
-    assert getattr(broker.filter, "status", None).value == "open"
+    assert getattr(broker.filter, "status", None).value == "all"
+
+
+def test_native_reconciliation_does_not_fallback_to_partial_legacy_orders() -> None:
+    from ai_trading.execution.reconcile import _fetch_broker_orders
+
+    class Broker:
+        def get_orders(self, *, filter):
+            raise TimeoutError("native broker order read failed")
+
+        def list_orders(self, status="open"):
+            raise AssertionError("partial legacy order list must not replace native snapshot")
+
+    with pytest.raises(TimeoutError, match="native broker order read failed"):
+        _fetch_broker_orders(Broker())
 
 
 def test_reconcile_with_fractional_string_quantities():

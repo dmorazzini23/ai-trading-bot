@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import types
 
+import pytest
+
 import ai_trading.core.bot_engine as eng
 
 
-def test_prepare_run_cancels_open_orders_only_once(monkeypatch):
+@pytest.mark.parametrize("first_cancel_fails", [False, True])
+def test_prepare_run_cancels_open_orders_only_after_success(monkeypatch, first_cancel_fails):
     runtime = types.SimpleNamespace(params={}, cfg=None)
     state = eng.BotState()
 
@@ -13,6 +16,8 @@ def test_prepare_run_cancels_open_orders_only_once(monkeypatch):
 
     def _cancel_stub(_runtime):
         cancel_calls.append(1)
+        if first_cancel_fails and len(cancel_calls) == 1:
+            raise RuntimeError("broker cancel failed")
 
     mock_acct = types.SimpleNamespace(equity="1000", buying_power="1000", cash="1000")
     mock_cfg = types.SimpleNamespace(
@@ -48,10 +53,15 @@ def test_prepare_run_cancels_open_orders_only_once(monkeypatch):
     monkeypatch.setattr("ai_trading.utils.portfolio_lock", _DummyLock(), raising=False)
     monkeypatch.setattr(eng.portfolio, "compute_portfolio_weights", lambda rt, syms: {})
 
+    if first_cancel_fails:
+        with pytest.raises(RuntimeError, match="broker cancel failed"):
+            eng._prepare_run(runtime, state, ["AAPL", "MSFT"])
+        assert getattr(state, "_open_order_cleanup_done", False) is False
     eng._prepare_run(runtime, state, ["AAPL", "MSFT"])
     eng._prepare_run(runtime, state, ["AAPL", "MSFT"])
 
-    assert len(cancel_calls) == 1
+    assert len(cancel_calls) == (2 if first_cancel_fails else 1)
+    assert state._open_order_cleanup_done is True
 
 
 def test_prepare_run_hard_block_skips_cycle_when_degraded(monkeypatch):

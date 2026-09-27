@@ -249,6 +249,7 @@ def test_trade_history_direct_rows_enriches_costs_and_rendering(
         "matched_exit_legs": 1,
         "matched_legs": 2,
         "enriched_trades": 1,
+        "trades_with_unknown_fee": 0,
         "trades_with_nonzero_fee": 1,
         "trades_with_nonzero_slippage": 1,
     }

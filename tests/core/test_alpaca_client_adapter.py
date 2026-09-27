@@ -2,6 +2,7 @@
 
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
@@ -301,7 +302,7 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
             sys.modules["ai_trading.core.bot_engine"] = original_bot_engine
 
 
-def test_list_open_orders_uses_open_query_when_available() -> None:
+def test_list_open_orders_merges_pending_with_nonempty_open_query() -> None:
     class _Api:
         def __init__(self) -> None:
             self.calls: list[str] = []
@@ -311,14 +312,16 @@ def test_list_open_orders_uses_open_query_when_available() -> None:
             self.calls.append(status)
             if status == "open":
                 return [SimpleNamespace(id="o1", status="open")]
-            return []
+            return [
+                SimpleNamespace(id="o1", status="open"),
+                SimpleNamespace(id="p1", status="pending_new"),
+            ]
 
     api = _Api()
     orders = alpaca_client.list_open_orders(api)
 
-    assert len(orders) == 1
-    assert orders[0].id == "o1"
-    assert api.calls == ["open"]
+    assert [order.id for order in orders] == ["o1", "p1"]
+    assert api.calls == ["open", "all"]
 
 
 def test_list_open_orders_falls_back_to_all_and_keeps_active_statuses() -> None:
@@ -350,7 +353,7 @@ def test_list_open_orders_falls_back_to_all_and_keeps_active_statuses() -> None:
     assert api.calls == ["open", "all"]
 
 
-def test_list_open_orders_returns_open_when_all_not_supported() -> None:
+def test_list_open_orders_rejects_unsupported_all_query() -> None:
     class _Api:
         def __init__(self) -> None:
             self.calls: list[str] = []
@@ -363,10 +366,59 @@ def test_list_open_orders_returns_open_when_all_not_supported() -> None:
             raise TypeError("status=all unsupported")
 
     api = _Api()
-    orders = alpaca_client.list_open_orders(api)
-
-    assert orders == []
+    with pytest.raises(TypeError, match="status=all unsupported"):
+        alpaca_client.list_open_orders(api)
     assert api.calls == ["open", "all"]
+
+
+def test_list_open_orders_paginates_past_fifty_recent_closed_orders() -> None:
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    history = [
+        SimpleNamespace(
+            id=f"order-{index}",
+            status="accepted" if index == 500 else "filled",
+            submitted_at=start + timedelta(seconds=index),
+        )
+        for index in range(501)
+    ]
+    calls: list[tuple[str, datetime | None, int | None]] = []
+
+    class Api:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(filter.status, "value", filter.status)
+            calls.append((status, filter.after, filter.limit))
+            if status == "open":
+                return []
+            return [
+                order for order in history
+                if filter.after is None or order.submitted_at > filter.after
+            ][: filter.limit]
+
+    orders = alpaca_client.list_open_orders(Api())
+
+    assert [order.id for order in orders] == ["order-500"]
+    assert [status for status, _, _ in calls] == ["open", "all", "all"]
+    assert all(limit == 500 for _, _, limit in calls)
+
+
+def test_list_open_orders_rejects_unadvanceable_timestamp_page() -> None:
+    submitted_at = datetime(2026, 9, 1, tzinfo=UTC)
+    history = [
+        SimpleNamespace(id=f"order-{index}", status="filled", submitted_at=submitted_at)
+        for index in range(501)
+    ]
+
+    class Api:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            if getattr(filter.status, "value", filter.status) == "open":
+                return []
+            return [
+                order for order in history
+                if filter.after is None or order.submitted_at > filter.after
+            ][: filter.limit]
+
+    with pytest.raises(RuntimeError, match="pagination did not advance"):
+        alpaca_client.list_open_orders(Api())
 
 
 def test_get_orders_network_error_does_not_fallback_to_invalid_status_kwarg() -> None:

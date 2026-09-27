@@ -42,6 +42,6 @@ def test_validate_trading_api_uses_native_get_orders() -> None:
             statuses = filter_obj.get("statuses") or filter_obj.get("status")
         if statuses is not None and not isinstance(statuses, (list, tuple)):
             statuses = [getattr(statuses, "value", statuses)]
-        assert statuses in (["open"], ["OPEN"], ("open",), ("OPEN",))
+        assert statuses in (["all"], ["ALL"], ("all",), ("ALL",))
     else:
-        assert client.kwargs == {"status": "open"}
+        assert client.kwargs == {"status": "all"}

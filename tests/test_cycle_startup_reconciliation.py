@@ -90,7 +90,7 @@ def test_pending_order_read_failure_blocks_worker_and_retries_next_cycle(cycle, 
     assert main._STARTUP_PENDING_RECONCILED
 
 
-def test_cancel_failure_is_reported_without_retrying_every_cycle(cycle, monkeypatch, caplog):
+def test_cancel_failure_keeps_startup_reconciliation_pending_until_retry(cycle, monkeypatch, caplog):
     from ai_trading.core import bot_engine
     main, _, _, calls = cycle
     calls["pending"] = [SimpleNamespace(id="pending", status="new")]
@@ -99,7 +99,12 @@ def test_cancel_failure_is_reported_without_retrying_every_cycle(cycle, monkeypa
     monkeypatch.setattr(bot_engine, "cancel_all_open_orders", fail_cancel)
     main.run_cycle()
     assert "PENDING_ORDERS_STARTUP_CLEANUP_FAILED" in caplog.text
+    assert not main._STARTUP_PENDING_RECONCILED
+    assert calls["worker"] == []
+    monkeypatch.setattr(bot_engine, "cancel_all_open_orders", lambda rt: calls["cancel"].append(rt))
+    main.run_cycle()
     assert main._STARTUP_PENDING_RECONCILED
+    assert len(calls["cancel"]) == 1
     assert len(calls["worker"]) == 1
 
 

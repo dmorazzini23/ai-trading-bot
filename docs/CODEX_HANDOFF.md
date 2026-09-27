@@ -1,23 +1,31 @@
 # Current handoff
 
-## September 26 repository audit repair candidate
+## September 27 order, fee-reporting and release-documentation repair
 
-The audit found seven defects in execution-lineage matching, live quote-source
-authority, research decision/quote evidence, replay-refresh locking, the legacy
-money validation check, and this handoff's release status. The code and focused
-regressions are patched locally. Final changed-file validation passed Ruff,
-mypy, compile, shell syntax, and 523 mapped tests; repository-wide Ruff, mypy,
-strict typing, and Python compilation also passed. A full local pytest attempt
-reached 99% but was stopped after sandbox-specific port/bytecode failures, an
-ignored research artifact scanned by a test, and a two-minute HTTP test hang;
-it is not a full-suite pass. A host read-only health check returned HTTP 503
-only for the existing `required_model_stale` readiness failure, with fresh
-broker connectivity, zero positions/open orders, and NRestarts=0. A non-sending
-incident snapshot completed. The revised seven-day quote audit still admitted
-2 of 2,414 rows, both ready Alpaca quotes. Exact-tip CI is pending. Do not
-deploy until CI and broker exposure review pass. Model, replay, cost,
-freshness, provenance, promotion, research-budget, and holdout gates remain
-unchanged.
+The previous audit repair, `3e9511b21`, passed exact-tip CI run `36288984071`
+and was deployed to the paper service after close on September 27. The
+installed unit passed pre/post-migration release checks; its release spec still
+names that SHA. The running service had zero restarts at the latest check.
+
+This local candidate fixes incomplete Alpaca active-order snapshots with a
+paged `all` query, startup cancellation and retry signaling, fail-closed order
+capacity/pressure reads, TCA fee provenance and unknown-fee PnL reporting,
+in-memory paper order ID collisions, and the OMS missing-API failure count.
+The audit utility now compiles read-only plugin files in memory. Regression
+tests cover each defect. Changed-file validation passed Ruff, mypy, Python
+compilation and 500 mapped tests on the final code; its sandbox-local curl
+could not reach port
+9001. A separate host read-only health check returned HTTP 503 solely for
+`required_model_stale`, with a fresh connected paper broker and zero positions
+or open orders. A non-sending incident snapshot classified the service as
+`blocked_qualification`; `health_degraded` remained actionable because of the
+same stale-model reason. Current candidate exact-tip CI, broker exposure review and
+release checks remain pending; do not restart on this candidate yet.
+
+No model, replay, cost, freshness, provenance, promotion, research-budget or
+holdout gate was relaxed. No strategy trial or training was run. The historical
+fee evidence gap remains unresolved; unknown fees now remain unknown in the
+affected performance report.
 
 ## September 26 bounded economics and quote-timing evidence
 

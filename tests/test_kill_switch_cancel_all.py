@@ -31,6 +31,14 @@ def test_cancel_all_open_orders_cancels_everything() -> None:
     assert runtime.api.cancelled == ["oid-1", "oid-2"]
 
 
+def test_cancel_all_open_orders_missing_api_counts_failure() -> None:
+    result = cancel_all_open_orders(SimpleNamespace(api=None))
+
+    assert result.cancelled == 0
+    assert result.failed == 1
+    assert result.errors == [{"error": "missing_api"}]
+
+
 def test_cancel_all_open_orders_logs_info_on_success(caplog) -> None:
     runtime = SimpleNamespace(api=_Api())
     with caplog.at_level(logging.INFO):

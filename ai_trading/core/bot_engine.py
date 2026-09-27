@@ -11845,47 +11845,43 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
 
 
 def cancel_all_open_orders(runtime) -> None:
-    """
-    On startup or each run, cancel every Alpaca order whose status is 'open'.
-    """
+    """Cancel every active broker order; leave failures visible to the caller."""
     if runtime.api is None:
         logger.warning("runtime.api is None - cannot cancel orders")
-        return
+        raise RuntimeError("Cannot cancel open orders without broker API")
     if not _validate_trading_api(runtime.api):
-        return
+        raise RuntimeError("Cannot cancel open orders with invalid broker API")
 
-    try:
-        open_orders = list_open_orders(runtime.api)
-        if not open_orders:
-            return
-        cancelable_statuses = {"open", "new", "pending_new"}
-        for od in open_orders:
-            status_value = getattr(od, "status", "")
-            status = getattr(status_value, "value", status_value)
-            if not isinstance(status, str):
-                try:
-                    status = str(status)
-                except COMMON_EXC:
-                    status = ""
-            if status.lower() not in cancelable_statuses:
-                continue
-            try:
-                runtime.api.cancel_order_by_id(od.id)
-            except APIError as exc:
-                # AI-AGENT-REF: narrow Alpaca API exceptions
-                logger.exception(
-                    "Failed to cancel order %s",
-                    getattr(od, "id", "unknown"),
-                    exc_info=exc,
-                    extra={"cause": exc.__class__.__name__},
-                )
-    except APIError as exc:
-        logger.warning(
-            "Failed to cancel open orders: %s",
-            exc,
-            exc_info=True,
-            extra={"cause": exc.__class__.__name__},
-        )
+    open_orders = list_open_orders(runtime.api)
+    cancelable_statuses = {
+        "open", "new", "pending_new", "accepted", "accepted_for_bidding",
+        "partially_filled", "pending_replace", "pending_cancel", "held",
+    }
+    failed_ids: list[str] = []
+    first_error: Exception | None = None
+    for od in open_orders:
+        status_value = getattr(od, "status", "")
+        status = getattr(status_value, "value", status_value)
+        if str(status).strip().lower() not in cancelable_statuses:
+            continue
+        order_id = getattr(od, "id", None)
+        if order_id in (None, ""):
+            raise RuntimeError("Active broker order missing id during cancellation")
+        try:
+            runtime.api.cancel_order_by_id(order_id)
+        except APIError as exc:
+            logger.exception(
+                "Failed to cancel order %s",
+                order_id,
+                extra={"cause": exc.__class__.__name__},
+            )
+            failed_ids.append(str(order_id))
+            if first_error is None:
+                first_error = exc
+    if failed_ids:
+        raise RuntimeError(
+            f"Failed to cancel {len(failed_ids)} active broker order(s): {', '.join(failed_ids[:5])}"
+        ) from first_error
 
 
 def reconcile_positions(ctx: BotContext) -> None:

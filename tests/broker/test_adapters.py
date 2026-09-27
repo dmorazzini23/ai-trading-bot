@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
@@ -228,7 +229,7 @@ def test_alpaca_adapter_uses_native_get_orders_filter() -> None:
     assert orders == [{"id": "native-1", "status": "open"}]
     assert client.list_orders_called is False
     assert client.filter is not None
-    assert getattr(client.filter, "status", None).value == "open"
+    assert getattr(client.filter, "status", None).value == "all"
 
 
 def test_alpaca_adapter_rejects_unknown_side() -> None:
@@ -264,6 +265,37 @@ def test_paper_adapter_supports_account_orders_and_submit() -> None:
     assert response["time_in_force"] == "day"
     assert len(adapter.list_orders("open")) == 1
     _assert_submit_contract(response)
+
+
+def test_paper_adapter_assigns_unique_broker_ids_to_rapid_orders() -> None:
+    adapter = PaperBrokerAdapter()
+    orders = [
+        adapter.submit_order({"symbol": "MSFT", "side": "buy", "quantity": 1})
+        for _ in range(100)
+    ]
+
+    assert len({order["id"] for order in orders}) == 100
+    assert len(adapter.list_orders("open")) == 100
+    supplied = adapter.submit_order(
+        {"symbol": "MSFT", "side": "buy", "quantity": 1, "client_order_id": "client-1"}
+    )
+    assert supplied["client_order_id"] == "client-1"
+
+
+def test_native_adapter_includes_pending_orders_omitted_from_open_filter() -> None:
+    class Client:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(filter.status, "value", filter.status)
+            if status == "open":
+                return [SimpleNamespace(id="open-1", status="open")]
+            return [
+                SimpleNamespace(id="open-1", status="open"),
+                SimpleNamespace(id="pending-1", status="pending_new"),
+            ]
+
+    adapter = AlpacaBrokerAdapter(client=Client())
+
+    assert [order.id for order in adapter.list_orders()] == ["open-1", "pending-1"]
 
 
 def test_paper_adapter_normalizes_short_side_alias() -> None:
