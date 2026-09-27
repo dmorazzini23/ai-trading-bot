@@ -2,36 +2,38 @@
 
 ## September 27 order, fee-reporting and release-documentation repair
 
-The previous audit repair, `3e9511b21`, passed exact-tip CI run `36288984071`
-and was deployed to the paper service after close on September 27. The
-installed unit passed pre/post-migration release checks; its release spec still
-names that SHA. The running service had zero restarts at the latest check.
-
-This local candidate fixes incomplete Alpaca active-order snapshots with a
+The previous paper release was `3e9511b21`. The current repair fixes incomplete
+Alpaca active-order snapshots with a
 paged `all` query, startup cancellation and retry signaling, fail-closed order
 capacity/pressure reads, TCA fee provenance and unknown-fee PnL reporting,
 in-memory paper order ID collisions, and the OMS missing-API failure count.
 The audit utility now compiles read-only plugin files in memory. Regression
 tests cover each defect. Changed-file validation passed Ruff, mypy, Python
-compilation and 500 mapped tests on the final code; its sandbox-local curl
-could not reach port 9001. A separate host read-only health check returned
-HTTP 503 solely for `required_model_stale`, with a fresh connected paper broker
-and zero positions or open orders. A non-sending incident snapshot classified
-the service as `blocked_qualification`; `health_degraded` remained actionable
-because of the same stale-model reason. Commit `d1db4aac8` was pushed, but CI
-`36294360918` failed only five older Alpaca request test doubles that lacked
-the new pagination fields (7,248 passed, 5 failed, 80.20% coverage). The four
-test files were corrected; the five failures and all eight mapped tests pass
-locally. The corrected read-only order query found zero paper broker orders and
-positions. A fresh recovery bundle was created and restored in isolation, and
-temporary candidate release identity checks passed. The installed release spec
-and running service still name `3e9511b21`; a new exact-tip CI pass and fresh
-broker exposure review are required before restart.
+compilation and 500 mapped tests; its sandbox-local curl could not reach port
+9001, while a separate host smoke check succeeded. First CI run `36294360918`
+found five older Alpaca request test doubles that lacked pagination fields.
+Those four test files were corrected and all eight mapped tests passed. Follow-up
+commit `edfefa72f` passed exact-tip CI run `36295553632` (7,253 passed,
+4 skipped, 80.22% coverage), CodeQL, SBOM and workflow lint.
+
+Before release, the corrected read-only order query found zero paper broker
+orders and positions, the broker clock was closed, and a fresh recovery bundle
+was restored in isolation. The paper service restarted at 05:23 UTC on
+September 27 with systemd pre/post-migration release identity checks passing
+for `edfefa72f`. It remained active with zero automatic restarts and zero
+error-level journal entries. Post-start health returned HTTP 503 solely for
+`required_model_stale`, with fresh connected broker state and zero exposure.
+The non-sending incident snapshot classified `blocked_qualification`; its
+`health_degraded` alert remains actionable outside startup grace. The current
+checkout and release specification must match a clean CI-tested commit before
+any future restart.
 
 No model, replay, cost, freshness, provenance, promotion, research-budget or
 holdout gate was relaxed. No strategy trial or training was run. The historical
 fee evidence gap remains unresolved; unknown fees now remain unknown in the
-affected performance report.
+affected TCA-matched performance report. A live read-only report labels its
+older trade-history PnL `reported_trade_pnl_fee_unassessed`; that figure is not
+verified net profitability.
 
 ## September 26 bounded economics and quote-timing evidence
 

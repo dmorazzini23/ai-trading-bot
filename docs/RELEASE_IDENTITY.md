@@ -1,9 +1,8 @@
 # Release identity preflight
 
 **Status (2026-09-27):** the packaged paper service has the pre-migration and
-post-migration release checks installed. Commit `3e9511b21` passed exact-tip
-CI and both checks before the September 27 paper restart. The installed
-release specification still names that commit. This does not grant
+post-migration release checks installed. Commit `edfefa72f` passed exact-tip
+CI and both checks at the September 27 paper restart. This does not grant
 live-trading authority; a new commit requires its own CI result, exposure
 review, release specification and restart checks.
 

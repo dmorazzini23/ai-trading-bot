@@ -66,7 +66,7 @@ commit, effective config/profile, applied migration and configured model bytes
 against a reviewed release specification. The installed packaged unit enforces
 checks before and after Alembic migration and refuses startup without a valid
 release specification. Its last verified paper start was September 27, 2026,
-using CI-tested commit `3e9511b21`. For each subsequent candidate, review a
+using CI-tested commit `edfefa72f`. For each subsequent candidate, review a
 passing report with CI, broker exposure and rollback evidence before updating
 the release specification or restarting. Do not restart during market hours.
 
