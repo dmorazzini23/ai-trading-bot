@@ -1,5 +1,34 @@
 # Current handoff
 
+## September 28 weekly ETF data, execution and recovery check
+
+See `docs/EVIDENCE_AND_RECOVERY_CHECK_20260928.md`. A new outcome-free preflight
+verified the governed all-adjusted ETF bar hashes and measured 96/96 common
+valid Friday observation weeks with a 20-session lookback and five-session
+exit. All 65 captured development corporate actions had matching boundary
+bars; the earlier 19/19 adjustment diagnostics and 38/38 dataset links still
+matched their sources. Provider action completeness and point-in-time treatment
+remain unverified, so no trial was registered or run. The 2026 holdout,
+consumed budgets and all promotion gates remain unchanged.
+
+The current seven-day local audit found 13 fills, 13 order matches, 11 decision
+matches and 11 nonpending TCA matches. The two unmatched decision/TCA records
+were evidenced operational EOD exits. All 13 lacked verified total per-fill
+fees and a qualifying causal quote; the research scorecard had 0/13 complete
+chains. Broker fee activity still has no fill reference. No unknown fee was
+treated as zero or assigned to a guessed fill.
+
+A new local recovery bundle was created using the service runtime environment
+and restored in isolation; both SQLite integrity checks passed, and backup
+status is `ok`. The backup-sync timer remains disabled and the installed
+service unit is the older upload-only variant. Installing the checked-in
+snapshot-first unit was blocked because `sudo` requires a host password; no
+timer or S3 transfer was started. The older-version S3 restore still needs
+`s3:GetObjectVersion` and an isolated version-pinned test. Host health remained
+HTTP 503 for `required_model_stale`, broker fresh/flat, service active with
+zero restarts. Focused preflight, reconciliation and uploader tests passed
+(7 + 38 + 13), as did Ruff, mypy, unit syntax and an isolated restore.
+
 ## September 27 order, fee-reporting and release-documentation repair
 
 The previous paper release was `3e9511b21`. The current repair fixes incomplete
