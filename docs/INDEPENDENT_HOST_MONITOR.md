@@ -13,10 +13,11 @@ replace broker, model, replay, cost, freshness or promotion gates.
 ## Administrator setup
 
 Review the recurring CloudWatch metric/alarm and SNS usage for this account.
-The host's IAM identity `ai-trading-secrets-bot` currently receives
-`AccessDenied` for SNS topic listing and CloudWatch alarm description. An AWS
-administrator should grant this narrowly scoped publisher permission to that
-identity:
+The host IAM identity `ai-trading-secrets-bot` has the following narrowly
+scoped publisher permission. A manual publish succeeded on September 29.
+The host still lacks SNS topic listing and CloudWatch alarm description, so
+its IAM identity cannot independently verify the owner's report that the
+Ohio topic `ai-trading-host-failure` and email subscription are confirmed:
 
 ```json
 {
@@ -47,13 +48,15 @@ sudo systemctl enable --now ai-trading-host-heartbeat.timer
 systemctl status ai-trading-host-heartbeat.timer --no-pager
 ```
 
-Under an administrator identity in account `399705375437`, run the reviewed
-`bash scripts/provision_host_failure_alarm.sh dmorazzini23@gmail.com` after
-the first metric is visible. The script creates one SNS topic, one email
-subscription and one CloudWatch alarm for the exact metric/dimension emitted
-by the service. The owner must click the `Confirm subscription` link in the
-AWS email; `PendingConfirmation` is not delivery evidence. Do not forward the
-confirmation link to anyone. Confirm the alarm becomes `OK`.
+After recurring value 1 appears for custom metric `AITrading/Host`,
+`PaperRuntimeResponding`, `Host=ai-trading-primary`, an AWS administrator in
+account `399705375437` should create the alarm against the **existing**
+confirmed SNS topic. Do not run the full provisioning script for this setup:
+it also calls `sns subscribe`, which is unnecessary for the confirmed email.
+The CloudWatch alarm settings are: Minimum, 180-second period, 2 of 2
+datapoints, less than 1, missing data breaching, and both alarm and OK actions
+to `arn:aws:sns:us-east-2:399705375437:ai-trading-host-failure`. Confirm the
+alarm becomes `OK` after recurring metrics arrive.
 
 For the actual notification drill, record the alarm state and subscription
 ARN, use CloudWatch `set-alarm-state` to enter `ALARM` with the reason
@@ -65,6 +68,6 @@ drill is completed. The recipient must not treat a test alert as an actual
 trading incident. Record all timestamps, metric values, alarm history and
 confirmation/acknowledgement in the handoff.
 
-Until IAM, subscription confirmation, host installation, alarm history and
-delivered/acknowledged test email are verified, independent alerting remains
-**unproven**. Existing same-host health checks cannot detect total host loss.
+Until host installation, recurring metric, alarm history and a delivered and
+acknowledged test email are verified, independent alerting remains **unproven**.
+Existing same-host health checks cannot detect total host loss.

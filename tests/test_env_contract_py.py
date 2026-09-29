@@ -1,16 +1,31 @@
 from __future__ import annotations
 import ast
 import pathlib, re
+import subprocess
 
 from tests.helpers.constants import LEGACY_ENV_PREFIXES, LEGACY_ENV_WHITELIST
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-FILES = [p for p in ROOT.rglob("*.py")
-         if "tests" not in str(p)
-         and "venv" not in str(p)
-         and ".venv" not in str(p)
-         and "node_modules" not in str(p)]
-PY = [p for p in ROOT.rglob("*.py") if "venv" not in str(p)]  # AI-AGENT-REF: include tests
+
+
+def _source_python_files() -> list[pathlib.Path]:
+    """Scan versioned and new source, never ignored runtime or research artifacts."""
+
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return sorted(
+        ROOT / pathlib.Path(raw.decode("utf-8"))
+        for raw in result.stdout.split(b"\0")
+        if raw and (ROOT / pathlib.Path(raw.decode("utf-8"))).is_file()
+    )
+
+
+PY = _source_python_files()  # AI-AGENT-REF: include tests
+FILES = [p for p in PY if "tests" not in p.relative_to(ROOT).parts]
 
 def _t(p): return p.read_text(encoding="utf-8", errors="ignore")
 
@@ -52,6 +67,17 @@ def test_all_python_has_explicit_alpaca_creds():
         r"\bCryptoHistoricalDataClient\s*\([^)]*\)", "api_key="
     )
     assert not bad, f"Missing explicit Alpaca creds in: {sorted(set(bad))}"
+
+
+def test_contract_scan_excludes_ignored_generated_artifacts():
+    ignored = ROOT / "artifacts" / "research_reset" / "check_dia_omissions.py"
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", "--", str(ignored)],
+        cwd=ROOT,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert ignored not in PY
 
 
 def test_tradingclient_sets_paper_not_base_url():

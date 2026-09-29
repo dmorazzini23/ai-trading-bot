@@ -1,4 +1,3 @@
-import os
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -58,7 +57,6 @@ def _patch_env(monkeypatch):
     monkeypatch.setenv("ORDER_FLIP_MODE", "cancel_then_submit")
     cast(Any, get_trading_config).cache_clear()
     yield
-    os.environ.pop("PYTEST_RUNNING", None)
 
 
 def test_enforce_opposite_policy_cancels_orders(monkeypatch):

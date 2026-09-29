@@ -1,4 +1,6 @@
 # AI-AGENT-REF: ensure RiskEngine imports without crash
+import importlib
+
 import pytest
 
 
@@ -41,10 +43,9 @@ def test_risk_engine_tolerates_stubbed_data_client(monkeypatch):
         def __init__(self, *args, **kwargs):  # noqa: D401, ARG002
             raise ImportError("stub client active")
 
-    monkeypatch.setattr("ai_trading.risk.engine.StockHistoricalDataClient", StubClient)
+    risk_engine_module = importlib.import_module("ai_trading.risk.engine")
+    monkeypatch.setattr(risk_engine_module, "StockHistoricalDataClient", StubClient)
 
-    from ai_trading.risk.engine import RiskEngine
-
-    engine = RiskEngine()
+    engine = risk_engine_module.RiskEngine()
 
     assert getattr(engine, "data_client", None) is None

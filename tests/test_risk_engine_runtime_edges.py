@@ -158,7 +158,7 @@ def test_can_trade_projects_strategy_exposure_with_pending_weight() -> None:
 
 
 def test_risk_engine_import_does_not_reseed_global_rngs() -> None:
-    import ai_trading.risk.engine as risk_engine_module
+    risk_engine_module = importlib.import_module("ai_trading.risk.engine")
 
     random.seed(987654)
     np.random.seed(987654)

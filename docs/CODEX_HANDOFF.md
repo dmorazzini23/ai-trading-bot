@@ -1,5 +1,40 @@
 # Current handoff
 
+## September 29 validation and AWS alert handoff
+
+The three reported pytest failures were test-isolation defects: the source
+contract walked ignored research artifacts, and risk import tests left stale
+module identities. Two more tests removed `PYTEST_RUNNING` from the shared
+process, causing later tests to enter production paths and attempt Alpaca and
+AWS calls. The contract now scans tracked and unignored Python files; the risk
+import helper restores its original modules; the two environment tests restore
+the prior marker. Focused collection-order tests passed. The final
+`bash scripts/agent_validate_changed.sh --full` passed: 7,286 pytest passed,
+one skipped for missing regime-column fixture data, Ruff, mypy, strict mypy,
+tracked-Python compilation and the validation artifact. The earlier sandbox
+run failed on denied sockets and the environment leak; it is superseded by the
+complete host-access run. No trading or model gate changed in this repair.
+
+The host IAM policy for `AITrading/Host` was added and a manual heartbeat
+published successfully at 04:28 UTC. The owner created the Ohio SNS topic
+`ai-trading-host-failure` and reports the `dmorazzini23@gmail.com`
+subscription as **Confirmed**; the host IAM identity cannot independently
+list it. The heartbeat timer is not installed (`LoadState=not-found`), no
+CloudWatch alarm exists in the verified evidence, and email delivery has not
+been tested. After exact-tip CI and broker-exposure review, install the timer,
+observe recurring value 1 in CloudWatch, create the alarm against the existing
+SNS topic without another subscription request, and run one labelled test
+alert with recipient acknowledgement. See `docs/INDEPENDENT_HOST_MONITOR.md`.
+
+At 05:12 UTC the paper service was active with zero restarts. A host-access
+`/healthz` read returned structured HTTP 503 `degraded` for
+`required_model_stale`, with `replay_live_parity_gate_failed` also flagged;
+broker state was connected and fresh with zero positions and open orders. One
+five-second health request timed out under full-suite host load; a subsequent
+request completed in 2.65 seconds. No restart was performed. The deployed
+checkout remains `edfefa72fd4cdc3209fafc0ad94934e8f01ce117`; the main
+worktree changes are not deployed.
+
 ## September 29 selected equity-risk and off-host alert work
 
 In the separate `main` worktree, `ai_trading.runtime.equity_risk` now has
@@ -11,18 +46,11 @@ approved starting/session baseline, broker equity source timestamp or complete
 cash-activity interval was available. The canonical live opening gate still
 discards strategy-provided loss values. Live capital remains blocked.
 
-The independent host monitor has a two-minute systemd heartbeat, a CloudWatch
-metric publisher, an administrator provisioning script for one SNS email
-subscription and missing-data alarm, and tests. The read-only local heartbeat
-returned 1 while `/healthz` returned structured HTTP 503 for the existing
-model/replay blockers. AWS denied this host's `cloudwatch:PutMetricData` call;
-SNS and CloudWatch read permissions were also denied. No SNS topic, alarm,
-email confirmation, metric publishing timer or alert delivery was installed
-or proven. The proposed recipient is `dmorazzini23@gmail.com`. Grant the
-namespace-scoped IAM permission, pass exact-tip CI, review broker exposure,
-then install the timer, provision the alarm under an AWS administrator and
-verify email confirmation plus an acknowledged test alert. See
-`docs/INDEPENDENT_HOST_MONITOR.md`.
+The independent host monitor code has a two-minute systemd heartbeat, a
+CloudWatch metric publisher, an administrator provisioning script and tests.
+The local heartbeat returned 1 while `/healthz` returned structured HTTP 503
+for the existing model/replay blockers. Subsequent AWS and subscription
+evidence is recorded above.
 
 Targeted changed-file validation passed Ruff, mypy, compilation, shell syntax,
 84 mapped tests and systemd unit verification. Its sandbox-local `/healthz`
