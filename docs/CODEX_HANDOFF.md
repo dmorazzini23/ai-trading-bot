@@ -1,5 +1,37 @@
 # Current handoff
 
+## September 29 installed backup and off-host restore evidence
+
+The installed snapshot-first backup service and timer match their packaged
+files; systemd has reloaded them. The timer is enabled and waiting for its first
+automatic run at 23:30 UTC September 29. The runtime `.env` has the verified
+12-digit expected S3 bucket owner. The existing current-object 30-day lifecycle
+rule was preserved, and a 30-day noncurrent-version expiration was added only
+for `pruned/recovery_backups/`; AWS read-back matched the reviewed rules.
+
+An administrator-started run of the installed service at 03:08-03:09 UTC
+completed successfully, created
+`recovery.bak.20260929T030848Z-1a7c3ed1.gz` (110,749,747 bytes), uploaded it,
+and read it back byte-for-byte. S3 reports AES256 and SHA-256 matching the
+local bundle. Exact current version
+`pk3O20PqM.c3.pX633EMbDjZxuKrLR.a` was then downloaded to
+`/tmp/goal-offhost-restore-20260929` and restored into a new isolated directory.
+Restore verification passed for all 3,045 content entries; both required SQLite
+databases passed integrity checks. The restored OMS has 2,150 terminal intents,
+764 fills, 81,718 events and zero active intents. A fresh paper broker check at
+03:23 UTC showed zero positions and open orders, so exposure matched at that
+boundary. This is not historical fill reconciliation or a shared-PostgreSQL
+two-owner failover drill. The downloaded version was current, so recovery of a
+noncurrent version remains untested.
+
+The paper service remained active with zero restarts; health was degraded for
+the existing `required_model_stale` and `replay_live_parity_gate_failed` gates.
+No broker order, trading change, service restart, live activation or research
+trial occurred. Next: verify the first automatic timer run and its new S3
+object after 23:30 UTC; continue the verified-equity risk contract, shared
+PostgreSQL drill and independent off-host alert evidence. The six-area goal is
+still blocked, not complete.
+
 ## September 28 weekly ETF data, execution and recovery check
 
 See `docs/EVIDENCE_AND_RECOVERY_CHECK_20260928.md`. A new outcome-free preflight
