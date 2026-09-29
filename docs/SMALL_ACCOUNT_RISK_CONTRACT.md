@@ -112,10 +112,32 @@ Consequently, a missing or date-only activity cannot certify that no intraday
 cash movement affected the equity comparison. Live loss evidence must remain
 blocked when that timing or completeness cannot be verified.
 
-The selected numeric limits must be implemented in a single canonical evaluator
-wired to every opening submission path, with same-account, timestamped broker evidence for
-all inputs; durable high-water and session baselines; corruption, rollover,
-restart, concurrent-submit, stale-state and ambiguous-order tests; an isolated
-broker fault/restore rehearsal; passing code and replay gates; after-close
-deployment with zero-position/open-order review; and a separately approved
-live canary. Until each item is proven, the live-capital state remains blocked.
+The September 29 `ai_trading.runtime.equity_risk` evaluator now implements the
+selected 1% daily and 3% peak-to-trough arithmetic with full projected long
+notional and estimated costs reserved against both limits. It separately reports
+loss from approved starting capital. It validates account
+identity, causality, fresh timestamped observations, complete and timed cash
+flows, and a separately approved durable starting/session/high-water record.
+Its atomic high-water update never creates a missing baseline or resets one at
+session rollover. Synthetic regressions cover deposits, withdrawals, unrealized
+loss, peak loss, stale or conflicting evidence, damaged state and restart.
+
+**This is an evidence contract, not an activated gate.** The host has only
+paper credentials established for this task; no funded live-account opening
+snapshot, approved capital reference, complete live cash-flow interval or
+broker-source observation timestamp has been supplied. Alpaca's documented
+account fields do not include an equity observation timestamp, and its
+activity endpoint filters by creation time; date-only or delayed nontrade
+entries cannot be treated as precise intraday cash-flow proof. No baseline
+artifact was created and no strategy-provided value was accepted as broker
+proof. The canonical live opening path still discards caller loss values and
+remains fail-closed. Do not wire this evaluator to permit a broker order until
+a source-backed live capture can satisfy its input contract.
+
+The remaining work is a read-only, same-account live broker capture and
+approved starting/session baseline; a complete cash/activity reconciliation
+with a defensible timestamp basis; atomic integration into every opening
+submission path with concurrent-submit and ambiguity tests; an isolated broker
+fault/restore rehearsal; passing code and replay gates; after-close deployment
+with zero-position/open-order review; and a separately approved live canary.
+Until each item is proven, the live-capital state remains blocked.

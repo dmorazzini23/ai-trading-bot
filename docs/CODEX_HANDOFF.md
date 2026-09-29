@@ -1,5 +1,38 @@
 # Current handoff
 
+## September 29 selected equity-risk and off-host alert work
+
+In the separate `main` worktree, `ai_trading.runtime.equity_risk` now has
+fail-closed arithmetic for the selected 1% daily and 3% peak-to-trough
+cash-flow-adjusted equity limits, full projected-long-notional reserve and an
+atomic high-water updater that refuses missing or corrupt baselines. It is
+deliberately not wired to permit live openings: no live-account source,
+approved starting/session baseline, broker equity source timestamp or complete
+cash-activity interval was available. The canonical live opening gate still
+discards strategy-provided loss values. Live capital remains blocked.
+
+The independent host monitor has a two-minute systemd heartbeat, a CloudWatch
+metric publisher, an administrator provisioning script for one SNS email
+subscription and missing-data alarm, and tests. The read-only local heartbeat
+returned 1 while `/healthz` returned structured HTTP 503 for the existing
+model/replay blockers. AWS denied this host's `cloudwatch:PutMetricData` call;
+SNS and CloudWatch read permissions were also denied. No SNS topic, alarm,
+email confirmation, metric publishing timer or alert delivery was installed
+or proven. The proposed recipient is `dmorazzini23@gmail.com`. Grant the
+namespace-scoped IAM permission, pass exact-tip CI, review broker exposure,
+then install the timer, provision the alarm under an AWS administrator and
+verify email confirmation plus an acknowledged test alert. See
+`docs/INDEPENDENT_HOST_MONITOR.md`.
+
+Targeted changed-file validation passed Ruff, mypy, compilation, shell syntax,
+84 mapped tests and systemd unit verification. Its sandbox-local `/healthz`
+curl could not connect; a separate host check returned HTTP 503 with
+`degraded`, broker connected, zero paper positions/orders, and the known
+`required_model_stale`/`replay_live_parity_gate_failed` flags. The non-sending
+incident snapshot passed. The separate deployed checkout remains at
+`edfefa72fd4cdc3209fafc0ad94934e8f01ce117` with zero service restarts;
+these code and unit changes are not deployed.
+
 ## September 29 installed backup and off-host restore evidence
 
 The installed snapshot-first backup service and timer match their packaged

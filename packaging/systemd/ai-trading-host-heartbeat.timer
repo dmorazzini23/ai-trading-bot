@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish AI Trading Host Liveness every two minutes
+
+[Timer]
+OnCalendar=*:0/2
+AccuracySec=20s
+Persistent=true
+Unit=ai-trading-host-heartbeat.service
+
+[Install]
+WantedBy=timers.target
