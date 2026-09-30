@@ -1,5 +1,45 @@
 # Current handoff
 
+## September 30 paper close and slow-cycle follow-through
+
+The September 30 paper session closed flat: broker cash equaled equity, with
+zero positions, zero active orders and no September 30 activity.
+The 20:36–20:38 UTC daily evidence workflow completed. Its opening/closing
+broker position snapshots matched with no quantity differences, but there were
+no orders or fills; `paper_evidence_review` remains `evidence_pending` for
+`no_execution_samples` and cannot establish net trading performance. At 22:29
+UTC the service was active with zero restarts; `/healthz` returned structured
+503 for the unchanged `required_model_stale` and
+`replay_live_parity_gate_failed` blocks, with fresh, flat broker state.
+The non-sending incident snapshot reported only the expected degraded-health
+trigger. The session's 13 structured error-level entries were 12 compute
+alerts and one stale-model registry event.
+No order, model, replay, cost or promotion gate was changed.
+
+The service logged 16 over-budget cycles out of 183 on September 30, including
+12 critical compute alerts; the maximum cycle was 248,579 ms. Several delays
+surrounded broker order reads and the execution KPI snapshot. A read-only
+after-close Alpaca paper measurement found that one complete active-order
+snapshot required 80 API calls and scanned 39,425 historical order rows in
+4.33 seconds with zero active orders. Market-session delays were longer, but
+the exact share attributable to that read remains unproven. The current patch
+adds a warning with duration/page/row counts for complete reads taking at least
+10 seconds and adds the broker-read duration to `EXECUTION_KPI_SNAPSHOT`.
+It preserves full pagination and every exposure and trading gate. Use the next
+paper session's timings to locate the remaining cost before proposing a safe
+optimization; do not shorten the broker query from an arbitrary date.
+
+Logged IEX minute gaps were AMZN 4/389 for September 30 and MSFT 7/589 across
+September 29–30. A read-only requery of the free Alpaca IEX feed after close
+still lacked all sampled timestamps, supporting a provider-feed gap rather
+than a local omission for those samples. Keep the missing-bar safeguards and
+do not synthesize bars or buy SIP access. The diagnostic patch has targeted
+regression coverage. `bash scripts/agent_validate_changed.sh --full` passed:
+7,287 pytest passed, one regime-fixture skip, Ruff, mypy, strict mypy,
+tracked-Python compilation and the validation artifact. Run exact-tip CI,
+review broker exposure, then deploy after close and check health before using
+its timings as evidence.
+
 ## September 30 after-close release and host-alert evidence
 
 Exact-tip commit `0d86c1225adb229b5cd292682899f996f5e720f7` passed

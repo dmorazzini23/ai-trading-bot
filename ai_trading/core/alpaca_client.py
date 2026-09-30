@@ -8,6 +8,7 @@ import sys
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from importlib import import_module
+from time import perf_counter
 from types import ModuleType
 
 from ai_trading.logging import get_logger, logger_once
@@ -168,6 +169,9 @@ def list_open_orders(api: Any):
     without an advancing timestamp cannot be safely treated as complete.
     """
 
+    started_at = perf_counter()
+    all_pages = 0
+    orders_scanned = 0
     active_statuses = {
         "open",
         "new",
@@ -210,6 +214,8 @@ def list_open_orders(api: Any):
     previous_last: datetime | None = None
     while True:
         page = list(_get_orders_by_status(api, "all", after=after) or [])
+        all_pages += 1
+        orders_scanned += len(page)
         if len(page) > 500:
             raise RuntimeError("Alpaca all-orders page exceeds requested limit")
         for order in page:
@@ -235,6 +241,17 @@ def list_open_orders(api: Any):
         # Overlap the boundary timestamp. A tied 500-order page fails closed
         # on the next iteration instead of silently dropping tied orders.
         after = last - timedelta(microseconds=1)
+    elapsed_ms = round((perf_counter() - started_at) * 1000)
+    if elapsed_ms >= 10_000:
+        logger.warning(
+            "BROKER_OPEN_ORDER_SNAPSHOT_SLOW",
+            extra={
+                "elapsed_ms": elapsed_ms,
+                "all_pages": all_pages,
+                "orders_scanned": orders_scanned,
+                "active_orders": len(filtered),
+            },
+        )
     return filtered
 
 

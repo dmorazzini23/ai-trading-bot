@@ -324,6 +324,36 @@ def test_list_open_orders_merges_pending_with_nonempty_open_query() -> None:
     assert api.calls == ["open", "all"]
 
 
+def test_list_open_orders_reports_slow_complete_scan_without_truncating(monkeypatch) -> None:
+    class Api:
+        def get_orders(self, *, filter: Any) -> list[Any]:
+            status = getattr(filter.status, "value", filter.status)
+            if status == "open":
+                return []
+            return [SimpleNamespace(id="pending-1", status="accepted")]
+
+    observed: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(alpaca_client, "perf_counter", iter((0.0, 11.0)).__next__)
+    monkeypatch.setattr(
+        alpaca_client.logger,
+        "warning",
+        lambda event, **kwargs: observed.append((event, kwargs["extra"])),
+    )
+
+    assert [order.id for order in alpaca_client.list_open_orders(Api())] == ["pending-1"]
+    assert observed == [
+        (
+            "BROKER_OPEN_ORDER_SNAPSHOT_SLOW",
+            {
+                "elapsed_ms": 11_000,
+                "all_pages": 1,
+                "orders_scanned": 1,
+                "active_orders": 1,
+            },
+        )
+    ]
+
+
 def test_list_open_orders_falls_back_to_all_and_keeps_active_statuses() -> None:
     class _Status:
         def __init__(self, value: str) -> None:

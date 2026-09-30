@@ -6387,7 +6387,12 @@ def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     engine._emit_cycle_execution_kpis()
 
-    assert any(record.message == "EXECUTION_KPI_SNAPSHOT" for record in caplog.records)
+    snapshots = [
+        record for record in caplog.records
+        if record.message == "EXECUTION_KPI_SNAPSHOT"
+    ]
+    assert snapshots
+    assert snapshots[-1].open_orders_snapshot_ms >= 0
     assert "ALERT_EXEC_KPI_LOW_FILL_RATIO" in emitted
     assert "ALERT_EXEC_KPI_HIGH_CANCEL_RATIO" in emitted
     assert "ALERT_EXEC_KPI_HIGH_CANCEL_NEW_RATIO" in emitted

@@ -16059,7 +16059,11 @@ class ExecutionEngine:
 
         now_dt = datetime.now(UTC)
         pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
+        open_orders_started_mono = monotonic_time()
         open_orders = self._list_open_orders_snapshot()
+        open_orders_snapshot_ms = round(
+            max(monotonic_time() - open_orders_started_mono, 0.0) * 1000
+        )
         pending_open_ages: list[float] = []
         for order in open_orders:
             status = _normalize_status(_extract_value(order, "status")) or ""
@@ -16144,6 +16148,7 @@ class ExecutionEngine:
                 "sum_realized_bps_30m_samples": int(sum_realized_bps_samples_30m),
                 "turnover_notional": round(float(turnover_notional), 4),
                 "open_pending_count": len(pending_open_ages),
+                "open_orders_snapshot_ms": open_orders_snapshot_ms,
                 "oldest_pending_s": round(oldest_pending_s, 3),
                 "broker_lock_active": bool(broker_lock_active),
                 "broker_lock_reason": broker_lock_reason,
