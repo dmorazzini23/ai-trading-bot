@@ -1,5 +1,52 @@
 # Current handoff
 
+## September 30 after-close release and host-alert evidence
+
+Exact-tip commit `0d86c1225adb229b5cd292682899f996f5e720f7` passed
+GitHub CI, CodeQL, SBOM and Workflow Lint. The complete host-access validation
+below passed before release. After the paper broker reported a closed market,
+zero positions and zero active orders, the clean deployment checkout was moved
+to that commit. The migration-aware release specification and installed
+release-identity preflight passed for the exact checkout and paper mode. The
+owner restarted `ai-trading.service` at 03:39 UTC; it remained active with
+`NRestarts=0`. After warm-up, `/healthz` reported a fresh, flat broker and
+the unchanged `required_model_stale` and `replay_live_parity_gate_failed`
+qualification blocks. The non-sending incident snapshot had no triggers.
+No live trading, strategy gate change or order submission occurred. The prior
+release specification is saved at
+`/tmp/ai-trading-release-spec-before-0d86c1225.json` for reviewed rollback.
+
+The installed backup timer completed its automatic 23:30 UTC run and read back
+the uploaded `recovery.bak.20260929T233016Z-9c5e7b25.gz` object. S3 confirmed
+version `HAYe6qsbNyY83sSmyGYubxfIBF.b0QOm`, AES256 and the expected bucket
+owner. The earlier isolated restore verified 3,045 entries and SQLite
+integrity. A noncurrent-version restore and shared-PostgreSQL two-owner
+failover remain untested.
+
+The owner installed the packaged two-minute heartbeat service and timer; unit
+files match the reviewed copies. Manual and scheduled runs through 04:00 UTC
+published `responding: true`. In Ohio account `399705375437`, the owner created
+`ai-trading-primary-host-failure`; CloudShell read-back confirmed its
+`AITrading/Host` metric, `Host=ai-trading-primary`, Minimum over 180 seconds,
+two of two below one, missing data breaching and both transitions routed to
+the existing SNS topic. SNS reports one confirmed subscription. The alarm was
+`INSUFFICIENT_DATA` immediately after creation and the owner confirmed `OK`
+after completed metric periods. The owner ran the authorized, labelled
+`set-alarm-state` test and confirmed receipt at `dmorazzini23@gmail.com`.
+CloudShell read-back confirmed return to `OK` with two value-1 datapoints at
+03:54 and 03:57 UTC. CloudWatch state and action history confirms the earlier
+03:54:26 action was `INSUFFICIENT_DATA` to `OK`; the authorized drill changed
+`OK` to `ALARM` at 04:00:02 and `ALARM` to `OK` at 04:00:55. Both drill
+transitions successfully executed the SNS action. The owner confirmed receipt
+of the test email. This verifies the alarm notification path; an actual host
+outage and two-owner recovery drill remain separate evidence gaps.
+The notification drill establishes email delivery, not real host-outage
+recovery.
+
+The six-area goal is still blocked for live-capital baseline and cash-activity
+evidence, model and replay qualification, noncurrent-version recovery and the
+shared-owner failover drill. Paper abstention is not profitability evidence.
+
 ## September 29 validation and AWS alert handoff
 
 The three reported pytest failures were test-isolation defects: the source

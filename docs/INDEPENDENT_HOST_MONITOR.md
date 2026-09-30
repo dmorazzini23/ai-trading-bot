@@ -1,5 +1,22 @@
 # Independent paper-host failure alert
 
+## Current evidence (September 30, 2026)
+
+The packaged heartbeat service and two-minute timer are installed and
+enabled. Manual and scheduled host runs through 04:00 UTC published value 1.
+The owner created the alarm in Ohio account `399705375437`; CloudShell
+read-back matched the settings below and confirmed one SNS subscription.
+The alarm was initially `INSUFFICIENT_DATA` immediately after creation; the
+owner then confirmed `OK`. The owner ran the authorized, labelled
+notification drill and confirmed receipt at the subscribed email address.
+CloudShell read-back confirmed return to `OK` on two value-1 datapoints at
+03:54 and 03:57 UTC. State and action history identifies the 03:54:26 action
+as `INSUFFICIENT_DATA` to `OK`; the authorized drill changed `OK` to `ALARM`
+at 04:00:02 and `ALARM` to `OK` at 04:00:55. Both drill transitions
+successfully executed the SNS action, and the owner confirmed receipt of the
+test email. Email delivery is verified for this drill; a real host-outage
+response is not.
+
 The packaged `ai-trading-host-heartbeat.timer` starts a separate oneshot every
 two minutes. It publishes a standard CloudWatch metric in `us-east-2` only
 after checking the local systemd service and canonical `/healthz` response.
@@ -15,9 +32,10 @@ replace broker, model, replay, cost, freshness or promotion gates.
 Review the recurring CloudWatch metric/alarm and SNS usage for this account.
 The host IAM identity `ai-trading-secrets-bot` has the following narrowly
 scoped publisher permission. A manual publish succeeded on September 29.
-The host still lacks SNS topic listing and CloudWatch alarm description, so
-its IAM identity cannot independently verify the owner's report that the
-Ohio topic `ai-trading-host-failure` and email subscription are confirmed:
+The host IAM identity still lacks SNS topic listing and CloudWatch alarm
+description, as intended for a metric-only publisher. The owner verified the
+Ohio topic `ai-trading-host-failure`, one confirmed subscription and the alarm
+through CloudShell in the target account:
 
 ```json
 {
@@ -68,6 +86,6 @@ drill is completed. The recipient must not treat a test alert as an actual
 trading incident. Record all timestamps, metric values, alarm history and
 confirmation/acknowledgement in the handoff.
 
-Until host installation, recurring metric, alarm history and a delivered and
-acknowledged test email are verified, independent alerting remains **unproven**.
-Existing same-host health checks cannot detect total host loss.
+Keep the alarm history and email acknowledgement with the handoff. A controlled
+real host-failure drill remains necessary to prove end-to-end outage detection;
+existing same-host health checks cannot detect total host loss.
