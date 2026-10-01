@@ -23730,6 +23730,17 @@ class ExecutionEngine:
             getattr(self, "order_manager", None), "_intent_store", None
         ) is not None
         durable_required = self._durable_order_lifecycle_required() or durable_store_present
+        if (
+            durable_required
+            and not closing_position
+            and _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED")
+            and float(getattr(self, "_runtime_gonogo_cache_until_mono", 0.0) or 0.0)
+            - monotonic_time() <= 10.0
+        ):
+            # Refresh before the claim; the report must not count this order's
+            # in-flight intent as a missing broker acknowledgement.
+            self._runtime_gonogo_cache_until_mono = 0.0
+            self._runtime_gonogo_openings_allowed()
         try:
             durable_intent_id = self._begin_durable_order_lifecycle(
                 client_order_id=client_order_id,
@@ -32701,7 +32712,7 @@ class ExecutionEngine:
         self._runtime_gonogo_cache_allowed = bool(execution_allowed)
         self._runtime_gonogo_cache_context = dict(context)
         self._runtime_gonogo_cache_report = dict(report) if isinstance(report, Mapping) else {}
-        self._runtime_gonogo_cache_until_mono = now_mono + ttl
+        self._runtime_gonogo_cache_until_mono = monotonic_time() + ttl
         return bool(execution_allowed), dict(context)
 
     def _pre_execution_order_checks(self, order: Mapping[str, Any] | None = None) -> bool:

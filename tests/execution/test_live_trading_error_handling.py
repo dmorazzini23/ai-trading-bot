@@ -869,6 +869,62 @@ def test_execute_order_propagates_precheck_failure_detail(engine_factory):
     )
 
 
+def test_execute_order_refreshes_gonogo_before_claiming_its_own_intent(
+    engine_factory, monkeypatch
+):
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    engine = engine_factory()
+    engine.execution_mode = "paper"
+    steps: list[str] = []
+    engine._runtime_gonogo_cache_until_mono = 0.0
+
+    def gonogo():
+        if lt.monotonic_time() >= engine._runtime_gonogo_cache_until_mono:
+            steps.append("gate_evaluated")
+            if "intent_claimed" in steps:
+                return False, {"failed_checks": ["oms_lifecycle_parity_consistent"]}
+            engine._runtime_gonogo_cache_until_mono = lt.monotonic_time() + 60.0
+        return True, {}
+
+    def reserve(*_args, **_kwargs):
+        steps.append("cache_expired_during_order_preparation")
+        engine._runtime_gonogo_cache_until_mono = 0.0
+        return Decimal("0")
+
+    def begin(**kwargs):
+        steps.append("intent_claimed")
+        return kwargs["intent_id"]
+
+    def submit(*_args, **_kwargs):
+        if not engine._pre_execution_order_checks({"symbol": "AAPL"}):
+            return None
+        steps.append("broker_submit")
+        return SimpleNamespace(id="broker-1", client_order_id="cid-1", status="new")
+
+    engine._runtime_gonogo_openings_allowed = gonogo
+    engine._pre_execution_order_checks = lambda _order: gonogo()[0]
+    engine._reserve_cycle_opening_notional = reserve
+    engine.submit_market_order = submit
+    engine.submit_limit_order = submit
+    engine.order_manager = SimpleNamespace(
+        _intent_store=SimpleNamespace(get_open_intents=lambda: []),
+        begin_external_order_lifecycle=begin,
+        sync_external_order_state=lambda **kwargs: kwargs["intent_id"],
+    )
+
+    result = engine.execute_order(
+        "AAPL", "buy", 1, order_type="market", client_order_id="cid-1"
+    )
+    assert steps == [
+        "gate_evaluated",
+        "cache_expired_during_order_preparation",
+        "gate_evaluated",
+        "intent_claimed",
+        "broker_submit",
+    ]
+    assert result is not None
+
+
 def test_execute_order_records_metrics_control_precheck_as_controlled_skip(engine_factory):
     engine = engine_factory()
     submit_errors: list[dict[str, Any]] = []

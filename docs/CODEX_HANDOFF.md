@@ -1,5 +1,44 @@
 # Current handoff
 
+## September 30 no-order diagnosis and OMS report ordering
+
+The paper service ran 183 cycles during the regular session; 96 event-driven
+cycles skipped because no new bars were available. Across 85 logged decision
+rejection summaries, 476 candidate records were rejected and none accepted.
+Twelve September 30 OMS intents were all locally rejected by the runtime
+go/no-go precheck, with no broker order ID; the paper broker closed with no
+orders, fills, positions or active orders. Seven AMZN entry checks also hit
+the symbol live-expectancy block. Of 19 logged runtime go/no-go entry blocks,
+18 carried `oms_lifecycle_parity_consistent`; the other carried an OMS
+invariants availability/consistency failure. These counts overlap across
+stages.
+
+The go/no-go report's historical five-day window had 19 closed trades (50
+required), six wins, and zero acceptance. Its fresh replay counterfactual had
+195 candidate samples (250 required) and -7.29 bps net edge; more samples
+alone cannot establish positive economics. The active model remains stale.
+The service is healthy as a process but trading qualification remains blocked.
+Do not force orders, change gate thresholds, or treat paper abstention as
+profitability evidence.
+
+One integrity failure in the 19:47:56 report was transient: the report read
+the current AMZN intent after it had been claimed but before its local
+go/no-go rejection closed it. A later direct OMS read found the intent
+`REJECTED` with `SUBMIT_REJECT`, `ORDER_FAILED` and `INTENT_CLOSED` events,
+no broker ID, and no open intents; current health reports OMS lifecycle parity
+consistent. The report refresh happened after the order's earlier cache had
+expired, making its own in-flight intent appear to lack a submit ack. The
+patch refreshes go/no-go immediately before claiming an opening intent when
+the cache is near expiry and starts its TTL at evaluation completion. Prior
+unresolved intents remain subject to the same fail-closed parity check. A
+focused regression reproduces cache expiry between precheck and claim. The
+two affected execution test files passed (334 tests). Full after-close
+validation passed: 7,288 pytest passed, one fixture skip, Ruff, mypy, strict
+mypy, tracked-Python compilation and the validation artifact. The preceding
+diagnostic commit `1ab4380cc0fcd09d38abcc0aebe97c7654968a22` passed
+GitHub CI, CodeQL, SBOM and Workflow Lint; this follow-up fix still needs its
+own exact-tip CI and release identity/exposure checks before deployment.
+
 ## September 30 paper close and slow-cycle follow-through
 
 The September 30 paper session closed flat: broker cash equaled equity, with
