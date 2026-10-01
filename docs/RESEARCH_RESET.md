@@ -16,6 +16,12 @@ Resuming requires an explicit review and a deliberate policy change.
 
 Discretionary features, new models, and unregistered parameter searches are paused.
 Correctness fixes and work that resolves a named evidence blocker remain in scope.
+The September 30 [five-item follow-through](TRADING_IMPROVEMENTS_20260930.md)
+records the decision to retire the consumed fixed logistic replacement trial:
+its selected proxy trades average +0.22 bps gross and −9.78 bps net at the frozen
+10 bps cost. Ordinary operational evidence collection does not authorize another
+model trial or rescue a negative economic result. The existing replay remains
+below its sample requirement and negative; its markouts are not realized P&L.
 This policy controls the canonical research orchestrator, not arbitrary commands
 an operator runs directly. Existing health, capture, and governance timers continue.
 The research timers read this checkout on each invocation; no trading-service

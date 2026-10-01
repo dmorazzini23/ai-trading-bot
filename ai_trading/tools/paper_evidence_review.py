@@ -16,6 +16,7 @@ import pandas as pd
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.tools.execution_evidence_reconciliation import _number, _read, reconcile_session
+from ai_trading.tools.order_funnel import session_diagnostic
 from ai_trading.utils.market_calendar import is_trading_day, session_info
 
 
@@ -217,6 +218,7 @@ def main() -> None:
     parser.add_argument("--training-report", type=Path)
     parser.add_argument("--selection-report", type=Path)
     parser.add_argument("--accounting-report", type=Path)
+    parser.add_argument("--oms-database", type=Path, help="Read-only SQLite OMS diagnostic; defaults to managed OMS configuration")
     parser.add_argument("--allocation-source", type=Path, help="Optional fixed replay input for the predeclared tie-order diagnostic")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -245,6 +247,7 @@ def main() -> None:
     account = next(iter(accounts)) if len(accounts) == 1 else ""
     audit = reconcile_session(session_date=session, account_id=account, **inputs) if account else {"status": "evidence_gaps", "session_gaps": ["unique_paper_account_identity_required"]}
     report: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat(), "session_date": session, "session_audit": audit, "cap_selection": cap_selection_review(replay), "execution_cost_comparison": compare_execution_costs(replay, inputs["fills"], account_id=account), "sources": sources, "promotion_authority": False, "orders_sent": 0}
+    report["order_funnel"] = session_diagnostic(session, args.oms_database)
     report["capture_readiness"] = capture_readiness(inputs["boundaries"], account_id=account, now=now)
     training_reports = {}
     for name, path in (("training", args.training_report), ("selection", args.selection_report), ("accounting", args.accounting_report)):

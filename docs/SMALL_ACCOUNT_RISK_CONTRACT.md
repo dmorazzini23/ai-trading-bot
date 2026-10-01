@@ -122,6 +122,11 @@ Its atomic high-water update never creates a missing baseline or resets one at
 session rollover. Synthetic regressions cover deposits, withdrawals, unrealized
 loss, peak loss, stale or conflicting evidence, damaged state and restart.
 
+The September 30 follow-through also rejects a stale source equity observation
+even when it has just been received. Both source and receipt must satisfy the
+existing 60-second freshness bound; a fresh receipt cannot refresh old equity.
+This repair does not establish the missing live evidence or activate the gate.
+
 **This is an evidence contract, not an activated gate.** The host has only
 paper credentials established for this task; no funded live-account opening
 snapshot, approved capital reference, complete live cash-flow interval or

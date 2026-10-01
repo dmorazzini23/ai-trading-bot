@@ -1,9 +1,30 @@
 # Runtime recovery boundary and rehearsal
 
-**Status (2026-09-24):** local backup and isolated restore are implemented,
-and one manually uploaded S3 bundle was read back and restored. The paper
-service unit's release checks are active; the backup-sync timer remains
-disabled. No live activation or broker order was part of this work.
+**Status (2026-10-01 UTC):** the installed daily backup timer is enabled/active;
+its September 30 23:30:23 UTC run succeeded. Current-version restore and a
+controlled actual noncurrent-version restore have passed. The local real
+PostgreSQL owner-crash/takeover drill passed separately. Cross-host failover,
+funded-live accounting and unavailable original historical versions remain
+unproven. No live activation, broker order or trading-service restart was part
+of the latest recovery drill. Earlier dated observations below are historical.
+
+## Controlled version restore (October 1 UTC)
+
+Two uploads of the same previously verified September 29 bundle under a new
+key in the approved `pruned/recovery_backups/` prefix produced distinct versions.
+The first, now-noncurrent version was retrieved with `GetObjectVersion`; its
+version ID, phase metadata and SHA-256 matched. Original objects were untouched;
+the approved 30-day retention applies to the fixture. Isolated restoration
+recovered 3,045 entries in 11.813 seconds; both SQLite integrity checks passed.
+Fresh paper broker evidence at 04:44:58 UTC matched the restored account and
+flat position boundary, with zero active orders. The archived code identity
+remains historical `edfefa72f`, and restored order authority remains disabled.
+No replacement owner was started. This does not establish full cash/fees/history
+reconciliation or recovery of absent original versions. Evidence is recorded at
+`/tmp/five-items-version-recovery-20261001T043836Z/proof.json` and
+`broker-boundary-proof.json` in that directory. See
+`TRADING_IMPROVEMENTS_20260930.md` for the actual PostgreSQL drill and remaining
+cross-host acceptance criteria.
 
 ## Authoritative state and coverage
 
@@ -60,12 +81,11 @@ succeeded with zero keys, and the bucket lifecycle policy had an enabled
 30-day expiration rule covering that prefix. `GetBucketVersioning` returned
 `AccessDenied`, but the later owner-approved single-bundle upload returned a
 version ID. The current object was downloaded, hash-checked and restored in
-isolation. A version-pinned read was denied `s3:GetObjectVersion`, so recovery
-of an overwritten version remains unproven. The September 24 uploader change
-has only been exercised with fake AWS; no real S3 write used it. The timer
-remains disabled. Its activation requires separate approval for daily uploads
-to the exact bucket/prefix, host installation of the reviewed backup unit and
-timer, and a verified read-back under that installed unit.
+isolation. At that time, a version-pinned read was denied `s3:GetObjectVersion`
+and the timer was disabled. Subsequent owner-approved IAM, retention and unit
+installation enabled the daily timer and verified its real upload/read-back.
+The October 1 controlled drill above supersedes the earlier version-read gap;
+it does not reconstruct versions that never existed for historical unique keys.
 
 A failed local backup exits nonzero, writes
 `runtime/recovery_backup_latest.json` with a safe reason
@@ -96,8 +116,18 @@ recovery evidence.
    share the lock. The current paper SQLite deployment has no cross-host
    database fence. An isolated shared-lock simulator checks two candidate
    owners, contention, release, backend-lock loss and process-ID mismatch;
-   no local PostgreSQL server is installed, so real PostgreSQL contention and
-   failover remain unverified. Do not treat the simulator as cross-host proof.
+   the September 30 follow-through also passed the actual PostgreSQL advisory-lock
+   contention/crash/takeover test using a temporary localhost PostgreSQL 16.15
+   server unpacked under `/tmp` without a system installation. The server was
+   stopped afterward. This is local process-boundary evidence; real cross-host
+   failover remains unverified. Do not treat either test as cross-host proof.
+   An opt-in real process-boundary drill now lives at
+   `tests/integration/test_postgres_owner_recovery.py`. It requires the managed
+   `AI_TRADING_TEST_OWNER_DATABASE_URL` setting pointing to a **local disposable**
+   `ai_trading_owner_test` database distinct from the runtime database. It creates
+   no schema, proves contention, kills the owner and verifies takeover. An
+   unconfigured test is an explicit skip, not proof; a passing local test does
+   not replace a cross-host stop/revoke/fence rehearsal.
 2. Fetch a complete bundle into a restricted directory. Verify it with
    `./venv/bin/python -m ai_trading.tools.runtime_recovery_backup --verify BUNDLE`.
    Inspect the manifest's code/config/policy identities and obtain the matching
@@ -140,8 +170,11 @@ are not a full recovery-time objective. At a successful daily cadence, the
 recoverable local snapshot can lag current broker state by nearly 24 hours,
 plus snapshot/sync time; missed or failed runs have no bounded loss window.
 Evidence files may have per-file timestamp skew. The restored owner must
-reconcile all post-snapshot broker activity before new risk. Off-host restore
-and actual alert delivery remain unproven while the timer is disabled.
+reconcile all post-snapshot broker activity before new risk. Off-host S3 retrieval
+and isolated file restore now have evidence; replacement-host provisioning and
+stop/revoke/fence recovery still require a separate rehearsal. Independent
+host-failure alert delivery was acknowledged in the September 30 AWS drill;
+this does not prove every backup failure alert path.
 
 ## Schema-2 read-only-source rehearsal (September 23, 09:02 UTC)
 

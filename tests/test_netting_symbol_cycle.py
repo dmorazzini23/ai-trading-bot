@@ -99,7 +99,10 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
             execution_intent_context=SimpleNamespace(
                 client_order_id="cid-1",
                 pretrade_intent=_DummyIntent(),
-                order_lineage_metadata={"lineage": "x"},
+                order_lineage_metadata={
+                    "lineage": "x", "decision_ts": now.isoformat(),
+                    "source_timestamp": "2026-04-18T23:55:00+00:00",
+                },
                 order_annotations={"annotation": "x"},
                 decision_trace_id="trace-1",
             ),
@@ -455,7 +458,29 @@ def test_process_netting_symbol_submitted_order_records_and_counts() -> None:
     assert len(records) == 1
     assert records[0]["order"] == {"client_order_id": "cid-1"}
     assert records[0]["decision_trace_id"] == "trace-1"
+    assert records[0]["metrics"]["decision_ts"] == processor.now.isoformat()
+    assert records[0]["metrics"]["decision_ts_basis"] == "explicit"
     assert "OK_TRADE" in records[0]["gates"]
+
+
+def test_rejected_submission_retains_pre_submit_causal_time_and_identity() -> None:
+    def reject(**kwargs: Any) -> Any:
+        return SimpleNamespace(
+            status="failed", gates_added=("PRE_EXECUTION_ORDER_CHECKS_FAILED",),
+            attempted_increment=1, submitted_increment=0,
+            metrics={"decision_ts": "2026-04-19T00:05:00+00:00"},
+            order_intent_contract={"intent": "dummy"},
+        )
+    processor, records = _make_processor(execute_submission_func=reject)
+    result = process_netting_symbol(
+        processor=processor, symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now), orders_submitted=0,
+    )
+    assert result.submitted_increment == 0
+    assert records[0]["decision_trace_id"] == "trace-1"
+    assert records[0]["metrics"]["decision_ts"] == processor.now.isoformat()
+    assert records[0]["metrics"]["source_timestamp"] == "2026-04-18T23:55:00+00:00"
+    assert records[0]["metrics"]["decision_ts_basis"] == "explicit"
 
 
 def test_process_netting_symbol_partitions_stale_model_diagnostic_order() -> None:

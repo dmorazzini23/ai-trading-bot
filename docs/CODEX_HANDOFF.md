@@ -1,5 +1,111 @@
 # Current handoff
 
+## Five-item improvement follow-through, September 30 Pacific / October 1 UTC
+
+User authorized all five improvements. Work is on `main` in
+`/tmp/goal-handoff-20260929`, preserving the existing uncommitted release docs.
+The detached deployment checkout remains clean at `5a8ae5ac5`; no new code is
+deployed. Scope and per-item acceptance criteria:
+`docs/TRADING_IMPROVEMENTS_20260930.md`.
+
+- **Cycle efficiency:** KPI reporting reuses fresh, known synchronized order
+  inventory instead of another complete history scan. Unknown inventory is null,
+  never zero. Authoritative order/exposure queries are unchanged. The no-query
+  regressions pass; market-session latency confirmation is still pending.
+- **Order diagnostics:** `ai_trading.tools.order_funnel` reads a coherent SQLite
+  snapshot and separates durable decisions, final acceptance, intents, submit
+  claims, durable broker acknowledgements and recorded fills. The daily paper
+  review includes it. Independent pre-submit qualification is not recorded and
+  is reported as unknown. Counts/reasons can overlap; they are not conversion
+  rates. New outcome records retain pre-submit decision/source times and rejection
+  trace IDs. September 30: 476 decisions, zero final accepted records, 12 locally
+  rejected intents/claims, no durable broker acks or fills. All twelve historical
+  joins lack causal time evidence; account identity is absent. No record is
+  backdated or joined by a guessed symbol/time.
+- **Fault coverage:** the durable broker simulator records actual submit calls,
+  preventing unique-order deduplication from hiding retries. Two competing process
+  claims and a partial-fill/cancel/delayed-ack race pass. Eight process tests pass.
+- **Live risk/recovery:** source observation freshness now matters independently
+  of receipt freshness; all fourteen equity-risk tests pass. Added a real opt-in
+  PostgreSQL owner-crash/takeover test with no schema writes, restricted to a local
+  disposable database. The general suite skips it unless explicitly configured;
+  a separate actual run passed using temporarily unpacked Ubuntu PostgreSQL
+  16.15 on localhost. Contention, killed-owner lock release and takeover passed
+  in 5.24 seconds; cleanup stopped the server. No system installation, runtime
+  database or trading-service change occurred. Log:
+  `/tmp/five-items-real-postgres-drill.log`.
+  Funded-live baselines, complete timed cash flows, source equity timestamps and
+  real cross-host recovery remain unavailable. A controlled S3 fixture uploaded
+  the same previously verified bundle twice under one new approved-prefix key;
+  fetching the first, now-noncurrent version matched its version ID, phase
+  metadata and original SHA-256. Isolated restore recovered 3,045 entries and
+  both SQLite integrity checks passed. The restored boundary and fresh paper
+  broker share the same account and flat positions; restored order authority
+  remains disabled. This proves version selection/restore mechanics, not recovery
+  of absent historical versions, full accounting or cross-host failover.
+  Proof: `/tmp/five-items-version-recovery-20261001T043836Z/proof.json` and
+  `broker-boundary-proof.json` in that directory. At 04:44:58 UTC the backup
+  timer was enabled/active; its September 30 23:30:23 UTC run succeeded.
+- **Research decision:** retire the consumed fixed logistic replacement trial.
+  Existing selected proxy trades average +0.221377 bps gross / −9.778623 bps net
+  at frozen 10 bps costs; all five folds lose. Current existing replay has 195
+  samples and −7.294058 bps net edge. More samples alone do not fix economics.
+  No new trial, holdout evaluation, model or gate change is authorized or run.
+
+Validation so far: final affected-file run passed 354 tests with one unconfigured
+PostgreSQL skip; the actual PostgreSQL drill separately passed. Standard changed-file
+validation passed 355 tests, one explicit PostgreSQL skip, Ruff, mypy (12 paths),
+compilation and forbidden-pattern checks; final diagnostic/KPI refinements passed
+their affected-file recheck, Ruff and mypy (six paths). Full project mypy (466
+sources), strict types (466 plus 14 and 25 strict sources), tracked Python and new
+module/test compilation pass. The initial full run was aborted after socket
+restrictions broke local server tests and stalled an HTTP fixture; known socket
+failures pass on the host and four later failures pass in isolation. The final
+unchanged-source full host validation passed at 04:48 UTC:
+**7,308 passed, two skipped** in 21:58, Ruff, mypy, strict types and tracked
+Python compilation all passed. Log: `/tmp/five-items-full-host-validation.log`.
+The skips were the unconfigured PostgreSQL test (separately run and passed) and
+the existing regime fixture lacking a regime column.
+Required live/non-sending checks passed at 03:50 UTC:
+service active, zero restarts; structured health 503 only preserved model/replay
+qualification blocks; fresh broker with zero positions/orders; incident snapshot
+reports expected degraded health. It sent no notification.
+
+Next: commit on `main`, obtain
+commit-specific public push authorization if automatic approval requires it,
+then exact-tip CI and release/exposure checks before any after-close restart.
+Underlying live-capital evidence gaps and the existing goal remain blocked;
+do not mark them complete because this investigation or patch is finished.
+
+## September 30 release continuation
+
+The owner explicitly approved publishing
+`5a8ae5ac593e828a3431a1284de63d7e4f8f755f`; it is pushed to `origin/main`.
+Exact-tip CI, CodeQL, SBOM and Workflow Lint passed. CI reported 7,285 tests
+passed, four skipped and 80.19% coverage. Reuse the successful full local
+validation below because runtime code is unchanged. Both installed
+release-identity phases passed against the clean deployment checkout,
+packaged runtime environment, existing schema and configured model bytes.
+At 03:03 UTC October 1 the paper broker was closed, active, flat and had no
+active orders.
+The installed unit matches the packaged unit. The deployment checkout and
+installed release specification now identify `5a8ae5ac5`; the prior
+specification is saved at `/tmp/ai-trading-release-spec-before-5a8ae5ac.json`.
+The owner restarted the paper service at 03:05:21 UTC October 1 (8:05 p.m.
+Pacific September 30). Both installed startup checks passed for the clean
+`5a8ae5ac5` checkout. The service is active with zero automatic restarts;
+after warm-up, health reports a fresh, flat broker and consistent OMS
+invariants/lifecycle parity. Structured 503 reflects only the preserved
+`required_model_stale` and `replay_live_parity_gate_failed` qualification
+blocks. The final non-sending incident snapshot reported
+`blocked_qualification`, no triggers and `should_alert=false`. The bounded
+startup log had import/API/broker-sync anchors and no structured warnings or
+errors. `bash scripts/agent_validate_changed.sh --docs-only` passed for the
+local handoff/release-guide updates on the main worktree.
+Use the next paper session to confirm the false OMS self-block is gone and
+inspect the new broker-read timings before proposing a bounded optimization.
+No new experiment or model/trading gate change is authorized by this release.
+
 ## September 30 no-order diagnosis and OMS report ordering
 
 The paper service ran 183 cycles during the regular session; 96 event-driven
@@ -36,8 +142,10 @@ two affected execution test files passed (334 tests). Full after-close
 validation passed: 7,288 pytest passed, one fixture skip, Ruff, mypy, strict
 mypy, tracked-Python compilation and the validation artifact. The preceding
 diagnostic commit `1ab4380cc0fcd09d38abcc0aebe97c7654968a22` passed
-GitHub CI, CodeQL, SBOM and Workflow Lint; this follow-up fix still needs its
-own exact-tip CI and release identity/exposure checks before deployment.
+GitHub CI, CodeQL, SBOM and Workflow Lint. The follow-up fix has now passed its
+own exact-tip CI, installed release identity/exposure checks and the verified
+paper restart described above. Operational confirmation during a trading
+session remains pending.
 
 ## September 30 paper close and slow-cycle follow-through
 

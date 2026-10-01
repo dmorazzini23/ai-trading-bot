@@ -925,6 +925,13 @@ def process_netting_symbol(
         detail=getattr(submit_result, "terminal_detail", None),
         context=getattr(submit_result, "terminal_context", None),
     )
+    # Outcome recording can occur after a slow broker call or local rejection.
+    # Retain the evidence captured before submission, never outcome capture time.
+    for key in ("decision_ts", "source_timestamp"):
+        if key in order_lineage_metadata:
+            submit_metrics[key] = order_lineage_metadata[key]
+    if "decision_ts" in order_lineage_metadata:
+        submit_metrics["decision_ts_basis"] = "explicit"
     if submit_result.status != "submitted":
         _record_decision(
             symbol=symbol,
@@ -935,6 +942,7 @@ def process_netting_symbol(
             metrics=submit_metrics,
             config_snapshot=symbol_snapshot,
             order_intent=submit_result.order_intent_contract,
+            decision_trace_id=execution_intent_context.decision_trace_id,
             correlation_id=opportunity_correlation_id,
         )
         return NettingSymbolProcessResult(

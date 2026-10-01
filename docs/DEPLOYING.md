@@ -65,8 +65,9 @@ described in [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md). It compares the tested
 commit, effective config/profile, applied migration and configured model bytes
 against a reviewed release specification. The installed packaged unit enforces
 checks before and after Alembic migration and refuses startup without a valid
-release specification. Its last verified paper start was September 27, 2026,
-using CI-tested commit `edfefa72f`. For each subsequent candidate, review a
+release specification. Its last verified paper start was September 30, 2026
+Pacific (03:05 UTC October 1), using CI-tested commit `5a8ae5ac5`, with a closed,
+flat paper broker and both installed release checks passing. For each subsequent candidate, review a
 passing report with CI, broker exposure and rollback evidence before updating
 the release specification or restarting. Do not restart during market hours.
 

@@ -94,6 +94,8 @@ def test_deposit_and_withdrawal_are_neutralized() -> None:
     ({"cash_flow_timing_verified": False}, "equity_risk_cash_flow_unverified"),
     ({"observed_at": (NOW - timedelta(seconds=62)).isoformat(),
       "received_at": (NOW - timedelta(seconds=61)).isoformat()}, "equity_risk_snapshot_stale"),
+    ({"observed_at": (NOW - timedelta(minutes=2)).isoformat(),
+      "received_at": NOW.isoformat()}, "equity_risk_snapshot_stale"),
     ({"observed_at": (NOW + timedelta(days=1)).isoformat()}, "equity_risk_causality_invalid"),
     ({"observed_at": "2026-09-30T15:00:00+00:00", "received_at": "2026-09-30T15:00:01+00:00"}, "equity_risk_causality_invalid"),
 ])

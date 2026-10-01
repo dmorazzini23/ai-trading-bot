@@ -27,9 +27,13 @@ class _BrokerSimulator:
                 "client_order_id TEXT PRIMARY KEY, id TEXT NOT NULL, "
                 "status TEXT NOT NULL, filled_qty REAL NOT NULL)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS submit_calls (client_order_id TEXT NOT NULL)"
+            )
 
     def accept(self, client_order_id: str) -> dict[str, object]:
         with sqlite3.connect(self.path) as connection:
+            connection.execute("INSERT INTO submit_calls VALUES (?)", (client_order_id,))
             connection.execute(
                 "INSERT OR IGNORE INTO orders VALUES (?, ?, 'accepted', 0)",
                 (client_order_id, f"broker-{client_order_id}"),
@@ -68,7 +72,9 @@ class _BrokerSimulator:
     def count(self) -> int:
         with sqlite3.connect(self.path) as connection:
             row = connection.execute("SELECT COUNT(*) FROM orders").fetchone()
+            calls = connection.execute("SELECT COUNT(*) FROM submit_calls").fetchone()
         assert row is not None
+        assert calls is not None and calls[0] == row[0], "duplicate broker submission call"
         return int(row[0])
 
 
@@ -291,4 +297,51 @@ def test_partial_fill_and_out_of_order_updates_after_disconnect(tmp_path: Path) 
     assert completed is not None
     assert completed.status == "FILLED"
     assert sum(fill.fill_qty for fill in store.list_fills(intent_id)) == 2.0
+    assert broker.count() == 1
+
+
+def test_two_processes_cannot_submit_same_durable_intent(tmp_path: Path) -> None:
+    intent_db, broker_db = tmp_path / "intents.db", tmp_path / "broker.db"
+    store = IntentStore(path=str(intent_db))
+    broker = _BrokerSimulator(broker_db)
+    store.create_intent(
+        intent_id="competing-workers", idempotency_key="competing-workers",
+        symbol="AAPL", side="buy", quantity=2.0, status="PENDING_SUBMIT",
+    )
+    workers = [multiprocessing.get_context("fork").Process(
+        target=_accept_then_crash,
+        args=(str(intent_db), str(broker_db), "competing-workers"),
+    ) for _ in range(2)]
+    try:
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+        assert sorted(worker.exitcode for worker in workers if worker.exitcode is not None) == [41, 47]
+        assert broker.count() == 1
+        assert store.get_intent("competing-workers").submit_attempts == 1
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+
+
+def test_partial_fill_then_cancel_and_delayed_ack_preserve_exposure(tmp_path: Path) -> None:
+    store, broker, intent_id = _start_crashed_submission(tmp_path)
+    broker.set_fill(intent_id, 1.0, terminal=False)
+    assert broker.cancel(intent_id)
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+    manager.reconcile_open_intents(
+        broker_orders=[], get_order_by_client_order_id_fn=broker.lookup,
+    )
+    # The pre-disconnect acknowledgement arrives twice after the cancel/fill truth.
+    for _ in range(2):
+        manager.sync_external_order_state(
+            intent_id=intent_id, order_id=f"broker-{intent_id}",
+            client_order_id=intent_id, status="accepted", filled_qty=0.0,
+        )
+    assert store.get_intent(intent_id).status == "CANCELED"
+    assert sum(fill.fill_qty for fill in store.list_fills(intent_id)) == 1.0
     assert broker.count() == 1

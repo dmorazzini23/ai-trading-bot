@@ -16060,15 +16060,35 @@ class ExecutionEngine:
         now_dt = datetime.now(UTC)
         pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
         open_orders_started_mono = monotonic_time()
-        open_orders = self._list_open_orders_snapshot()
+        # Reporting reuses the complete synchronized inventory. It must not
+        # perform another historical broker scan or turn unavailable data into
+        # a claimed zero. Submission/exposure checks keep their own fresh reads.
+        snapshot = getattr(self, "_broker_sync", None)
+        snapshot_ts = _safe_float(getattr(snapshot, "timestamp", None))
+        snapshot_age_s = (
+            open_orders_started_mono - snapshot_ts
+            if snapshot_ts is not None and math.isfinite(snapshot_ts) else None
+        )
+        open_orders_available = (
+            snapshot is not None
+            and bool(getattr(snapshot, "fresh", False))
+            and bool(getattr(snapshot, "open_orders_fresh", False))
+            and not bool(getattr(self, "_broker_open_orders_unknown", False))
+            and isinstance(getattr(snapshot, "open_orders", None), (tuple, list))
+            and snapshot_age_s is not None
+            and 0.0 <= snapshot_age_s <= 60.0
+        )
+        open_orders = list(snapshot.open_orders) if open_orders_available else []
         open_orders_snapshot_ms = round(
             max(monotonic_time() - open_orders_started_mono, 0.0) * 1000
         )
         pending_open_ages: list[float] = []
+        pending_open_count = 0
         for order in open_orders:
             status = _normalize_status(_extract_value(order, "status")) or ""
             if status not in pending_statuses:
                 continue
+            pending_open_count += 1
             age_s = self._order_age_seconds(order, now_dt)
             if age_s is not None:
                 pending_open_ages.append(age_s)
@@ -16147,9 +16167,13 @@ class ExecutionEngine:
                 "sum_realized_bps_30m": round(float(sum_realized_bps_30m), 4),
                 "sum_realized_bps_30m_samples": int(sum_realized_bps_samples_30m),
                 "turnover_notional": round(float(turnover_notional), 4),
-                "open_pending_count": len(pending_open_ages),
+                "open_pending_count": pending_open_count if open_orders_available else None,
                 "open_orders_snapshot_ms": open_orders_snapshot_ms,
-                "oldest_pending_s": round(oldest_pending_s, 3),
+                "open_orders_snapshot_source": "broker_sync" if snapshot is not None else None,
+                "open_orders_snapshot_available": open_orders_available,
+                "open_orders_snapshot_age_s": snapshot_age_s,
+                "pending_age_unknown_count": pending_open_count - len(pending_open_ages) if open_orders_available else None,
+                "oldest_pending_s": round(oldest_pending_s, 3) if open_orders_available and len(pending_open_ages) == pending_open_count else None,
                 "broker_lock_active": bool(broker_lock_active),
                 "broker_lock_reason": broker_lock_reason,
                 "broker_lock_ttl_s": round(broker_lock_ttl_s, 1),

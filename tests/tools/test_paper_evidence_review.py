@@ -45,6 +45,12 @@ def test_gross_cost_pair_does_not_publish_unverified_fee_bps():
 def test_daily_cli_keeps_supported_session_and_slippage_pending_without_fee_contract(tmp_path, monkeypatch):
     from ai_trading.tools.paper_evidence_review import main
 
+    calls = []
+    def diagnostic(session, database):
+        calls.append((session, database))
+        return {"status": "evidence_gaps", "gaps": ["account_identity_unverified"]}
+    monkeypatch.setattr("ai_trading.tools.paper_evidence_review.session_diagnostic", diagnostic)
+
     fills = [{"fill_id": str(i), "order_id": str(i), "client_order_id": str(i), "account_id": "test", "trading_mode": "paper", "symbol": "AAPL", "side": "buy", "fill_qty": 1, "fill_price": 100.1, "expected_price": 100, "ts": f"2026-08-{3+i%5:02d}T15:00:00Z", "fee_amount": 0, "fee_source": "broker_payload"} for i in range(30)]
     boundaries = [{"timestamp": ts, "account_id": "test", "trading_mode": "paper", "positions_complete": True, "positions": {"AAPL": qty}} for ts, qty in [("2026-08-07T13:30:00Z", 24), ("2026-08-07T20:00:00Z", 30)]]
     orders = [{"order_id": row["order_id"], "ts": row["ts"], "filled_qty": 1} for row in fills]
@@ -60,6 +66,8 @@ def test_daily_cli_keeps_supported_session_and_slippage_pending_without_fee_cont
     monkeypatch.setattr("sys.argv", ["paper_evidence_review", "--runtime-dir", str(tmp_path), "--replay-report", str(replay), "--training-report", str(training), "--selection-report", str(selection), "--session", "2026-08-07", "--output", str(output)])
     main()
     report = json.loads(output.read_text())
+    assert calls == [("2026-08-07", None)]
+    assert report["order_funnel"]["gaps"] == ["account_identity_unverified"]
     assert report["session_audit"]["status"] == "evidence_gaps"
     assert report["session_audit"]["evidence_gap_counts"]["fees_missing"] == 6
     assert report["execution_cost_comparison"]["status"] == "comparison_available"

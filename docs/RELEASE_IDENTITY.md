@@ -1,8 +1,10 @@
 # Release identity preflight
 
-**Status (2026-09-27):** the packaged paper service has the pre-migration and
-post-migration release checks installed. Commit `edfefa72f` passed exact-tip
-CI and both checks at the September 27 paper restart. This does not grant
+**Status (2026-09-30 Pacific):** the packaged paper service has the pre-migration
+and post-migration release checks installed. Commit `5a8ae5ac5` passed exact-tip
+CI and both checks at the 03:05 UTC October 1 paper restart (September 30
+Pacific). The broker was closed and flat; model/replay qualification remains
+blocked. This does not grant
 live-trading authority; a new commit requires its own CI result, exposure
 review, release specification and restart checks.
 

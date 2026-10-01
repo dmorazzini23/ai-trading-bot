@@ -153,7 +153,10 @@ def evaluate_selected_limits(
         raise EquityRiskEvidenceError("equity_risk_cash_flow_unverified")
     if not (baseline.last_observed_at <= observation.observed_at <= observation.received_at <= current_time):
         raise EquityRiskEvidenceError("equity_risk_causality_invalid")
-    if current_time - observation.received_at > _MAX_AGE:
+    if (
+        current_time - observation.received_at > _MAX_AGE
+        or current_time - observation.observed_at > _MAX_AGE
+    ):
         raise EquityRiskEvidenceError("equity_risk_snapshot_stale")
     if observation.observed_at.astimezone(_EASTERN).date().isoformat() != baseline.session_date:
         raise EquityRiskEvidenceError("equity_risk_session_rollover")

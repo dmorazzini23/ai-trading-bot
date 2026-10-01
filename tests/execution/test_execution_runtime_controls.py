@@ -6363,9 +6363,11 @@ def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
         {"status": "pending_new", "duration_s": 12.0, "ack_timed_out": True},
         {"status": "canceled", "duration_s": 20.0, "ack_timed_out": False},
     ]
-    engine._list_open_orders_snapshot = lambda: [
-        SimpleNamespace(status="pending_new", created_at=now_dt - timedelta(seconds=180))
-    ]
+    engine._broker_sync = SimpleNamespace(
+        open_orders=(SimpleNamespace(status="pending_new", created_at=now_dt - timedelta(seconds=180)),),
+        timestamp=lt.monotonic_time(), fresh=True, open_orders_fresh=True,
+    )
+    engine._list_open_orders_snapshot = lambda: pytest.fail("KPI reporting must not rescan broker history")
 
     monkeypatch.setenv("AI_TRADING_EXEC_KPI_ALERTS_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_KPI_MIN_FILL_RATIO", "0.90")
@@ -6393,11 +6395,50 @@ def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     ]
     assert snapshots
     assert snapshots[-1].open_orders_snapshot_ms >= 0
+    assert snapshots[-1].open_orders_snapshot_source == "broker_sync"
+    assert snapshots[-1].open_orders_snapshot_available is True
+    assert snapshots[-1].open_pending_count == 1
     assert "ALERT_EXEC_KPI_LOW_FILL_RATIO" in emitted
     assert "ALERT_EXEC_KPI_HIGH_CANCEL_RATIO" in emitted
     assert "ALERT_EXEC_KPI_HIGH_CANCEL_NEW_RATIO" in emitted
     assert "ALERT_EXEC_KPI_MEDIAN_PENDING_HIGH" in emitted
     assert "ALERT_EXEC_KPI_OPEN_PENDING_AGED" in emitted
+
+
+@pytest.mark.parametrize("failure", ["missing", "stale", "failed", "future", "unknown"])
+def test_execution_kpi_unavailable_inventory_is_unknown_without_broker_read(failure, caplog):
+    engine = _engine_stub()
+    engine._cycle_order_outcomes = [{"status": "skipped", "reason": "precheck"}]
+    engine._list_open_orders_snapshot = lambda: pytest.fail("reporting caused a broker read")
+    engine._broker_sync = None if failure == "missing" else SimpleNamespace(
+        open_orders=(), fresh=failure != "failed", open_orders_fresh=True,
+        timestamp=lt.monotonic_time() + (1 if failure == "future" else -61 if failure == "stale" else 0),
+    )
+    engine._broker_open_orders_unknown = failure == "unknown"
+    caplog.set_level(logging.INFO)
+    engine._emit_cycle_execution_kpis()
+    snapshot = next(r for r in caplog.records if r.message == "EXECUTION_KPI_SNAPSHOT")
+    assert snapshot.open_orders_snapshot_available is False
+    assert snapshot.open_pending_count is None
+    assert snapshot.oldest_pending_s is None
+
+
+def test_execution_kpi_counts_pending_order_with_unknown_age(caplog):
+    engine = _engine_stub()
+    engine._cycle_order_outcomes = [{"status": "skipped", "reason": "precheck"}]
+    engine._broker_sync = SimpleNamespace(
+        open_orders=(SimpleNamespace(status="accepted"),),
+        timestamp=lt.monotonic_time(), fresh=True, open_orders_fresh=True,
+    )
+    engine._order_age_seconds = lambda order, now: None
+    engine._list_open_orders_snapshot = lambda: pytest.fail("reporting caused a broker read")
+    caplog.set_level(logging.INFO)
+    engine._emit_cycle_execution_kpis()
+    snapshot = next(r for r in caplog.records if r.message == "EXECUTION_KPI_SNAPSHOT")
+    assert snapshot.open_orders_snapshot_available is True
+    assert snapshot.open_pending_count == 1
+    assert snapshot.pending_age_unknown_count == 1
+    assert snapshot.oldest_pending_s is None
 
 
 def test_execution_kpi_low_fill_alert_respects_min_submitted(monkeypatch) -> None:
