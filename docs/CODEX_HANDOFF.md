@@ -1,13 +1,52 @@
 # Current handoff
 
+## October 2 Pacific closing snapshot
+
+Read-only broker check at 13:02 Pacific: market closed, ACTIVE paper account,
+zero positions/active orders, six paginated broker fills. Three one-share
+round trips: AAPL -$1.88, AMZN +$0.82, MSFT -$0.02; total -$1.08 gross.
+Broker equity change also -$1.08. All fill fee amounts remain unknown; neither
+equality nor absent fee activities establishes verified net P&L. Today's
+scheduled report published at 13:38 Pacific: all local sources stable, six-fill
+position arithmetic matched, five TCA matches/one AMZN gap and six unknown fees.
+Separate today-only raw broker comparison passed all six order quantities and
+execution counts; matching counts do not certify individual fill identity.
+The broader historical report still has 19 execution-count mismatches.
+Service active with zero automatic restarts; broker/OMS health fresh/consistent,
+only existing stale-model/replay qualification flags.
+Closing local funnel: 476 decisions, seven intents/acks, six fills and one
+canceled MSFT buy. Six intent/decision trace links pass. The late AMZN sell
+lacks decision_trace_id and reports account_identity_consistent=false even
+though its intent account matches the observed broker. Two diagnostic gaps:
+decision_intent_linkage_incomplete, account_identity_unverified. Earlier
+ordinary-path verification was a bounded sample, not proof of every exit path.
+Root cause and prospective repair now documented in
+`docs/EOD_EXIT_ACCOUNTING_REPAIR_20261002.md`: EOD bypassed the normal decision
+and TCA writers; the lifecycle writer discarded the genuine trigger time.
+The patch adds a stable operational exit trace/decision before claim, retains
+trigger time/account, and captures fill receipts without invented benchmarks,
+fees or costs. Retries retain original durable decision identity. Historical
+records are unchanged. 136 focused tests and final required validation (113
+mapped tests, Ruff, mypy/compile, health/non-sending smoke) passed. Current runtime
+remains `7e2b81612`; new commit CI and release checks are pending.
+Next: publish reviewed commit for
+exact-tip CI, deploy after close only on passing gates/flat broker, then verify
+the next naturally occurring EOD reduction. Unknown fees and this historical
+AMZN gap remain unavailable evidence; do not force trades or fabricate joins.
+Today's report investigation is complete; its `evidence_pending` status remains
+appropriate. Details and exact acceptance criteria are in the repair report.
+Private artifacts: `/tmp/ai-trading-status-20261002{,-activities}.json` and
+`/tmp/ai-trading-closing-funnel-20261002.json`.
+
 ## October 1 Pacific after-close follow-through
 
 Three-item evidence and patch summary:
 `docs/AFTER_CLOSE_FOLLOWTHROUGH_20261001.md`.
-The owner approved and published exact commit `3da931cff31bedfb22be5b5ef768b1fc5bf0d3db`.
-CI run `36959017627` passed: **7,327 passed, five skipped, 80.21% coverage**;
-CodeQL, SBOM, Workflow Lint, replay, research backtest and determinism passed.
-Full log: `/tmp/ai-trading-ci-3da931cff.log`. Pre-deployment boundary review found
+The owner approved and published follow-up `7e2b81612d2745bdf1b3bcc7508e912ab36a0cd6`.
+Exact-tip CI `36961650029` passed: **7,330 passed, five skipped, 80.21% coverage**;
+CodeQL, SBOM, Workflow Lint, replay, research backtest and all determinism seeds
+passed. Full log: `/tmp/ai-trading-ci-7e2b81612.log`.
+The earlier `3da931cff` also passed CI. Pre-deployment boundary review found
 the canonical lifecycle writer rebuilt metadata without account identity.
 The follow-up verifies/persists the current cached broker account before the
 durable claim; conflicts stop and unavailable identity stays unknown. The
@@ -17,7 +56,19 @@ passed 51 mapped tests, Ruff, mypy (three paths), compilation, forbidden pattern
 live health and the non-sending incident snapshot. Logs:
 `/tmp/three-items-durable-writer-tests.log` and
 `/tmp/three-items-durable-writer-validation.log`.
-Do not deploy `3da931cff` alone. Runtime/spec stay at `d20388f88`.
+Runtime checkout and installed specification now identify `7e2b81612`.
+Restart completed October 1 **21:15 Pacific** (October 2 04:15 UTC), after the
+broker clock confirmed closed, account ACTIVE and zero positions/active orders.
+Both installed-checkout and automatic startup identity phases passed.
+Post-start health passed at 21:16 Pacific: fresh connected broker, flat,
+consistent OMS invariants/lifecycle, zero automatic restarts. HTTP 503 retains
+only `required_model_stale` and `replay_live_parity_gate_failed`.
+Non-sending incident snapshot passed; no notification sent by this task.
+Its edge-realism, go/no-go and degraded-health triggers remain diagnostic
+blockers; a passing snapshot smoke check does not establish qualification.
+Reports: `/tmp/ai-trading-followup-installed-{pre,final}.json` and
+`/tmp/ai-trading-three-items-post-deployment.json`. Rollback spec:
+`/tmp/ai-trading-release-spec-before-3da931cff.json` (previous `d20388f88`).
 Complete order lookup remains 79 history pages / 39,427 response rows including
 overlap (~4.08 seconds after close); no latency improvement is claimed. Rejected
 the cursor prototype because newly visible old/null-timestamp pending orders
@@ -34,14 +85,25 @@ Validation: 142 mapped tests, Ruff, mypy (13 paths), compilation, forbidden
 patterns, live health and non-sending incident snapshot passed. Final streaming
 pagination adjustment passed 29 affected tests, Ruff, mypy (two paths) and
 compilation. Logs: `/tmp/three-items-final-agent-validation.log` and
-`/tmp/three-items-inventory-final-tests.log`. Read-only candidate broker check
-was closed and flat; service remains at `d20388f88`, active with no automatic
-restarts. Model/replay safeguards and research budgets/holdout remain unchanged.
-Next: finalize the follow-up and obtain its exact-commit public push approval,
-exact-tip CI, identity/exposure checks,
-after-close deployment and prospective session verification. The full-suite
-result above applies to `3da931cff`; its writer correction still requires its
-own exact-tip CI result before deployment.
+`/tmp/three-items-inventory-final-tests.log`. Model/replay safeguards and research
+budgets/holdout remain unchanged. Deployment and prospective account-path
+verification are complete within today's observed sample. October 2 ordinary
+session diagnostic: 230 durable decisions, three intents/acks (one canceled
+MSFT buy and the two filled AAPL orders), three causal local trace links and
+zero linkage gaps. All three intent accounts match the fresh broker capture;
+four pending/resolved TCA rows cover both filled broker order IDs and match
+that account. This does not establish fee completeness or live execution proof.
+Artifacts: `/tmp/ai-trading-goal-session-funnel-20261002.json` and
+`/tmp/ai-trading-goal-tca-tail-20261002.jsonl` (private identifiers stay local).
+The ordinary cycle wrote the new release's run manifest at 06:30 Pacific
+October 2 (13:30 UTC). No cycle/order was forced for verification.
+The saved six-area goal remains blocked: source-backed live equity/cash and
+approved baselines plus risk-path integration, cross-host recovery/fencing,
+verified accounting costs/boundaries and model/replay qualification are still
+unfinished. Controlled noncurrent-version recovery and the real local
+PostgreSQL owner-crash drill already passed; do not list them as untested.
+Local documentation updates in this main worktree record deployment; they have
+not been published. Runtime checkout stays clean at its CI-tested code release.
 
 ## Approved improvement release continuation (October 1 UTC)
 

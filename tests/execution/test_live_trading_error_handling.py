@@ -1,4 +1,7 @@
 import sys
+import json
+import sqlite3
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +13,178 @@ import ai_trading.execution.live_trading as lt
 from ai_trading.execution import guards
 from ai_trading.execution.engine import OrderManager
 from ai_trading.oms.intent_store import IntentStore
+
+
+@pytest.mark.parametrize("signed_qty", [1, -1])
+@pytest.mark.parametrize("account", [{"id": "paper-account"}, None])
+def test_eod_exit_actual_execution_persists_causal_decision_before_submit(
+    engine_factory, monkeypatch, tmp_path, signed_qty, account,
+):
+    from ai_trading.core.execution_flow import exit_all_positions
+    from ai_trading.oms.decision_events import reset_decision_event_store_cache
+    from ai_trading.tools.order_funnel import build_funnel
+
+    database = tmp_path / "oms.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tmp_path / "tca.jsonl"))
+    reset_decision_event_store_cache()
+    store = IntentStore(url=f"sqlite:///{database}", event_dual_write_enabled=True)
+    manager = OrderManager()
+    manager._intent_store = store
+    engine = engine_factory()
+    engine.execution_mode = "paper"
+    engine.order_manager = manager
+    engine._get_account_snapshot = lambda: account
+    engine._position_quantity = lambda _symbol: signed_qty
+    engine._pre_execution_order_checks = lambda _order: True
+    calls = []
+
+    def submit(symbol, side, quantity, **kwargs):
+        with sqlite3.connect(database) as connection:
+            decision = connection.execute("SELECT context_json FROM decision_events").fetchone()
+            intent = connection.execute("SELECT decision_ts, metadata_json FROM intents").fetchone()
+        assert decision is not None and intent is not None
+        context = json.loads(decision[0])
+        metadata = json.loads(intent[1])
+        assert context["lineage"]["decision_ts"] == intent[0] == metadata["decision_ts"]
+        assert context["lineage"]["decision_ts_basis"] == "runtime_eod_flatten_trigger"
+        assert context["lineage"]["decision_trace_id"] == metadata["decision_trace_id"]
+        assert context["gates"] == ["OPERATIONAL_EXIT_REQUESTED"]
+        calls.append((symbol, side, quantity))
+        return {"id": "broker-eod", "symbol": symbol, "side": side, "qty": quantity, "status": "accepted", "filled_qty": "0"}
+
+    engine.submit_market_order = submit
+    runtime = SimpleNamespace(
+        api=SimpleNamespace(get_all_positions=lambda: [SimpleNamespace(symbol="AMZN", qty=signed_qty)]),
+        execution_engine=engine,
+    )
+    try:
+        exit_all_positions(runtime)
+        assert calls == [("AMZN", "sell" if signed_qty > 0 else "buy", 1)]
+        receipt = json.loads((tmp_path / "tca.jsonl").read_text().splitlines()[0])
+        assert receipt["decision_trace_id"] and receipt["order_id"] == "broker-eod"
+        assert receipt["account_id"] == (account["id"] if account else None)
+        assert receipt["fees"] is None and receipt["decision_price"] is None
+        assert receipt["promotion_eligible"] is False
+        intent = store.list_intents()[0]
+        store.record_fill(intent.intent_id, fill_qty=1, fill_price=250)
+        engine._reconcile_pending_tca_from_fill(
+            symbol="AMZN", side="sell" if signed_qty > 0 else "buy",
+            fill_qty=1, fill_price=250, timestamp=datetime.now(UTC),
+            order_id="broker-eod", client_order_id=intent.intent_id,
+            order_status="filled", fee_amount=None, source="simulated_broker_fill",
+        )
+        resolved = json.loads((tmp_path / "tca.jsonl").read_text().splitlines()[-1])
+        assert resolved["evidence_type"] == "operational_exit_fill"
+        assert resolved["pending_resolved"] is True
+        assert resolved["fees"] is None and resolved["is_bps"] is None
+        assert resolved["decision_price"] is None and resolved["promotion_eligible"] is False
+        # Repeated flatten requests must not invent another decision or claim.
+        exit_all_positions(runtime)
+        assert len(calls) == 1
+        with sqlite3.connect(database) as connection:
+            connection.row_factory = sqlite3.Row
+            decisions, intents, events, fills = [
+                [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                for table in ("decision_events", "intents", "oms_events", "intent_fills")
+            ]
+        assert len(decisions) == 1
+        report = build_funnel(decisions, intents, events, fills)
+        assert report["intents"][0]["linkage"] == "linked_local_trace"
+        assert report["intents"][0]["account_identity_consistent"] is bool(account)
+        assert report["counts"]["final_accepted_decisions"] == 0
+    finally:
+        store.close()
+        reset_decision_event_store_cache()
+
+
+def test_eod_audit_failure_preserves_reduction_and_reports_missing_decision(
+    engine_factory, monkeypatch, tmp_path, caplog,
+):
+    from ai_trading.core.execution_flow import exit_all_positions
+    from ai_trading.oms import decision_events
+
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tmp_path / "tca.jsonl"))
+    store = IntentStore(url=f"sqlite:///{tmp_path / 'oms.db'}")
+    manager = OrderManager()
+    manager._intent_store = store
+    engine = engine_factory()
+    engine.order_manager = manager
+    engine.execution_mode = "paper"
+    engine._get_account_snapshot = lambda: {"id": "paper-account"}
+    engine._position_quantity = lambda _symbol: 1
+    engine._pre_execution_order_checks = lambda _order: True
+    calls = []
+
+    def fail_audit(*_args, **_kwargs):
+        raise RuntimeError("decision audit unavailable")
+
+    monkeypatch.setattr(decision_events, "emit_decision_event_from_payload", fail_audit)
+    engine.submit_market_order = lambda symbol, side, quantity, **kwargs: calls.append(side) or {
+        "id": "broker-eod", "symbol": symbol, "side": side, "qty": quantity, "status": "accepted", "filled_qty": "0",
+    }
+    runtime = SimpleNamespace(
+        api=SimpleNamespace(get_all_positions=lambda: [SimpleNamespace(symbol="AMZN", qty=1)]),
+        execution_engine=engine,
+    )
+    try:
+        exit_all_positions(runtime)
+        assert calls == ["sell"]
+        assert "EOD_EXIT_DECISION_EVIDENCE_UNAVAILABLE" in caplog.text
+        assert len(store.list_intents()) == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("existing_intent", [False, True])
+def test_eod_decision_retry_deduplicates_and_never_backfills_existing_intent(
+    engine_factory, monkeypatch, tmp_path, existing_intent,
+):
+    from ai_trading.oms.decision_events import reset_decision_event_store_cache
+
+    database = tmp_path / "oms.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    reset_decision_event_store_cache()
+    store = IntentStore(url=f"sqlite:///{database}", event_dual_write_enabled=True)
+    manager = OrderManager()
+    manager._intent_store = store
+    engine = engine_factory()
+    engine.order_manager = manager
+    engine._get_account_snapshot = lambda: {"id": "paper-account"}
+    begin = manager.begin_external_order_lifecycle
+    arguments = dict(
+        client_order_id="eod-retry", symbol="AMZN", side="sell", quantity=1,
+        order_type="market", expected_price=None, expected_edge_bps=None,
+        closing_position=True, model_id=None, model_version=None,
+        config_snapshot_hash=None, dataset_hash=None, feature_version=None,
+        model_artifact_hash=None, policy_hash=None, decision_trace_id="exit-trace",
+        decision_ts="2026-10-02T19:55:00+00:00", decision_ts_basis="runtime_eod_flatten_trigger",
+    )
+    try:
+        if existing_intent:
+            begin(intent_id="eod-retry", idempotency_key="eod-retry", symbol="AMZN",
+                  side="sell", quantity=1, decision_ts=arguments["decision_ts"],
+                  metadata={"historical": True})
+        else:
+            def fail_claim(**_kwargs):
+                raise RuntimeError("interrupted before intent creation")
+            monkeypatch.setattr(manager, "begin_external_order_lifecycle", fail_claim)
+            assert engine._begin_durable_order_lifecycle(**arguments) is None
+            monkeypatch.setattr(manager, "begin_external_order_lifecycle", begin)
+        engine._begin_durable_order_lifecycle(**arguments)
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("SELECT count(*) FROM decision_events").fetchone()[0] == (0 if existing_intent else 1)
+            assert connection.execute("SELECT count(*) FROM intents").fetchone()[0] == 1
+            metadata = json.loads(connection.execute("SELECT metadata_json FROM intents").fetchone()[0])
+        if existing_intent:
+            assert metadata == {"historical": True}
+    finally:
+        store.close()
+        reset_decision_event_store_cache()
 
 
 @pytest.fixture

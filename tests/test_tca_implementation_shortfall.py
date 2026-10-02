@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from ai_trading.analytics.tca import (
     ExecutionBenchmark,
     FillSummary,
@@ -117,6 +119,62 @@ def test_resolve_pending_tca_from_fill_updates_pending_fields() -> None:
     assert resolved["fill_latency_ms"] == 2000
     assert resolved["benchmark"]["first_fill_ts"] == fill_ts.isoformat()
     assert resolved["pending_resolved_source"] == "unit_test"
+
+
+@pytest.mark.parametrize("fee", [None, 0.0, 0.03])
+def test_operational_exit_fill_preserves_unknown_benchmark_and_fee_total(fee) -> None:
+    pending = {
+        "client_order_id": "eod-1", "account_id": "paper-account",
+        "decision_ts": "2026-10-02T19:55:00+00:00",
+        "decision_ts_basis": "runtime_eod_flatten_trigger",
+        "evidence_type": "operational_exit_request", "promotion_eligible": False,
+        "pending_event": True, "fees": None,
+    }
+    fill_ts = datetime(2026, 10, 2, 19, 55, 1, tzinfo=UTC)
+    resolved = resolve_pending_tca_from_fill(
+        pending_record=pending, fill_price=251.48, fill_qty=1,
+        status="filled", fill_ts=fill_ts, fee_amount=fee, source="broker_stream",
+    )
+    assert resolved["fill_price"] == 251.48
+    assert resolved["account_id"] == "paper-account"
+    assert resolved["decision_ts"] == pending["decision_ts"]
+    assert resolved["pending_resolved_ts"] == fill_ts.isoformat()
+    assert resolved["fees"] == fee
+    assert resolved["total_fee_verified"] is False
+    assert resolved["promotion_eligible"] is False
+    for field in ("decision_price", "arrival_price", "is_bps", "spread_paid_bps", "fill_latency_ms"):
+        assert resolved[field] is None
+    with pytest.raises(ValueError, match="operational_exit_fill_timestamp_missing"):
+        resolve_pending_tca_from_fill(pending_record=pending, fill_price=251.48, fill_qty=1, status="filled")
+    ordinary = {**pending, "evidence_type": "model_request", "promotion_eligible": True}
+    with pytest.raises(ValueError, match="pending_record_missing_decision_price"):
+        resolve_pending_tca_from_fill(pending_record=ordinary, fill_price=251.48, fill_qty=1, status="filled", fill_ts=fill_ts)
+
+
+def test_operational_exit_partial_fill_can_advance_without_duplicate_or_stale_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "tca.jsonl"
+    pending = {
+        "client_order_id": "eod-1", "pending_event": True,
+        "decision_ts_basis": "runtime_eod_flatten_trigger",
+        "evidence_type": "operational_exit_request", "promotion_eligible": False,
+    }
+    path.write_text(json.dumps(pending) + "\n")
+    def reconcile(qty, status, second):
+        return reconcile_pending_tca_with_fill(
+            str(path), client_order_id="eod-1", fill_price=251.48,
+            fill_qty=qty, status=status,
+            fill_ts=datetime(2026, 10, 2, 19, 55, second, tzinfo=UTC),
+        )
+    assert reconcile(1, "partially_filled", 1) == (True, "reconciled")
+    assert reconcile(1, "partially_filled", 1) == (False, "already_resolved")
+    assert reconcile(2, "filled", 0) == (False, "already_resolved")
+    assert reconcile(2, "filled", 2) == (True, "reconciled")
+    assert reconcile(2, "filled", 2) == (False, "already_resolved")
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 3
+    assert rows[0] == pending and rows[1]["partial_fill"] is True
+    assert rows[2]["resolved_fill_qty"] == 2 and rows[2]["partial_fill"] is False
+    assert rows[2]["fees"] is None and rows[2]["promotion_eligible"] is False
 
 
 def test_resolve_pending_tca_from_fill_cover_slippage_is_not_inverted() -> None:

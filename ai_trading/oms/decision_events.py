@@ -4,6 +4,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Mapping
+from dataclasses import replace
 import hashlib
 import json
 from threading import RLock
@@ -297,6 +298,7 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         "account_id_source",
         "source_timestamp",
         "decision_ts",
+        "decision_ts_basis",
         "quote_timestamp",
         "order_type",
         "session_regime",
@@ -448,6 +450,7 @@ def emit_decision_event_from_payload(
     payload: Mapping[str, Any],
     *,
     event_source: str = "decision_record",
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Persist immutable decision/OMS audit events from a normalized decision payload."""
 
@@ -460,7 +463,7 @@ def emit_decision_event_from_payload(
         symbol=symbol,
         decision_action=_decision_action(payload),  # type: ignore[arg-type]
         decision_source=str(event_source or "decision_record"),
-        idempotency_key=_idempotency_key(payload),
+        idempotency_key=str(idempotency_key or "").strip() or _idempotency_key(payload),
         strategy_id=_strategy_id(payload),
         confidence=_confidence(payload),
         expected_edge_bps=_expected_edge_bps(payload),
@@ -473,6 +476,22 @@ def emit_decision_event_from_payload(
     ).normalized()
     try:
         decision_persisted = bool(store.append_decision_event(decision))
+        if not decision_persisted and idempotency_key:
+            rows = store.list_decision_events(idempotency_key=decision.idempotency_key, limit=1)
+            if not rows:
+                raise RuntimeError("Duplicate decision identity unavailable")
+            row = rows[0]
+            # Retry after interruption must reference the durable decision,
+            # including its original timestamp, rather than a new UUID.
+            decision = replace(
+                decision,
+                **{key: row[key] for key in (
+                    "decision_uuid", "decision_ts", "symbol", "strategy_id", "decision_action",
+                    "confidence", "expected_edge_bps", "policy_hash", "model_hash", "config_hash",
+                )},
+                features=json.loads(row["features_json"]),
+                context=json.loads(row["context_json"]),
+            )
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
         logger.warning(
             "DECISION_EVENT_APPEND_FAILED",

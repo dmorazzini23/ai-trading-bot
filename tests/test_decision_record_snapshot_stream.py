@@ -13,6 +13,34 @@ from ai_trading.oms.decision_events import reset_decision_event_store_cache
 from ai_trading.oms.event_store import EventStore
 
 
+def test_explicit_decision_retry_uses_original_uuid_time_and_context(monkeypatch, tmp_path):
+    store = EventStore(url=f"sqlite:///{tmp_path / 'retry.db'}")
+    monkeypatch.setattr(decision_events, "_resolve_event_store", lambda: store)
+    append_oms = store.append_oms_event_payload
+    def interrupt_oms(**_kwargs):
+        raise RuntimeError("interrupted after durable decision")
+    monkeypatch.setattr(store, "append_oms_event_payload", interrupt_oms)
+    payload = {
+        "symbol": "AMZN", "bar_ts": "2026-10-02T19:55:00+00:00",
+        "decision_action": "EXIT", "decision_trace_id": "exit-trace",
+        "order": {"client_order_id": "eod-1", "side": "sell", "qty": 1},
+        "metrics": {"account_id": "original-account"},
+    }
+    first = decision_events.emit_decision_event_from_payload(payload, idempotency_key="eod-1")
+    monkeypatch.setattr(store, "append_oms_event_payload", append_oms)
+    retry = decision_events.emit_decision_event_from_payload(
+        {**payload, "bar_ts": "2026-10-02T19:56:00+00:00", "metrics": {"account_id": "different-account"}},
+        idempotency_key="eod-1",
+    )
+    assert retry["decision_uuid"] == first["decision_uuid"]
+    assert len(store.list_decision_events()) == 1
+    rows = store.list_oms_events(intent_id="eod-1")
+    assert len(rows) == 1 and rows[0]["event_ts"] == payload["bar_ts"]
+    event_payload = json.loads(rows[0]["payload_json"])
+    assert event_payload["decision_uuid"] == first["decision_uuid"]
+    assert event_payload["lineage"]["account_id"] == "original-account"
+
+
 class _DummyDecisionRecord:
     def to_dict(self) -> dict[str, object]:
         return {

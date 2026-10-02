@@ -1000,7 +1000,8 @@ class EventStore:
                 conn.rollback()
         return [dict(row) for row in rows]
 
-    def list_decision_events(self, *, symbol: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+    def list_decision_events(self, *, symbol: str | None = None, limit: int = 500,
+                             idempotency_key: str | None = None) -> list[dict[str, Any]]:
         """List decision events optionally filtered by symbol."""
 
         assert _DECISION_EVENTS_TABLE is not None
@@ -1009,6 +1010,8 @@ class EventStore:
         ).limit(max(1, int(limit)))
         if symbol not in (None, ""):
             stmt = stmt.where(_DECISION_EVENTS_TABLE.c.symbol == str(symbol).upper())
+        if idempotency_key is not None:
+            stmt = stmt.where(_DECISION_EVENTS_TABLE.c.idempotency_key == idempotency_key)
         with self._engine.connect() as conn:
             result = conn.execute(stmt)
             try:

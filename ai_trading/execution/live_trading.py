@@ -262,7 +262,7 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
     )
 
 
-from ai_trading.analytics.tca import finalize_stale_pending_tca, reconcile_pending_tca_with_fill
+from ai_trading.analytics.tca import finalize_stale_pending_tca, reconcile_pending_tca_with_fill, write_tca_record
 from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
     is_safe_mode_active,
@@ -16966,6 +16966,8 @@ class ExecutionEngine:
         decision_quote_age_ms: float | None = None,
         execution_profile: str | None = None,
         account_id: str | None = None,
+        decision_ts: str | None = None,
+        decision_ts_basis: str | None = None,
     ) -> str | None:
         """Create and claim the canonical durable OMS intent for a live submit."""
 
@@ -16982,6 +16984,9 @@ class ExecutionEngine:
         metadata: dict[str, Any] = {
             "account_id": observed_account_id or None,
             "account_id_source": "broker_get_account" if observed_account_id else None,
+            "decision_ts": decision_ts,
+            "source_timestamp": decision_ts,
+            "decision_ts_basis": decision_ts_basis,
             "execution_mode": str(getattr(self, "execution_mode", "") or "").strip().lower() or None,
             "order_type": str(order_type or "").strip().lower() or None,
             "expected_price": float(expected_price) if expected_price not in (None, "") else None,
@@ -17028,6 +17033,41 @@ class ExecutionEngine:
         metadata = {
             key: value for key, value in metadata.items() if value not in (None, "")
         }
+        if closing_position and decision_ts_basis == "runtime_eod_flatten_trigger":
+            # Capture the observed reduction request before claim/submission.
+            # An existing intent is immutable evidence, never a backfill target.
+            store = getattr(manager, "_intent_store", None)
+            existing = store.get_intent(token) if store is not None else None
+            try:
+                trigger_time = datetime.fromisoformat(str(decision_ts))
+                trigger_known = trigger_time.tzinfo is not None and bool(decision_trace_id)
+            except ValueError:
+                trigger_known = False
+            if not trigger_known:
+                logger.warning("EOD_EXIT_DECISION_EVIDENCE_UNAVAILABLE", extra={"symbol": symbol})
+            elif existing is None and store is not None:
+                from ai_trading.oms.decision_events import emit_decision_event_from_payload
+
+                try:
+                    result = emit_decision_event_from_payload(
+                        {
+                            "symbol": symbol,
+                            "bar_ts": decision_ts,
+                            "decision_action": "EXIT",
+                            "decision_trace_id": decision_trace_id,
+                            "gates": ["OPERATIONAL_EXIT_REQUESTED"],
+                            "order": {"client_order_id": token, "side": side, "qty": quantity},
+                            "metrics": metadata,
+                        },
+                        event_source="runtime_eod_flatten_trigger",
+                        idempotency_key=f"eod-exit-decision:{token}",
+                    )
+                    if not result.get("decision_uuid"):
+                        logger.warning("EOD_EXIT_DECISION_EVIDENCE_UNAVAILABLE", extra={"symbol": symbol})
+                except LIVE_TRADING_FALLBACK_EXC:
+                    # Audit failure must stay visible without disabling a
+                    # broker-verified risk reduction or weakening its gates.
+                    logger.warning("EOD_EXIT_DECISION_EVIDENCE_UNAVAILABLE", extra={"symbol": symbol}, exc_info=True)
         try:
             created_intent_id = begin_fn(
                 intent_id=token,
@@ -17035,7 +17075,7 @@ class ExecutionEngine:
                 symbol=symbol,
                 side=side,
                 quantity=float(quantity),
-                decision_ts=datetime.now(UTC).isoformat(),
+                decision_ts=decision_ts or datetime.now(UTC).isoformat(),
                 strategy_id=strategy_id,
                 expected_edge_bps=expected_edge_bps,
                 metadata=metadata,
@@ -23799,6 +23839,10 @@ class ExecutionEngine:
                 decision_trace_id=decision_trace_id_hint,
                 account_id=(str(metadata_raw.get("account_id") or "").strip() or None)
                 if isinstance(metadata_raw, Mapping) else None,
+                decision_ts=(str(metadata_raw.get("decision_ts") or "").strip() or None)
+                if isinstance(metadata_raw, Mapping) else None,
+                decision_ts_basis=(str(metadata_raw.get("decision_ts_basis") or "").strip() or None)
+                if isinstance(metadata_raw, Mapping) else None,
                 strategy_id=(str(metadata_raw.get("strategy_id") or "").strip() or None)
                 if isinstance(metadata_raw, Mapping) else None,
                 session_regime=(
@@ -24828,6 +24872,44 @@ class ExecutionEngine:
             final_payload["prev_status"] = last_prev_status
         if last_new_status is not None:
             final_payload["new_status"] = last_new_status
+        if (
+            closing_position
+            and isinstance(metadata_raw, Mapping)
+            and metadata_raw.get("decision_ts_basis") == "runtime_eod_flatten_trigger"
+            and order_id_display
+            and _resolve_bool_env("AI_TRADING_TCA_ENABLED") is not False
+            and _resolve_bool_env("AI_TRADING_TCA_WRITE_PENDING_EVENTS") is not False
+        ):
+            # A protective exit is operational evidence, never a model sample.
+            # Do not substitute a fill or fallback mark for an arrival quote.
+            account_snapshot = self._get_account_snapshot()
+            account_id = _extract_value(account_snapshot, "id", "account_id") if account_snapshot is not None else None
+            receipt = {
+                "ts": datetime.now(UTC).isoformat(),
+                "symbol": symbol, "side": mapped_side, "qty": requested_qty,
+                "order_id": str(order_id_display), "broker_order_id": str(order_id_display),
+                "client_order_id": client_order_id,
+                "account_id": str(account_id).strip() if account_id else None,
+                "account_id_source": "broker_get_account" if account_id else None,
+                "decision_trace_id": decision_trace_id_hint,
+                "decision_ts": metadata_raw.get("decision_ts"),
+                "source_timestamp": metadata_raw.get("decision_ts"),
+                "decision_ts_basis": "runtime_eod_flatten_trigger",
+                "evidence_type": "operational_exit_request", "promotion_eligible": False,
+                "pending_event": True, "status": order_status_lower,
+                "decision_price": None, "arrival_price": None,
+                "submit_price_reference": None, "benchmark": {},
+                "fees": None, "total_fee_verified": False,
+                "is_bps": None, "spread_paid_bps": None, "fill_latency_ms": None,
+            }
+            try:
+                tca_path = resolve_runtime_artifact_path(
+                    str(_runtime_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")),
+                    default_relative="runtime/tca_records.jsonl",
+                )
+                write_tca_record(str(tca_path), receipt)
+            except LIVE_TRADING_FALLBACK_EXC:
+                logger.warning("EOD_EXIT_TCA_EVIDENCE_UNAVAILABLE", extra={"symbol": symbol}, exc_info=True)
         if order_status_lower == "filled":
             logger.info("ORDER_FILLED", extra=final_payload)
         elif order_status_lower in {"canceled", "cancelled", "expired", "done_for_day"}:

@@ -65,10 +65,12 @@ described in [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md). It compares the tested
 commit, effective config/profile, applied migration and configured model bytes
 against a reviewed release specification. The installed packaged unit enforces
 checks before and after Alembic migration and refuses startup without a valid
-release specification. Its last verified paper start was the owner-run October 1,
-2026 07:30 Pacific restart, using CI-tested commit `d20388f88`, with both installed
-release checks passing. At 07:35 Pacific the broker held one MSFT paper share and
-no active orders; OMS consistency passed. For each subsequent candidate, review a
+release specification. Its last verified paper start was October 1,
+2026 21:15 Pacific after-close restart, using CI-tested commit `7e2b81612`, with
+both installed release checks passing. The broker was closed, ACTIVE and flat
+before restart; post-start broker freshness and OMS consistency passed at
+21:16 Pacific, with zero positions/active orders and automatic restarts.
+For each subsequent candidate, review a
 passing report with CI, broker exposure and rollback evidence before updating
 the release specification or restarting. Do not restart during market hours.
 

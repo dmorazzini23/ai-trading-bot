@@ -4,6 +4,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 """Execution flow helpers decoupled from bot_engine."""
 
 from json import JSONDecodeError
+import hashlib
 from typing import Any, Mapping, cast
 import time as pytime
 from threading import Thread
@@ -903,12 +904,16 @@ def exit_all_positions(ctx: Any) -> None:
                     "eod_exit",
                     position=pos,
                 )
-                exit_metadata["decision_ts"] = datetime.now(UTC).isoformat()
+                decision_time = datetime.now(UTC)
+                exit_metadata["decision_ts"] = decision_time.isoformat()
                 exit_metadata["decision_ts_basis"] = "runtime_eod_flatten_trigger"
                 # Keep broker idempotency stable across cycles and restarts. A
                 # timeout is ambiguous, not evidence that no order was accepted.
-                session_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+                session_date = decision_time.astimezone(ZoneInfo("America/New_York")).date().isoformat()
                 client_order_id = f"eod-{session_date}-{pos.symbol}-{side}"
+                exit_metadata["decision_trace_id"] = hashlib.sha256(
+                    f"eod-exit|{client_order_id}".encode("utf-8")
+                ).hexdigest()[:24]
                 try:
                     execute_order(
                         pos.symbol,

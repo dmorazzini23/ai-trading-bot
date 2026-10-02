@@ -347,6 +347,36 @@ def resolve_pending_tca_from_fill(
     if decision_price is None:
         decision_price = _safe_float(pending_record.get("submit_price_reference"))
     if decision_price is None or decision_price <= 0.0:
+        if (
+            pending_record.get("evidence_type") == "operational_exit_request"
+            and pending_record.get("promotion_eligible") is False
+            and pending_record.get("decision_ts_basis") == "runtime_eod_flatten_trigger"
+        ):
+            # Resolve the observed execution without inventing an arrival
+            # benchmark, verified fee total, or modeled implementation cost.
+            fill_timestamp = _coerce_utc_datetime(fill_ts)
+            if fill_timestamp is None:
+                raise ValueError("operational_exit_fill_timestamp_missing")
+            fee_value = _safe_float(fee_amount)
+            resolved = dict(pending_record)
+            resolved.update({
+                "ts": (generated_ts or datetime.now(UTC)).isoformat(),
+                "status": str(status or "filled").strip().lower(),
+                "order_status": str(status or "filled").strip().lower(),
+                "fill_price": float(fill_price_value), "fill_vwap": float(fill_price_value),
+                "resolved_fill_price": float(fill_price_value), "resolved_fill_qty": float(fill_qty_value),
+                "qty": float(fill_qty_value), "fees": abs(fee_value) if fee_value is not None else None,
+                "total_fee_verified": False,
+                "pending_event": False, "pending_resolved": True,
+                "pending_resolved_ts": fill_timestamp.isoformat(),
+                "pending_resolved_source": source,
+                "fill_based_evidence": True,
+                "evidence_type": "operational_exit_fill", "promotion_eligible": False,
+                "decision_price": None, "arrival_price": None, "submit_price_reference": None,
+                "is_bps": None, "spread_paid_bps": None, "fill_latency_ms": None,
+                "partial_fill": str(status).strip().lower() == "partially_filled",
+            })
+            return resolved
         raise ValueError("pending_record_missing_decision_price")
 
     status_token = str(status or pending_record.get("status") or "filled").strip().lower() or "filled"
@@ -558,6 +588,24 @@ def reconcile_pending_tca_with_fill(
                     and resolved_fill > 0.0
                     and resolved_status in {"filled", "partially_filled"}
                 ):
+                    resolved_qty = _safe_float(row.get("resolved_fill_qty"))
+                    resolved_ts = _coerce_utc_datetime(row.get("pending_resolved_ts"))
+                    if (
+                        row.get("evidence_type") == "operational_exit_fill"
+                        and row.get("promotion_eligible") is False
+                        and resolved_status == "partially_filled"
+                        and str(status).lower() in {"filled", "partially_filled"}
+                        and resolved_qty is not None
+                        and fill_qty_value is not None
+                        and fill_qty_value >= resolved_qty
+                        and (fill_qty_value > resolved_qty or str(status).lower() == "filled")
+                        and resolved_ts is not None
+                        and fill_ts_utc is not None
+                        and fill_ts_utc >= resolved_ts
+                    ):
+                        # Append newer cumulative execution facts; the original
+                        # request and earlier partial fill remain immutable.
+                        continue
                     already_resolved = True
     except OSError:
         return False, "tca_path_unreadable"

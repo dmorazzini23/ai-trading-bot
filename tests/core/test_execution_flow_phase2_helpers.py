@@ -120,6 +120,7 @@ def test_exit_all_positions_routes_eod_flatten_through_canonical_execution() -> 
         assert decision_ts.tzinfo is not None
         assert decision_ts <= datetime.now(UTC)
         assert metadata.pop("decision_ts_basis") == "runtime_eod_flatten_trigger"
+        assert len(metadata.pop("decision_trace_id")) == 24
     assert calls == [
         {
             "symbol": "AAPL",
