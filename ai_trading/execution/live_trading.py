@@ -24892,6 +24892,7 @@ class ExecutionEngine:
                 "account_id": str(account_id).strip() if account_id else None,
                 "account_id_source": "broker_get_account" if account_id else None,
                 "decision_trace_id": decision_trace_id_hint,
+                "correlation_id": metadata_raw.get("position_entry_correlation_id") or metadata_raw.get("correlation_id"),
                 "decision_ts": metadata_raw.get("decision_ts"),
                 "source_timestamp": metadata_raw.get("decision_ts"),
                 "decision_ts_basis": "runtime_eod_flatten_trigger",

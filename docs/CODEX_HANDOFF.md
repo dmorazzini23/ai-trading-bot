@@ -29,6 +29,11 @@ fees or costs. Retries retain original durable decision identity. Historical
 records are unchanged. 136 focused tests and final required validation (113
 mapped tests, Ruff, mypy/compile, health/non-sending smoke) passed. Current runtime
 remains `7e2b81612`; new commit CI and release checks are pending.
+Initial `25b9a7d28` is published. A pre-deployment follow-up retains the explicit
+position-entry correlation in EOD TCA receipts, preserving the strict matching
+gate. Its expanded eight-case regression invokes the actual fill-capture writer;
+required validation passed 57 mapped tests, Ruff, typing/compile, live health and
+non-sending snapshot. Deploy only the final follow-up after its exact-tip CI.
 Next: publish reviewed commit for
 exact-tip CI, deploy after close only on passing gates/flat broker, then verify
 the next naturally occurring EOD reduction. Unknown fees and this historical

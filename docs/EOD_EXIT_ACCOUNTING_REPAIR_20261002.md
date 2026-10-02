@@ -19,6 +19,19 @@ disable protective exits or relax submission gates. Explicit decision retries
 query the original durable row so an interrupted OMS emission references its
 original UUID, timestamp and context.
 
+**Pre-deployment follow-up:** the actual fill-capture writer can attach the
+position's existing entry correlation. The prospective EOD receipt must retain
+that explicit correlation from exit metadata because the TCA reconciler requires
+agreement before matching order IDs. Four known-correlation cases reproduced the
+omission. The receipt now retains the known value; unknown identity stays unknown.
+The expanded eight-case integration invokes the real fill-capture writer and
+checks fill/receipt account, decision trace and position-entry correlation.
+Its final required changed-file validation passed 57 mapped tests, Ruff,
+mypy/compilation on both changed paths, health and the non-sending snapshot.
+Log: `/tmp/amzn-exit-correlation-final-validation.log`. The earlier required
+validation is reused for unchanged OMS/TCA/core paths; final exact-tip CI is
+required for this follow-up before deployment.
+
 The acknowledged EOD order now receives a prospective TCA request receipt.
 Observed fills can resolve it without an invented arrival benchmark, fee total,
 slippage or latency. Partial fills may advance with newer cumulative quantities;

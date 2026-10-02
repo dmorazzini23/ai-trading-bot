@@ -17,8 +17,9 @@ from ai_trading.oms.intent_store import IntentStore
 
 @pytest.mark.parametrize("signed_qty", [1, -1])
 @pytest.mark.parametrize("account", [{"id": "paper-account"}, None])
+@pytest.mark.parametrize("entry_correlation", [None, "known-position-entry"])
 def test_eod_exit_actual_execution_persists_causal_decision_before_submit(
-    engine_factory, monkeypatch, tmp_path, signed_qty, account,
+    engine_factory, monkeypatch, tmp_path, signed_qty, account, entry_correlation,
 ):
     from ai_trading.core.execution_flow import exit_all_positions
     from ai_trading.oms.decision_events import reset_decision_event_store_cache
@@ -37,7 +38,9 @@ def test_eod_exit_actual_execution_persists_causal_decision_before_submit(
     engine.execution_mode = "paper"
     engine.order_manager = manager
     engine._get_account_snapshot = lambda: account
+    engine._cycle_account = account
     engine._position_quantity = lambda _symbol: signed_qty
+    engine.position_correlation_id = lambda _symbol: entry_correlation
     engine._pre_execution_order_checks = lambda _order: True
     calls = []
 
@@ -53,7 +56,8 @@ def test_eod_exit_actual_execution_persists_causal_decision_before_submit(
         assert context["lineage"]["decision_trace_id"] == metadata["decision_trace_id"]
         assert context["gates"] == ["OPERATIONAL_EXIT_REQUESTED"]
         calls.append((symbol, side, quantity))
-        return {"id": "broker-eod", "symbol": symbol, "side": side, "qty": quantity, "status": "accepted", "filled_qty": "0"}
+        return {"id": "broker-eod", "client_order_id": kwargs.get("client_order_id"),
+                "symbol": symbol, "side": side, "qty": quantity, "status": "accepted", "filled_qty": "0"}
 
     engine.submit_market_order = submit
     runtime = SimpleNamespace(
@@ -66,16 +70,27 @@ def test_eod_exit_actual_execution_persists_causal_decision_before_submit(
         receipt = json.loads((tmp_path / "tca.jsonl").read_text().splitlines()[0])
         assert receipt["decision_trace_id"] and receipt["order_id"] == "broker-eod"
         assert receipt["account_id"] == (account["id"] if account else None)
+        assert receipt["correlation_id"] == entry_correlation
         assert receipt["fees"] is None and receipt["decision_price"] is None
         assert receipt["promotion_eligible"] is False
         intent = store.list_intents()[0]
         store.record_fill(intent.intent_id, fill_qty=1, fill_price=250)
-        engine._reconcile_pending_tca_from_fill(
+        monkeypatch.setattr(lt, "record_trade_fill", lambda _record: None)
+        engine._runtime_exec_event_persistence_enabled = lambda: True
+        captured_fills = []
+        engine._record_runtime_fill_event = captured_fills.append
+        engine._persist_fill_derived_trade_record(
             symbol="AMZN", side="sell" if signed_qty > 0 else "buy",
-            fill_qty=1, fill_price=250, timestamp=datetime.now(UTC),
+            filled_qty=1, fill_price=250, expected_price=None,
+            timestamp=datetime.now(UTC), signal=None,
             order_id="broker-eod", client_order_id=intent.intent_id,
-            order_status="filled", fee_amount=None, source="simulated_broker_fill",
+            order_status="filled", fill_source="simulated_broker_fill",
+            runtime_payload={**engine._pending_orders["broker-eod"], "metadata": {"correlation_id": entry_correlation}},
+            closing_position=True,
         )
+        assert captured_fills[0].get("correlation_id") == entry_correlation
+        assert captured_fills[0]["account_id"] == receipt["account_id"]
+        assert captured_fills[0]["decision_trace_id"] == receipt["decision_trace_id"]
         resolved = json.loads((tmp_path / "tca.jsonl").read_text().splitlines()[-1])
         assert resolved["evidence_type"] == "operational_exit_fill"
         assert resolved["pending_resolved"] is True
