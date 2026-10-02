@@ -31,6 +31,14 @@ mypy/compilation on both changed paths, health and the non-sending snapshot.
 Log: `/tmp/amzn-exit-correlation-final-validation.log`. The earlier required
 validation is reused for unchanged OMS/TCA/core paths; final exact-tip CI is
 required for this follow-up before deployment.
+Initial commit `25b9a7d28` full CI found one older exact-metadata helper
+expectation: 7,341 passed, one failed, five skipped, 80.21% coverage. The helper
+test now explicitly asserts the new 24-character trace before comparing the
+remaining metadata. This test update is included in the final candidate.
+The corrected helper file passed 25 required mapped tests, Ruff, mypy and
+compilation. The final helper plus execution-error regression files passed
+80 tests together. Logs: `/tmp/amzn-exit-ci-expectation-validation.log` and
+`/tmp/amzn-exit-final-path-tests.log`. Final CI/deployment remain on hold.
 
 The acknowledged EOD order now receives a prospective TCA request receipt.
 Observed fills can resolve it without an invented arrival benchmark, fee total,

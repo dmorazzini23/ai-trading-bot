@@ -279,6 +279,7 @@ def test_exit_all_positions_uses_runtime_exec_engine_when_execute_order_absent(m
         metadata = call["metadata"]
         assert metadata.pop("decision_ts") == "2024-01-02T15:04:05+00:00"
         assert metadata.pop("decision_ts_basis") == "runtime_eod_flatten_trigger"
+        assert len(metadata.pop("decision_trace_id")) == 24
     assert calls == [
         {
             "symbol": "AAPL",

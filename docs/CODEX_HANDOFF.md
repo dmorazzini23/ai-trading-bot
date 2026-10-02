@@ -34,6 +34,12 @@ position-entry correlation in EOD TCA receipts, preserving the strict matching
 gate. Its expanded eight-case regression invokes the actual fill-capture writer;
 required validation passed 57 mapped tests, Ruff, typing/compile, live health and
 non-sending snapshot. Deploy only the final follow-up after its exact-tip CI.
+Initial full CI: 7,341 passed, one outdated helper metadata expectation failed,
+five skipped, 80.21% coverage. The test now asserts the new trace explicitly;
+final candidate includes this correction plus the correlation follow-up.
+The helper correction passed required validation (25 tests/lint/type/compile);
+80 affected helper/execution tests passed together. Await final public commit
+approval, exact-tip CI and after-close release checks; runtime still `7e2b81612`.
 Next: publish reviewed commit for
 exact-tip CI, deploy after close only on passing gates/flat broker, then verify
 the next naturally occurring EOD reduction. Unknown fees and this historical
