@@ -48,7 +48,8 @@ temporal cache to bypass this requirement.
 
 **Root causes:** execution capture knew the broker account, but netting did
 not carry it into submission metadata. Decision and execution/TCA allowlists
-also omitted it. Separately, a failed account refresh could retain a previous
+also omitted it. The canonical durable lifecycle writer independently rebuilt
+metadata and dropped propagated account identity. Separately, a failed account refresh could retain a previous
 `_evidence_account_id` for subsequent execution evidence.
 
 **Changes:** decisions, including early rejections, use the current cycle's
@@ -56,14 +57,19 @@ broker account snapshot. The same ID and `broker_get_account` provenance enter
 submission/intent metadata and execution/TCA records. Conflicting supplied
 identity stops before submission. Account refresh/synchronization clears stale
 evidence identity when the broker account is unavailable or lacks an ID.
+The canonical lifecycle writer verifies the current account snapshot again
+before claiming the intent and persists its ID/provenance. It uses the existing
+per-cycle account cache; it never copies an unverified supplied ID into the store.
 No database migration or historical backfill is performed. Unknown account
 identity remains unknown; an identity match does not certify fill completeness.
 
 **Regression coverage:** object/dictionary broker snapshots, unavailable
 identity, rejected decisions, conflicting identity, account refresh failure,
 account change, decision/OMS persistence and TCA propagation. A simulated
-SQLite flow carries the account through durable decision, intent, submit claim,
+SQLite flow uses the actual lifecycle writer and OrderManager/IntentStore to
+carry the account through durable decision, intent, submit claim,
 acknowledgement and fill, and passes the funnel's account/causal linkage checks.
+Separate writer tests cover matching/conflicting/unavailable broker identity.
 These simulated acknowledgements/fills are local test fixtures, not broker
 execution evidence or cost validation.
 
@@ -130,6 +136,17 @@ allocation of account-level charges is authorized.
   the mapped validation; its separate 11-test check also passed.
 - Previous full validation for the deployed release remains evidence for
   `d20388f88`, not this new commit. New exact-tip CI is still required.
+- Pre-deployment review caught the additional durable-writer omission before
+  releasing `3da931cff`. That commit subsequently passed full exact-tip CI:
+  7,327 tests passed, five skipped, 80.21% coverage, with all required workflows
+  passing. Full log: `/tmp/ai-trading-ci-3da931cff.log`.
+  Its follow-up passed 345 targeted tests, including runtime controls and the
+  actual OMS writer/store path; standard validation passed 51 mapped tests,
+  Ruff, mypy (three paths), compilation, forbidden-pattern checks, live health
+  and non-sending incident snapshot. Log:
+  `/tmp/three-items-durable-writer-validation.log`.
+  Follow-up exact-tip CI is required before deployment; no claim that the earlier
+  full-suite result covers the changed writer is made.
 - Candidate read-only broker check: closed, zero positions/active orders.
   Running service stays active with zero automatic restarts; broker/OMS health
   is fresh and consistent. Structured health 503 retains only the existing

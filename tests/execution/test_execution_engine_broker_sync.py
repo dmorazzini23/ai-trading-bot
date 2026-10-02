@@ -7,7 +7,7 @@ import pytest
 from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
 from requests.exceptions import HTTPError
 
-from ai_trading.execution.engine import BrokerSyncResult, ExecutionEngine
+from ai_trading.execution.engine import BrokerSyncResult, ExecutionEngine, OrderManager
 from ai_trading.execution.live_trading import LiveTradingExecutionEngine
 from ai_trading.oms.event_store import EventStore
 from ai_trading.oms.intent_store import IntentStore
@@ -254,6 +254,33 @@ def test_account_refresh_never_reuses_previous_execution_identity(account):
     engine._record_runtime_order_event({"order_id": "broker-order-1"})
     assert captured[0]["account_id"] == ("account-b" if account is not None and account.id else None)
     assert captured[0]["order_id"] == "broker-order-1"
+
+
+@pytest.mark.parametrize("account,supplied", [({"id": "account-a"}, "account-a"), ({"id": "account-b"}, "account-a"), (None, "account-a")])
+def test_actual_durable_writer_preserves_only_current_account_identity(tmp_path, monkeypatch, account, supplied):
+    store = IntentStore(url=f"sqlite:///{tmp_path / 'oms.db'}")
+    manager = OrderManager()
+    manager._intent_store = store
+    engine = LiveTradingExecutionEngine.__new__(LiveTradingExecutionEngine)
+    engine.order_manager = manager
+    engine.execution_mode = "paper"
+    engine._cycle_account_fetched = True
+    engine._cycle_account = account
+    arguments = dict(client_order_id="account-intent", symbol="AAPL", side="buy", quantity=1, order_type="limit", expected_price=100, expected_edge_bps=3, closing_position=False, model_id=None, model_version=None, config_snapshot_hash=None, dataset_hash=None, feature_version=None, model_artifact_hash=None, policy_hash=None, decision_trace_id="trace-account", account_id=supplied)
+    try:
+        if account and account["id"] != supplied:
+            with pytest.raises(RuntimeError, match="account identity conflicts"):
+                engine._begin_durable_order_lifecycle(**arguments)
+            assert store.list_intents() == []
+        else:
+            assert engine._begin_durable_order_lifecycle(**arguments) == "account-intent"
+            record = store.get_intent("account-intent")
+            metadata = json.loads(record.metadata_json)
+            assert metadata.get("account_id") == (account["id"] if account else None)
+            assert metadata.get("account_id_source") == ("broker_get_account" if account else None)
+            assert metadata["decision_trace_id"] == "trace-account"
+    finally:
+        store.close()
 
 
 def test_live_engine_broker_sync_fail_closes_on_open_order_fetch_failure(

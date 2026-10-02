@@ -339,6 +339,8 @@ def test_account_lineage_survives_durable_decision_intent_ack_and_fill(tmp_path,
     from ai_trading.oms.decision_events import emit_decision_event_from_payload, reset_decision_event_store_cache
     from ai_trading.oms.intent_store import IntentStore
     from ai_trading.tools.order_funnel import build_funnel
+    from ai_trading.execution.engine import OrderManager
+    from ai_trading.execution.live_trading import ExecutionEngine
 
     database = tmp_path / "oms.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database}")
@@ -347,13 +349,26 @@ def test_account_lineage_survives_durable_decision_intent_ack_and_fill(tmp_path,
     reset_decision_event_store_cache()
     store = IntentStore(url=f"sqlite:///{database}", event_dual_write_enabled=True)
     monkeypatch.setattr(store, "_utcnow_iso", lambda: "2026-04-19T00:00:01+00:00")
-    processor, records = _make_processor(exec_engine=SimpleNamespace(_get_account_snapshot=lambda: {"id": "broker-account-1"}))
+    manager = OrderManager()
+    manager._intent_store = store
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    engine.order_manager = manager
+    engine.execution_mode = "paper"
+    engine._cycle_account_fetched = True
+    engine._cycle_account = {"id": "broker-account-1"}
+    processor, records = _make_processor(exec_engine=engine)
     original = processor.execute_submission_func
 
     def submit(**kwargs):
         metadata = kwargs["order_lineage_metadata"]
-        store.create_intent(intent_id="cid-1", idempotency_key="test-claim", symbol="AAPL", side="buy", quantity=1, decision_ts=metadata["decision_ts"], metadata=metadata)
-        assert store.claim_for_submit("cid-1")
+        assert engine._begin_durable_order_lifecycle(
+            client_order_id="cid-1", symbol="AAPL", side="buy", quantity=1,
+            order_type="limit", expected_price=10, expected_edge_bps=3,
+            closing_position=False, model_id=None, model_version=None,
+            config_snapshot_hash=None, dataset_hash=None, feature_version=None,
+            model_artifact_hash=None, policy_hash=None,
+            decision_trace_id=metadata["decision_trace_id"], account_id=metadata["account_id"],
+        ) == "cid-1"
         store.mark_submitted("cid-1", "broker-order-1")
         store.record_fill("cid-1", fill_qty=1, fill_price=10)
         return original(**kwargs)

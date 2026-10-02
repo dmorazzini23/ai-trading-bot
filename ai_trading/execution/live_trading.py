@@ -16965,6 +16965,7 @@ class ExecutionEngine:
         decision_spread_bps: float | None = None,
         decision_quote_age_ms: float | None = None,
         execution_profile: str | None = None,
+        account_id: str | None = None,
     ) -> str | None:
         """Create and claim the canonical durable OMS intent for a live submit."""
 
@@ -16973,7 +16974,14 @@ class ExecutionEngine:
         token = str(client_order_id or "").strip()
         if not callable(begin_fn) or not token:
             return None
+        account_snapshot = self._get_account_snapshot()
+        observed_account_id = _extract_value(account_snapshot, "id", "account_id") if account_snapshot is not None else None
+        observed_account_id = str(observed_account_id).strip() if observed_account_id else None
+        if observed_account_id and account_id and str(account_id).strip() != observed_account_id:
+            raise RuntimeError("Durable intent account identity conflicts with broker account")
         metadata: dict[str, Any] = {
+            "account_id": observed_account_id or None,
+            "account_id_source": "broker_get_account" if observed_account_id else None,
             "execution_mode": str(getattr(self, "execution_mode", "") or "").strip().lower() or None,
             "order_type": str(order_type or "").strip().lower() or None,
             "expected_price": float(expected_price) if expected_price not in (None, "") else None,
@@ -23789,6 +23797,8 @@ class ExecutionEngine:
                 model_artifact_hash=model_artifact_hash_hint,
                 policy_hash=policy_hash_hint,
                 decision_trace_id=decision_trace_id_hint,
+                account_id=(str(metadata_raw.get("account_id") or "").strip() or None)
+                if isinstance(metadata_raw, Mapping) else None,
                 strategy_id=(str(metadata_raw.get("strategy_id") or "").strip() or None)
                 if isinstance(metadata_raw, Mapping) else None,
                 session_regime=(

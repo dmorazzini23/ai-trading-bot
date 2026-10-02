@@ -4,6 +4,20 @@
 
 Three-item evidence and patch summary:
 `docs/AFTER_CLOSE_FOLLOWTHROUGH_20261001.md`.
+The owner approved and published exact commit `3da931cff31bedfb22be5b5ef768b1fc5bf0d3db`.
+CI run `36959017627` passed: **7,327 passed, five skipped, 80.21% coverage**;
+CodeQL, SBOM, Workflow Lint, replay, research backtest and determinism passed.
+Full log: `/tmp/ai-trading-ci-3da931cff.log`. Pre-deployment boundary review found
+the canonical lifecycle writer rebuilt metadata without account identity.
+The follow-up verifies/persists the current cached broker account before the
+durable claim; conflicts stop and unavailable identity stays unknown. The
+integration regression now invokes that actual writer and OrderManager/store.
+Its 345 targeted runtime/account tests passed; standard changed-file validation
+passed 51 mapped tests, Ruff, mypy (three paths), compilation, forbidden patterns,
+live health and the non-sending incident snapshot. Logs:
+`/tmp/three-items-durable-writer-tests.log` and
+`/tmp/three-items-durable-writer-validation.log`.
+Do not deploy `3da931cff` alone. Runtime/spec stay at `d20388f88`.
 Complete order lookup remains 79 history pages / 39,427 response rows including
 overlap (~4.08 seconds after close); no latency improvement is claimed. Rejected
 the cursor prototype because newly visible old/null-timestamp pending orders
@@ -23,9 +37,11 @@ compilation. Logs: `/tmp/three-items-final-agent-validation.log` and
 `/tmp/three-items-inventory-final-tests.log`. Read-only candidate broker check
 was closed and flat; service remains at `d20388f88`, active with no automatic
 restarts. Model/replay safeguards and research budgets/holdout remain unchanged.
-Next: exact-commit public push approval, exact-tip CI, identity/exposure checks,
-after-close deployment and prospective session verification. Full-suite results
-below apply to the prior release and are not this new commit's CI result.
+Next: finalize the follow-up and obtain its exact-commit public push approval,
+exact-tip CI, identity/exposure checks,
+after-close deployment and prospective session verification. The full-suite
+result above applies to `3da931cff`; its writer correction still requires its
+own exact-tip CI result before deployment.
 
 ## Approved improvement release continuation (October 1 UTC)
 
