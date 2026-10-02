@@ -293,6 +293,8 @@ def _lineage_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     if correlation_id is not None:
         lineage["correlation_id"] = correlation_id
     for key in (
+        "account_id",
+        "account_id_source",
         "source_timestamp",
         "decision_ts",
         "quote_timestamp",

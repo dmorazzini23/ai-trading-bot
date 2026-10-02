@@ -341,6 +341,31 @@ def test_accounting_preserves_unallocated_fees_and_does_not_infer_zero():
     assert reconcile(snapshot, fills)["status"] == "accounting_incomplete"
 
 
+def test_raw_paper_fills_without_fee_fields_preserve_unknown_total_cost():
+    from ai_trading.tools.broker_accounting_evidence import fee_record_coverage
+
+    rows = [{"id": f"activity-{side}", "activity_type": "FILL", "order_id": f"order-{side}", "qty": "1", "price": "100", "side": side, "symbol": "MSFT", "transaction_time": "2026-10-01T15:00:00Z"} for side in ("buy", "sell")]
+
+    class Client:
+        def get_account(self):
+            return SimpleNamespace(id="paper")
+
+        def get(self, path, *, data):
+            assert path == "/account/activities"
+            return rows
+
+    snapshot = capture(Client(), after="2026-10-01T04:00:00Z")
+    assert snapshot["activities"] == rows
+    assert snapshot["pagination_complete"]
+    coverage = fee_record_coverage(snapshot)
+    assert coverage["fill_rows_with_fee_amount"] == 0
+    assert coverage["fee_activity_rows"] == 0
+    local = [{"account_id": "paper", "trading_mode": "paper", "fill_id": row["id"], "order_id": row["order_id"], "fill_qty": 1, "ts": row["transaction_time"]} for row in rows]
+    result = reconcile(snapshot, local)
+    assert result["fee_coverage"] == {"total_fee_unknown": 2}
+    assert result["net_fee_validation"] != "validated"
+
+
 def test_accounting_flags_aggregated_local_fill_despite_matching_order_quantity():
     snapshot = {
         "account_id": "paper", "trading_mode": "paper", "pagination_complete": True,

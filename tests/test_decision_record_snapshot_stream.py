@@ -62,6 +62,8 @@ class _DecisionEventRecord:
                 "decision_trace_id": "trace-aapl-1",
             },
             "metrics": {
+                "account_id": "broker-account-1",
+                "account_id_source": "broker_get_account",
                 "confidence": 0.82,
                 "expected_net_edge_bps": 14.2,
                 "score": 0.51,
@@ -174,6 +176,8 @@ def test_write_decision_record_emits_immutable_decision_events(
     assert lineage["feature_version"] == "fv-2026.04"
     assert lineage["model_artifact_hash"] == "artifact-hash-1"
     assert lineage["decision_trace_id"] == "trace-aapl-1"
+    assert lineage["account_id"] == "broker-account-1"
+    assert lineage["account_id_source"] == "broker_get_account"
     assert decision_context["order_side"] == "buy"
     assert decision_context["sleeve"] == "intraday"
     assert decision_context["sleeves"] == ["intraday"]
@@ -184,6 +188,7 @@ def test_write_decision_record_emits_immutable_decision_events(
     oms_payload = json.loads(str(oms_rows[0]["payload_json"] or "{}"))
     assert oms_payload["lineage"]["dataset_hash"] == "ds-hash-1"
     assert oms_payload["lineage"]["feature_version"] == "fv-2026.04"
+    assert oms_payload["lineage"]["account_id"] == "broker-account-1"
 
 
 def test_write_decision_record_emits_decision_events_idempotently(

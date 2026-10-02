@@ -221,6 +221,8 @@ def test_research_only_fill_cannot_become_promotion_evidence(
         safe_float=_safe_float,
         logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
         order_lineage_metadata={
+            "account_id": "broker-account-1",
+            "account_id_source": "broker_get_account",
             "evidence_partition": "stale_model_paper_diagnostic",
             "research_only": True,
             "model_authority": False,
@@ -235,6 +237,8 @@ def test_research_only_fill_cannot_become_promotion_evidence(
     assert metrics["promotion_eligible"] is False
     assert metrics["evidence_partition"] == "stale_model_paper_diagnostic"
     assert metrics["model_authority"] is False
+    assert metrics["account_id"] == "broker-account-1"
+    assert metrics["account_id_source"] == "broker_get_account"
 
 
 def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,6 +302,8 @@ def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.Monke
         logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
         order_lineage_metadata={
             "model_id": "ml-main",
+            "account_id": "broker-account-1",
+            "account_id_source": "broker_get_account",
             "model_version": "v1",
             "config_snapshot_hash": "cfg-1",
             "rank_reasons": ["CAPTURE_OK"],
@@ -330,6 +336,8 @@ def test_build_order_metrics_writes_pending_tca_record(monkeypatch: pytest.Monke
     assert tca_record["expected_capture_bps"] == pytest.approx(2.25)
     assert tca_record["venue_session"] == "IEX:opening"
     assert tca_record["model_id"] == "ml-main"
+    assert tca_record["account_id"] == "broker-account-1"
+    assert tca_record["account_id_source"] == "broker_get_account"
     assert tca_record["model_version"] == "v1"
     assert tca_record["config_snapshot_hash"] == "cfg-1"
     assert tca_record["rank_reason"] == "EDGE_RANKED"
@@ -495,6 +503,8 @@ def test_build_order_metrics_writes_terminal_nonfill_tca(
             "model_id": "ml-main",
             "model_version": "v1",
             "config_snapshot_hash": "cfg-1",
+            "account_id": "broker-account-1",
+            "account_id_source": "broker_get_account",
         },
     )
 
@@ -507,4 +517,6 @@ def test_build_order_metrics_writes_terminal_nonfill_tca(
     assert terminal["pending_terminal_nonfill"] is True
     assert terminal["pending_reason"] == "rejected"
     assert terminal["model_id"] == "ml-main"
+    assert terminal["account_id"] == "broker-account-1"
+    assert terminal["account_id_source"] == "broker_get_account"
     assert terminal["config_snapshot_hash"] == "cfg-1"

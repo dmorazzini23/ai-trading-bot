@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+import pytest
 
 from ai_trading.core.netting_symbol_cycle import (
     NettingSymbolProcessor,
@@ -100,6 +101,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
                 client_order_id="cid-1",
                 pretrade_intent=_DummyIntent(),
                 order_lineage_metadata={
+                    "decision_trace_id": "trace-1",
                     "lineage": "x", "decision_ts": now.isoformat(),
                     "source_timestamp": "2026-04-18T23:55:00+00:00",
                 },
@@ -288,6 +290,93 @@ def test_process_netting_symbol_halt_records_block() -> None:
     assert records[0]["gates"] == ["HALT_TRADING"]
     assert records[0]["metrics"]["terminal_stage"] == "decision_filter"
     assert records[0]["metrics"]["terminal_reason"] == "HALT_TRADING"
+
+
+@pytest.mark.parametrize("account", [SimpleNamespace(id="broker-account-1"), {"id": "broker-account-1"}, None, {}])
+def test_submission_and_decision_share_only_observed_account_identity(account) -> None:
+    processor, records = _make_processor(exec_engine=SimpleNamespace(_get_account_snapshot=lambda: account))
+    submitted = []
+    original = processor.execute_submission_func
+
+    def submit(**kwargs):
+        submitted.append(kwargs["order_lineage_metadata"])
+        return original(**kwargs)
+
+    processor.execute_submission_func = submit
+    process_netting_symbol(processor=processor, symbol="AAPL", net_target=_make_net_target(bar_ts=processor.now), orders_submitted=0)
+    expected = "broker-account-1" if account else None
+    assert submitted[0].get("account_id") == expected
+    assert records[0]["metrics"].get("account_id") == expected
+    assert submitted[0]["decision_ts"] == processor.now.isoformat()
+    assert submitted[0]["source_timestamp"] == "2026-04-18T23:55:00+00:00"
+
+
+def test_conflicting_account_identity_stops_before_submission() -> None:
+    processor, records = _make_processor(exec_engine=SimpleNamespace(_get_account_snapshot=lambda: {"id": "broker-account-1"}))
+    original = processor.prepare_submit_prelude_func
+
+    def prelude(**kwargs):
+        result = original(**kwargs)
+        result.execution_intent_context.order_lineage_metadata["account_id"] = "different-account"
+        return result
+
+    processor.prepare_submit_prelude_func = prelude
+    processor.execute_submission_func = lambda **kwargs: pytest.fail("conflicting identity submitted")
+    with pytest.raises(RuntimeError, match="account identity conflicts"):
+        process_netting_symbol(processor=processor, symbol="AAPL", net_target=_make_net_target(bar_ts=processor.now), orders_submitted=0)
+    assert records == []
+
+
+def test_rejected_decision_keeps_observed_account_identity() -> None:
+    processor, records = _make_processor(exec_engine=SimpleNamespace(_get_account_snapshot=lambda: {"id": "broker-account-1"}))
+    processor.state.halt_trading = True
+    process_netting_symbol(processor=processor, symbol="AAPL", net_target=_make_net_target(bar_ts=processor.now), orders_submitted=0)
+    assert records[0]["metrics"]["account_id"] == "broker-account-1"
+
+
+def test_account_lineage_survives_durable_decision_intent_ack_and_fill(tmp_path, monkeypatch) -> None:
+    import sqlite3
+    from ai_trading.oms.decision_events import emit_decision_event_from_payload, reset_decision_event_store_cache
+    from ai_trading.oms.intent_store import IntentStore
+    from ai_trading.tools.order_funnel import build_funnel
+
+    database = tmp_path / "oms.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("AI_TRADING_DECISION_EVENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
+    reset_decision_event_store_cache()
+    store = IntentStore(url=f"sqlite:///{database}", event_dual_write_enabled=True)
+    monkeypatch.setattr(store, "_utcnow_iso", lambda: "2026-04-19T00:00:01+00:00")
+    processor, records = _make_processor(exec_engine=SimpleNamespace(_get_account_snapshot=lambda: {"id": "broker-account-1"}))
+    original = processor.execute_submission_func
+
+    def submit(**kwargs):
+        metadata = kwargs["order_lineage_metadata"]
+        store.create_intent(intent_id="cid-1", idempotency_key="test-claim", symbol="AAPL", side="buy", quantity=1, decision_ts=metadata["decision_ts"], metadata=metadata)
+        assert store.claim_for_submit("cid-1")
+        store.mark_submitted("cid-1", "broker-order-1")
+        store.record_fill("cid-1", fill_qty=1, fill_price=10)
+        return original(**kwargs)
+
+    try:
+        processor.execute_submission_func = submit
+        process_netting_symbol(processor=processor, symbol="AAPL", net_target=_make_net_target(bar_ts=processor.now), orders_submitted=0)
+        payload = {**records[0], "bar_ts": processor.now.isoformat()}
+        assert emit_decision_event_from_payload(payload)["persisted"]
+        with sqlite3.connect(database) as connection:
+            connection.row_factory = sqlite3.Row
+            decisions, intents, events, fills = [
+                [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                for table in ("decision_events", "intents", "oms_events", "intent_fills")
+            ]
+        report = build_funnel(decisions, intents, events, fills)
+        assert "account_identity_unverified" not in report["gaps"]
+        assert report["intents"][0]["linkage"] == "linked_local_trace"
+        assert report["counts"]["intents_with_durable_ack"] == 1
+        assert report["counts"]["intents_with_recorded_fill"] == 1
+    finally:
+        store.close()
+        reset_decision_event_store_cache()
 
 
 def test_process_netting_symbol_preserves_opening_warmup_without_bad_data() -> None:

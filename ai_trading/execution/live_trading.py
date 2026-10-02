@@ -16455,6 +16455,7 @@ class ExecutionEngine:
         if not callable(get_account):
             self._cycle_account_fetched = True
             self._cycle_account = None
+            self._evidence_account_id = None
             return None
         try:
             account = get_account()
@@ -16467,8 +16468,7 @@ class ExecutionEngine:
         self._cycle_account = account
         self._cycle_account_fetched = True
         account_id = _extract_value(account, "id", "account_id") if account is not None else None
-        if account_id:
-            self._evidence_account_id = str(account_id)
+        self._evidence_account_id = (str(account_id).strip() or None) if account_id else None
         return account
 
     def _capacity_broker(self, broker_client: Any | None) -> Any | None:
@@ -36733,6 +36733,8 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         # Never reuse a prior cycle's account after a failed broker read.
         self._cycle_account = account_snapshot
         self._cycle_account_fetched = True
+        account_id = _extract_value(account_snapshot, "id", "account_id") if account_snapshot is not None else None
+        self._evidence_account_id = (str(account_id).strip() or None) if account_id else None
         open_orders_unknown = bool(
             getattr(self, "_broker_open_orders_unknown", False)
         )

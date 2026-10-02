@@ -198,6 +198,7 @@ def test_live_broker_sync_account_504_does_not_crash_or_reuse_cached_account(
     engine.trading_client = _AccountFailureClient()
     engine._cycle_account = SimpleNamespace(id="stale-account")
     engine._cycle_account_fetched = True
+    engine._evidence_account_id = "stale-account"
 
     snapshot = engine.synchronize_broker_state()
 
@@ -209,6 +210,7 @@ def test_live_broker_sync_account_504_does_not_crash_or_reuse_cached_account(
     assert snapshot.failed_components == ("account",)
     assert snapshot.last_error == "broker_account_unavailable"
     assert engine._cycle_account is None
+    assert engine._evidence_account_id is None
     assert engine._cycle_account_fetched is True
     engine._broker_freshness_enforcement_ready = True
     opening_allowed, opening_reason = engine._execution_phase_allows_submits(
@@ -233,9 +235,25 @@ def test_live_opening_account_refresh_catches_native_alpaca_timeout(monkeypatch)
     engine.trading_client = _AccountFailureClient()
     engine._cycle_account = SimpleNamespace(id="stale-account")
 
+    engine._evidence_account_id = "stale-account"
     assert engine._refresh_cycle_account() is None
     assert engine._cycle_account is None
     assert engine._cycle_account_fetched is True
+    assert engine._evidence_account_id is None
+
+
+@pytest.mark.parametrize("account", [None, SimpleNamespace(id=None), SimpleNamespace(id="account-b")])
+def test_account_refresh_never_reuses_previous_execution_identity(account):
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = SimpleNamespace(get_account=lambda: account, list_orders=lambda: [])
+    engine._evidence_account_id = "account-a"
+    engine._refresh_cycle_account()
+    captured = []
+    engine._runtime_exec_event_persistence_enabled = lambda: True
+    engine._append_runtime_jsonl = lambda **kwargs: captured.append(kwargs["payload"])
+    engine._record_runtime_order_event({"order_id": "broker-order-1"})
+    assert captured[0]["account_id"] == ("account-b" if account is not None and account.id else None)
+    assert captured[0]["order_id"] == "broker-order-1"
 
 
 def test_live_engine_broker_sync_fail_closes_on_open_order_fetch_failure(

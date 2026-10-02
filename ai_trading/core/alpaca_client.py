@@ -5,7 +5,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from typing import Any
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta
 from importlib import import_module
 from time import perf_counter
@@ -161,6 +161,37 @@ def _get_orders_by_status(
     return get_orders(filter=_orders_request(status, after=after))
 
 
+def _order_field(order: Any, name: str) -> Any:
+    return order.get(name) if isinstance(order, Mapping) else getattr(order, name, None)
+
+
+def _iter_order_pages(api: Any, status: str) -> Iterator[list[Any]]:
+    after: datetime | None = None
+    previous_last = after
+    while True:
+        page = list(_get_orders_by_status(api, status, after=after) or [])
+        if len(page) > 500:
+            raise RuntimeError("Alpaca orders page exceeds requested limit")
+        if len(page) < 500:
+            yield page
+            return
+        if any(
+            not isinstance(_order_field(order, "submitted_at"), datetime)
+            or _order_field(order, "submitted_at").tzinfo is None
+            for order in page
+        ):
+            raise RuntimeError("Cannot paginate Alpaca orders without submitted_at")
+        last = _order_field(page[-1], "submitted_at")
+        if previous_last is not None and last <= previous_last:
+            raise RuntimeError("Alpaca orders pagination did not advance")
+        if any(_order_field(order, "id") in (None, "") for order in page):
+            raise RuntimeError("Cannot paginate Alpaca orders without broker IDs")
+        previous_last = last
+        # Overlap the boundary; ambiguous tied full pages fail closed.
+        after = last - timedelta(microseconds=1)
+        yield page
+
+
 def list_open_orders(api: Any):
     """Return a complete active-order snapshot or raise on an incomplete page.
 
@@ -207,40 +238,19 @@ def list_open_orders(api: Any):
         seen_ids.update(keys)
         filtered.append(order)
 
-    for order in _get_orders_by_status(api, "open") or []:
-        add_active(order, from_open_query=True)
+    open_pages = 0
+    for page in _iter_order_pages(api, "open"):
+        open_pages += 1
+        for order in page:
+            add_active(order, from_open_query=True)
 
-    after: datetime | None = None
-    previous_last: datetime | None = None
-    while True:
-        page = list(_get_orders_by_status(api, "all", after=after) or [])
+    # No temporal discovery cache: newly visible orders can carry older or
+    # missing submission timestamps. Every snapshot retains the broader scan.
+    for page in _iter_order_pages(api, "all"):
         all_pages += 1
         orders_scanned += len(page)
-        if len(page) > 500:
-            raise RuntimeError("Alpaca all-orders page exceeds requested limit")
         for order in page:
             add_active(order, from_open_query=False)
-        if len(page) < 500:
-            break
-        last = (
-            page[-1].get("submitted_at")
-            if isinstance(page[-1], Mapping)
-            else getattr(page[-1], "submitted_at", None)
-        )
-        if not isinstance(last, datetime) or last.tzinfo is None:
-            raise RuntimeError("Cannot paginate Alpaca orders without submitted_at")
-        if previous_last is not None and last <= previous_last:
-            raise RuntimeError("Alpaca all-orders pagination did not advance")
-        if any(
-            (order.get("id") if isinstance(order, Mapping) else getattr(order, "id", None))
-            in (None, "")
-            for order in page
-        ):
-            raise RuntimeError("Cannot paginate Alpaca orders without broker IDs")
-        previous_last = last
-        # Overlap the boundary timestamp. A tied 500-order page fails closed
-        # on the next iteration instead of silently dropping tied orders.
-        after = last - timedelta(microseconds=1)
     elapsed_ms = round((perf_counter() - started_at) * 1000)
     if elapsed_ms >= 10_000:
         logger.warning(
@@ -250,6 +260,7 @@ def list_open_orders(api: Any):
                 "all_pages": all_pages,
                 "orders_scanned": orders_scanned,
                 "active_orders": len(filtered),
+                "open_pages": open_pages,
             },
         )
     return filtered

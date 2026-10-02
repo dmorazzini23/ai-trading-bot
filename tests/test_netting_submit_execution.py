@@ -52,6 +52,8 @@ def _base_kwargs() -> dict[str, Any]:
         "policy_hash_for_order": "policy",
         "order_annotations": {"price_source": "nbbo"},
         "order_lineage_metadata": {
+            "account_id": "broker-account-1",
+            "account_id_source": "broker_get_account",
             "decision_trace_id": "trace-1",
             "correlation_id": "opp-netting-1",
             "source_timestamp": "2026-04-19T15:29:00+00:00",
@@ -128,6 +130,8 @@ def test_sampled_receipt_preserves_requested_submitted_and_filled_quantities() -
     )
     result = execute_netting_submission(**kwargs)
     assert submitted["metadata"]["strategy_id"] == "alpha"
+    assert submitted["metadata"]["account_id"] == "broker-account-1"
+    assert submitted["metadata"]["account_id_source"] == "broker_get_account"
     assert result.order_payload["requested_qty"] == 10
     assert result.order_payload["submitted_qty"] == 1
     assert result.order_payload["qty"] == 1

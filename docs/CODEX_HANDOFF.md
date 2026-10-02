@@ -1,17 +1,90 @@
 # Current handoff
 
+## October 1 Pacific after-close follow-through
+
+Three-item evidence and patch summary:
+`docs/AFTER_CLOSE_FOLLOWTHROUGH_20261001.md`.
+Complete order lookup remains 79 history pages / 39,427 response rows including
+overlap (~4.08 seconds after close); no latency improvement is claimed. Rejected
+the cursor prototype because newly visible old/null-timestamp pending orders
+could disappear. Fixed open-query pagination and full-page evidence checks.
+Prospective broker account attribution now reaches rejected/final decisions,
+submission/OMS metadata and TCA; failed account refresh/sync clears stale
+execution identity. Original historical records remain unchanged.
+Fresh October 1 raw activities and both raw orders contain no total-fee
+evidence; two observed fills remain gross-only (-$0.320 inferred FIFO), with
+net P&L unavailable. No ingestion defect was established for those responses.
+Investigation completion does not resolve the underlying fee/latency gaps.
+
+Validation: 142 mapped tests, Ruff, mypy (13 paths), compilation, forbidden
+patterns, live health and non-sending incident snapshot passed. Final streaming
+pagination adjustment passed 29 affected tests, Ruff, mypy (two paths) and
+compilation. Logs: `/tmp/three-items-final-agent-validation.log` and
+`/tmp/three-items-inventory-final-tests.log`. Read-only candidate broker check
+was closed and flat; service remains at `d20388f88`, active with no automatic
+restarts. Model/replay safeguards and research budgets/holdout remain unchanged.
+Next: exact-commit public push approval, exact-tip CI, identity/exposure checks,
+after-close deployment and prospective session verification. Full-suite results
+below apply to the prior release and are not this new commit's CI result.
+
+## Approved improvement release continuation (October 1 UTC)
+
+The owner approved publishing exact commit
+`d20388f88aa1e228946b0ce3dbd74970924cebbf`; it is now on `origin/main`.
+SBOM, Workflow Lint, CodeQL and exact-tip CI run `36817593249` passed.
+CI reported **7,305 passed, five skipped, 80.20% coverage**, including its
+replay, research-backtest, determinism, institutional and static gates.
+Full CI log: `/tmp/ai-trading-ci-d20388f88.log`.
+Both read-only candidate release identity phases passed using the packaged
+environment, existing schema and unchanged model/config/profile identities.
+Reports: `/tmp/ai-trading-release-identity-candidate-d20388f88.json` and
+`/tmp/ai-trading-release-identity-final-candidate-d20388f88.json`.
+The refreshed 05:26:16 UTC broker check was closed, active and flat with zero
+active orders. The deployment checkout and installed release specification
+now identify `d20388f88`; both installed-checkout identity phases passed:
+`/tmp/ai-trading-deployment-pre-migration-d20388f88.json` and
+`/tmp/ai-trading-deployment-final-d20388f88.json`.
+Rollback specification is preserved
+at `/tmp/ai-trading-release-spec-before-d20388f88.json`.
+The owner ran the restart at **07:30:04 Pacific October 1 (14:30:04 UTC)**,
+during the open paper session. Both automatic startup identity checks and the
+run manifest identify `d20388f88`; the checkout is clean. The service remains
+active with zero automatic restarts. No further restart was performed.
+After the initial in-flight intent completed, health showed a fresh connected
+broker and consistent OMS invariants/lifecycle parity. HTTP 503 now reflects
+only `required_model_stale` and `replay_live_parity_gate_failed`. Startup includes
+the existing `MODEL_REGISTRY_STALE` error, preserved replay safeguards, IEX gaps
+and slow authoritative broker scans; do not report an error-free startup.
+At 07:35:36 Pacific the broker showed one long MSFT share and zero active orders.
+The read-only daily funnel captured one local decision/intent/ack/fill chain
+with `linked_local_trace` and a causal pre-submit timestamp; local account
+identity remains absent. No account identity or historical join was invented.
+Two KPI snapshots show synchronized inventory ages 0.547/0.690 seconds and
+`open_orders_snapshot_ms=0`; reporting no longer adds a history scan. Authoritative
+79-page scans still took about 14–35 seconds and need separately bounded work;
+do not claim whole-cycle latency is solved. The non-sending incident snapshot
+passed and reported existing degraded health; no notification was sent.
+Evidence: `/tmp/ai-trading-startup-d20388f88.log`,
+`/tmp/ai-trading-health-after-d20388f88.json`,
+`/tmp/ai-trading-postdeployment-exposure-d20388f88.json`,
+`/tmp/ai-trading-postdeployment-funnel-d20388f88.json` and
+`/tmp/ai-trading-incident-after-d20388f88.json`.
+These handoff/release-guide updates are local and outside the already-approved
+published commit. Reuse the completed local/CI tests for unchanged runtime code.
+
 ## Five-item improvement follow-through, September 30 Pacific / October 1 UTC
 
 User authorized all five improvements. Work is on `main` in
 `/tmp/goal-handoff-20260929`, preserving the existing uncommitted release docs.
-The detached deployment checkout remains clean at `5a8ae5ac5`; no new code is
-deployed. Scope and per-item acceptance criteria:
+Implementation and initial validation were completed before the deployed
+continuation above. Scope and per-item acceptance criteria:
 `docs/TRADING_IMPROVEMENTS_20260930.md`.
 
 - **Cycle efficiency:** KPI reporting reuses fresh, known synchronized order
   inventory instead of another complete history scan. Unknown inventory is null,
   never zero. Authoritative order/exposure queries are unchanged. The no-query
-  regressions pass; market-session latency confirmation is still pending.
+  regressions pass; the first-session reporting behavior is verified above.
+  Complete cycle latency remains a separate limitation.
 - **Order diagnostics:** `ai_trading.tools.order_funnel` reads a coherent SQLite
   snapshot and separates durable decisions, final acceptance, intents, submit
   claims, durable broker acknowledgements and recorded fills. The daily paper
@@ -71,9 +144,9 @@ service active, zero restarts; structured health 503 only preserved model/replay
 qualification blocks; fresh broker with zero positions/orders; incident snapshot
 reports expected degraded health. It sent no notification.
 
-Next: commit on `main`, obtain
-commit-specific public push authorization if automatic approval requires it,
-then exact-tip CI and release/exposure checks before any after-close restart.
+Next: preserve ordinary paper evidence and review the next daily accounting
+report; investigate remaining authoritative-read latency in a separately bounded
+task. Deployment and first-session diagnostic/KPI checks passed as recorded above.
 Underlying live-capital evidence gaps and the existing goal remain blocked;
 do not mark them complete because this investigation or patch is finished.
 

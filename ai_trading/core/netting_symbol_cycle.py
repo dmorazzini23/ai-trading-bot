@@ -227,9 +227,23 @@ def process_netting_symbol(
     net_target: Any,
     orders_submitted: int,
 ) -> NettingSymbolProcessResult:
+    decision_account_id: str | None = None
+    get_account_snapshot = getattr(processor.exec_engine, "_get_account_snapshot", None)
+    if callable(get_account_snapshot):
+        account_snapshot = get_account_snapshot()
+        raw_account_id = (
+            account_snapshot.get("id") if isinstance(account_snapshot, Mapping)
+            else getattr(account_snapshot, "id", None)
+        )
+        if raw_account_id and str(raw_account_id).strip():
+            decision_account_id = str(raw_account_id).strip()
+
     def _record_decision(**kwargs: Any) -> Any:
         metrics_raw = kwargs.get("metrics")
         metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {}
+        if decision_account_id is not None:
+            metrics["account_id"] = decision_account_id
+            metrics["account_id_source"] = "broker_get_account"
         if "terminal_stage" not in metrics and not kwargs.get("order"):
             gate_values = [
                 str(gate).strip()
@@ -813,6 +827,12 @@ def process_netting_symbol(
     client_order_id = execution_intent_context.client_order_id
     intent = execution_intent_context.pretrade_intent
     order_lineage_metadata = dict(execution_intent_context.order_lineage_metadata)
+    if decision_account_id is not None:
+        supplied_account = order_lineage_metadata.get("account_id")
+        if supplied_account and str(supplied_account) != decision_account_id:
+            raise RuntimeError("Execution lineage account identity conflicts with broker account")
+        order_lineage_metadata["account_id"] = decision_account_id
+        order_lineage_metadata["account_id_source"] = "broker_get_account"
     order_annotations = dict(execution_intent_context.order_annotations)
     diagnostic_debug = next(
         (

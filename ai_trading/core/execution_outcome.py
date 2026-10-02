@@ -192,6 +192,8 @@ def build_order_metrics_and_tca(
 
     lineage = dict(order_lineage_metadata or {})
     for key in (
+        "account_id",
+        "account_id_source",
         "correlation_id",
         "decision_trace_id",
         "source_timestamp",
@@ -417,6 +419,9 @@ def build_order_metrics_and_tca(
         or "ALPACA"
     ).strip().upper() or "ALPACA"
     tca_record["liquidity_role"] = str(liquidity_role_token)
+    for key in ("account_id", "account_id_source"):
+        if lineage.get(key) not in (None, ""):
+            tca_record[key] = lineage[key]
     tca_record["venue"] = str(venue_token)
     tca_record["session_regime"] = str(session_regime_token)
     tca_record["session"] = str(session_regime_token)

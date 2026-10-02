@@ -25,10 +25,15 @@ are reported separately and the oldest age remains null rather than implying zer
 without any broker call; five unavailable-inventory cases remain unknown and
 also make no broker call. Existing KPI/SLO regressions remain applicable.
 
-**Status:** implementation resolved; session latency confirmation awaits deployment
-and the next session. Acceptance: KPI history calls remain zero, authoritative
-inventory stays fresh/complete, no new exposure inconsistency, and compare cycle
-timings with the September 30 baseline. No measured profitability claim.
+**Status:** implemented, deployed and verified in the first October 1 session
+snapshots. Reporting reused synchronized inventory ages 0.547/0.690 seconds,
+with `open_orders_snapshot_ms=0`; pending count changed from one to zero after
+the fill. Authoritative broker and OMS state were fresh/consistent after warm-up.
+Whole-cycle latency is not resolved: required complete scans still read 79 pages
+and 39,425 orders, taking about 14–35 seconds during startup. Acceptance for a
+future bounded optimization: maintain complete authoritative inventory and
+fail-closed unknowns, demonstrate lower complete-cycle time against a comparable
+session baseline, and preserve exposure consistency. No profitability claim.
 
 ## 2. Explain where orders stop, without invented conversions
 
@@ -241,10 +246,19 @@ strict type checks and tracked Python compilation. The PostgreSQL test skipped
 in the general suite passed against the isolated real server separately; the
 other skip is an existing regime fixture without a regime column.
 Focused and standard validation results, runtime checks and
-release status are recorded in `CODEX_HANDOFF.md`. The current paper service is
-still on tested release `5a8ae5ac5`; this patch has not been deployed. Exact-tip
-CI and release checks are required before an after-close restart. No model,
-replay, freshness, fee, provenance or promotion threshold was relaxed.
+release status are recorded in `CODEX_HANDOFF.md`. Exact-tip CI passed with
+**7,305 tests passed, five skipped and 80.20% coverage**. The owner restarted
+the paper service at 07:30 Pacific October 1 on tested release `d20388f88`;
+both automatic startup identity checks passed and the process has zero automatic
+restarts. It was an open-market owner-run restart; no further restart was
+performed. After warm-up, the broker and OMS checks were fresh/consistent,
+with one MSFT paper share and zero active orders at 07:35 Pacific.
+The daily funnel captured one local decision/intent/ack/fill chain using a causal
+pre-submit decision timestamp; account attribution remains unavailable locally.
+No old records were rewritten. The non-sending incident snapshot passed;
+no notification was sent. HTTP 503 still reflects stale-model and replay
+qualification, and the startup log contains the existing stale-model error.
+No model, replay, freshness, fee, provenance or promotion threshold was relaxed.
 
 Rollback: deploy the preceding tested code/specification through the existing
 release-identity procedure after broker exposure review. No schema/configuration

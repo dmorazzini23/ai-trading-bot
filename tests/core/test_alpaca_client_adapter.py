@@ -349,6 +349,7 @@ def test_list_open_orders_reports_slow_complete_scan_without_truncating(monkeypa
                 "all_pages": 1,
                 "orders_scanned": 1,
                 "active_orders": 1,
+                "open_pages": 1,
             },
         )
     ]
