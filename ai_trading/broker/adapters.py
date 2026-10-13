@@ -165,7 +165,7 @@ def list_alpaca_orders(
         ):
             from ai_trading.core.alpaca_client import list_open_orders
 
-            orders = list_open_orders(client)
+            orders = list_open_orders(client, symbols=list(symbols) if symbols else None)
             if not symbols:
                 return list(orders)
             wanted = {str(symbol).strip().upper() for symbol in symbols}

@@ -24,6 +24,17 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _explicit_utc_datetime(value: Any) -> datetime | None:
+    """Require an actual offset for retrospective causal recovery evidence."""
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
 def _coerce_utc_datetime(value: Any) -> datetime | None:
     """Parse datetimes from runtime payloads into UTC."""
 
@@ -471,6 +482,8 @@ def reconcile_pending_tca_with_fill(
     fallback_window_seconds: float = 8.0 * 3600.0,
     qty_tolerance_ratio: float = 0.05,
     correlation_id: str | None = None,
+    account_id: str | None = None,
+    trading_mode: str | None = None,
 ) -> tuple[bool, str]:
     """Append a resolved TCA row for a previously pending TCA order when available."""
 
@@ -495,6 +508,8 @@ def reconcile_pending_tca_with_fill(
     symbol_token = str(symbol or "").strip().upper()
     side_token = _normalize_order_side(side)
     fallback_enabled = bool(
+        not identifiers
+        and
         not correlation_token
         and allow_symbol_qty_fallback
         and symbol_token
@@ -541,6 +556,11 @@ def reconcile_pending_tca_with_fill(
                     continue
 
                 row_identifiers = _collect_row_identifiers(row)
+                if any(
+                    supplied and row.get(field) not in (None, "", supplied)
+                    for field, supplied in (("order_id", order_id), ("client_order_id", client_order_id))
+                ):
+                    continue
                 row_correlation = str(row.get("correlation_id") or "").strip()
                 if correlation_token and row_correlation != correlation_token:
                     continue
@@ -569,7 +589,31 @@ def reconcile_pending_tca_with_fill(
                 if not id_matched and not fallback_matched:
                     continue
 
-                if bool(row.get("pending_event")):
+                # Older maintenance could mark an unfilled request resolved on
+                # a fuzzy match. Recover only against observed causal fill facts
+                # with explicit matching native identities and account/mode.
+                compacted_request = bool(
+                    row.get("pending_compacted") is True
+                    and (_safe_float(row.get("fill_price")) or 0.0) <= 0.0
+                    and (_safe_float(row.get("fill_vwap")) or 0.0) <= 0.0
+                    and row.get("pending_terminal_nonfill") is False
+                    and account_id and row.get("account_id") == account_id
+                    and trading_mode in {"paper", "live"}
+                    and row.get("trading_mode") in (None, trading_mode)
+                    and order_id and str(row.get("order_id") or row.get("broker_order_id") or "") == str(order_id)
+                    and row.get("broker_order_id") in (None, "", order_id)
+                    and client_order_id and str(row.get("client_order_id") or "") == str(client_order_id)
+                    and symbol_token == str(row.get("symbol") or "").strip().upper()
+                    and side_token == _normalize_order_side(row.get("order_side") or row.get("side"))
+                    and fill_ts_utc is not None
+                    and _explicit_utc_datetime(fill_ts) is not None
+                    and (request_ts := _explicit_utc_datetime(row.get("ts"))) is not None
+                    and request_ts <= fill_ts_utc
+                    and (requested_qty := _safe_float(row.get("requested_qty") or row.get("qty"))) is not None
+                    and fill_qty_value is not None
+                    and 0.0 < float(fill_qty_value) <= requested_qty
+                )
+                if bool(row.get("pending_event")) or compacted_request:
                     rank = 2 if id_matched else 1
                     row_ts = _coerce_utc_datetime(row.get("ts"))
                     row_ts_epoch = float(row_ts.timestamp()) if row_ts is not None else 0.0
@@ -629,6 +673,17 @@ def reconcile_pending_tca_with_fill(
     except ValueError as exc:
         return False, f"invalid_pending_record:{exc}"
 
+    if latest_pending.get("pending_compacted") is True:
+        resolved["compacted_request_recovered"] = True
+        resolved["total_fee_verified"] = False
+        resolved["fee_amount"] = fee_amount
+        resolved["trading_mode"] = trading_mode
+        resolved["promotion_eligible"] = False
+        resolved["fill_ts"] = fill_ts_utc.isoformat() if fill_ts_utc is not None else None
+        resolved["recorded_at"] = datetime.now(UTC).isoformat()
+        # Recovery has observed fill time but no independently verified broker
+        # submission-time basis; do not certify latency from old request fields.
+        resolved["fill_latency_ms"] = None
     write_tca_record(path, resolved)
     return True, "reconciled"
 
@@ -882,10 +937,8 @@ def finalize_stale_pending_tca(
                     fallback_fill_match = True
                     break
             if fallback_fill_match:
-                if compact_enabled:
-                    entries[index] = ("json", _build_compacted_row(pending_row, kind="fill_event_fallback_match"))
-                    compacted_fill_event_matches += 1
-                    continue
+                # Similar symbol/side/quantity/time is not identity evidence.
+                # Retain this unresolved request for its actual native fill.
                 skipped_fill_event_match += 1
                 continue
         age_seconds = max(0.0, (now_utc - pending_ts).total_seconds())

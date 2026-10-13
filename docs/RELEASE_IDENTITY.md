@@ -1,11 +1,11 @@
 # Release identity preflight
 
-**Status (2026-10-01 Pacific):** the packaged paper service has the pre-migration
-and post-migration release checks installed. Commit `7e2b81612` passed exact-tip
-CI and both automatic checks at the 21:15 Pacific October 1 after-close paper
+**Status (2026-10-08 Pacific):** the packaged paper service has the pre-migration
+and post-migration release checks installed. Commit `1853464dc` passed exact-tip
+CI and both automatic checks at the 19:33 Pacific October 8 host-maintenance
 restart. Fresh pre-restart broker evidence confirmed closed, ACTIVE and flat
 with zero active orders. Post-start verification showed fresh, flat broker/OMS
-state and zero automatic restarts at 21:16 Pacific. Model/replay
+state and zero automatic restarts at 19:40 Pacific. Model/replay
 qualification remains blocked. This does not grant
 live-trading authority; a new commit requires its own CI result, exposure
 review, release specification and restart checks.

@@ -1,5 +1,65 @@
 # Current handoff
 
+## October 12 Pacific cycle/accounting repair
+
+Work in persistent `main` checkout `/home/aiuser/ai-trading-maintenance-main`;
+runtime remains clean at `1853464dc`. Five prior documentation edits are preserved.
+Details: `docs/CYCLE_ACCOUNTING_REPAIR_20261012.md`.
+Established causes: repeated complete 39k-order scans (six in a 194.75-second
+cycle); AMZN's pending request compacted by fuzzy match before its real fill;
+MSFT's genuine durable EXIT decision omitted from the ordinary-file-only audit.
+Patch sends explicit symbol scope to every open/all page, reconciles known intents
+by native IDs, reuses only same-attempt/same-broker complete observations younger
+than one second at consumption, stops fuzzy compaction and appends only native
+causal recovery facts, and reads the original durable decision for reports.
+All trading/research safeguards, budgets and holdout remain unchanged. Full
+account discovery still queries all history; no temporal cursor discovery cache.
+Initial 43 focused / 164 expanded tests passed. Final required changed-file
+validation passed 93 mapped tests, lint/type/compile, health/non-sending smoke.
+Actual-record copy proof: decision/order/TCA matches 1/2/1 -> 2/2/2, fees still
+unknown. AMZN-scoped read: six requests / 0.325 seconds versus account-wide
+80 / 3.849; known MSFT lookup one / 0.014. These are after-close measurements,
+not evidence that all market-hour cycles now meet the unchanged 110-second SLO.
+Next: reviewed commit, exact-tip CI, fresh closed/flat exposure and release checks,
+after-close deployment, supported AMZN receipt append/report regeneration, then
+observe ordinary market/EOD cycles without forced trades. Approval is required
+for publishing the exact new commit to the public repository. Private evidence:
+runtime `artifacts/maintenance/cycle_accounting_repair_20261012/`.
+
+## October 8 Pacific host maintenance — complete
+
+Owner requested latest Codex and routine server updates. Both existing npm
+prefixes have stable Codex CLI `0.162.0`; version/help smoke checks pass.
+Owner authenticated apt refresh and
+`sudo env NEEDRESTART_MODE=l apt-get --with-new-pkgs --no-remove upgrade`.
+Completed at 19:26:48 Pacific: 39 upgrades, seven new packages, no removals.
+Two packages (`libopeniscsiusr`, `open-iscsi`) remain deferred by Ubuntu phasing.
+Owner rebooted; boot time 19:32:51 Pacific. Kernel `6.8.0-146-generic` is active
+and the reboot-required marker is absent. The reconnected app server now
+reports `0.162.0`, matching the CLI; the earlier unmanaged `0.160.0` process
+could not be upgraded through the managed daemon commands before reboot.
+Trading started at 19:33:29 Pacific with zero automatic restarts. Both automatic
+startup identity checks pass on clean tested source `1853464dc`. Canonical health
+and independent broker check confirm fresh/connected, closed/ACTIVE and flat;
+OMS checks pass. Existing stale-model/replay flags remain unchanged. No failed
+systemd services or incomplete package states. Heartbeat and backup timers are
+active/enabled; heartbeat upload succeeded after reboot. The last backup before
+reboot completed successfully at 16:31:41 Pacific; next backup is scheduled.
+Final post-reboot snapshot at 19:43 Pacific passes all seven release/broker/OMS/
+kernel/reboot checks. Bounded startup journal has 77 INFO entries and no structured
+ERROR/CRITICAL entries. Non-sending incident check passes; its `health_degraded`
+trigger reflects the existing qualification flags. No notification was sent.
+Docs-only validation and `git diff --check` pass on the restored changes.
+No application code, SDK, model, trading gate or research changes.
+Reboot cleared the temporary main editing worktree and private `/tmp` artifacts.
+Recovered the five recorded documentation edits into persistent main worktree
+`/home/aiuser/ai-trading-maintenance-main`; leave the deployed checkout clean.
+Historical branch metadata is untouched. Older `/tmp` proof and rollback paths
+below are historical references, not currently available files. New maintenance
+evidence is persisted under the ignored runtime artifact directory
+`artifacts/maintenance/server_updates_20261008/`. Documentation is local and
+unpublished; no public push is authorized for a new documentation commit.
+
 ## October 2 Pacific closing snapshot
 
 Read-only broker check at 13:02 Pacific: market closed, ACTIVE paper account,
@@ -26,26 +86,34 @@ and TCA writers; the lifecycle writer discarded the genuine trigger time.
 The patch adds a stable operational exit trace/decision before claim, retains
 trigger time/account, and captures fill receipts without invented benchmarks,
 fees or costs. Retries retain original durable decision identity. Historical
-records are unchanged. 136 focused tests and final required validation (113
-mapped tests, Ruff, mypy/compile, health/non-sending smoke) passed. Current runtime
-remains `7e2b81612`; new commit CI and release checks are pending.
-Initial `25b9a7d28` is published. A pre-deployment follow-up retains the explicit
-position-entry correlation in EOD TCA receipts, preserving the strict matching
-gate. Its expanded eight-case regression invokes the actual fill-capture writer;
-required validation passed 57 mapped tests, Ruff, typing/compile, live health and
-non-sending snapshot. Deploy only the final follow-up after its exact-tip CI.
-Initial full CI: 7,341 passed, one outdated helper metadata expectation failed,
-five skipped, 80.21% coverage. The test now asserts the new trace explicitly;
-final candidate includes this correction plus the correlation follow-up.
-The helper correction passed required validation (25 tests/lint/type/compile);
-80 affected helper/execution tests passed together. Await final public commit
-approval, exact-tip CI and after-close release checks; runtime still `7e2b81612`.
-Next: publish reviewed commit for
-exact-tip CI, deploy after close only on passing gates/flat broker, then verify
-the next naturally occurring EOD reduction. Unknown fees and this historical
-AMZN gap remain unavailable evidence; do not force trades or fabricate joins.
+records are unchanged. The follow-up preserves known position-entry correlation
+through the actual fill-capture writer; the strict matching gate is unchanged.
+Required validation passed 113 initial, 57 follow-up and 25 helper tests, with
+lint/type/compile, health and non-sending checks; 80 affected tests also passed
+together. Initial CI's outdated helper expectation was corrected before release.
+Final owner-approved commit `1853464dcd1893f98b0d35477a2f8367c0090fb7` is public.
+Exact-tip CI `37065103532` passed: 7,346 passed, five skipped, 80.22% coverage.
+CodeQL, SBOM, Workflow Lint, strict typing, replay, the fixed research fixture
+backtest and determinism checks passed. Historical log: `/tmp/ai-trading-ci-1853464dc.log`.
+After-close deployment completed October 2 at 14:34:28 Pacific, with a fresh
+closed/ACTIVE/flat broker check and both installed and automatic startup release
+identity phases passing. Runtime checkout was clean at `1853464dc`. At 14:36:40
+Pacific, health confirmed fresh connected broker state, zero positions/active
+orders, passing OMS checks and the existing stale-model/replay flags. Zero
+automatic restarts and structured startup errors. The final non-sending incident
+snapshot passed with no triggers; no notification was sent. Historical proof:
+`/tmp/ai-trading-eod-exit-post-deployment.json` and
+`/tmp/ai-trading-eod-exit-incident-snapshot.json`.
+Rollback source is `7e2b81612`; its former specification path was
+`/tmp/ai-trading-release-spec-before-25b9a7d28.json` (cleared at October 8 reboot).
+Next: verify the next naturally occurring EOD reduction's decision, single claim,
+account/order/trace/correlation and observed fill receipt. This runtime-path proof
+awaits a future ordinary session. Unknown fees and the historical AMZN gap remain
+unavailable evidence; do not force trades or fabricate joins.
 Today's report investigation is complete; its `evidence_pending` status remains
 appropriate. Details and exact acceptance criteria are in the repair report.
+Post-deployment documentation is recovered locally on the persistent `main`
+editing worktree; it is not yet committed/published. Keep the runtime checkout clean.
 Private artifacts: `/tmp/ai-trading-status-20261002{,-activities}.json` and
 `/tmp/ai-trading-closing-funnel-20261002.json`.
 

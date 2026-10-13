@@ -51,6 +51,15 @@ def _matched_source(
         return False
     for key in identities:
         for source in index.get(key, []):
+            if kind == "decision" and source.get("evidence_source") == "oms_decision_event":
+                # A durable causal decision must have been captured before the
+                # fill; a late reconstruction cannot establish that evidence.
+                recorded_at = pd.to_datetime(source.get("recorded_at"), errors="coerce")
+                if pd.isna(recorded_at) or recorded_at.tzinfo is None or recorded_at > fill_time:
+                    continue
+                decision_at = pd.to_datetime(source.get("decision_ts"), errors="coerce")
+                if pd.isna(decision_at) or decision_at.tzinfo is None or decision_at > recorded_at:
+                    continue
             if any(
                 source.get(field) not in (None, "")
                 and fill.get(field) not in (None, "")

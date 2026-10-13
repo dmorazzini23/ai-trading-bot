@@ -133,7 +133,7 @@ def _validate_trading_api(api: Any) -> bool:
     return True
 
 
-def _orders_request(status: str, *, after: datetime | None = None) -> Any:
+def _orders_request(status: str, *, after: datetime | None = None, symbols: list[str] | None = None) -> Any:
     """Build a native alpaca-py GetOrdersRequest for a query status."""
 
     try:
@@ -144,32 +144,32 @@ def _orders_request(status: str, *, after: datetime | None = None) -> Any:
         raise RuntimeError("alpaca-py trading order request classes unavailable") from exc
 
     status_value: Any = getattr(QueryOrderStatus, str(status).upper(), status)
-    return GetOrdersRequest(
-        status=status_value,
-        limit=500,
-        direction=Sort.ASC,
-        after=after,
-    )
+    kwargs: dict[str, Any] = {
+        "status": status_value, "limit": 500, "direction": Sort.ASC, "after": after,
+    }
+    if symbols:
+        kwargs["symbols"] = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+    return GetOrdersRequest(**kwargs)
 
 
 def _get_orders_by_status(
-    api: Any, status: str, *, after: datetime | None = None
+    api: Any, status: str, *, after: datetime | None = None, symbols: list[str] | None = None
 ) -> Any:
     get_orders = getattr(api, "get_orders", None)
     if not callable(get_orders):
         raise RuntimeError("Alpaca client missing native get_orders method")
-    return get_orders(filter=_orders_request(status, after=after))
+    return get_orders(filter=_orders_request(status, after=after, symbols=symbols))
 
 
 def _order_field(order: Any, name: str) -> Any:
     return order.get(name) if isinstance(order, Mapping) else getattr(order, name, None)
 
 
-def _iter_order_pages(api: Any, status: str) -> Iterator[list[Any]]:
+def _iter_order_pages(api: Any, status: str, *, symbols: list[str] | None = None) -> Iterator[list[Any]]:
     after: datetime | None = None
     previous_last = after
     while True:
-        page = list(_get_orders_by_status(api, status, after=after) or [])
+        page = list(_get_orders_by_status(api, status, after=after, symbols=symbols) or [])
         if len(page) > 500:
             raise RuntimeError("Alpaca orders page exceeds requested limit")
         if len(page) < 500:
@@ -192,7 +192,7 @@ def _iter_order_pages(api: Any, status: str) -> Iterator[list[Any]]:
         yield page
 
 
-def list_open_orders(api: Any):
+def list_open_orders(api: Any, *, symbols: list[str] | None = None):
     """Return a complete active-order snapshot or raise on an incomplete page.
 
     The broker's ``open`` filter can omit early active statuses. Query ``all``
@@ -239,14 +239,14 @@ def list_open_orders(api: Any):
         filtered.append(order)
 
     open_pages = 0
-    for page in _iter_order_pages(api, "open"):
+    for page in _iter_order_pages(api, "open", symbols=symbols):
         open_pages += 1
         for order in page:
             add_active(order, from_open_query=True)
 
     # No temporal discovery cache: newly visible orders can carry older or
     # missing submission timestamps. Every snapshot retains the broader scan.
-    for page in _iter_order_pages(api, "all"):
+    for page in _iter_order_pages(api, "all", symbols=symbols):
         all_pages += 1
         orders_scanned += len(page)
         for order in page:

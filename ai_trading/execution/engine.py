@@ -1128,6 +1128,12 @@ class OrderManager:
         orders_payload: list[Any]
         if broker_orders is not None:
             orders_payload = list(broker_orders)
+        elif callable(get_order_by_id_fn) and callable(get_order_by_client_order_id_fn):
+            # This reconciliation concerns only durable known intents. Exact
+            # native lookups below include pending/terminal orders omitted by
+            # the broker's open filter; account discovery remains a separate
+            # complete risk/synchronization read.
+            orders_payload = []
         elif callable(list_orders_fn):
             try:
                 fetched = list_orders_fn(status="open")  # type: ignore[misc]

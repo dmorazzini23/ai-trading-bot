@@ -17,6 +17,72 @@ from ai_trading.analytics.tca import (
 )
 
 
+def test_fuzzy_fill_match_cannot_compact_another_pending_order(tmp_path):
+    now = datetime(2026, 10, 8, 19, 18, tzinfo=UTC)
+    pending = {"ts": now.isoformat(), "symbol": "AMZN", "side": "buy", "qty": 1,
+               "order_id": "new-order", "client_order_id": "new-client", "pending_event": True, "decision_price": 254.92}
+    path = tmp_path / "tca.jsonl"
+    path.write_text(json.dumps(pending)+"\n")
+    original = path.read_bytes()
+    fills = tmp_path / "fills.jsonl"
+    fills.write_text(json.dumps({"ts": "2026-10-07T19:27:00Z", "symbol": "AMZN", "side": "buy", "fill_qty": 1, "order_id": "other-order", "client_order_id": "other-client"})+"\n")
+    result = finalize_stale_pending_tca(str(path), stale_after_seconds=3600, now=now,
+                                       fill_events_path=str(fills), compact_matched_pending=True)
+    assert result["compacted_fill_event_matches"] == 0
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("change", [{}, {"account_id": "other"}, {"trading_mode": "live"},
+                                   {"order_id": "other"}, {"client_order_id": "other"},
+                                   {"symbol": "MSFT"}, {"side": "sell"}, {"fill_qty": 2},
+                                   {"fill_ts": None}, {"fill_ts": datetime(2026, 10, 8, 19, 18, 12)},
+                                   {"fill_ts": datetime(2026, 10, 8, 19, 17, tzinfo=UTC)}])
+@pytest.mark.parametrize("pending_mode", [None, "paper"])
+def test_compacted_request_recovery_requires_native_causal_fill_evidence(tmp_path, change, pending_mode):
+    pending = {"ts": "2026-10-08T19:17:38Z", "symbol": "AMZN", "side": "buy", "qty": 1,
+               "order_id": "order", "client_order_id": "client", "account_id": "account",
+               "trading_mode": pending_mode, "decision_price": 254.92, "pending_event": False, "pending_compacted": True,
+               "pending_terminal_nonfill": False, "pending_compaction_kind": "fill_event_fallback_match"}
+    path = tmp_path / "tca.jsonl"
+    path.write_text(json.dumps(pending)+"\n")
+    original = path.read_text().splitlines()[0]
+    kwargs = dict(client_order_id="client", order_id="order", account_id="account", trading_mode="paper",
+                  symbol="AMZN", side="buy", fill_qty=1, fill_price=254.92, status="filled",
+                  fill_ts=datetime(2026, 10, 8, 19, 18, 12, tzinfo=UTC))
+    kwargs.update(change)
+    success, _ = reconcile_pending_tca_with_fill(str(path), **kwargs)
+    # A known conflicting mode is rejected; absent original mode is supplied
+    # only by the actual same-account/native-order fill, never by a filename.
+    expected = not change or (pending_mode is None and change == {"trading_mode": "live"})
+    assert success is expected
+    rows = path.read_text().splitlines()
+    assert rows[0] == original
+    if success:
+        resolved = json.loads(rows[-1])
+        assert resolved["fill_price"] == 254.92 and resolved["resolved_fill_qty"] == 1
+        assert resolved["compacted_request_recovered"] is True
+        assert resolved["total_fee_verified"] is False and resolved["fee_amount"] is None
+        assert resolved["promotion_eligible"] is False and resolved["fill_latency_ms"] is None
+        assert resolved["fill_ts"] == kwargs["fill_ts"].isoformat()
+        assert reconcile_pending_tca_with_fill(str(path), **kwargs)[0] is False
+    else:
+        assert len(rows) == 1
+
+
+def test_known_native_identity_cannot_resolve_a_different_fuzzy_request(tmp_path):
+    path = tmp_path / "tca.jsonl"
+    pending = {"ts": "2026-10-08T19:17:38Z", "symbol": "AMZN", "side": "buy", "qty": 1,
+               "order_id": "other-order", "client_order_id": "other-client", "pending_event": True,
+               "decision_price": 254.92}
+    path.write_text(json.dumps(pending)+"\n")
+    original = path.read_bytes()
+    result = reconcile_pending_tca_with_fill(str(path), order_id="actual-order", client_order_id="actual-client",
+        symbol="AMZN", side="buy", fill_qty=1, fill_price=254.92, status="filled",
+        fill_ts=datetime(2026, 10, 8, 19, 18, tzinfo=UTC), allow_symbol_qty_fallback=True)
+    assert result == (False, "pending_record_missing")
+    assert path.read_bytes() == original
+
+
 def test_implementation_shortfall_buy_direction() -> None:
     # Buy worse fill than decision price should be positive cost bps
     value = implementation_shortfall_bps("buy", 100.0, 101.0, fees=0.0, qty=10)

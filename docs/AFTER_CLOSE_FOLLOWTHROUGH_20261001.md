@@ -87,12 +87,15 @@ not repaired by this prospective change.
 for that exit path. The closing funnel has six successful trace links and one
 `missing_trace_id`, on the AMZN sell. Its intent account matches the observed
 broker, but the diagnostic reports `account_identity_consistent=false` and
-`account_identity_unverified`. Root cause is not yet traced; no claim that the
+`account_identity_unverified`. No claim that the
 broker used a different account is supported. The actual EOD path bypassed the
 ordinary decision and TCA writers and discarded its genuine trigger time at the
 durable writer. The prospective repair and validation are recorded in
-`EOD_EXIT_ACCOUNTING_REPAIR_20261002.md`; CI/deployment remain pending. Historical
-records and unknowns remain unchanged.
+`EOD_EXIT_ACCOUNTING_REPAIR_20261002.md`. Final commit `1853464dc` passed exact-tip
+CI and was deployed after close October 2 at 14:34 Pacific, with release identity,
+fresh flat broker/OMS and non-sending checks passing. Verification of the next
+naturally occurring EOD reduction awaits a future session. Historical records
+and unknowns remain unchanged.
 
 **Remaining action and acceptance:** continue ordinary monitoring for identity
 conflicts and unknowns. The observed session now satisfies the prospective

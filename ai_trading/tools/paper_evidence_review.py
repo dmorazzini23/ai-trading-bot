@@ -245,9 +245,21 @@ def main() -> None:
     accounts = {row["account_id"] for row in inputs["boundaries"] if row.get("account_id") and row.get("trading_mode") == "paper"}
     session = args.session or latest_completed_session(now)
     account = next(iter(accounts)) if len(accounts) == 1 else ""
+    funnel = session_diagnostic(session, args.oms_database)
+    durable_decisions = [
+        {**row, "evidence_source": "oms_decision_event"}
+        for row in funnel.get("decisions", [])
+        if row.get("decision_trace_id") and row.get("account_id") == account
+    ]
+    inputs["decisions"].extend(durable_decisions)
+    sources["oms_decisions"] = {
+        "path": funnel.get("database"), "rows": len(durable_decisions),
+        "read_only": True, "status": funnel.get("status"),
+        "missing": funnel.get("status") == "unavailable",
+    }
     audit = reconcile_session(session_date=session, account_id=account, **inputs) if account else {"status": "evidence_gaps", "session_gaps": ["unique_paper_account_identity_required"]}
     report: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat(), "session_date": session, "session_audit": audit, "cap_selection": cap_selection_review(replay), "execution_cost_comparison": compare_execution_costs(replay, inputs["fills"], account_id=account), "sources": sources, "promotion_authority": False, "orders_sent": 0}
-    report["order_funnel"] = session_diagnostic(session, args.oms_database)
+    report["order_funnel"] = funnel
     report["capture_readiness"] = capture_readiness(inputs["boundaries"], account_id=account, now=now)
     training_reports = {}
     for name, path in (("training", args.training_report), ("selection", args.selection_report), ("accounting", args.accounting_report)):

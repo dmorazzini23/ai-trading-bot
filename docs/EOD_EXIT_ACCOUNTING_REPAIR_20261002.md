@@ -29,8 +29,8 @@ checks fill/receipt account, decision trace and position-entry correlation.
 Its final required changed-file validation passed 57 mapped tests, Ruff,
 mypy/compilation on both changed paths, health and the non-sending snapshot.
 Log: `/tmp/amzn-exit-correlation-final-validation.log`. The earlier required
-validation is reused for unchanged OMS/TCA/core paths; final exact-tip CI is
-required for this follow-up before deployment.
+validation is reused for unchanged OMS/TCA/core paths. Final exact-tip CI passed
+before deployment, as recorded below.
 Initial commit `25b9a7d28` full CI found one older exact-metadata helper
 expectation: 7,341 passed, one failed, five skipped, 80.21% coverage. The helper
 test now explicitly asserts the new 24-character trace before comparing the
@@ -38,7 +38,8 @@ remaining metadata. This test update is included in the final candidate.
 The corrected helper file passed 25 required mapped tests, Ruff, mypy and
 compilation. The final helper plus execution-error regression files passed
 80 tests together. Logs: `/tmp/amzn-exit-ci-expectation-validation.log` and
-`/tmp/amzn-exit-final-path-tests.log`. Final CI/deployment remain on hold.
+`/tmp/amzn-exit-final-path-tests.log`. The failed candidate was not deployed;
+the corrected final candidate passed CI and release checks.
 
 The acknowledged EOD order now receives a prospective TCA request receipt.
 Observed fills can resolve it without an invented arrival benchmark, fee total,
@@ -62,12 +63,18 @@ nine changed paths, compilation, forbidden-pattern checks, canonical live health
 and the non-sending incident snapshot. Logs are private `/tmp/amzn-exit-*.log`.
 The cost-model reader separately rejected an operational receipt with
 `cost_metrics_missing_or_invalid`. No strategy/replay behavior changed; research
-experiments and holdout evaluations were not run. Exact-tip CI remains required.
+experiments and holdout evaluations were not run. Final exact-tip CI
+`37065103532` passed on `1853464dcd1893f98b0d35477a2f8367c0090fb7`:
+**7,346 passed, five skipped, 80.22% coverage**. Repository lint, typing, strict
+typing, replay, fixed research fixture backtest and determinism checks passed,
+as did CodeQL, SBOM and Workflow Lint. Historical log:
+`/tmp/ai-trading-ci-1853464dc.log`.
 
-**Status:** repair locally validated; awaiting commit CI and after-close release
-checks. October 2's historical decision/TCA gap remains unavailable evidence.
-Acceptance after deployment: the next naturally occurring EOD reduction has one
-causal operational decision, one durable claim, matching account/order/trace,
+**Status:** defect repaired, validated and deployed; runtime proof of the next
+ordinary EOD reduction awaits a future session. October 2's historical
+decision/TCA gap remains unavailable evidence.
+Acceptance: the next naturally occurring EOD reduction has one
+causal operational decision, one durable claim, matching account/order/trace/correlation,
 and a receipt resolving observed fill facts without certifying unknown fees.
 Do not force a position or trade for this check.
 
@@ -111,15 +118,25 @@ historical identity gaps remain excluded from claims of complete causal evidence
 
 ## 3. Paper operation and remaining actions
 
-The service remains on tested release `7e2b81612` with zero automatic restarts.
-Canonical broker state is fresh/flat and OMS consistency passes. The existing
+The service deployed tested release `1853464dc` October 2 at **14:34:28 Pacific**,
+after all final workflows passed. The 14:33:17 Pacific broker check confirmed
+closed, ACTIVE and flat with complete order pagination. Both installed identity
+phases and both automatic startup checks passed; runtime checkout was clean.
+Post-start verification at **14:36:40 Pacific** confirmed fresh connected broker
+state, zero positions/active orders and passing OMS consistency. There were zero
+automatic restarts and structured startup errors. The final non-sending incident
+snapshot passed with no triggers and sent no notification. Historical proof:
+`/tmp/ai-trading-eod-exit-post-deployment.json`,
+`/tmp/ai-trading-eod-exit-incident-snapshot.json` and
+`/tmp/ai-trading-eod-exit-startup-journal.log`. The existing
 `required_model_stale` and `replay_live_parity_gate_failed` flags remain. A passing
 health/incident smoke check does not establish model qualification or live safety.
 
-After exact-tip CI passes: recheck closed broker exposure, stage reviewed source
-and release specification, pass both identity phases, restart after close and
-verify broker/OMS health plus a non-sending incident snapshot. Keep rollback
-source/spec available. Runtime EOD proof requires a future ordinary session.
+Rollback source `7e2b81612` remains in git history; the former private specification
+at `/tmp/ai-trading-release-spec-before-25b9a7d28.json` was cleared at the October 8
+host reboot, together with the temporary logs cited above. Reconstruct and verify
+any rollback specification before using it. Continue normal paper monitoring;
+runtime EOD proof requires a future ordinary session.
 Verified fees, legacy historical accounting and broader live-readiness evidence
 remain separate blockers. Research budgets, holdout, model and trading gates
 remain unchanged; no training, new experiment, forced trade or paid data was used.

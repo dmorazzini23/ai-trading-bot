@@ -19,7 +19,7 @@ import statistics
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from email.utils import parsedate_to_datetime
@@ -1940,6 +1940,22 @@ class CapacityCheck:
     can_submit: bool
     suggested_qty: int
     reason: str | None = None
+    open_orders: tuple[Any, ...] | None = field(default=None, repr=False, compare=False)
+    open_orders_observed_at: float | None = field(default=None, repr=False, compare=False)
+    open_orders_broker: Any = field(default=None, repr=False, compare=False)
+
+
+def _capacity_open_orders(capacity: CapacityCheck, broker: Any) -> tuple[Any, ...] | None:
+    """Consume this attempt's complete observation only within one second.
+
+    This is not a discovery cache: another broker, an unavailable timestamp or
+    an older observation requires the normal fresh complete broker query.
+    """
+    observed_at = capacity.open_orders_observed_at
+    if observed_at is None or capacity.open_orders_broker is not broker:
+        return None
+    age = monotonic_time() - observed_at
+    return capacity.open_orders if 0.0 <= age < 1.0 else None
 
 
 @dataclass
@@ -2101,6 +2117,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     )
 
     open_orders: list[Any] = []
+    open_orders_observed_at: float | None = None
     if broker is not None and hasattr(broker, "list_orders"):
         try:
             orders = list_alpaca_orders(broker, status="open")
@@ -2108,6 +2125,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
                 open_orders = []
             else:
                 open_orders = list(orders)
+            open_orders_observed_at = monotonic_time() if orders is not None else None
         except LIVE_TRADING_FALLBACK_EXC as exc:
             logger.warning(
                 "BROKER_CAPACITY_OPEN_ORDERS_ERROR",
@@ -2298,7 +2316,9 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
             qty_int,
             _format_money(required_notional),
         )
-        return CapacityCheck(True, qty_int, None)
+        return CapacityCheck(
+            True, qty_int, None, tuple(open_orders), open_orders_observed_at, broker,
+        )
 
     if available <= 0:
         logger.warning(
@@ -2363,7 +2383,9 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         max_qty,
         _format_money(downsized_notional),
     )
-    return CapacityCheck(True, max_qty, None)
+    return CapacityCheck(
+        True, max_qty, None, tuple(open_orders), open_orders_observed_at, broker,
+    )
 
 AlpacaREST: type[Any] | None
 OrderSide: Any | None
@@ -18281,6 +18303,8 @@ class ExecutionEngine:
         status_token = _normalize_status(order_status) or "filled"
         resolved, reason = reconcile_pending_tca_with_fill(
             str(tca_path),
+            account_id=getattr(self, "_evidence_account_id", None),
+            trading_mode=getattr(self, "execution_mode", None),
             correlation_id=(
                 str(correlation_id).strip()
                 if correlation_id not in (None, "")
@@ -18479,6 +18503,8 @@ class ExecutionEngine:
                 fallback_ids.append(str(value))
             resolved, _reason = reconcile_pending_tca_with_fill(
                 str(tca_path),
+                account_id=row.get("account_id"),
+                trading_mode=row.get("trading_mode"),
                 correlation_id=correlation_id,
                 client_order_id=(
                     str(client_order_id)
@@ -23812,7 +23838,14 @@ class ExecutionEngine:
             # Refresh before the claim; the report must not count this order's
             # in-flight intent as a missing broker acknowledgement.
             self._runtime_gonogo_cache_until_mono = 0.0
-            self._runtime_gonogo_openings_allowed()
+            capacity_orders = _capacity_open_orders(capacity, capacity_broker)
+            if capacity_orders is None:
+                self._runtime_gonogo_openings_allowed()
+            else:
+                self._runtime_gonogo_openings_allowed(
+                    pending_orders=capacity_orders,
+                    pending_orders_observed_at=capacity.open_orders_observed_at,
+                )
         try:
             durable_intent_id = self._begin_durable_order_lifecycle(
                 client_order_id=client_order_id,
@@ -30304,7 +30337,10 @@ class ExecutionEngine:
             "daily_stats_view": "operational" if operational_view else "accounting",
         }
 
-    def _runtime_pending_new_pressure_allows_openings(self) -> tuple[bool, dict[str, Any]]:
+    def _runtime_pending_new_pressure_allows_openings(
+        self, *, pending_orders: Sequence[Any] | None = None,
+        pending_orders_observed_at: float | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
         """Block new openings while pending-new pressure indicates weak microstructure."""
 
         enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED")
@@ -30331,7 +30367,13 @@ class ExecutionEngine:
         pending_ages: list[float] = []
         pending_count = 0
         client = self._capacity_broker(getattr(self, "trading_client", None))
-        if client is None:
+        observation_age = (
+            monotonic_time() - pending_orders_observed_at
+            if pending_orders_observed_at is not None else float("inf")
+        )
+        if pending_orders is not None and 0.0 <= observation_age < 1.0:
+            open_orders = list(pending_orders)
+        elif client is None:
             open_orders = []
         else:
             try:
@@ -31936,7 +31978,10 @@ class ExecutionEngine:
             },
         )
 
-    def _runtime_gonogo_openings_allowed(self) -> tuple[bool, dict[str, Any]]:
+    def _runtime_gonogo_openings_allowed(
+        self, *, pending_orders: Sequence[Any] | None = None,
+        pending_orders_observed_at: float | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
         """Return go/no-go eligibility for opening orders using runtime performance artifacts."""
 
         enabled = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED")
@@ -32620,9 +32665,13 @@ class ExecutionEngine:
                     context["gate_passed"] = False
                     context["reason"] = "intraday_slippage_kill_switch"
             if allowed:
-                pressure_allowed, pressure_context = (
-                    self._runtime_pending_new_pressure_allows_openings()
-                )
+                if pending_orders is None:
+                    pressure_allowed, pressure_context = self._runtime_pending_new_pressure_allows_openings()
+                else:
+                    pressure_allowed, pressure_context = self._runtime_pending_new_pressure_allows_openings(
+                        pending_orders=pending_orders,
+                        pending_orders_observed_at=pending_orders_observed_at,
+                    )
                 context["pending_new_pressure_guard"] = pressure_context
                 if not pressure_allowed:
                     allowed = False
