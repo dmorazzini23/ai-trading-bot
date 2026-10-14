@@ -55,6 +55,62 @@ def test_chain_requires_causal_quotes_and_verified_fees():
     assert result["gap_counts"]["causal_quote_unverified"] == 1
 
 
+def durable_exit(recorded_at="2026-09-08T14:00:00.05Z"):
+    return {"symbol": "SPY", "side": "buy", "account_id": "paper", "decision_trace_id": "eod-1",
+            "evidence_source": "oms_decision_event", "recorded_at": recorded_at,
+            "metrics": {"decision_ts": "2026-09-08T14:00:00Z", "decision_ts_basis": "explicit"}}
+
+
+def eod_fill_inputs():
+    _, orders, fills = complete_inputs()
+    for row in (orders[0], fills[0]):
+        row.pop("correlation_id")
+        row["decision_trace_id"] = "eod-1"
+    return orders, fills
+
+
+def test_chain_links_causal_durable_decision_only():
+    orders, fills = eod_fill_inputs()
+    linked = reset.execution_chain([], orders, fills, durable=[durable_exit()])["gap_counts"]
+    assert "decision_missing_or_ambiguous" not in linked
+    assert "durable_decision_not_causal" not in linked
+    late = reset.execution_chain([], orders, fills, durable=[durable_exit("2026-09-08T14:00:01Z")])
+    assert late["gap_counts"]["durable_decision_not_causal"] == 1
+    assert late["complete_chains"] == 0
+
+
+def test_file_decision_takes_precedence_over_durable_decision():
+    decisions, orders, fills = complete_inputs()
+    fills[0]["decision_trace_id"] = "eod-1"
+    result = reset.execution_chain(decisions, orders, fills, durable=[durable_exit()])
+    assert result["complete_chains"] == 1
+
+
+def test_scorecard_uses_durable_exit_decisions_in_window(tmp_path, monkeypatch):
+    now = datetime(2026, 9, 8, 21, tzinfo=UTC)
+    orders, fills = eod_fill_inputs()
+    file_decision = {**complete_inputs()[0][0], "ts": "2026-09-08T14:00:00Z"}
+    for name, rows in (("decision_records", [file_decision]), ("order_events", orders), ("fill_events", fills)):
+        (tmp_path / f"{name}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    durable = {key: value for key, value in durable_exit().items() if key not in {"metrics", "evidence_source"}}
+    durable["decision_ts"] = durable_exit()["metrics"]["decision_ts"]
+    stale = {**durable, "decision_trace_id": "old", "recorded_at": "2026-08-01T14:00:00Z"}
+    sessions = []
+
+    def diagnostic(session, database):
+        sessions.append(session)
+        return {"status": "local_diagnostic_complete", "decisions": [durable, stale] if session == "2026-09-08" else []}
+
+    monkeypatch.setattr(reset, "session_diagnostic", diagnostic)
+    report = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now, oms_database=tmp_path / "oms.db")
+    assert "decision_missing_or_ambiguous" not in report["execution_chain"]["gap_counts"]
+    assert report["sources"]["oms_decisions"]["rows_in_window"] == 1
+    assert sessions[0] == "2026-09-01" and sessions[-1] == "2026-09-08"
+    assert report["quotes"]["rows_read"] == 1
+    without = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now)
+    assert without["execution_chain"]["gap_counts"]["decision_missing_or_ambiguous"] == 1
+
+
 def test_chain_rejects_duplicate_conflicts_wrong_account_and_missing_ids():
     decisions, orders, fills = complete_inputs()
     duplicate = deepcopy(fills[0])

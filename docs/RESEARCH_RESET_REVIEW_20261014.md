@@ -33,7 +33,13 @@ Repeating trials on consumed budgets or loosening gates would only fit noise.
    separate follow-up.
 2. **Incomplete causal execution chains.** Fills lack a verified causal quote,
    and some lack an explicit decision time or account/order link. Repair the
-   writers going forward; leave historical records unchanged.
+   writers going forward; leave historical records unchanged. The weekly
+   scorecard had only read `decision_records.jsonl`, so EOD exits whose decision
+   exists only in the OMS `decision_events` table looked "missing". It now falls
+   back to those durable decisions (read-only, captured before the fill) for
+   fills that have no file decision. EOD exits still honestly show
+   `completed_source_bar_unverified` and a missing causal quote, because the exit
+   trigger is not a completed-bar decision and no benchmark quote is invented.
 3. **Per-fill total fees.** These remain unavailable from the paper Trading API
    activity schema. Do not impute zero fees or allocate account-level charges.
 

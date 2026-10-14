@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -16,10 +17,12 @@ from ai_trading.config.research_policy import reset_policy
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.tools.execution_evidence_reconciliation import _identities, _number
+from ai_trading.tools.order_funnel import configured_sqlite_path, session_diagnostic
 from ai_trading.tools.research_foundation import audit_quotes
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = ROOT / "config/research_reset.json"
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 def stamp(value: Any) -> pd.Timestamp | None:
@@ -67,11 +70,15 @@ def read_window(path: Path, now: datetime) -> tuple[list[dict[str, Any]], dict[s
     return rows, {"path": str(path), "sha256": digest.hexdigest(), "status": "read", "stable_during_read": stable, "counts": dict(counts), "rows_in_window": len(rows), "latest_in_window": latest.isoformat() if latest is not None else None}
 
 
-def execution_chain(decisions: list[dict[str, Any]], orders: list[dict[str, Any]], fills: list[dict[str, Any]]) -> dict[str, Any]:
-    """Require causal, unambiguous, account-scoped links and explicit total fees."""
+def execution_chain(decisions: list[dict[str, Any]], orders: list[dict[str, Any]], fills: list[dict[str, Any]], durable: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Require causal, unambiguous, account-scoped links and explicit total fees.
+
+    Durable OMS decisions are consulted only for fills with no file decision.
+    """
     index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    durable_index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     order_index: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for rows, target in ((decisions, index), (orders, order_index)):
+    for rows, target in ((decisions, index), (durable or [], durable_index), (orders, order_index)):
         for row in rows:
             for identity_key in _identities(row):
                 target[identity_key].append(row)
@@ -101,9 +108,17 @@ def execution_chain(decisions: list[dict[str, Any]], orders: list[dict[str, Any]
         if not account or fill.get("trading_mode") != "paper":
             gaps.add("paper_account_unverified")
         candidates = {id(row): row for identity in _identities(fill) for row in index[identity] if row.get("symbol") == fill.get("symbol")}
+        if not candidates:
+            candidates = {id(row): row for identity in _identities(fill) for row in durable_index[identity] if row.get("symbol") == fill.get("symbol")}
         if len(candidates) != 1:
             gaps.add("decision_missing_or_ambiguous")
         decision = next(iter(candidates.values())) if len(candidates) == 1 else {}
+        if decision.get("evidence_source") == "oms_decision_event":
+            # A durable decision counts only if it was captured before the fill.
+            recorded_at, filled_at = stamp(decision.get("recorded_at")), stamp(fill.get("ts"))
+            durable_decision_time = stamp((decision.get("metrics") or {}).get("decision_ts"))
+            if recorded_at is None or filled_at is None or durable_decision_time is None or not durable_decision_time <= recorded_at <= filled_at:
+                gaps.add("durable_decision_not_causal")
         if decision and any(
             decision.get(field) not in (None, "") and decision.get(field) != fill.get(field)
             for field in ("account_id", "trading_mode", "side")
@@ -190,12 +205,39 @@ def campaign_results(paths: list[Path], now: datetime) -> tuple[list[dict[str, A
     return results, dict(counts)
 
 
-def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None) -> dict[str, Any]:
+def durable_decisions(database: Path, now: datetime) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read OMS decisions; EOD exits can be absent from the decision file."""
+    start = now - timedelta(days=7)
+    session, last = start.astimezone(NEW_YORK).date(), now.astimezone(NEW_YORK).date()
+    rows: list[dict[str, Any]] = []
+    statuses: Counter[str] = Counter()
+    while session <= last:
+        funnel = session_diagnostic(session.isoformat(), database)
+        statuses[str(funnel.get("status"))] += 1
+        for row in funnel.get("decisions", []):
+            recorded_at = stamp(row.get("recorded_at"))
+            if not row.get("decision_trace_id") or recorded_at is None or not start <= recorded_at <= now:
+                continue
+            rows.append({
+                "symbol": row.get("symbol"), "side": row.get("side"), "account_id": row.get("account_id"),
+                "decision_trace_id": row["decision_trace_id"], "evidence_source": "oms_decision_event",
+                "recorded_at": row.get("recorded_at"),
+                "metrics": {"decision_ts": row.get("decision_ts"), "decision_ts_basis": "explicit" if row.get("decision_ts") else None, "source_timestamp": row.get("source_timestamp")},
+            })
+        session += timedelta(days=1)
+    unavailable = statuses.get("unavailable", 0)
+    return rows, {"path": str(database), "status": "unavailable" if unavailable else "read", "read_only": True, "sessions": dict(statuses), "rows_in_window": len(rows), "usage": "fallback_for_fills_without_file_decision"}
+
+
+def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None, oms_database: Path | None = None) -> dict[str, Any]:
     inputs, sources = {}, {}
     for name, filename in (("decisions", "decision_records.jsonl"), ("orders", "order_events.jsonl"), ("fills", "fill_events.jsonl")):
         inputs[name], sources[name] = read_window(runtime_dir / filename, now)
     quotes = audit_quotes(inputs["decisions"], now)
-    chain = execution_chain(**inputs)
+    durable = None
+    if oms_database is not None:
+        durable, sources["oms_decisions"] = durable_decisions(oms_database, now)
+    chain = execution_chain(**inputs, durable=durable)
     accounting, sources["accounting"] = read_json_source(accounting_path, now, max_age_days=2)
     paper, sources["paper_review"] = read_json_source(paper_path, now, max_age_days=2)
     trials, experiment_counts = campaign_results(campaigns, now)
@@ -227,8 +269,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--campaign-state", type=Path, action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sampling-support", type=Path, default=ROOT / "artifacts/research_reset/sampling_support.json")
+    parser.add_argument("--oms-database", type=Path, default=None, help="Read-only OMS SQLite; defaults to the configured store")
     args = parser.parse_args(argv)
-    report = build_scorecard(args.runtime_dir, args.accounting_report, args.paper_report, args.campaign_state, datetime.now(UTC), args.sampling_support)
+    oms_database = args.oms_database or configured_sqlite_path()
+    report = build_scorecard(args.runtime_dir, args.accounting_report, args.paper_report, args.campaign_state, datetime.now(UTC), args.sampling_support, oms_database)
     atomic_write_text(args.output, json.dumps(report, indent=2, allow_nan=False) + "\n")
     get_logger(__name__).info("RESEARCH_RESET_SCORECARD_COMPLETE", extra={"status": report["status"], "blocker": report["highest_value_blocker"]})
     return 0
