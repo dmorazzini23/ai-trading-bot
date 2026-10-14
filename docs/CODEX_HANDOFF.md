@@ -1,5 +1,19 @@
 # Current handoff
 
+## October 14 research reset review
+
+The user decided to keep the pause through the holdout
+([review](RESEARCH_RESET_REVIEW_20261014.md)). `config/research_reset.json` now
+sets the review date to 2026-12-09 and still requires an explicit review. Work is
+limited to named gaps, in priority order: stale decision quotes (1,896/2,399 over
+1 s), incomplete causal fill chains (0/22), per-fill fees. Runtime is still at
+`1853464dc`; the research timers read the live checkout, so they keep reporting
+`review_due` until deployment (training stays blocked either way).
+Oct 14 session: service healthy with 0 restarts; 3 one-share round trips, ≈ −$0.68
+gross; ends flat. Five cycles of about 195 s, matching the 39k-order scans that
+the undeployed `893f491` addresses. Validation: `agent_validate_changed.sh`
+targeted pass (ruff/mypy/compile, 9 tests) plus 26 research policy/reset tests.
+
 ## October 12 Pacific cycle/accounting repair
 
 Work in persistent `main` checkout `/home/aiuser/ai-trading-maintenance-main`;

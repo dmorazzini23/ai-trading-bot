@@ -1,7 +1,10 @@
 {
   "enabled": true,
   "start_date": "2026-09-08",
-  "review_date": "2026-10-08",
+  "review_date": "2026-12-09",
+  "last_review_date": "2026-10-14",
+  "last_review_decision": "continue_pause_evidence_gaps_only",
+  "review_record": "docs/RESEARCH_RESET_REVIEW_20261014.md",
   "resume_policy": "explicit_review_required",
   "holdout_start": "2026-09-09",
   "holdout_end": "2026-12-08",

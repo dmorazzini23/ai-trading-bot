@@ -25,6 +25,14 @@ def test_review_does_not_release_training(tmp_path, monkeypatch):
     assert policy.training_block_reason() is None
 
 
+def test_checked_in_policy_keeps_pause_through_holdout():
+    raw = json.loads(policy.POLICY_PATH.read_text())
+    assert raw["holdout_end"] < raw["review_date"]
+    holdout = datetime(2026, 12, 8, 20, tzinfo=UTC)
+    assert policy.reset_policy(policy.POLICY_PATH, holdout)["phase"] == "evidence_reset"
+    assert policy.training_block_reason(holdout) == "research_reset_active"
+
+
 def test_after_hours_reset_precedes_data_and_env(monkeypatch):
     from ai_trading.training import after_hours
 
