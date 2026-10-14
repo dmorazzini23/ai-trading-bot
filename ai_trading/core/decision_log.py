@@ -277,9 +277,26 @@ class DecisionRecorder:
         if explicitly_governed:
             metrics_payload["replay_shadow_evidence"] = True
             metrics_payload["replay_live_entry_control"] = replay_entry_control
-        quote_age_ms = _finite_float(quote_snapshot.get("quote_age_ms"))
+        # The snapshot is the latest cached quote for the symbol. Never pair its
+        # prices, age or observation time with a different quote this decision
+        # explicitly recorded (for example the submit-arrival quote).
+        explicit_quote_ts = normalize_evidence_timestamp(
+            _first_text(metrics_payload.get("quote_timestamp"), metrics_payload.get("quote_ts"))
+        )
+        snapshot_quote_ts = normalize_evidence_timestamp(
+            _first_text(quote_snapshot.get("quote_timestamp"), quote_snapshot.get("updated"))
+        )
+        quote_view: Mapping[str, Any] = quote_snapshot
+        if explicit_quote_ts is not None and snapshot_quote_ts != explicit_quote_ts:
+            quote_view = {
+                "bid": metrics_payload.get("raw_quote_bid"),
+                "ask": metrics_payload.get("raw_quote_ask"),
+                "quote_age_ms": metrics_payload.get("quote_age_ms"),
+                "quote_observed_at": metrics_payload.get("quote_observed_at"),
+            }
+        quote_age_ms = _finite_float(quote_view.get("quote_age_ms"))
         if quote_age_ms is None:
-            quote_age_sec = _finite_float(quote_snapshot.get("age_sec"))
+            quote_age_sec = _finite_float(quote_view.get("age_sec"))
             if quote_age_sec is not None:
                 quote_age_ms = max(0.0, quote_age_sec * 1000.0)
         if quote_age_ms is not None:
@@ -293,7 +310,7 @@ class DecisionRecorder:
         if quote_timestamp:
             metrics_payload.setdefault("quote_timestamp", quote_timestamp)
         quote_observed_at = normalize_evidence_timestamp(
-            quote_snapshot.get("quote_observed_at")
+            quote_view.get("quote_observed_at")
         )
         if quote_timestamp and quote_observed_at is not None:
             metrics_payload.setdefault("quote_observed_at", quote_observed_at.isoformat())
@@ -311,8 +328,8 @@ class DecisionRecorder:
         )
         if quote_source:
             metrics_payload.setdefault("quote_source", quote_source)
-        bid = _finite_float(quote_snapshot.get("bid"))
-        ask = _finite_float(quote_snapshot.get("ask"))
+        bid = _finite_float(quote_view.get("bid"))
+        ask = _finite_float(quote_view.get("ask"))
         if bid is not None:
             metrics_payload.setdefault("raw_quote_bid", bid)
         if ask is not None:

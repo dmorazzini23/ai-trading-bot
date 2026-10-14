@@ -3,10 +3,11 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Callable
 
 from ai_trading.config.management import get_env
+from ai_trading.core.evidence_lineage import normalize_evidence_timestamp
 from ai_trading.core.execution_guards import build_portfolio_optimizer_positions, build_pretrade_validation_cfg
 from ai_trading.core.execution_intent import ExecutionIntentContext, build_execution_intent_context
 
@@ -24,6 +25,7 @@ class NettingSubmitPreludeResult:
     blocked_reason: str | None
     blocked_metrics: dict[str, Any] | None
     blocked_order_intent: Any | None
+    decision_quote_evidence: dict[str, Any] | None = None
 
 
 def _fail_closed_on_optimizer_error(*, cfg: Any, opening_trade: bool) -> bool:
@@ -204,6 +206,27 @@ def prepare_netting_submit_prelude(
         side=side,
         fallback_price=price,
     )
+    # The per-symbol order decision is formed from this arrival quote, so its
+    # observation time (not the cycle start) is the causal decision time.
+    quote_observed_at = datetime.now(UTC)
+    decision_quote_evidence: dict[str, Any] = {
+        "quote_observed_at": quote_observed_at.isoformat(),
+    }
+    arrival_quote_ts = normalize_evidence_timestamp(submit_quote_ts)
+    if arrival_quote_ts is not None:
+        decision_quote_evidence["quote_timestamp"] = arrival_quote_ts.isoformat()
+        decision_quote_evidence["raw_quote_timestamp"] = arrival_quote_ts.isoformat()
+        decision_quote_evidence["quote_age_ms"] = max(
+            (quote_observed_at - arrival_quote_ts).total_seconds() * 1000.0,
+            0.0,
+        )
+    if submit_bid_at_arrival is not None:
+        decision_quote_evidence["raw_quote_bid"] = float(submit_bid_at_arrival)
+    if submit_ask_at_arrival is not None:
+        decision_quote_evidence["raw_quote_ask"] = float(submit_ask_at_arrival)
+    if submit_quote_source:
+        decision_quote_evidence["quote_source"] = str(submit_quote_source)
+        decision_quote_evidence["raw_quote_source"] = str(submit_quote_source)
 
     broker_submit_allowed = bool(breakers.allow("broker_submit"))
     broker_ready = broker_submit_allowed and auth_forbidden_retry_after <= 0.0
@@ -276,7 +299,7 @@ def prepare_netting_submit_prelude(
         broker_ready_reason=broker_ready_reason,
         broker_cooldown_remaining_sec=broker_cooldown_remaining_sec,
         correlation_id=correlation_id,
-        decision_timestamp=now,
+        decision_timestamp=quote_observed_at,
         source_timestamp=bar_ts,
         order_type="limit",
         execution_profile=execution_profile,
@@ -313,6 +336,7 @@ def prepare_netting_submit_prelude(
             blocked_reason=pretrade_reason,
             blocked_metrics={"pretrade": pretrade_details},
             blocked_order_intent=blocked_order_intent,
+            decision_quote_evidence=decision_quote_evidence,
         )
 
     return NettingSubmitPreludeResult(
@@ -327,4 +351,5 @@ def prepare_netting_submit_prelude(
         blocked_reason=None,
         blocked_metrics=None,
         blocked_order_intent=None,
+        decision_quote_evidence=decision_quote_evidence,
     )

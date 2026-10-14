@@ -126,6 +126,17 @@ evidence is persisted under the ignored runtime artifact directory
 `artifacts/maintenance/server_updates_20261008/`. Documentation is local and
 unpublished; no public push is authorized for a new documentation commit.
 
+## October 14 decision-quote staleness (branch claude/lucid-moore-e37bad)
+
+Root cause, evidence and patch: `docs/QUOTE_STALENESS_DIAGNOSIS_20261014.md`.
+Two recording bugs: the explicit decision time was the cycle start (it preceded
+the per-symbol arrival quote in 487/515 rows), and decision records used the
+cached prerank quote or a mix of it, not the arrival quote (all 23 invalid
+observation rows). Fixed in the submit prelude, netting cycle and recorder, with
+regression tests. Non-submitting rows are genuinely stale (median 7.9 s from
+prerank prefetch to netting); 893f491 targets broker-read tails, not that interval.
+Undeployed; fees still block complete chains.
+
 ## October 2 Pacific closing snapshot
 
 Read-only broker check at 13:02 Pacific: market closed, ACTIVE paper account,

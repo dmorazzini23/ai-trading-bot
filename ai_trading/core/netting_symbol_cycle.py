@@ -806,7 +806,10 @@ def process_netting_symbol(
             net_target=net_target,
             gates=gates,
             metrics=_terminal_metrics(
-                submit_prelude.blocked_metrics,
+                {
+                    **dict(submit_prelude.blocked_metrics or {}),
+                    **dict(submit_prelude.decision_quote_evidence or {}),
+                },
                 stage="precheck",
                 reason=str(submit_prelude.blocked_reason),
                 context={"gates_added": list(submit_prelude.gates_added)},
@@ -952,6 +955,9 @@ def process_netting_symbol(
             submit_metrics[key] = order_lineage_metadata[key]
     if "decision_ts" in order_lineage_metadata:
         submit_metrics["decision_ts_basis"] = "explicit"
+    # Record the arrival quote the order decision used, not whichever quote the
+    # shared runtime snapshot holds when this record is finally written.
+    submit_metrics.update(submit_prelude.decision_quote_evidence or {})
     if submit_result.status != "submitted":
         _record_decision(
             symbol=symbol,

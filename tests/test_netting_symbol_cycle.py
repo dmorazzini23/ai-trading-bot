@@ -118,6 +118,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
             blocked_reason=None,
             blocked_metrics=None,
             blocked_order_intent=None,
+            decision_quote_evidence=None,
         )
 
     def execute_submission_func(**kwargs: Any) -> Any:
@@ -677,3 +678,46 @@ def test_process_netting_symbol_leaves_alpha_and_capacity_sizing_to_approval() -
     assert records[0]["net_target"].target_shares == 4
     assert records[0]["config_snapshot"]["alpha_decay"]["before_delta_shares"] == 10
     assert records[0]["config_snapshot"]["capacity_throttle"]["after_delta_shares"] == 4
+
+
+def test_submitted_decision_records_arrival_quote_not_runtime_snapshot_quote() -> None:
+    processor, records = _make_processor()
+    original = processor.prepare_submit_prelude_func
+    evidence = {
+        "quote_observed_at": "2026-04-19T00:00:08.200000+00:00",
+        "quote_timestamp": "2026-04-19T00:00:08+00:00",
+        "raw_quote_timestamp": "2026-04-19T00:00:08+00:00",
+        "quote_age_ms": 200.0,
+        "raw_quote_bid": 9.9,
+        "raw_quote_ask": 10.1,
+        "quote_source": "broker_nbbo",
+        "raw_quote_source": "broker_nbbo",
+    }
+
+    def prelude(**kwargs: Any) -> Any:
+        result = original(**kwargs)
+        result.execution_intent_context.order_lineage_metadata["decision_ts"] = evidence["quote_observed_at"]
+        result.decision_quote_evidence = dict(evidence)
+        return result
+
+    processor.prepare_submit_prelude_func = prelude
+    original_submit = processor.execute_submission_func
+
+    def submit(**kwargs: Any) -> Any:
+        result = original_submit(**kwargs)
+        # Submit-path metrics computed age against the cycle start (clamped).
+        result.metrics = {"quote_age_ms": 0.0, "quote_timestamp": evidence["quote_timestamp"]}
+        return result
+
+    processor.execute_submission_func = submit
+    process_netting_symbol(
+        processor=processor, symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now), orders_submitted=0,
+    )
+
+    metrics = records[0]["metrics"]
+    assert metrics["decision_ts"] == evidence["quote_observed_at"]
+    assert metrics["decision_ts_basis"] == "explicit"
+    for key, value in evidence.items():
+        assert metrics[key] == value
+

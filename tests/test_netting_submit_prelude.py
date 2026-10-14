@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -196,3 +196,45 @@ def test_prepare_netting_submit_prelude_builds_final_intent_with_nbbo_quote() ->
         == "paper_sampling_passive"
     )
     assert result.execution_intent_context.order_annotations["quote"]["midpoint"] == 100.0
+
+
+def test_prelude_decision_time_follows_arrival_quote_not_cycle_start() -> None:
+    kwargs = _base_kwargs()
+    cycle_now = datetime.now(UTC) - timedelta(seconds=8)
+    arrival_quote_ts = datetime.now(UTC) - timedelta(milliseconds=200)
+    kwargs["now"] = cycle_now
+    kwargs["resolve_order_quote_basis_func"] = lambda runtime, symbol, side, fallback_price: (
+        "broker_nbbo", 99.5, 100.5, 100.0, 100.5, arrival_quote_ts,
+    )
+
+    result = prepare_netting_submit_prelude(**cast(Any, kwargs))
+
+    assert result.execution_intent_context is not None
+    lineage = result.execution_intent_context.order_lineage_metadata
+    decision_ts = datetime.fromisoformat(lineage["decision_ts"])
+    # Causal: the decision is made after the quote it uses was observed.
+    assert 0.0 <= (decision_ts - arrival_quote_ts).total_seconds() <= 1.0
+    assert decision_ts > cycle_now
+    evidence = result.decision_quote_evidence
+    assert evidence is not None
+    assert evidence["quote_observed_at"] == lineage["decision_ts"]
+    assert evidence["quote_timestamp"] == arrival_quote_ts.isoformat()
+    assert evidence["raw_quote_bid"] == 99.5
+    assert evidence["raw_quote_ask"] == 100.5
+    assert evidence["quote_source"] == "broker_nbbo"
+    assert 200.0 <= evidence["quote_age_ms"] < 1000.0
+    # The pretrade gate input is intentionally unchanged (still cycle-relative).
+    assert result.execution_intent_context.pretrade_intent.quote_age_ms == 0.0
+
+
+def test_prelude_pretrade_block_carries_arrival_quote_evidence() -> None:
+    kwargs = _base_kwargs()
+    kwargs["safe_validate_pretrade_func"] = lambda intent, **kwargs: (False, "PRICE_COLLAR_BLOCK", {})
+
+    result = prepare_netting_submit_prelude(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "PRICE_COLLAR_BLOCK"
+    assert result.decision_quote_evidence is not None
+    assert result.decision_quote_evidence["raw_quote_bid"] == 99.5
+    assert "quote_timestamp" not in result.decision_quote_evidence
+

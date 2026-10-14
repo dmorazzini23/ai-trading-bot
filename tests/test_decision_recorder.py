@@ -523,3 +523,90 @@ def test_decision_recorder_does_not_attribute_heuristic_proposal_to_ml() -> None
         "model_artifact_hash",
     ):
         assert journal[key] is None
+
+
+def _snapshot_recorder() -> DecisionRecorder:
+    return DecisionRecorder(
+        runtime=type("Runtime", (), {"execution_candidate_rank_expected_edge_bps": {}})(),
+        path="runtime/decision_records.jsonl",
+        write_impl=lambda _record, _path: None,
+        dedupe_gate_root_causes=lambda gates: list(dict.fromkeys(gates)),
+        session_bucket_from_ts=lambda _ts: "midday",
+        safe_float=lambda value: float(value) if value is not None else None,
+        # Earlier prerank quote cached in shared runtime state.
+        quote_snapshot_func=lambda _symbol: {
+            "status": "ready",
+            "allowed": True,
+            "source": "latest_quote",
+            "bid": 259.0,
+            "ask": 259.2,
+            "quote_age_ms": 59.6,
+            "quote_timestamp": "2026-10-13T19:41:48.418000+00:00",
+            "quote_observed_at": "2026-10-13T19:41:48.478228+00:00",
+        },
+    )
+
+
+def _snapshot_target() -> tuple[datetime, NettedTarget]:
+    bar_ts = datetime(2026, 10, 13, 19, 35, tzinfo=UTC)
+    proposal = SleeveProposal(
+        symbol="AMZN", sleeve="day", bar_ts=bar_ts, target_dollars=1000.0,
+        expected_edge_bps=12.0, expected_cost_bps=3.0, score=0.7, confidence=0.8,
+    )
+    return bar_ts, NettedTarget(
+        symbol="AMZN", bar_ts=bar_ts, target_dollars=1000.0, target_shares=4.0,
+        proposals=[proposal],
+    )
+
+
+def test_decision_recorder_never_pairs_snapshot_with_different_explicit_quote() -> None:
+    bar_ts, target = _snapshot_target()
+    record = _snapshot_recorder().build_record(
+        symbol="AMZN", bar_ts=bar_ts, net_target=target, sleeves=list(target.proposals),
+        gates=["OK_TRADE"],
+        metrics={
+            "quote_timestamp": "2026-10-13T19:41:56.082069+00:00",
+            "quote_observed_at": "2026-10-13T19:41:56.300000+00:00",
+            "quote_age_ms": 217.9,
+            "raw_quote_bid": 259.67,
+            "raw_quote_ask": 259.76,
+        },
+    )
+
+    assert record.metrics is not None
+    assert record.metrics["quote_timestamp"] == "2026-10-13T19:41:56.082069+00:00"
+    assert record.metrics["quote_observed_at"] == "2026-10-13T19:41:56.300000+00:00"
+    assert record.metrics["quote_age_ms"] == 217.9
+    assert record.metrics["raw_quote_age_ms"] == 217.9
+    assert record.metrics["raw_quote_bid"] == 259.67
+    assert record.metrics["raw_quote_ask"] == 259.76
+
+
+def test_decision_recorder_omits_snapshot_fields_when_explicit_quote_lacks_them() -> None:
+    bar_ts, target = _snapshot_target()
+    record = _snapshot_recorder().build_record(
+        symbol="AMZN", bar_ts=bar_ts, net_target=target, sleeves=list(target.proposals),
+        gates=["OK_TRADE"],
+        metrics={"quote_timestamp": "2026-10-13T19:41:56.082069+00:00"},
+    )
+
+    assert record.metrics is not None
+    # The snapshot observation time predates this quote; pairing it is invalid.
+    assert "quote_observed_at" not in record.metrics
+    assert "raw_quote_bid" not in record.metrics
+    assert record.metrics["quote_quality_status"] == "anomalous"
+    assert record.metrics["quote_anomaly_reason"] == "bid_or_ask_missing"
+
+
+def test_decision_recorder_uses_snapshot_for_its_own_quote() -> None:
+    bar_ts, target = _snapshot_target()
+    record = _snapshot_recorder().build_record(
+        symbol="AMZN", bar_ts=bar_ts, net_target=target, sleeves=list(target.proposals),
+        gates=["NO_ACTION"],
+        metrics={"quote_timestamp": "2026-10-13T19:41:48.418+00:00"},
+    )
+
+    assert record.metrics is not None
+    assert record.metrics["quote_observed_at"] == "2026-10-13T19:41:48.478228+00:00"
+    assert record.metrics["raw_quote_bid"] == 259.0
+
