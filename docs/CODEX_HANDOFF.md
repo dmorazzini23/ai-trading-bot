@@ -33,6 +33,25 @@ new release spec, move the runtime checkout to the CI-passed SHA,
 scorecard chain gaps. Live canary stays blocked: no qualified model, replay
 −8.2 bps net, research pause until the Dec 9 review.
 
+## October 14 broker open-order snapshot bound (not deployed)
+
+`list_open_orders` no longer pages the full `status=all` history. The read
+starts 92 days back, based on Alpaca's aged-order policy: GTC orders are
+canceled 90 days after creation, and other TIFs expire sooner. This is a
+lifetime bound, not the rejected submission-time discovery cursor. Hidden
+`pending_new`/`accepted` orders inside the bound are still found. Any `open`
+row with no timestamp or older than the bound falls back to the full scan.
+This builds on 893f491's symbol scoping: unscoped risk/broker-sync reads
+and symbol-scoped reads both stop at the bound instead of reading all history.
+After close, read-only paper measurement: full scan 79 pages / 39,484 rows /
+4.3 s; bounded scan 1 page / 191 rows. History has 2,848 GTC orders, all
+ended within 10 days, and none is active. That fits the policy but doesn't
+prove paper enforces it. Residual gap: an order older than 92 days that is
+hidden from `open`, or a row with no timestamp (the alpaca-py 0.42.1 `Order`
+model requires `submitted_at`). Validation after rebasing onto c402a78: `agent_validate_changed.sh` passed;
+913 tests passed (`tests/core` plus every `list_open_orders` caller). Next: deploy with operator approval and confirm that
+`BROKER_OPEN_ORDER_SNAPSHOT_SLOW` and the over-budget cycles drop.
+
 ## October 14 research reset review
 
 The user decided to keep the pause through the holdout

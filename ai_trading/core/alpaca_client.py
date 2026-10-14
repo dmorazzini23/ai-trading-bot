@@ -6,7 +6,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from typing import Any
 import sys
 from collections.abc import Iterator, Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from time import perf_counter
 from types import ModuleType
@@ -133,6 +133,12 @@ def _validate_trading_api(api: Any) -> bool:
     return True
 
 
+# Alpaca's aged-order policy cancels GTC orders 90 days after creation (at
+# 4:15 PM ET); other time-in-force values expire sooner. Two days of margin
+# cover the cancel job and clock skew.
+_MAX_ACTIVE_ORDER_AGE = timedelta(days=92)
+
+
 def _orders_request(status: str, *, after: datetime | None = None, symbols: list[str] | None = None) -> Any:
     """Build a native alpaca-py GetOrdersRequest for a query status."""
 
@@ -165,8 +171,13 @@ def _order_field(order: Any, name: str) -> Any:
     return order.get(name) if isinstance(order, Mapping) else getattr(order, name, None)
 
 
-def _iter_order_pages(api: Any, status: str, *, symbols: list[str] | None = None) -> Iterator[list[Any]]:
-    after: datetime | None = None
+def _iter_order_pages(
+    api: Any,
+    status: str,
+    *,
+    symbols: list[str] | None = None,
+    after: datetime | None = None,
+) -> Iterator[list[Any]]:
     previous_last = after
     while True:
         page = list(_get_orders_by_status(api, status, after=after, symbols=symbols) or [])
@@ -198,6 +209,14 @@ def list_open_orders(api: Any, *, symbols: list[str] | None = None):
     The broker's ``open`` filter can omit early active statuses. Query ``all``
     even when ``open`` is nonempty, then page by submission time. A full page
     without an advancing timestamp cannot be safely treated as complete.
+
+    The ``all`` read starts at the provider's maximum active-order age rather
+    than the beginning of account history: Alpaca's aged-order policy cancels
+    GTC orders 90 days after creation, and every other time-in-force ends
+    sooner. The bound is a lifetime limit, not a discovery cursor, so it holds
+    for orders that become visible late. If any ``open`` row lacks a timestamp
+    or predates the bound, the policy is not demonstrated and the full history
+    is read.
     """
 
     started_at = perf_counter()
@@ -238,15 +257,24 @@ def list_open_orders(api: Any, *, symbols: list[str] | None = None):
         seen_ids.update(keys)
         filtered.append(order)
 
+    history_after: datetime | None = datetime.now(UTC) - _MAX_ACTIVE_ORDER_AGE
     open_pages = 0
     for page in _iter_order_pages(api, "open", symbols=symbols):
         open_pages += 1
         for order in page:
             add_active(order, from_open_query=True)
+            submitted_at = _order_field(order, "submitted_at")
+            if history_after is not None and (
+                not isinstance(submitted_at, datetime)
+                or submitted_at.tzinfo is None
+                or submitted_at <= history_after
+            ):
+                history_after = None
 
-    # No temporal discovery cache: newly visible orders can carry older or
-    # missing submission timestamps. Every snapshot retains the broader scan.
-    for page in _iter_order_pages(api, "all", symbols=symbols):
+    # No temporal discovery cache: every snapshot rereads all orders that can
+    # still be active under the provider lifetime bound (full history if the
+    # bound is contradicted by the open query).
+    for page in _iter_order_pages(api, "all", symbols=symbols, after=history_after):
         all_pages += 1
         orders_scanned += len(page)
         for order in page:
@@ -261,6 +289,7 @@ def list_open_orders(api: Any, *, symbols: list[str] | None = None):
                 "orders_scanned": orders_scanned,
                 "active_orders": len(filtered),
                 "open_pages": open_pages,
+                "history_bounded": history_after is not None,
             },
         )
     return filtered
