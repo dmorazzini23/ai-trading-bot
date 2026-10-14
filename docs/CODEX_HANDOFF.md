@@ -1,10 +1,29 @@
 # Current handoff
 
-## October 14 evening — pending release (start here)
+## October 14 deploy of `a7a704ce4` — complete (start here)
+
+The owner approved the push and deploy. Commit `a7a704ce4` is on origin/main
+(CI, CodeQL, SBOM and Workflow Lint all pass). Local
+`agent_validate_changed.sh --full` passed: 7,409 tests, ruff, mypy, strict typing
+and compile. Log: `artifacts/maintenance/validation_20261014_merged/`. Deployed at
+23:09 UTC with the account closed and flat (0 positions, 0 open orders). The prior
+spec is saved as `runtime/release_spec.1853464dc.bak.json`, and the new spec
+changes only the SHA. Pre- and post-migration identity checks pass, as do
+`IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`, 0 errors, 0 restarts,
+broker fresh/flat and OMS gates. Only the existing stale-model/replay flags remain.
+`.claude/` (side-session worktrees) and the `venv` symlink are excluded locally via
+`.git/info/exclude`, so the runtime checkout reports clean.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 1853464dc`, restore
+the backup spec, then `sudo systemctl restart ai-trading.service` (NOPASSWD).
+Next: watch the Oct 15 market session for cycles under 110 s, no
+`BROKER_OPEN_ORDER_SNAPSHOT_SLOW`, decision quotes at most 1 s old, and fewer
+scorecard chain gaps. Follow-ups: CPU-only torch (4.6 GB of unused CUDA wheels), and
+archiving research reports older than 30 days (7.4 GB, evidence: archive, don't delete).
+
+## October 14 evening — release preparation (superseded by the deploy above)
 
 Work from this `main` checkout (`/home/aiuser/ai-trading-maintenance-main`), never
-the live runtime checkout `/home/aiuser/ai-trading-bot`, which must stay clean at
-`1853464dc`. Nothing below is pushed or deployed.
+the live runtime checkout `/home/aiuser/ai-trading-bot`, which must stay clean.
 
 - `main` (unpushed, 3 ahead of origin): `893f491` (Oct 12 broker read/accounting
   repair), `c402a78` (Oct 14 review), `94ec6f7` (scorecard uses durable OMS
