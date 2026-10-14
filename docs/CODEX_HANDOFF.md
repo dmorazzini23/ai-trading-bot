@@ -1,5 +1,36 @@
 # Current handoff
 
+## October 14 evening — pending release (start here)
+
+Work from this `main` checkout (`/home/aiuser/ai-trading-maintenance-main`), never
+the live runtime checkout `/home/aiuser/ai-trading-bot`, which must stay clean at
+`1853464dc`. Nothing below is pushed or deployed.
+
+- `main` (unpushed, 3 ahead of origin): `893f491` (Oct 12 broker read/accounting
+  repair), `c402a78` (Oct 14 review), `94ec6f7` (scorecard uses durable OMS
+  decisions for EOD exits as a fallback; on live data the decision, decision-time
+  and order gaps went 3→0).
+- Branch `claude/silly-sutherland-7975c7` → `60d0f75bb`: bounds the open-order
+  history scan by the active-order lifetime, on top of 893f491's symbol scoping
+  (913 tests + validator passed). One commit ahead of `main`.
+- Branch `claude/lucid-moore-e37bad` → `8197a933c`: records the causal decision
+  time and arrival quote in netting decision records. Stale "quotes" were a
+  recording bug, not the IEX feed. Based before `c402a78`; needs a merge.
+- Full validation of `c402a78` (ruff, mypy, strict typing, compile pass; pytest
+  had about 8 failures at 93%). Logs and the final `failures.txt`:
+  `artifacts/maintenance/validation_20261014/`. Triage the failures first;
+  they may come from the long-running suite or be real.
+
+Next, in order: (1) triage the pytest failures; (2) merge both branches into
+`main`, then rerun `bash scripts/agent_validate_changed.sh --full` outside market
+hours; (3) **owner approval** to push `main` (public repo) and wait for exact-tip
+CI; (4) after-close deploy per `docs/RELEASE_IDENTITY.md`: flat/no open orders,
+new release spec, move the runtime checkout to the CI-passed SHA,
+`sudo systemctl restart ai-trading.service`, check health and 0 restarts;
+(5) watch the next market session's cycle times (<110 s), quote ages and
+scorecard chain gaps. Live canary stays blocked: no qualified model, replay
+−8.2 bps net, research pause until the Dec 9 review.
+
 ## October 14 research reset review
 
 The user decided to keep the pause through the holdout
