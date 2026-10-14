@@ -16,12 +16,14 @@ the live runtime checkout `/home/aiuser/ai-trading-bot`, which must stay clean a
 - Branch `claude/lucid-moore-e37bad` → `8197a933c`: records the causal decision
   time and arrival quote in netting decision records. Stale "quotes" were a
   recording bug, not the IEX feed. Based before `c402a78`; needs a merge.
-- Full validation of `c402a78` (ruff, mypy, strict typing, compile pass; pytest
-  had about 8 failures at 93%). Logs and the final `failures.txt`:
-  `artifacts/maintenance/validation_20261014/`. Triage the failures first;
-  they may come from the long-running suite or be real.
+- Full validation of `c402a78`: ruff, mypy, strict typing and compile are clean;
+  pytest 7,387 passed, 2 skipped, 8 failed. All 8 are environmental (this
+  worktree has no `./venv`): they pass with `AI_TRADING_PYTHON` set or in the
+  runtime checkout. Triage and logs: `artifacts/maintenance/validation_20261014/`.
+  Run tests here with `/home/aiuser/ai-trading-bot/venv/bin/...` plus
+  `AI_TRADING_PYTHON=/home/aiuser/ai-trading-bot/venv/bin/python`.
 
-Next, in order: (1) triage the pytest failures; (2) merge both branches into
+Next, in order: (1) done: test triage; (2) merge both branches into
 `main`, then rerun `bash scripts/agent_validate_changed.sh --full` outside market
 hours; (3) **owner approval** to push `main` (public repo) and wait for exact-tip
 CI; (4) after-close deploy per `docs/RELEASE_IDENTITY.md`: flat/no open orders,
