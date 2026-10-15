@@ -1,6 +1,27 @@
 # Current handoff
 
-## October 15 (03:25 UTC) CPU-only torch venv and HF retirement (start here)
+## October 15 (04:39 UTC) deploy of `15513026b` — complete (start here)
+
+The owner approved. Full validation on `15513026b` passed (7,396 tests, ruff,
+mypy, strict typing, compile; log in
+`artifacts/maintenance/validation_20261015_main/`). It is pushed to origin/main.
+CI, CodeQL, SBOM, Workflow Lint and Dependency Graph pass. **Dependency Audit
+fails**, as it has on every weekly run since Sept 21 (including on `1853464dc`):
+7 vulnerabilities in anyio 4.13.0, fsspec 2025.7.0, urllib3 2.7.0 (live has
+2.6.3) and Werkzeug 3.1.6. Fixed versions: anyio 4.14.2, fsspec 2026.6.0,
+urllib3 2.8.0, Werkzeug 3.1.9. The live venv already runs these vulnerable
+versions and this deploy did not change them. The owner chose to deploy now and
+fix the audit next.
+The deploy ran closed and flat. The prior spec is saved as
+`runtime/release_spec.a7a704ce4.bak.json`; the new spec changes only the SHA. Both
+identity checks pass, there are 0 errors and 0 restarts, broker is connected and
+flat, and the OMS gates pass. **Torch is no longer loaded** (0 mappings, no
+`ML_DEVICE_DETECTED`). RSS was 758 MB at 1m36s, compared with 862 MB at 1m29s
+after the previous restart. Re-measure after a market session.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach a7a704ce4`, restore
+the backup spec, then restart.
+
+## October 15 (03:25 UTC) CPU-only torch venv and HF retirement
 
 - **Live venv converted in place** (owner approved; closed and flat): removed triton
   and 14 `nvidia-*-cu12` wheels, installed `torch==2.8.0+cpu` (same version), and
