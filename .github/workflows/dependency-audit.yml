@@ -44,6 +44,12 @@ jobs:
         run: |
           python -m pip install -c constraints.txt -r requirements.txt
           pip-audit --local --format json --output pip-audit-report.json
+      - name: Audit CPU-only torch release
+        run: |
+          # The local +cpu build is skipped by pip-audit; audit its public release.
+          sed -n 's/^torch==\([0-9.]*\)+cpu$/torch==\1/p' constraints.txt > torch-public-release.txt
+          test -s torch-public-release.txt
+          pip-audit --disable-pip --no-deps -r torch-public-release.txt
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4

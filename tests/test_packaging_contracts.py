@@ -70,6 +70,23 @@ def test_runtime_lock_is_valid_constraints_and_satisfies_runtime_requirements() 
         assert locked[canonicalize_name(requirement.name)] in requirement.specifier, value
 
 
+def test_torch_pins_use_cpu_only_wheels() -> None:
+    cpu_index = "--extra-index-url https://download.pytorch.org/whl/cpu"
+    for name in ("requirements.txt", "requirements-extras-rl.txt", "requirements-extras-nlp.txt"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert cpu_index in text.splitlines(), name
+        assert re.search(r"^torch==[0-9.]+\+cpu\b", text, re.M), name
+
+    gpu_only = {"triton", "cuda-toolkit", "cuda-bindings"}
+    for name in ("constraints.txt", "requirements-extras-rl.txt", "requirements-extras-nlp.txt"):
+        names = _requirement_names(ROOT / name)
+        assert not {n for n in names if n.startswith("nvidia-") or n in gpu_only}, name
+    assert re.search(r"^torch==[0-9.]+\+cpu$", (ROOT / "constraints.txt").read_text(), re.M)
+
+    audit_text = (ROOT / ".github" / "workflows" / "dependency-audit.yml").read_text(encoding="utf-8")
+    assert "pip-audit --disable-pip --no-deps -r torch-public-release.txt" in audit_text
+
+
 def test_runtime_workflows_use_ubuntu_2404_constraints_and_block_scheduled_gates() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     workflow_text = "\n".join(path.read_text(encoding="utf-8") for path in workflow_dir.glob("*.yml"))

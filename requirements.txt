@@ -45,7 +45,10 @@ pybreaker==1.4.1
 numba>=0.57  # AI-AGENT-REF: enable JIT-optimized indicators
 statsmodels==0.14.6
 cryptography>=50.0.0
-torch==2.13.0
+# CPU-only PyTorch build: the deployment host has no GPU, and the default
+# PyPI wheel pulls ~4.6 GB of NVIDIA CUDA/triton wheels.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
 transformers==5.10.4
 hmmlearn==0.3.2
 SQLAlchemy>=2.0,<3

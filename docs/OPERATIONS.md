@@ -496,6 +496,32 @@ Repeated Alpaca failures can trigger provider safe-mode:
 Resume only after Alpaca data is healthy again and the halt condition has been
 cleared intentionally.
 
+### CPU-Only PyTorch In The Runtime Venv
+
+The host has no GPU, so torch is pinned to the `+cpu` build from
+`https://download.pytorch.org/whl/cpu` (`requirements.txt`, `constraints.txt`).
+A venv built from the lock gets no `nvidia-*`/`triton` wheels. To convert an
+existing CUDA venv, do it after the close with the account flat, no open
+orders, and the service stopped. Run pip as `aiuser`, never with `sudo`.
+
+```bash
+sudo systemctl stop ai-trading.service
+cd /home/aiuser/ai-trading-bot
+cp -a venv venv.cuda-bak                      # rollback copy
+P=./venv/bin/python
+V=$($P -c 'import torch; print(torch.__version__.split("+")[0])')
+$P -m pip uninstall -y triton $($P -m pip freeze | grep -oE '^nvidia-[^=]+')
+$P -m pip install --no-deps --index-url https://download.pytorch.org/whl/cpu "torch==${V}+cpu"
+$P -m pip check
+$P -c 'import torch, transformers, alpaca; assert not torch.cuda.is_available(); print(torch.__version__)'
+sudo systemctl start ai-trading.service
+curl -sS http://127.0.0.1:9001/healthz
+```
+
+This keeps every other installed version unchanged. Rollback:
+`sudo systemctl stop ai-trading.service && rm -rf venv && mv venv.cuda-bak venv`,
+then start the service. Delete `venv.cuda-bak` once a session has run cleanly.
+
 ### Robustness Audit
 
 For the current control matrix, scenario drills, and operator cadence, see

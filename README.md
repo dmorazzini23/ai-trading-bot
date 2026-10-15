@@ -34,7 +34,7 @@ configuration, and never trade with money you cannot afford to lose.
 python3.12 -m venv venv
 . venv/bin/activate
 ./venv/bin/python -m pip install -U pip
-./venv/bin/python -m pip install -e .
+./venv/bin/python -m pip install -e . --extra-index-url https://download.pytorch.org/whl/cpu
 
 ./venv/bin/python -c "import importlib.metadata as m; assert m.version('alpaca-py') == '0.42.1'"
 ./venv/bin/python -m ai_trading --dry-run
