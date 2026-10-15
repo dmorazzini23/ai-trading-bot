@@ -1,6 +1,34 @@
 # Current handoff
 
-## October 14 deploy of `a7a704ce4` — complete (start here)
+## October 15 (03:25 UTC) CPU-only torch venv and HF retirement (start here)
+
+- **Live venv converted in place** (owner approved; closed and flat): removed triton
+  and 14 `nvidia-*-cu12` wheels, installed `torch==2.8.0+cpu` (same version), and
+  `pip check` is clean. The venv went from 7.5 GB to 1.9 GB. Backup is at
+  `/home/aiuser/ai-trading-bot/venv.cuda-bak` (excluded via `.git/info/exclude`);
+  delete it after a clean session. Rollback: stop the service, `rm -rf venv &&
+  mv venv.cuda-bak venv`, then start. After restart: identity checks pass, 0
+  errors, 0 restarts, broker connected and flat, and 0 NVIDIA library mappings
+  (76 before).
+- Memory: the old process (4h15m) had 632 MB RSS + 326 MB swap, with 1.84 GB system
+  swap. Re-measure the new process after a full market session. Most remaining
+  swap belongs to other tools (OpenClaw gateway ~262 MB, PDF MCP helpers ~380 MB,
+  idle Claude sessions), not the bot. Torch is still loaded because
+  `AI_TRADING_RL_REQUIRE_RUNTIME_STACK=1`, although the RL agent
+  (`rl_agent.zip`, March) has produced no signals. Removing RL from runtime is a
+  pending **owner decision**.
+- **Drift:** the live venv does not match `constraints.txt` on 15 packages (torch
+  2.8 vs 2.13, transformers 5.7 vs 5.10.4, pyarrow 17 vs 23, cryptography 46 vs
+  50, …). CI tests the lock versions. Rebuilding from the lock is a separate,
+  deliberately validated change.
+- `main` (unpushed): `9e55e86` pins `torch==2.13.0+cpu` via the PyTorch CPU index
+  (packaging tests pass). `121bd42` retires the dormant HF research tooling (5
+  tools, 11 planned steps, report sections; −3,614 lines;
+  `agent_validate_changed.sh` passed with 87 affected tests). The runtime FinBERT
+  sentiment module is unchanged. Neither commit is deployed; the live checkout
+  is still `a7a704ce4`.
+
+## October 14 deploy of `a7a704ce4` — complete
 
 The owner approved the push and deploy. Commit `a7a704ce4` is on origin/main
 (CI, CodeQL, SBOM and Workflow Lint all pass). Local
