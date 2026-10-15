@@ -522,6 +522,33 @@ This keeps every other installed version unchanged. Rollback:
 `sudo systemctl stop ai-trading.service && rm -rf venv && mv venv.cuda-bak venv`,
 then start the service. Delete `venv.cuda-bak` once a session has run cleanly.
 
+### Security Pin Bumps In The Runtime Venv
+
+The October 2026 dependency audit bumped four pins in `constraints.txt` to
+their minimum fixed releases: `anyio==4.14.2`, `fsspec==2026.6.0`,
+`urllib3==2.8.0`, and `werkzeug==3.1.9`. The live venv was built earlier and
+may still carry older copies (urllib3 was `2.6.3` there, not `2.7.0`). Upgrade
+after the close with the account flat, no open orders, and the service
+stopped. Run pip as `aiuser`, never with `sudo`.
+
+```bash
+sudo systemctl stop ai-trading.service
+cd /home/aiuser/ai-trading-bot
+cp -a venv venv.bak                           # rollback copy
+P=./venv/bin/python
+$P -m pip list | grep -iE '^(anyio|fsspec|urllib3|werkzeug) '   # record old versions
+$P -m pip check > /tmp/pip-check-before.txt || true                # baseline (venv drift may already show here)
+$P -m pip install --no-deps anyio==4.14.2 fsspec==2026.6.0 urllib3==2.8.0 werkzeug==3.1.9
+$P -m pip check | diff /tmp/pip-check-before.txt - && echo "no new conflicts"
+$P -c 'import anyio, fsspec, urllib3, werkzeug, flask, requests, httpx, aiohttp, alpaca; print(urllib3.__version__)'
+sudo systemctl start ai-trading.service
+curl -sS http://127.0.0.1:9001/healthz
+```
+
+`--no-deps` keeps every other installed version unchanged. Rollback:
+`sudo systemctl stop ai-trading.service && rm -rf venv && mv venv.bak venv`,
+then start the service. Delete `venv.bak` once a session has run cleanly.
+
 ### Robustness Audit
 
 For the current control matrix, scenario drills, and operator cadence, see

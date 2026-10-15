@@ -16,7 +16,7 @@ lxml>=6.1,<7
 aiohttp>=3.14.3,<4
 msgpack==1.2.1  # AI-AGENT-REF: used by Alpaca SDK and transport layers
 pyyaml==6.0.3
-urllib3==2.7.0  # AI-AGENT-REF: networking baseline across providers
+urllib3==2.8.0  # AI-AGENT-REF: networking baseline across providers
 websockets==10.4  # AI-AGENT-REF: keep compatible with yfinance pin
 # Explicit Pydantic v2 + settings
 pydantic==2.8.2
