@@ -80,9 +80,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "symbol_promotion_comparison" in step_names
     assert "daily_research_pipeline" in step_names
     assert "live_capital_readiness" in step_names
-    assert "huggingface_research_discovery" in step_names
-    assert "huggingface_candidate_intake" in step_names
-    assert "huggingface_cache_materialization_plan" in step_names
+    assert not any(name.startswith("huggingface_") for name in step_names)  # retired
     assert "upward_trajectory_report" in step_names
     assert "evidence_manifest" in payload
     live_cost = next(
@@ -140,15 +138,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert "--expected-edge-calibration-json" in daily_research["command"]
     assert "--evidence-starvation-json" in daily_research["command"]
     assert "--paper-sampling-state-json" in daily_research["command"]
-    assert "--huggingface-discovery-json" in daily_research["command"]
-    hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
-    assert hf_step["metadata"]["runtime_authority"] is False
-    assert hf_step["metadata"]["promotion_authority"] is False
-    assert hf_step["metadata"]["live_money_authority"] is False
-    assert hf_step["metadata"]["non_authoritative"] is True
-    assert hf_step["metadata"]["requires_explicit_api_opt_in"] is True
-    hf_cache = next(step for step in payload["steps"] if step["name"] == "huggingface_cache_materialization_plan")  # type: ignore[index]
-    assert "--dry-run" in hf_cache["command"]
+    assert not any(str(token).startswith("--huggingface-") for token in daily_research["command"])
     registry = next(step for step in payload["steps"] if step["name"] == "model_registry_evaluation")  # type: ignore[index]
     registry_command = [str(token) for token in registry["command"]]
     registry_json_arg = registry_command[registry_command.index("--registry-json") + 1]
@@ -198,12 +188,12 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     assert shadow_baseline["metadata"]["research_only"] is True
 
 
-def test_hf_research_api_requires_second_explicit_toggle(
+def test_retired_hf_research_env_does_not_add_steps(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("AI_TRADING_HF_RESEARCH_ENABLED", "1")
-    monkeypatch.delenv("AI_TRADING_HF_RESEARCH_USE_API", raising=False)
+    monkeypatch.setenv("AI_TRADING_HF_RESEARCH_USE_API", "1")
 
     exit_code = research_automation.main(
         [
@@ -211,7 +201,7 @@ def test_hf_research_api_requires_second_explicit_toggle(
             "--report-root",
             str(tmp_path / "reports"),
             "--run-id",
-            "hf-toggle-test",
+            "hf-retired-test",
             "--plan-only",
         ]
     )
@@ -221,36 +211,11 @@ def test_hf_research_api_requires_second_explicit_toggle(
         tmp_path
         / "reports"
         / "daily"
-        / "hf-toggle-test"
+        / "hf-retired-test"
         / "research_automation_report.json"
     )
-    hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
-    assert "--enabled" in hf_step["command"]
-    assert "--use-hf-api" not in hf_step["command"]
-
-    monkeypatch.setenv("AI_TRADING_HF_RESEARCH_USE_API", "1")
-    exit_code = research_automation.main(
-        [
-            "daily",
-            "--report-root",
-            str(tmp_path / "reports-api"),
-            "--run-id",
-            "hf-toggle-test",
-            "--plan-only",
-        ]
-    )
-
-    assert exit_code == 0
-    payload = _read(
-        tmp_path
-        / "reports-api"
-        / "daily"
-        / "hf-toggle-test"
-        / "research_automation_report.json"
-    )
-    hf_step = next(step for step in payload["steps"] if step["name"] == "huggingface_research_discovery")  # type: ignore[index]
-    assert "--enabled" in hf_step["command"]
-    assert "--use-hf-api" in hf_step["command"]
+    commands = [str(token) for step in payload["steps"] for token in step["command"]]  # type: ignore[index]
+    assert not any("huggingface" in token for token in commands)
 
 
 def test_daily_plan_with_data_adds_upward_trajectory_report(
@@ -552,8 +517,7 @@ def test_weekly_plan_adds_multi_horizon_and_microstructure_when_inputs_exist(
     assert "multi_horizon_objective_search" in step_names
     assert "training_accelerator_weekly" in step_names
     assert "microstructure_replay_bridge" in step_names
-    assert "huggingface_research_discovery" in step_names
-    assert "huggingface_candidate_intake" in step_names
+    assert not any(name.startswith("huggingface_") for name in step_names)  # retired
     accelerator = next(
         step for step in payload["steps"] if step["name"] == "training_accelerator_weekly"
     )

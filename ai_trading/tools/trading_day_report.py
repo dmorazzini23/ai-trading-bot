@@ -718,9 +718,6 @@ def build_trading_day_report(
     weekend_research: Mapping[str, Any] | None = None,
     upward_trajectory: Mapping[str, Any] | None = None,
     metrics_improvement: Mapping[str, Any] | None = None,
-    huggingface_discovery: Mapping[str, Any] | None = None,
-    huggingface_candidate_intake: Mapping[str, Any] | None = None,
-    huggingface_cache_materialization: Mapping[str, Any] | None = None,
     decisions: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     intents = [row for row in order_intents if _date_match(row, report_date)]
@@ -1023,15 +1020,6 @@ def build_trading_day_report(
             "promotion_authority": False,
             "live_money_authority": False,
         },
-        "huggingface_research": {
-            "discovery": dict(huggingface_discovery or {}),
-            "candidate_intake": dict(huggingface_candidate_intake or {}),
-            "cache_materialization": dict(huggingface_cache_materialization or {}),
-            "research_only": True,
-            "runtime_authority": False,
-            "promotion_authority": False,
-            "live_money_authority": False,
-        },
         "next_session_recommendation": "review_live_capital_readiness_before_live_trading",
     }
     report["health_report_summary"] = {
@@ -1060,8 +1048,6 @@ def build_trading_day_report(
         "operator_control_plane_status": _status(operator_control_plane or {}),
         "upward_trajectory_status": _status(upward_trajectory or {}),
         "metrics_improvement_status": _status(metrics_improvement or {}),
-        "huggingface_research_status": _status(huggingface_discovery or {}),
-        "huggingface_intake_status": _status(huggingface_candidate_intake or {}),
         "top_reject_reasons": dict(reject_reasons.most_common(5)),
         "controlled_skips": controlled_skip_count,
         "top_controlled_skip_reasons": dict(controlled_skip_reasons.most_common(5)),
@@ -1145,7 +1131,6 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"- Drift monitor: `{report.get('model_data_drift_monitor', {}).get('status', 'missing')}`",
             f"- Operator control plane: `{report.get('operator_control_plane', {}).get('status', 'missing')}`",
             f"- Metrics improvement control: `{report.get('metrics_improvement_control', {}).get('status', 'missing')}`",
-            f"- Hugging Face research: `{report.get('huggingface_research', {}).get('discovery', {}).get('status', 'missing')}`",
             f"- Health/report summary: `{report.get('health_report_summary', {}).get('desired', 0)}` desired, "
             f"`{report.get('health_report_summary', {}).get('fills', 0)}` fills",
             f"- Next session: `{report.get('next_session_recommendation')}`",
@@ -1184,9 +1169,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weekend-research-json", type=Path, default=None)
     parser.add_argument("--upward-trajectory-json", type=Path, default=None)
     parser.add_argument("--metrics-improvement-json", type=Path, default=None)
-    parser.add_argument("--huggingface-discovery-json", type=Path, default=None)
-    parser.add_argument("--huggingface-candidate-intake-json", type=Path, default=None)
-    parser.add_argument("--huggingface-cache-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--latest-json", type=Path, default=None)
     parser.add_argument("--latest-md", type=Path, default=None)
@@ -1224,9 +1206,6 @@ def main(argv: list[str] | None = None) -> int:
         weekend_research=_read_json(args.weekend_research_json),
         upward_trajectory=_read_json(args.upward_trajectory_json),
         metrics_improvement=_read_json(args.metrics_improvement_json),
-        huggingface_discovery=_read_json(args.huggingface_discovery_json),
-        huggingface_candidate_intake=_read_json(args.huggingface_candidate_intake_json),
-        huggingface_cache_materialization=_read_json(args.huggingface_cache_json),
     )
     for path, content in (
         (output_json, json.dumps(report, indent=2, sort_keys=True) + "\n"),

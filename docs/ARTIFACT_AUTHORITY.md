@@ -59,12 +59,10 @@ Use these latest pointers for current operational decisions:
   artifacts are research-only evidence. They may recommend review actions, but
   they never change model, symbol, size, launch-profile, provider, canary, or
   live-capital authority.
-- Hugging Face research:
-  `/var/lib/ai-trading-bot/runtime/research_reports/latest/hf_discovery_latest.json`,
-  `hf_candidate_intake_latest.json`, and `hf_cache_materialization_latest.json`
-  are research-only idea-discovery artifacts. They may inform offline
-  experiments and model-registry provenance, but they never grant runtime,
-  promotion, provider, canary, or live-capital authority.
+- Retired Hugging Face research (2026-10-15): the remaining
+  `/var/lib/ai-trading-bot/runtime/research_reports/latest/hf_*_latest.json`
+  files are archival evidence only and are no longer refreshed. They never
+  grant runtime, promotion, provider, canary, or live-capital authority.
 
 ## Research Artifacts
 

@@ -48,7 +48,6 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
         paper_sampling={"date": "2026-05-05", "count": 1},
         operator_actions={"actions": [{"id": "review-canary"}]},
         weekend_research={"status": "complete", "monday_preparation": {"status": "complete"}},
-        huggingface_research={"status": "discovered", "summary": {"candidate_count": 2}},
         upward_trajectory={"status": "ready", "summary": {"candidate_count": 2}},
     )
 
@@ -66,8 +65,7 @@ def test_operator_control_plane_aggregates_read_only_sections(monkeypatch) -> No
     assert report["operator_actions"]["pending_actions"] == [{"id": "review-canary"}]
     assert report["weekend_research"]["artifact_status"] == "complete"
     assert report["weekend_research"]["runtime_authority"] is False
-    assert report["huggingface_research"]["artifact_status"] == "discovered"
-    assert report["huggingface_research"]["runtime_authority"] is False
+    assert "huggingface_research" not in report
     assert report["upward_trajectory"]["artifact_status"] == "ready"
     assert report["upward_trajectory"]["paper_only_diagnostics"] is True
     assert report["upward_trajectory"]["runtime_authority"] is False
@@ -96,7 +94,6 @@ def test_operator_control_plane_sections_are_bounded_and_non_recursive(monkeypat
         surveillance={"status": "ok"},
         risk_verifier={"status": "pass"},
         paper_sampling={"status": "complete"},
-        huggingface_research={"status": "complete"},
         upward_trajectory={"status": "complete"},
     )
 
@@ -126,7 +123,6 @@ def test_operator_control_plane_derives_runtime_gonogo_and_oms_from_health(monke
         surveillance={"status": "ok"},
         risk_verifier={"status": "pass"},
         paper_sampling={"count": 0},
-        huggingface_research={"status": "disabled"},
         upward_trajectory={"status": "ready"},
     )
 
@@ -162,7 +158,6 @@ def test_operator_control_plane_prefers_fresh_health_summary(monkeypatch) -> Non
         surveillance={"status": "ok"},
         risk_verifier={"status": "pass"},
         paper_sampling={"count": 0},
-        huggingface_research={"status": "disabled"},
         upward_trajectory={"status": "ready"},
     )
 
@@ -239,8 +234,6 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
             str(tmp_path / "missing_actions.json"),
             "--weekend-research-json",
             str(tmp_path / "missing_weekend.json"),
-            "--huggingface-research-json",
-            str(tmp_path / "missing_hf.json"),
             "--upward-trajectory-json",
             str(tmp_path / "missing_upward.json"),
             "--output-json",
@@ -256,6 +249,6 @@ def test_operator_control_plane_cli_writes_partial_artifact(monkeypatch, tmp_pat
     assert "oms" not in artifact["missing_sections"]
     assert "operator_actions" in artifact["optional_missing_sections"]
     assert "weekend_research" in artifact["missing_sections"]
-    assert "huggingface_research" in artifact["missing_sections"]
+    assert "huggingface_research" not in artifact["missing_sections"]
     assert "upward_trajectory" in artifact["missing_sections"]
     assert artifact["safety_contract"]["writes"] == ["output_artifact_only"]

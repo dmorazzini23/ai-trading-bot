@@ -330,7 +330,6 @@ def build_operator_control_plane(
     risk_verifier: Mapping[str, Any] | None = None,
     paper_sampling: Mapping[str, Any] | None = None,
     operator_actions: Mapping[str, Any] | None = None,
-    huggingface_research: Mapping[str, Any] | None = None,
     metrics_improvement: Mapping[str, Any] | None = None,
     upward_trajectory: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
@@ -350,7 +349,6 @@ def build_operator_control_plane(
     risk_verifier_payload = _mapping(risk_verifier)
     paper_sampling_payload = _mapping(paper_sampling)
     operator_actions_payload = _mapping(operator_actions)
-    huggingface_research_payload = _mapping(huggingface_research)
     metrics_improvement_payload = _mapping(metrics_improvement)
     upward_trajectory_payload = _mapping(upward_trajectory)
     if not runtime_gonogo_payload:
@@ -377,7 +375,6 @@ def build_operator_control_plane(
         ("surveillance", surveillance_payload),
         ("risk_verifier", risk_verifier_payload),
         ("paper_sampling", paper_sampling_payload),
-        ("huggingface_research", huggingface_research_payload),
         ("upward_trajectory", upward_trajectory_payload),
     )
     optional_sections = (
@@ -446,13 +443,6 @@ def build_operator_control_plane(
         "risk_verifier": _section(risk_verifier_payload, label="risk_verifier"),
         "paper_sampling": _section(paper_sampling_payload, label="paper_sampling"),
         "operator_actions": _operator_actions(operator_actions_payload),
-        "huggingface_research": {
-            **_section(huggingface_research_payload, label="huggingface_research"),
-            "research_only": True,
-            "runtime_authority": False,
-            "promotion_authority": False,
-            "live_money_authority": False,
-        },
         "metrics_improvement_control": {
             **_section(metrics_improvement_payload, label="metrics_improvement_control"),
             "runtime_safety_control": bool(
@@ -508,7 +498,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--risk-verifier-json", type=Path, default=None)
     parser.add_argument("--paper-sampling-json", type=Path, default=None)
     parser.add_argument("--operator-actions-json", type=Path, default=None)
-    parser.add_argument("--huggingface-research-json", type=Path, default=None)
     parser.add_argument("--metrics-improvement-json", type=Path, default=None)
     parser.add_argument("--upward-trajectory-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, default=None)
@@ -556,10 +545,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
         operator_actions=_read_json_mapping(
             args.operator_actions_json or _default_path("runtime/operator_actions_latest.json")
-        ),
-        huggingface_research=_read_json_mapping(
-            args.huggingface_research_json
-            or _default_path("runtime/research_reports/latest/hf_discovery_latest.json")
         ),
         metrics_improvement=_read_json_mapping(
             args.metrics_improvement_json

@@ -224,22 +224,6 @@ def _truthy(raw: str | None) -> bool:
     return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _hf_research_enabled() -> bool:
-    return _truthy(_env_text("AI_TRADING_HF_RESEARCH_ENABLED", "0"))
-
-
-def _hf_research_use_api_enabled() -> bool:
-    return _truthy(_env_text("AI_TRADING_HF_RESEARCH_USE_API", "0"))
-
-
-def _hf_research_command_flags() -> tuple[str, ...]:
-    if not _hf_research_enabled():
-        return ()
-    if _hf_research_use_api_enabled():
-        return ("--enabled", "--use-hf-api")
-    return ("--enabled",)
-
-
 def _maybe_data_dir(raw: str) -> Path | None:
     value = str(raw or "").strip()
     if not value:
@@ -356,9 +340,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
     shadow_drift_baseline = config.run_dir / "model_data_drift_shadow_baseline_candidate.json"
     drift_monitor = config.run_dir / "model_data_drift_monitor.json"
     operator_control = config.run_dir / "operator_control_plane.json"
-    hf_discovery = config.run_dir / "hf_discovery.json"
-    hf_intake = config.run_dir / "hf_candidate_intake.json"
-    hf_cache = config.run_dir / "hf_cache_materialization.json"
     daily_research = config.run_dir / "daily_research_report.json"
     daily_research_md = config.run_dir / "daily_research_report.md"
     live_readiness = config.run_dir / "live_capital_readiness.json"
@@ -690,12 +671,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 drift_monitor,
                 "--operator-control-plane-json",
                 operator_control,
-                "--huggingface-discovery-json",
-                hf_discovery,
-                "--huggingface-candidate-intake-json",
-                hf_intake,
-                "--huggingface-cache-json",
-                hf_cache,
                 "--output-json",
                 trading_day,
                 "--latest-json",
@@ -1007,80 +982,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
             },
         ),
         ResearchStep(
-            name="huggingface_research_discovery",
-            command=_python_module(
-                "ai_trading.tools.huggingface_research_discovery",
-                "--report-date",
-                config.report_date,
-                "--output-json",
-                hf_discovery,
-                "--latest-json",
-                config.report_root / "latest" / "hf_discovery_latest.json",
-                *_hf_research_command_flags(),
-            ),
-            purpose="Summarize research-only Hugging Face model/dataset candidates.",
-            output_path=hf_discovery,
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "metadata_only": True,
-                "non_authoritative": True,
-                "requires_explicit_api_opt_in": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_candidate_intake",
-            command=_python_module(
-                "ai_trading.tools.huggingface_candidate_intake",
-                "--report-date",
-                config.report_date,
-                "--discovery-json",
-                hf_discovery,
-                "--ledger-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--ledger-latest-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--output-json",
-                hf_intake,
-                "--latest-json",
-                config.report_root / "latest" / "hf_candidate_intake_latest.json",
-            ),
-            purpose="Convert HF discoveries into manual offline research hypotheses.",
-            output_path=hf_intake,
-            skip_if_missing=(hf_discovery,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "manual_review_required": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_cache_materialization_plan",
-            command=_python_module(
-                "ai_trading.tools.huggingface_cache_materializer",
-                "--report-date",
-                config.report_date,
-                "--intake-json",
-                hf_intake,
-                "--dry-run",
-                "--output-json",
-                hf_cache,
-                "--latest-json",
-                config.report_root / "latest" / "hf_cache_materialization_latest.json",
-            ),
-            purpose="Plan optional HF offline cache materialization without downloading by default.",
-            output_path=hf_cache,
-            skip_if_missing=(hf_intake,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "downloads_enabled_by_default": False,
-            },
-        ),
-        ResearchStep(
             name="metrics_improvement_control",
             command=_python_module(
                 "ai_trading.tools.metrics_improvement_control",
@@ -1220,8 +1121,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 pretrade_risk,
                 "--paper-sampling-json",
                 _runtime_input_path("runtime/paper_sampling_state_latest.json"),
-                "--huggingface-research-json",
-                hf_discovery,
                 "--metrics-improvement-json",
                 metrics_control,
                 "--upward-trajectory-json",
@@ -1293,12 +1192,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 upward_trajectory,
                 "--metrics-improvement-json",
                 metrics_control,
-                "--huggingface-discovery-json",
-                hf_discovery,
-                "--huggingface-candidate-intake-json",
-                hf_intake,
-                "--huggingface-cache-json",
-                hf_cache,
                 "--output-json",
                 trading_day,
                 "--latest-json",
@@ -1367,12 +1260,6 @@ def _daily_steps(config: ResearchConfig) -> list[ResearchStep]:
                 upward_trajectory,
                 "--metrics-improvement-json",
                 metrics_control,
-                "--huggingface-discovery-json",
-                hf_discovery,
-                "--huggingface-candidate-intake-json",
-                hf_intake,
-                "--huggingface-cache-json",
-                hf_cache,
                 "--training-accelerator-json",
                 training_accelerator,
                 "--opportunity-markouts-json",
@@ -2026,9 +1913,6 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
     multi_horizon_dir = config.run_dir / "multi_horizon_weekly"
     training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     bridge = config.run_dir / "microstructure_replay_bridge.json"
-    hf_discovery = config.run_dir / "hf_discovery.json"
-    hf_intake = config.run_dir / "hf_candidate_intake.json"
-    hf_cache = config.run_dir / "hf_cache_materialization.json"
     steps = [
         ResearchStep(
             name="live_cost_model",
@@ -2045,80 +1929,6 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
             ),
             purpose="Pin the current observed cost model for weekly research.",
             output_path=live_cost,
-        ),
-        ResearchStep(
-            name="huggingface_research_discovery",
-            command=_python_module(
-                "ai_trading.tools.huggingface_research_discovery",
-                "--report-date",
-                config.report_date,
-                "--output-json",
-                hf_discovery,
-                "--latest-json",
-                config.report_root / "latest" / "hf_discovery_latest.json",
-                *_hf_research_command_flags(),
-            ),
-            purpose="Discover research-only Hugging Face candidates for weekly experiments.",
-            output_path=hf_discovery,
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "metadata_only": True,
-                "non_authoritative": True,
-                "requires_explicit_api_opt_in": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_candidate_intake",
-            command=_python_module(
-                "ai_trading.tools.huggingface_candidate_intake",
-                "--report-date",
-                config.report_date,
-                "--discovery-json",
-                hf_discovery,
-                "--ledger-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--ledger-latest-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--output-json",
-                hf_intake,
-                "--latest-json",
-                config.report_root / "latest" / "hf_candidate_intake_latest.json",
-            ),
-            purpose="Record HF candidates as manual offline experiment hypotheses.",
-            output_path=hf_intake,
-            skip_if_missing=(hf_discovery,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "manual_review_required": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_cache_materialization_plan",
-            command=_python_module(
-                "ai_trading.tools.huggingface_cache_materializer",
-                "--report-date",
-                config.report_date,
-                "--intake-json",
-                hf_intake,
-                "--dry-run",
-                "--output-json",
-                hf_cache,
-                "--latest-json",
-                config.report_root / "latest" / "hf_cache_materialization_latest.json",
-            ),
-            purpose="Plan optional HF cache downloads without downloading by default.",
-            output_path=hf_cache,
-            skip_if_missing=(hf_intake,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "downloads_enabled_by_default": False,
-            },
         ),
     ]
     if config.data_dir is not None:
@@ -2226,8 +2036,6 @@ def _weekly_steps(config: ResearchConfig) -> list[ResearchStep]:
 
 
 def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
-    hf_discovery = config.run_dir / "hf_discovery.json"
-    hf_intake = config.run_dir / "hf_candidate_intake.json"
     steps = [
         ResearchStep(
             name="replay_governance_refresh",
@@ -2243,56 +2051,6 @@ def _monthly_steps(config: ResearchConfig) -> list[ResearchStep]:
             output_path=config.run_dir / "replay_governance_summary.json",
             required=True,
             blocked_returncodes=(1, 2),
-        ),
-        ResearchStep(
-            name="huggingface_research_discovery",
-            command=_python_module(
-                "ai_trading.tools.huggingface_research_discovery",
-                "--report-date",
-                config.report_date,
-                "--output-json",
-                hf_discovery,
-                "--latest-json",
-                config.report_root / "latest" / "hf_discovery_latest.json",
-                *_hf_research_command_flags(),
-            ),
-            purpose="Discover research-only HF candidates for monthly architecture review.",
-            output_path=hf_discovery,
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "metadata_only": True,
-                "non_authoritative": True,
-                "requires_explicit_api_opt_in": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_candidate_intake",
-            command=_python_module(
-                "ai_trading.tools.huggingface_candidate_intake",
-                "--report-date",
-                config.report_date,
-                "--discovery-json",
-                hf_discovery,
-                "--ledger-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--ledger-latest-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--output-json",
-                hf_intake,
-                "--latest-json",
-                config.report_root / "latest" / "hf_candidate_intake_latest.json",
-            ),
-            purpose="Record monthly HF candidates as manual offline research hypotheses.",
-            output_path=hf_intake,
-            skip_if_missing=(hf_discovery,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "manual_review_required": True,
-            },
         ),
     ]
     if config.data_dir is not None:
@@ -2356,9 +2114,6 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
     symbol_lifecycle = config.run_dir / "symbol_lifecycle.json"
     training_accelerator = config.run_dir / "training_accelerator" / "training_accelerator_report.json"
     multi_horizon_dir = config.run_dir / "multi_horizon_weekend"
-    hf_discovery = config.run_dir / "hf_discovery.json"
-    hf_intake = config.run_dir / "hf_candidate_intake.json"
-    hf_cache = config.run_dir / "hf_cache_materialization.json"
     model_registry = config.run_dir / "model_registry.json"
     model_registry_source = _runtime_input_path("models/registry_index.json")
     steps = [
@@ -2514,80 +2269,6 @@ def _weekend_saturday_steps(config: ResearchConfig) -> tuple[list[ResearchStep],
             purpose="Summarize manual-only symbol lifecycle changes after broad weekend review.",
             output_path=symbol_lifecycle,
             metadata={"promotion_authority": False, "manual_approval_required": True},
-        ),
-        ResearchStep(
-            name="huggingface_research_discovery",
-            command=_python_module(
-                "ai_trading.tools.huggingface_research_discovery",
-                "--report-date",
-                config.report_date,
-                "--output-json",
-                hf_discovery,
-                "--latest-json",
-                config.report_root / "latest" / "hf_discovery_latest.json",
-                *_hf_research_command_flags(),
-            ),
-            purpose="Discover research-only HF candidates during weekend research, if enabled.",
-            output_path=hf_discovery,
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "metadata_only": True,
-                "non_authoritative": True,
-                "requires_explicit_api_opt_in": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_candidate_intake",
-            command=_python_module(
-                "ai_trading.tools.huggingface_candidate_intake",
-                "--report-date",
-                config.report_date,
-                "--discovery-json",
-                hf_discovery,
-                "--ledger-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--ledger-latest-json",
-                config.report_root / "latest" / "experiment_ledger_latest.json",
-                "--output-json",
-                hf_intake,
-                "--latest-json",
-                config.report_root / "latest" / "hf_candidate_intake_latest.json",
-            ),
-            purpose="Convert weekend HF discoveries into manual offline research hypotheses.",
-            output_path=hf_intake,
-            skip_if_missing=(hf_discovery,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "manual_review_required": True,
-            },
-        ),
-        ResearchStep(
-            name="huggingface_cache_materialization_plan",
-            command=_python_module(
-                "ai_trading.tools.huggingface_cache_materializer",
-                "--report-date",
-                config.report_date,
-                "--intake-json",
-                hf_intake,
-                "--dry-run",
-                "--output-json",
-                hf_cache,
-                "--latest-json",
-                config.report_root / "latest" / "hf_cache_materialization_latest.json",
-            ),
-            purpose="Plan optional HF cache materialization; downloads remain disabled by default.",
-            output_path=hf_cache,
-            skip_if_missing=(hf_intake,),
-            metadata={
-                "runtime_authority": False,
-                "promotion_authority": False,
-                "live_money_authority": False,
-                "downloads_enabled_by_default": False,
-            },
         ),
         ResearchStep(
             name="model_registry_evaluation",
@@ -3535,9 +3216,6 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
     adversarial_failure = _read_json(latest / "adversarial_failure_simulation_latest.json")
     drift_monitor = _read_json(latest / "model_data_drift_monitor_latest.json")
     operator_control = _read_json(latest / "operator_control_plane_latest.json")
-    hf_discovery = _read_json(latest / "hf_discovery_latest.json")
-    hf_intake = _read_json(latest / "hf_candidate_intake_latest.json")
-    hf_cache = _read_json(latest / "hf_cache_materialization_latest.json")
     upward_trajectory = _read_json(latest / "upward_trajectory_latest.json")
     execution_capture_improvement = _read_json(latest / "execution_capture_improvement_latest.json")
     metrics_control = _read_json(latest / "metrics_improvement_control_latest.json")
@@ -3717,15 +3395,6 @@ def _next_level_artifact_summary(config: ResearchConfig) -> dict[str, Any]:
             ),
             "promotion_authority": bool(metrics_control.get("promotion_authority", False)),
             "live_money_authority": bool(metrics_control.get("live_money_authority", False)),
-        },
-        "huggingface_research": {
-            "status": _artifact_status(hf_discovery),
-            "intake_status": _artifact_status(hf_intake),
-            "cache_status": _artifact_status(hf_cache),
-            "summary": hf_discovery.get("summary"),
-            "runtime_authority": False,
-            "promotion_authority": False,
-            "live_money_authority": False,
         },
         "weekend_research": {
             "status": _artifact_status(weekend_research),
@@ -4161,39 +3830,6 @@ def _copy_authority_artifacts(
                     resolve_runtime_artifact_path(
                         "runtime/research_reports/latest/upward_trajectory_latest.json",
                         default_relative="runtime/research_reports/latest/upward_trajectory_latest.json",
-                        for_write=True,
-                    ),
-                ]
-            )
-        elif name == "huggingface_research_discovery":
-            targets.extend(
-                [
-                    latest_dir / "hf_discovery_latest.json",
-                    resolve_runtime_artifact_path(
-                        "runtime/research_reports/latest/hf_discovery_latest.json",
-                        default_relative="runtime/research_reports/latest/hf_discovery_latest.json",
-                        for_write=True,
-                    ),
-                ]
-            )
-        elif name == "huggingface_candidate_intake":
-            targets.extend(
-                [
-                    latest_dir / "hf_candidate_intake_latest.json",
-                    resolve_runtime_artifact_path(
-                        "runtime/research_reports/latest/hf_candidate_intake_latest.json",
-                        default_relative="runtime/research_reports/latest/hf_candidate_intake_latest.json",
-                        for_write=True,
-                    ),
-                ]
-            )
-        elif name == "huggingface_cache_materialization_plan":
-            targets.extend(
-                [
-                    latest_dir / "hf_cache_materialization_latest.json",
-                    resolve_runtime_artifact_path(
-                        "runtime/research_reports/latest/hf_cache_materialization_latest.json",
-                        default_relative="runtime/research_reports/latest/hf_cache_materialization_latest.json",
                         for_write=True,
                     ),
                 ]

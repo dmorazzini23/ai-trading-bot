@@ -23,8 +23,6 @@ Daily after market close:
   configured. The accelerator caches replay-aligned feature frames and trains
   lightweight 1-bar and 15-bar risk-adjusted candidates with no promotion
   authority.
-- summarize Hugging Face research artifacts. By default this is metadata-only
-  and research-only; it cannot promote models or alter runtime authority.
 
 Weekly:
 
@@ -35,8 +33,6 @@ Weekly:
   refresh
 - optionally join shadow quote telemetry to replay candidates with the
   microstructure bridge
-- optionally discover Hugging Face models/datasets for offline research ideas
-  when `AI_TRADING_HF_RESEARCH_ENABLED=1`
 
 Monthly:
 
@@ -44,7 +40,6 @@ Monthly:
 - run broader logistic and histogram-gradient architecture checks when research
   data is configured
 - run a paper-mode live-cutover drill artifact for capital-profile review
-- refresh Hugging Face candidate intake for architecture review
 
 Manual only:
 
@@ -82,9 +77,6 @@ Important files:
 - `latest/trading_day_latest.json`
 - `latest/trading_day_latest.md`
 - `latest/upward_trajectory_latest.json`
-- `latest/hf_discovery_latest.json`
-- `latest/hf_candidate_intake_latest.json`
-- `latest/hf_cache_materialization_latest.json`
 
 Slack/OpenClaw should read these artifacts and summarize them. Heavy training
 should stay in systemd/repo scripts, not in Slack app handlers.
@@ -247,62 +239,15 @@ Run the training accelerator directly in plan mode:
   --plan-only
 ```
 
-Run Hugging Face research discovery in metadata-only mode:
-
-```bash
-./venv/bin/python -m ai_trading.tools.huggingface_research_discovery \
-  --report-date "$(date -u +%F)" \
-  --offline-results-json /path/to/hf_fixture.json
-```
-
-Enable weekly/monthly Hugging Face API discovery only when you intentionally
-want external metadata scans:
-
-```bash
-AI_TRADING_HF_RESEARCH_ENABLED=1 \
-./venv/bin/python -m ai_trading.tools.huggingface_research_discovery \
-  --report-date "$(date -u +%F)" \
-  --enabled \
-  --use-hf-api
-```
-
-Convert selected candidates into manual offline research hypotheses:
-
-```bash
-./venv/bin/python -m ai_trading.tools.huggingface_candidate_intake \
-  --discovery-json /var/lib/ai-trading-bot/runtime/research_reports/latest/hf_discovery_latest.json \
-  --candidate-id org/model-name
-```
-
-Plan, but do not download, optional cache materialization:
-
-```bash
-./venv/bin/python -m ai_trading.tools.huggingface_cache_materializer \
-  --intake-json /var/lib/ai-trading-bot/runtime/research_reports/latest/hf_candidate_intake_latest.json \
-  --dry-run
-```
-
-Actual downloads require `AI_TRADING_HF_ALLOW_DOWNLOADS=1` or
-`--allow-downloads`, and cached files stay under the configured Hugging Face
-research cache. They must never overwrite production model artifacts.
-Runtime sentiment model loading is local-only; FinBERT weights must already be
+Hugging Face research discovery, candidate intake, cache materialization and
+sentiment benchmarking were retired on 2026-10-15. Their last runs were one
+May experiment and empty intake; see `docs/RESEARCH_RESET_REVIEW_20261014.md`.
+The `AI_TRADING_HF_RESEARCH_*` and `AI_TRADING_HF_ALLOW_DOWNLOADS` settings no
+longer have an effect. Existing `hf_*_latest.json` and
+`research_reports/huggingface/` artifacts are kept as archival evidence. Runtime
+sentiment model loading remains local-only: FinBERT weights must already be
 present in the configured cache/model path, and runtime code must not download
 Hugging Face artifacts on demand.
-
-Safe Hugging Face knobs:
-
-```bash
-AI_TRADING_HF_RESEARCH_ENABLED=0
-AI_TRADING_HF_ALLOW_DOWNLOADS=0
-AI_TRADING_HF_MAX_RESULTS=25
-AI_TRADING_HF_CACHE_DIR=/var/lib/ai-trading-bot/runtime/research_reports/huggingface/cache
-AI_TRADING_HF_TOKEN_SECRET_NAME=AI_TRADING_HF_TOKEN
-```
-
-The default posture is disabled or metadata-only. Discovery may find ideas;
-candidate intake turns selected ideas into experiment-ledger entries; cache
-materialization is optional offline research storage. Promotion remains a
-separate local evidence process.
 
 Non-plan accelerator runs use cached feature frames and a bounded
 successive-halving style replay pass. Daily runs replay only the strongest small
@@ -326,16 +271,9 @@ the candidate path is visible in shell history and the generated report.
 - Weekly/monthly research can train candidates, but those candidates stay
   research artifacts until a manual promotion report passes and an operator
   performs the cutover.
-- Hugging Face artifacts are external research context only. They must retain
-  `runtime_authority=false`, `promotion_authority=false`, and
-  `live_money_authority=false`.
-- Hugging Face downloads are allowed only for explicit research cache
-  materialization. Runtime startup, sentiment scoring, and trading decisions
-  must use local artifacts or fail closed/degrade according to their runtime
-  policy.
-- Hugging Face tokens, if needed for gated/private metadata, should be provided
-  through managed secrets. Do not place tokens in Slack messages, logs, health
-  payloads, or committed files.
+- Runtime startup, sentiment scoring, and trading decisions must use local
+  model artifacts or fail closed/degrade according to their runtime policy;
+  they never download external models.
 - Live-money cutover remains a separate manual decision and should start with
   canary limits, no shorts, strict quote authority, strict spread/quote-age
   caps, and a tiny capital cap.

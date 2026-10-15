@@ -412,14 +412,6 @@ def test_daily_research_report_surfaces_next_level_artifacts(monkeypatch):
         counterfactual_execution={"status": "passed", "summary": {"missed_positive_count": 0}},
         portfolio_edge={"status": "ok", "summary": {"portfolio_capture_ratio": 0.7}},
         decision_receipts={"status": "complete", "summary": {"receipts": 3}},
-        huggingface_discovery={
-            "status": "discovered",
-            "summary": {"candidate_count": 4, "accepted_for_offline_experiment": 1},
-        },
-        huggingface_candidate_intake={
-            "status": "ready_for_manual_review",
-            "summary": {"accepted_for_offline_experiment": 1, "blocked": 2},
-        },
         weekend_research={
             "status": "complete",
             "cadence": "weekend-sunday",
@@ -433,10 +425,8 @@ def test_daily_research_report_surfaces_next_level_artifacts(monkeypatch):
     assert report["counterfactual_execution"]["status"] == "passed"
     assert report["portfolio_edge_control"]["output"] == "ok"
     assert report["decision_receipts"]["summary"]["receipts"] == 3
-    assert report["huggingface_research"]["status"]["discovery"] == "discovered"
-    assert report["huggingface_research"]["summary"]["accepted_for_offline_experiment"] == 1
-    assert report["huggingface_research"]["runtime_authority"] is False
-    assert report["next_level_artifacts"]["huggingface_research"]["runtime_authority"] is False
+    assert "huggingface_research" not in report
+    assert "huggingface_research" not in report["next_level_artifacts"]
     assert report["weekend_research"]["research_only"] is True
     assert report["next_level_artifacts"]["weekend_research"]["live_money_authority"] is False
 
@@ -451,7 +441,6 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     calibration = tmp_path / "calibration.json"
     starvation = tmp_path / "starvation.json"
     paper_sampling = tmp_path / "paper_sampling.json"
-    hf_discovery = tmp_path / "hf_discovery.json"
     out = tmp_path / "daily.json"
     latest = tmp_path / "latest.json"
     md = tmp_path / "daily.md"
@@ -490,10 +479,6 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
         encoding="utf-8",
     )
     paper_sampling.write_text(json.dumps({"date": "2026-05-05", "count": 1}), encoding="utf-8")
-    hf_discovery.write_text(
-        json.dumps({"status": "discovered", "summary": {"candidate_count": 2}}),
-        encoding="utf-8",
-    )
 
     rc = daily_research_pipeline.main(
         [
@@ -515,8 +500,6 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
             str(starvation),
             "--paper-sampling-state-json",
             str(paper_sampling),
-            "--huggingface-discovery-json",
-            str(hf_discovery),
             "--output-json",
             str(out),
             "--latest-json",
@@ -536,7 +519,6 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     assert payload["expected_edge_calibration"]["status"] == "calibrated"
     assert payload["evidence_starvation"]["status"] == "collecting"
     assert payload["diagnostic_sampling"]["state"]["count"] == 1
-    assert payload["huggingface_research"]["summary"]["candidates_scanned"] == 2
     assert payload["health_report_summary"]["trade_allowed"] is True
     assert payload["next_level_artifacts"]["diagnostic_sampling"]["paper_only"] is True
     assert payload["openclaw_summary"]["service"] == "ai-trading-research"
@@ -544,4 +526,4 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     markdown = md.read_text(encoding="utf-8")
     assert "Daily Research 2026-05-05" in markdown
     assert "Expected-edge calibration" in markdown
-    assert "Hugging Face research" in markdown
+    assert "Hugging Face research" not in markdown
