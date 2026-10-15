@@ -33,7 +33,11 @@ def test_max_position_size_consistency(monkeypatch, caplog):
     monkeypatch.setattr(
         "ai_trading.position_sizing._get_equity_from_alpaca", lambda cfg, force_refresh=True: 100000
     )
-    monkeypatch.setattr("ai_trading.utils.device.get_device", lambda: None)
+    # Startup must not probe the ML device: that imports torch (~200 MB resident).
+    monkeypatch.setattr(
+        "ai_trading.utils.device.get_device",
+        lambda: pytest.fail("startup probed the ML device"),
+    )
 
     from ai_trading.config.management import TradingConfig
     from ai_trading.core.runtime import build_runtime

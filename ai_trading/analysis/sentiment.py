@@ -42,8 +42,12 @@ _sentiment_initialized = False
 
 
 def _init_sentiment() -> None:
-    """Initialize sentiment utilities once."""
-    global _sentiment_initialized, _device
+    """Initialize sentiment utilities once.
+
+    The ML device is resolved only when FinBERT weights are actually loaded:
+    probing it imports torch (~200 MB resident) even when no model runs.
+    """
+    global _sentiment_initialized
     if _sentiment_initialized:
         return
     if not (
@@ -51,7 +55,6 @@ def _init_sentiment() -> None:
         or get_env("AI_TRADING_HF_SENTIMENT_BENCHMARK_MODE", False, cast=bool)
     ):
         validate_required_env()
-    _device = get_device()
     _sentiment_initialized = True
     logger.debug("SENTIMENT_INIT")
 _bs4 = None
@@ -264,7 +267,7 @@ def _load_bs4(log=logger):
     return _bs4
 
 def _load_transformers(log=logger):
-    global _transformers_bundle, _SENT_DEPS_LOGGED
+    global _transformers_bundle, _SENT_DEPS_LOGGED, _device
     if _transformers_bundle is not None:
         return _transformers_bundle
     revision_kwargs = _finbert_revision_kwargs()
@@ -314,6 +317,7 @@ def _load_transformers(log=logger):
                 local_files_only=True,
                 **revision_kwargs,
             )
+        _device = get_device()
         model.to(_device)
         model.eval()
         _transformers_bundle = (torch, tokenizer, model)
@@ -927,7 +931,7 @@ def analyze_text(text: str, logger=logger) -> dict:
     torch, tokenizer, model = deps
     try:
         inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=128)
-        inputs = tensors_to_device(inputs, _device)
+        inputs = tensors_to_device(inputs, _device or get_device())
         with torch.no_grad():
             outputs = model(**inputs)
             logits = outputs.logits[0]

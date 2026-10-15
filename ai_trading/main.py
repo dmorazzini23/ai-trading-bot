@@ -4381,9 +4381,6 @@ def main(argv: list[str] | None = None) -> None:
     except MAIN_FALLBACK_EXC:
         logger.debug("SERVICE_STATUS_ACTIVE_UPDATE_FAILED", exc_info=True)
     S = get_settings()
-    from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
-
-    get_device()
     raw_tick = get_env("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
     recommended_health_tick = 30
     try:

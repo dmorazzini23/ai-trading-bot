@@ -60,6 +60,37 @@ def test_fetch_sentiment_weighting(monkeypatch):
     assert abs(score - expected) < 1e-9
 
 
+def test_fetch_sentiment_does_not_probe_ml_device(monkeypatch):
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+
+    monkeypatch.setattr(sentiment, "_sentiment_initialized", False)
+    monkeypatch.setattr(sentiment, "get_device", lambda: pytest.fail("device probed"))
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(
+        sentiment,
+        "analyze_text",
+        lambda _text: {"available": True, "pos": 0.6, "neg": 0.2, "neu": 0.2},
+    )
+    monkeypatch.setattr(sentiment, "fetch_form4_filings", lambda _t: [])
+
+    class Resp(SimpleNamespace):
+        status_code: int = 200
+
+        def json(self):
+            return {"articles": [{"title": "t", "description": "d"}]}
+
+        def raise_for_status(self):
+            return None
+
+    sentiment._set_sentiment_http_session_for_tests(
+        SimpleNamespace(get=lambda *a, **kw: Resp())
+    )
+
+    sentiment.fetch_sentiment(None, "AAPL")
+    assert sentiment._sentiment_initialized is True
+
+
 def test_analyze_text_neutral(monkeypatch):
     monkeypatch.setenv("AI_TRADING_SENTIMENT_FAIL_CLOSED", "0")
     monkeypatch.setattr(sentiment, "_load_transformers", lambda log=None: None)
