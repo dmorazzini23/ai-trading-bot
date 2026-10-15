@@ -1,6 +1,31 @@
 # Current handoff
 
-## October 15 (04:39 UTC) deploy of `15513026b` — complete (start here)
+## October 15 after-close security upgrade — complete (start here)
+
+`51b0abd4b` (anyio 4.14.2, fsspec 2026.6.0, urllib3 2.8.0, Werkzeug 3.1.9) is
+pushed. All 6 workflows are green, **including Dependency Audit** (first pass
+since Sept 16). The live venv was upgraded in place at 20:13 UTC, closed and flat:
+`--no-deps` install of exactly those 4 wheels. Backup is at
+`/home/aiuser/ai-trading-bot/venv.bak` (excluded locally). Rollback: stop, `rm -rf
+venv && mv venv.bak venv`, then start. Imports are ok. The one new `pip check`
+line comes from the editable install's stale metadata ("ai-trading-bot 0.0.0 has
+requirement urllib3==2.6.3"). No runtime code reads it; refreshing it means an
+editable reinstall into the runtime checkout. The runtime checkout stays at
+`15513026b` (pins are packaging-only). After restart: identity checks pass, 0
+errors, 0 restarts, broker connected and flat, OMS gates pass, torch not loaded.
+`venv.cuda-bak` (7.5 GB) is now safe to delete after one clean session.
+
+**Oct 15 session (first full day on `15513026b`)**: 240 cycles, median 10.7 s
+(was 21.7), p90 17.6 s, max 43.7 s (was 196), 0 over 110 s, 0
+`BROKER_OPEN_ORDER_SNAPSHOT_SLOW` (was 35), 0 `ALERT_CYCLE_COMPUTE_CRITICAL`, 7
+submitted orders. The process at 15.5 h used 874 MB RSS + 122 MB swap with torch
+not loaded; system swap was 1.6 GB, mostly other tools. Issues to follow up:
+(1) `ALERT_PRIMARY_FEED_FALLBACK_PROLONGED`, ~18:05–18:25 UTC on the Yahoo backup;
+(2) the 19:55:47 UTC EOD MSFT market sell was rejected 403 "insufficient qty
+available (available: 0)", probably a race with an existing exit order holding the
+shares. The account ended flat.
+
+## October 15 (04:39 UTC) deploy of `15513026b` — complete
 
 The owner approved. Full validation on `15513026b` passed (7,396 tests, ruff,
 mypy, strict typing, compile; log in
