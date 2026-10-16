@@ -1,6 +1,29 @@
 # Current handoff
 
-## October 15 after-close security upgrade — complete (start here)
+## October 16 early-morning findings (start here)
+
+- **Possible data regression (open):** on Oct 15 the minute-bar provider switched
+  alpaca-iex → Yahoo at 18:05:18 UTC (`upstream_unavailable`, the catch-all in
+  `ai_trading/data/fetch/__init__.py` ~2290–2326) and stayed there until the close.
+  That meant 73 `BACKUP_PROVIDER_USED` (mostly AAPL) and 46 `ALPACA_FETCH_FAILED`.
+  Oct 8–14 had 0–1 backup uses, 0 switchovers and 0 fetch failures. This was the
+  first full day on `a7a704ce4`/`15513026b`. An AMD gap check at 18:05 showed
+  `window_end` 16:57 UTC (stale). Recovery probes never restored the primary. The
+  investigation is a separate task. If it's a regression, the rollback target is
+  `1853464dc` (see the release spec backups).
+- **Venv drift root cause:** the venv was created with `--system-site-packages`
+  (`venv/pyvenv.cfg`). Twelve packages are older in the venv itself (aiohttp,
+  click, cryptography 46, idna, mako, msgpack, pyarrow 17, soupsieve,
+  transformers 5.7, torch 2.8 vs lock 2.13+cpu, …). Pygments, pytz and setuptools
+  load from Ubuntu's `/usr/lib/python3/dist-packages`, so apt upgrades can change
+  runtime deps. Plan, **only after** the data question is settled: build a clean
+  venv without system packages from `constraints.txt` (as CI does), in a closed and
+  flat window. Keep `venv` as a rollback (move it aside). Run the identity
+  preflight and full health checks, and watch one session.
+- Housekeeping: `venv.cuda-bak` deleted (7.5 GB). `venv.bak` (pre-security-bump)
+  is kept until one clean session on the upgraded venv.
+
+## October 15 after-close security upgrade — complete
 
 `51b0abd4b` (anyio 4.14.2, fsspec 2026.6.0, urllib3 2.8.0, Werkzeug 3.1.9) is
 pushed. All 6 workflows are green, **including Dependency Audit** (first pass
