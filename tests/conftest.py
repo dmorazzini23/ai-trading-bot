@@ -762,3 +762,44 @@ def dummy_alpaca_client():
             return {"id": f"dummy-order-{len(self.calls)}"}
 
     return _DummyClient()
+
+
+# Test modules that set os.environ at import time leak those values into every
+# test collected after them (e.g. TESTING=1 forcing primary minute fetches).
+# Record each module's import-time env delta, undo it after collection, and
+# re-apply it only to that module's own tests via monkeypatch.
+_MODULE_IMPORT_ENV: dict[str, tuple[dict[str, str], frozenset[str]]] = {}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector: pytest.Collector):
+    if not isinstance(collector, pytest.Module):
+        yield
+        return
+    before = dict(os.environ)
+    yield
+    after = dict(os.environ)
+    changed = {key: value for key, value in after.items() if before.get(key) != value}
+    removed = frozenset(key for key in before if key not in after)
+    if not changed and not removed:
+        return
+    _MODULE_IMPORT_ENV[str(collector.path)] = (changed, removed)
+    for key in changed:
+        if key in before:
+            os.environ[key] = before[key]
+        else:
+            os.environ.pop(key, None)
+    for key in removed:
+        os.environ[key] = before[key]
+
+
+@pytest.fixture(autouse=True)
+def _module_import_env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    delta = _MODULE_IMPORT_ENV.get(str(request.node.path))
+    if delta is not None:
+        changed, removed = delta
+        for key, value in changed.items():
+            monkeypatch.setenv(key, value)
+        for key in removed:
+            monkeypatch.delenv(key, raising=False)
+    yield
