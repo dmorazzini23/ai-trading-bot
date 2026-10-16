@@ -883,11 +883,72 @@ def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
         ctx.stop_targets.pop(symbol, None)
 
 
+def _eod_conflicting_open_orders(api: Any, symbols: list[str]) -> dict[str, list[Any]] | None:
+    """Return non-EOD active broker orders by symbol, or None if unavailable.
+
+    A resting order (for example a strategy limit sell) holds position quantity,
+    so an EOD market exit beside it is clipped or rejected, and the position can
+    stay open overnight if the resting order does not fill.
+    """
+    from ai_trading.core.alpaca_client import list_open_orders
+
+    try:
+        orders = list_open_orders(api, symbols=symbols)
+    except (APIError, RuntimeError, ConnectionError, TimeoutError, OSError, TypeError, ValueError) as exc:
+        logger.warning("EOD_OPEN_ORDER_SNAPSHOT_UNAVAILABLE", extra={"error": str(exc)})
+        return None
+    conflicts: dict[str, list[Any]] = {}
+    for order in orders or []:
+        def field(name: str) -> Any:
+            return order.get(name) if isinstance(order, Mapping) else getattr(order, name, None)
+
+        client_order_id = str(field("client_order_id") or "")
+        if client_order_id.startswith("eod-"):
+            continue
+        symbol = str(field("symbol") or "").upper()
+        if symbol in symbols:
+            conflicts.setdefault(symbol, []).append(order)
+    return conflicts
+
+
+def _cancel_eod_conflicting_orders(api: Any, symbol: str, orders: list[Any]) -> None:
+    cancel = getattr(api, "cancel_order_by_id", None) or getattr(api, "cancel_order", None)
+    for order in orders:
+        order_id = order.get("id") if isinstance(order, Mapping) else getattr(order, "id", None)
+        if not callable(cancel) or order_id in (None, ""):
+            logger.warning("EOD_PENDING_ORDER_CANCEL_UNAVAILABLE", extra={"symbol": symbol, "order_id": order_id})
+            continue
+        try:
+            cancel(str(order_id))
+        except (APIError, ConnectionError, TimeoutError, OSError) as exc:
+            logger.warning(
+                "EOD_PENDING_ORDER_CANCEL_FAILED",
+                extra={"symbol": symbol, "order_id": str(order_id), "error": str(exc)},
+            )
+        else:
+            logger.info("EOD_PENDING_ORDER_CANCEL_REQUESTED", extra={"symbol": symbol, "order_id": str(order_id)})
+
+
 def exit_all_positions(ctx: Any) -> None:
     raw_positions = _list_positions_compat(ctx.api)
+    held = sorted(
+        {str(getattr(pos, "symbol", "") or "").upper() for pos in raw_positions if abs(_signed_position_qty(pos)) > 0}
+        - {""}
+    )
+    conflicts = _eod_conflicting_open_orders(ctx.api, held) if held else {}
     for pos in raw_positions:
         signed_qty = _signed_position_qty(pos)
         qty = abs(signed_qty)
+        pending = (conflicts or {}).get(str(getattr(pos, "symbol", "") or "").upper())
+        if qty and pending:
+            # Cancel first and exit on the next EOD attempt (60 s cadence) from a
+            # fresh position read: never sell beside an order that holds the shares.
+            _cancel_eod_conflicting_orders(ctx.api, pos.symbol, pending)
+            logger.info(
+                "EOD_EXIT_DEFERRED_PENDING_CANCEL",
+                extra={"symbol": pos.symbol, "qty": qty, "pending_orders": len(pending)},
+            )
+            continue
         if qty:
             execute_order = getattr(ctx, "execute_order", None)
             if not callable(execute_order):
