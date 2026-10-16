@@ -1,16 +1,44 @@
 # Current handoff
 
-## October 16 early-morning findings (start here)
+## October 16 06:12 UTC deploy of `4d53076b1` — complete (start here)
 
-- **Possible data regression (open):** on Oct 15 the minute-bar provider switched
-  alpaca-iex → Yahoo at 18:05:18 UTC (`upstream_unavailable`, the catch-all in
-  `ai_trading/data/fetch/__init__.py` ~2290–2326) and stayed there until the close.
-  That meant 73 `BACKUP_PROVIDER_USED` (mostly AAPL) and 46 `ALPACA_FETCH_FAILED`.
-  Oct 8–14 had 0–1 backup uses, 0 switchovers and 0 fetch failures. This was the
-  first full day on `a7a704ce4`/`15513026b`. An AMD gap check at 18:05 showed
-  `window_end` 16:57 UTC (stale). Recovery probes never restored the primary. The
-  investigation is a separate task. If it's a regression, the rollback target is
-  `1853464dc` (see the release spec backups).
+The owner approved. Full validation passed (7,399 tests; log in
+`artifacts/maintenance/validation_20261016_both2/`). Pushed; CI, CodeQL, SBOM and
+Workflow Lint all pass. Deployed closed and flat; the prior spec is saved as
+`runtime/release_spec.15513026b.bak.json`. Identity checks pass, 0 errors, 0
+restarts, broker connected and flat, provider alpaca, torch not loaded.
+Rollback: checkout `15513026b`, restore that spec, restart.
+
+1. **Oct 15 IEX→Yahoo fallback** (`9c4161644`): not a regression from our code (no
+   `ai_trading/data` changes). Root causes: (a) an upstream IEX minute-bar gap
+   ~16:57–18:10 UTC across AAPL/AMZN/TSLA/AMD/META pushed the session gap ratio
+   past 25% → switch at 18:05. (b) A pre-existing recovery bug: every
+   backup-served request was reported to the provider monitor as a primary
+   `hard_fail`, even when routing skipped the primary. That reset the
+   consecutive recovery passes, so the bot stayed on Yahoo until the close even
+   though IEX was current from ~18:13. Fix: no primary health update when the
+   primary wasn't attempted (routing skip). Real attempts, safe mode and forced
+   provider are unchanged.
+2. **Oct 15 EOD MSFT 403** (`f9be12add`, from the EOD investigation session): the
+   open-order quantity index normalized alpaca-py `OrderSide` with `str()` →
+   `"OrderSide.SELL"`, so every broker order was dropped. Sell clipping,
+   duplicate-intent suppression and delta netting never saw open orders. The fix
+   unwraps `.value`. **This changes trading behavior** (netting now subtracts real
+   open orders); no replay was run because it restores the intended contract.
+   Watch fills/rejects. The EOD cancel/replace policy question is still open.
+3. Test hardening (`4d53076b1`): `tests/core/test_enter_short_order_logging.py`
+   leaks `TESTING=1` etc. at import (pre-existing pollution).
+4. Process note: a `git stash pop` misfired onto the pre-existing stash
+   `stash@{0}` ("Preserved pre-deployment notes … 2026-09-21"). It was restored;
+   the stash is intact and untouched.
+
+Next: Oct 16 post-close check (fallback count, switchovers, 403s, cycles, memory).
+
+## October 16 early-morning findings
+
+- **Data regression question — resolved above.** On Oct 15 the minute-bar
+  provider switched alpaca-iex → Yahoo at 18:05:18 UTC and stayed there until the
+  close.
 - **Venv drift root cause:** the venv was created with `--system-site-packages`
   (`venv/pyvenv.cfg`). Twelve packages are older in the venv itself (aiohttp,
   click, cryptography 46, idna, mako, msgpack, pyarrow 17, soupsieve,
