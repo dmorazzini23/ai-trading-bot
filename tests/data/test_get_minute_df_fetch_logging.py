@@ -158,6 +158,72 @@ def test_backup_usage_marks_primary_unhealthy(monkeypatch):
     assert str(reason).strip() != ""
 
 
+def test_routing_skip_backup_does_not_report_primary_failure(monkeypatch):
+    """Oct 15: backup routing must not re-mark the unattempted primary unhealthy."""
+    start, end = _dt_range()
+    timestamps = pd.date_range(start=start, periods=5, freq="1min", tz=UTC)
+    fallback_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [1.0] * 5,
+            "high": [1.5] * 5,
+            "low": [0.5] * 5,
+            "close": [1.2] * 5,
+            "volume": [100] * 5,
+        }
+    )
+
+    class _Monitor(_DummyProviderMonitor):
+        def __init__(self):
+            self.health_updates = []
+
+        def update_data_health(self, primary, backup, *, healthy, reason, severity=None, **_kwargs):
+            self.health_updates.append((primary, backup, healthy, reason, severity))
+            return backup if not healthy else primary
+
+    monitor = _Monitor()
+    primary_calls = []
+
+    monkeypatch.setattr(data_fetcher, "provider_monitor", monitor)
+    monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", lambda *_a, **_k: fallback_df.copy())
+    monkeypatch.setattr(
+        data_fetcher, "_minute_backup_get_bars", lambda *_a, **_k: fallback_df.copy(), raising=False
+    )
+    monkeypatch.setattr(
+        data_fetcher,
+        "_fetch_primary_with_probe",
+        lambda *a, **k: primary_calls.append(a) or None,
+        raising=False,
+    )
+    monkeypatch.setattr(data_fetcher, "_backup_primary_probe_due", lambda *_a, **_k: False, raising=False)
+    monkeypatch.setattr(
+        data_fetcher,
+        "_GLOBAL_BACKUP_SKIP_UNTIL",
+        {"1Min": datetime.now(UTC) + timedelta(minutes=10)},
+        raising=False,
+    )
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_OUT_OF_SESSION", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(
+        data_fetcher,
+        "_current_settings",
+        lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
+    )
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
+    monkeypatch.setenv("DATA_FEED_INTRADAY", "iex")
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
+
+    result = data_fetcher.get_minute_df("AAPL", start, end, feed="iex")
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.attrs.get("data_provider") == "yahoo"
+    assert primary_calls == []
+    assert not any(healthy is False for _p, _b, healthy, _r, _s in monitor.health_updates)
+
+
 def test_env_without_sip_does_not_schedule_sip(monkeypatch):
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
     monkeypatch.setenv("ALPACA_HAS_SIP", "0")

@@ -488,7 +488,9 @@ def test_get_minute_df_provider_monitor_backup_choice_skips_primary(fetch_env: d
     result = fetch.get_minute_df("AAPL", PAST_START, PAST_END, feed="iex")
 
     assert not result.empty
-    assert monitor.health_updates
+    # The primary was never attempted, so routing must not report it as failed
+    # (that reset recovery passes and pinned the backup all of Oct 15).
+    assert not any(kwargs.get("healthy") is False for _args, kwargs in monitor.health_updates)
     assert ("AAPL", "1Min") in fetch._SKIPPED_SYMBOLS
 
 

@@ -14211,7 +14211,17 @@ def get_minute_df(
             )
         except FETCH_FALLBACK_EXCEPTIONS:
             quote_age_ms = None
-    if backup_label:
+    # A backup frame served only because fallback routing skipped the primary
+    # (skip window, cooldown, TTL or a deferred probe) says nothing about the
+    # primary's health. Reporting it as a primary hard failure re-arms the
+    # backup on every request, so recovery probes can never restore the primary.
+    primary_skipped_by_routing = (
+        used_backup
+        and not primary_fetch_attempted
+        and not safe_mode_forced_skip
+        and not forced_provider_label
+    )
+    if backup_label and not primary_skipped_by_routing:
         provider_monitor.update_data_health(
             primary_label,
             backup_label,
