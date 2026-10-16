@@ -227,6 +227,27 @@ def test_routing_skip_backup_does_not_report_primary_failure(monkeypatch):
     assert not any(healthy is False for _p, _b, healthy, _r, _s in monitor.health_updates)
 
 
+@pytest.mark.parametrize(
+    ("fallback", "severe", "residual", "healthy", "expected"),
+    [
+        ("backup_cooldown_active", True, True, False, "backup_cooldown_active"),
+        (None, True, True, False, "gap_ratio_severe_initial"),
+        (None, False, True, True, "gap_ratio_residual"),
+        (None, False, False, False, "gap_ratio_exceeded"),
+        (None, False, False, True, "upstream_unavailable"),
+    ],
+)
+def test_backup_monitor_reason_names_gap_condition(fallback, severe, residual, healthy, expected):
+    from ai_trading.data.provider_monitor import _reason_is_critical
+
+    reason = data_fetcher._backup_monitor_reason(
+        fallback, severe_initial_gap=severe, residual_gap=residual, healthy_gap=healthy
+    )
+    assert reason == expected
+    if fallback is None:
+        assert _reason_is_critical(reason)
+
+
 def test_env_without_sip_does_not_schedule_sip(monkeypatch):
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
     monkeypatch.setenv("ALPACA_HAS_SIP", "0")

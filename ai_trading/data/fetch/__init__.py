@@ -2326,6 +2326,29 @@ def _classify_fallback_reason(
     return "upstream_unavailable", details
 
 
+def _backup_monitor_reason(
+    fallback_reason: str | None,
+    *,
+    severe_initial_gap: bool,
+    residual_gap: bool,
+    healthy_gap: bool,
+) -> str:
+    """Name the gap condition behind a primary hard failure, not the catch-all.
+
+    Every gap label keeps the "gap_ratio" token, so provider-monitor
+    criticality is unchanged; only the diagnostic reason becomes specific.
+    """
+    if fallback_reason:
+        return fallback_reason
+    if severe_initial_gap:
+        return "gap_ratio_severe_initial"
+    if residual_gap:
+        return "gap_ratio_residual"
+    if not healthy_gap:
+        return "gap_ratio_exceeded"
+    return "upstream_unavailable"
+
+
 def _build_backup_usage_extra(
     provider: str | None,
     symbol: str | None,
@@ -14198,7 +14221,12 @@ def get_minute_df(
         else:
             monitor_healthy = False
             monitor_severity = "hard_fail"
-            monitor_reason = fallback_reason or "upstream_unavailable"
+            monitor_reason = _backup_monitor_reason(
+                fallback_reason,
+                severe_initial_gap=severe_initial_gap,
+                residual_gap=residual_gap,
+                healthy_gap=healthy_gap,
+            )
     quote_ts_present = False
     quote_age_ms: float | None = None
     last_timestamp_dt = coverage_meta.get("coverage_last_timestamp") if isinstance(coverage_meta, Mapping) else None
