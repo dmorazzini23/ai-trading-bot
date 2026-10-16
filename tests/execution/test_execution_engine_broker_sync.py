@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
+from alpaca.trading.enums import OrderSide, PositionSide
 from requests.exceptions import HTTPError
 
 from ai_trading.execution.engine import BrokerSyncResult, ExecutionEngine, OrderManager
@@ -50,6 +51,61 @@ def test_update_broker_snapshot_tracks_open_quantities() -> None:
     assert getattr(engine, "_position_tracker", {}).get("AAPL") == 6
     # Synchronize should return cached snapshot without mutation.
     assert engine.synchronize_broker_state() is snapshot
+
+
+def test_update_broker_snapshot_counts_alpaca_enum_order_sides() -> None:
+    """alpaca-py Order.side is an OrderSide enum, not a plain string."""
+
+    engine = ExecutionEngine()
+    open_orders = [
+        SimpleNamespace(symbol="MSFT", side=OrderSide.SELL, qty="1", filled_qty="0"),
+        SimpleNamespace(symbol="AAPL", side=OrderSide.BUY, qty="2", filled_qty="0"),
+    ]
+
+    snapshot = engine._update_broker_snapshot(open_orders, positions=[])
+
+    assert snapshot.open_sell_by_symbol["MSFT"] == 1
+    assert engine.open_order_totals("AAPL") == (2, 0)
+
+
+def test_live_snapshot_open_sell_enum_blocks_eod_double_exit(monkeypatch) -> None:
+    """Regression for 2026-10-15: a pending strategy limit sell held the only
+    MSFT share, yet the EOD market sell was submitted and rejected with 40310000
+    because the open-order index dropped the OrderSide.SELL order."""
+
+    engine = LiveTradingExecutionEngine.__new__(LiveTradingExecutionEngine)
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: False)
+    engine.trading_client = SimpleNamespace(
+        get_open_position=lambda symbol: SimpleNamespace(
+            symbol=symbol, qty="1", side=PositionSide.LONG
+        )
+    )
+    engine._update_broker_snapshot(
+        [
+            SimpleNamespace(
+                symbol="MSFT",
+                side=OrderSide.SELL,
+                qty="1",
+                filled_qty="0",
+                client_order_id="25da9023c04c16f8",
+            )
+        ],
+        [SimpleNamespace(symbol="MSFT", qty="1", side=PositionSide.LONG)],
+    )
+
+    assert engine.open_order_totals("MSFT") == (0.0, 1.0)
+
+    adjusted, context = engine._clip_sell_quantity_to_available_position(
+        symbol="MSFT",
+        requested_qty=1,
+        closing_position=True,
+        order_type="market",
+        client_order_id="eod-2026-10-15-MSFT-sell",
+    )
+
+    assert adjusted == 0
+    assert context is not None
+    assert context["reserved_shares"] == 1
 
 
 def test_live_broker_sync_update_failure_never_marks_cached_state_fresh(monkeypatch) -> None:

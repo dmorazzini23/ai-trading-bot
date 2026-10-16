@@ -2689,7 +2689,8 @@ class ExecutionEngine:
             if value in (None, ""):
                 return None
             try:
-                text = str(value).strip().lower()
+                # alpaca-py OrderSide is a str Enum whose str() is "OrderSide.SELL".
+                text = str(getattr(value, "value", value)).strip().lower()
             except EXECUTION_ENGINE_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
                 self.logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
