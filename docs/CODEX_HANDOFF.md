@@ -1,6 +1,32 @@
 # Current handoff
 
-## October 16 06:12 UTC deploy of `4d53076b1` — complete (start here)
+## October 16 evening deploy of `3fe07613e` — complete (start here)
+
+The owner asked for items 1–5 end to end. Full validation passed (7,407 tests;
+`artifacts/maintenance/validation_20261016_batch/`). Pushed; CI, CodeQL, SBOM and
+Workflow Lint pass. Deployed Fri 19:10 ET, closed and flat; the prior spec is saved
+as `runtime/release_spec.4d53076b1.bak.json`. Identity checks pass, 0 errors, 0
+restarts, broker flat, provider alpaca.
+
+- `99114d099`: provider-monitor hard-fail reasons now name the gap condition
+  (`gap_ratio_severe_initial` / `gap_ratio_residual` / `gap_ratio_exceeded`)
+  instead of the catch-all. Criticality is unchanged (all keep the `gap_ratio`
+  token). Telemetry reason_code now reads `gap_ratio`, not `upstream_5xx`.
+- `5dd9c72e2`: `tests/conftest.py` isolates each test module's import-time
+  `os.environ` changes (27 modules leaked TESTING/DRY_RUN/etc. into the whole run).
+- `3fe07613e`: **EOD policy change.** When a held symbol has non-EOD active orders,
+  EOD requests their cancellation and defers that symbol. The next EOD attempt
+  (60 s cadence, 300 s window) exits the remaining quantity from a fresh read. EOD
+  never sells beside a resting order and never cancels its own `eod-` orders. If the
+  open-order snapshot is unavailable, it falls back to the old behavior. Watch Monday
+  for `EOD_PENDING_ORDER_CANCEL_REQUESTED` / `EOD_EXIT_DEFERRED_PENDING_CANCEL` and
+  a flat close.
+- Five linked side sessions (all merged/deployed) still need archiving; the app was
+  unreachable from this session.
+
+Rollback: checkout `4d53076b1`, restore that spec, restart.
+
+## October 16 06:12 UTC deploy of `4d53076b1` — complete
 
 The owner approved. Full validation passed (7,399 tests; log in
 `artifacts/maintenance/validation_20261016_both2/`). Pushed; CI, CodeQL, SBOM and
