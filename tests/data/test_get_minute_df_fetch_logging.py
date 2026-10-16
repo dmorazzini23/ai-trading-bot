@@ -199,7 +199,8 @@ def test_routing_skip_backup_does_not_report_primary_failure(monkeypatch):
     monkeypatch.setattr(
         data_fetcher,
         "_GLOBAL_BACKUP_SKIP_UNTIL",
-        {"1Min": datetime.now(UTC) + timedelta(minutes=10)},
+        # Use the fetch module's clock so the skip window cannot look expired.
+        {"1Min": data_fetcher.datetime.now(tz=UTC) + timedelta(minutes=10)},
         raising=False,
     )
     monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", True, raising=False)
@@ -211,6 +212,8 @@ def test_routing_skip_backup_does_not_report_primary_failure(monkeypatch):
         lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
     )
     monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
+    # TESTING=1 (leaked by other modules) forces a primary attempt; the live service never sets it.
+    monkeypatch.delenv("TESTING", raising=False)
     monkeypatch.setenv("DATA_FEED_INTRADAY", "iex")
     monkeypatch.setenv("ALPACA_API_KEY", "test")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
