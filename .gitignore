@@ -124,8 +124,6 @@ patch_full_cleanup.patch
 /runtime/meta_retrain_history.json
 /memory/*.md
 
-# Local OpenClaw workspace state
-.openclaw/
 .codex-private/
 
 # Local-only test/runtime scratch files

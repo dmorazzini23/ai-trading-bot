@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a robust market-close recap for OpenClaw cron delivery.
+"""Generate a robust market-close recap for scheduled Slack delivery.
 
 The script is intentionally read-only and best-effort: missing logs, stale
 artifacts, or unavailable health endpoints are reported in the recap instead of
@@ -234,7 +234,7 @@ def _trading_day_summary(day: str) -> tuple[str, list[str]]:
             f"generated_at={generated_at}"
         )
         return f"trading-day report pending for {day}", warnings
-    summary = report.get("openclaw_summary") if isinstance(report.get("openclaw_summary"), dict) else {}
+    summary = report.get("operator_summary") if isinstance(report.get("operator_summary"), dict) else {}
     details = summary.get("details") if isinstance(summary.get("details"), dict) else {}
     text = str(summary.get("summary") or "no trading-day summary")
     if details:
@@ -255,7 +255,6 @@ def _operator_issues() -> list[str]:
     )
     for rel, label in (
         (Path("operator_control_plane_latest.json"), "operator control plane"),
-        (Path("openclaw_incident_state.json"), "OpenClaw incident state"),
         (Path("slack_incident_state.json"), "Slack incident state"),
     ):
         if reset_current and rel.name == "operator_control_plane_latest.json":

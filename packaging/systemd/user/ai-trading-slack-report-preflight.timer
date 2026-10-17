@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekday 09:20 ET market preflight Slack report
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:20:00 America/New_York
+Unit=ai-trading-slack-report@preflight.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

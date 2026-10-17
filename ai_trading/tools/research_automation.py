@@ -3139,7 +3139,7 @@ def _operator_summary(
         "latest_report": str(latest_path) if latest_path is not None else None,
         "operator_action": _operator_action(status, config.cadence, config.workflow),
         "health_report_summary": artifact_summary,
-        "slack_openclaw_summary": {
+        "operator_summary": {
             "service": "ai-trading-research-automation",
             "severity": "info"
             if status in {"complete", "planned", "dry_run"}
@@ -4026,7 +4026,7 @@ def run_research_automation(config: ResearchConfig) -> dict[str, Any]:
         "production_model_promotion": "manual_only",
         "live_money_cutover": "manual_only",
         "automated_runtime_mutations": False,
-        "slack_openclaw_source": "generated_artifacts",
+        "operator_summary_source": "generated_artifacts",
     }
     if _is_weekend_cadence(config.cadence):
         safety["weekend_research_authority"] = "research_only"

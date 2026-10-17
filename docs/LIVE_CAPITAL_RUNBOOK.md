@@ -16,7 +16,7 @@ It does not grant live authority by itself.
    `jq . /var/lib/ai-trading-bot/runtime/research_reports/latest/daily_readiness_latest.json`
 6. Review live-capital readiness:
    `jq . /var/lib/ai-trading-bot/runtime/live_capital_readiness_latest.json`
-7. Confirm Slack/OpenClaw received the latest after-hours summary.
+7. Confirm Slack received the latest after-hours summary.
    Research dry-runs do not send completion notifications; a missing dry-run
    notification is expected.
 

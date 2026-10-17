@@ -117,7 +117,7 @@ def test_research_automation_script_dry_run_skips_completion_notification(
     )
 
     assert result.returncode == 0
-    assert "skipping Slack/OpenClaw completion notification" in result.stderr
+    assert "skipping Slack completion notification" in result.stderr
     assert '"reason": "dry_run"' not in result.stdout
     payload = json.loads(
         (report_root / "latest" / "daily_research_automation_latest.json").read_text(

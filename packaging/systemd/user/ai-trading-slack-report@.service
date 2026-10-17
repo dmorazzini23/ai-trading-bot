@@ -1,0 +1,11 @@
+# User unit (systemctl --user); replaces the retired OpenClaw report jobs.
+# Install: see docs/OPERATIONS.md "Scheduled Slack reports".
+[Unit]
+Description=Post the ai-trading %i report to Slack
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/aiuser/ai-trading-bot
+ExecStart=/bin/bash -lc 'set -a; source /run/ai-trading-bot/ai-trading-runtime.env; set +a; exec /home/aiuser/ai-trading-bot/venv/bin/python /home/aiuser/ai-trading-bot/scripts/connector_incident_dispatch.py --report %i'
+TimeoutStartSec=300

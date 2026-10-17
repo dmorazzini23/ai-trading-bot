@@ -1,7 +1,7 @@
 # Trading Research Automation
 
 The research automation system turns the bot's existing evidence tools into a
-repeatable after-hours operating loop. It creates artifacts for Slack/OpenClaw
+repeatable after-hours operating loop. It creates artifacts for Slack
 and operators to read; it does not promote production models or enable live
 capital automatically.
 
@@ -78,7 +78,7 @@ Important files:
 - `latest/trading_day_latest.md`
 - `latest/upward_trajectory_latest.json`
 
-Slack/OpenClaw should read these artifacts and summarize them. Heavy training
+Slack summaries should read these artifacts. Heavy training
 should stay in systemd/repo scripts, not in Slack app handlers.
 
 When `AI_TRADING_RESEARCH_NOTIFY_SLACK=1`, the runner posts a completion summary

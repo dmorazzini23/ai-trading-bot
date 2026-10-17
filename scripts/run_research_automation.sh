@@ -89,7 +89,7 @@ esac
 
 if [[ "${AI_TRADING_RESEARCH_NOTIFY_SLACK:-1}" == "1" ]]; then
   if [[ "${AI_TRADING_RESEARCH_DRY_RUN:-0}" == "1" ]]; then
-    echo "research automation ${CADENCE} dry-run completed; skipping Slack/OpenClaw completion notification" >&2
+    echo "research automation ${CADENCE} dry-run completed; skipping Slack completion notification" >&2
   elif [[ "${AI_TRADING_RESEARCH_PLAN_ONLY:-0}" != "1" || "${AI_TRADING_RESEARCH_NOTIFY_PLAN_ONLY:-0}" == "1" ]]; then
     set +e
     "${PYTHON_BIN}" -m ai_trading.tools.research_completion_notify \

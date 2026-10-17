@@ -13,8 +13,8 @@ import pytest
 
 
 def _load_recap_module() -> ModuleType:
-    path = Path(__file__).resolve().parents[2] / "scripts" / "openclaw_market_close_recap.py"
-    spec = importlib.util.spec_from_file_location("openclaw_market_close_recap_test_module", path)
+    path = Path(__file__).resolve().parents[2] / "scripts" / "market_close_recap.py"
+    spec = importlib.util.spec_from_file_location("market_close_recap_test_module", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -79,7 +79,7 @@ def test_build_recap_reports_fresh_artifacts_without_system_checks(
             {
                 "generated_at": "2026-06-29T20:37:00Z",
                 "report_date": "2026-06-29",
-                "openclaw_summary": {
+                "operator_summary": {
                     "summary": "trading_day desired=2 submitted=2 rejected=0 controlled_skips=0 fills=2",
                     "details": {
                         "desired": 2,
@@ -120,7 +120,7 @@ def test_build_recap_marks_stale_trading_day_report(
             {
                 "generated_at": "2026-06-28T20:37:00Z",
                 "report_date": "2026-06-28",
-                "openclaw_summary": {"summary": "old report"},
+                "operator_summary": {"summary": "old report"},
             }
         ),
         encoding="utf-8",
@@ -240,13 +240,13 @@ def test_reset_recap_uses_current_paper_review_not_retired_report(tmp_path, monk
 def test_incident_checked_at_and_stale_operator_are_distinguished(tmp_path, monkeypatch):
     monkeypatch.setattr(recap, "RUNTIME_DIR", tmp_path)
     monkeypatch.setenv("AI_TRADING_RECAP_DATE", "2026-09-17")
-    (tmp_path / "openclaw_incident_state.json").write_text(json.dumps({
+    (tmp_path / "slack_incident_state.json").write_text(json.dumps({
         "status": "clear", "checked_at": "2026-09-17T21:00:00Z"}))
     (tmp_path / "operator_control_plane_latest.json").write_text(json.dumps({
         "status": "complete", "generated_at": "2026-09-07T21:00:00Z"}))
     issues = recap._operator_issues()
     assert "historical/unverified" in issues[0]
-    assert issues[1] == "OpenClaw incident state: clear at 2026-09-17T21:00:00Z"
+    assert issues[1] == "Slack incident state: clear at 2026-09-17T21:00:00Z"
 
 
 def test_fill_last_timestamp_only_uses_matching_session_fills(tmp_path, monkeypatch):

@@ -109,7 +109,7 @@ def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
     assert report["canary_evidence"]["portfolio_edge"]["status"] == "ok"
     assert report["canary_evidence"]["pretrade_risk_verifier"]["status"] == "passed"
     assert report["canary_evidence"]["model_data_drift_monitor"]["status"] == "ok"
-    assert report["openclaw_summary"]["service"] == "ai-trading-live-capital"
+    assert report["operator_summary"]["service"] == "ai-trading-live-capital"
 
 
 def test_live_capital_readiness_requires_approval_artifact(monkeypatch):
@@ -216,7 +216,7 @@ def test_live_capital_readiness_blocks_provider_authority_and_daily_research(mon
     assert "daily_research_trade_not_allowed" in report["reasons"]
     assert "runtime_gonogo_failed" in report["reasons"]
     assert report["canary_evidence"]["daily_research_trade_allowed"] is False
-    assert report["openclaw_summary"]["severity"] == "warning"
+    assert report["operator_summary"]["severity"] == "warning"
 
 
 def test_live_capital_readiness_blocks_insufficient_cost_samples(monkeypatch):

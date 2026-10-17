@@ -1059,7 +1059,7 @@ def build_trading_day_report(
             if isinstance(payload, Mapping)
         },
     }
-    report["openclaw_summary"] = {
+    report["operator_summary"] = {
         "service": "ai-trading-research",
         "severity": "info" if rejected_count == 0 else "warning",
         "summary": (

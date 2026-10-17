@@ -163,9 +163,9 @@ def build_research_completion_payload(
     health_summary = summary.get("health_report_summary")
     if not isinstance(health_summary, Mapping):
         health_summary = daily.get("health_report_summary") if isinstance(daily.get("health_report_summary"), Mapping) else {}
-    openclaw_summary = summary.get("slack_openclaw_summary")
-    if not isinstance(openclaw_summary, Mapping):
-        openclaw_summary = daily.get("openclaw_summary") if isinstance(daily.get("openclaw_summary"), Mapping) else {}
+    operator_summary = summary.get("operator_summary")
+    if not isinstance(operator_summary, Mapping):
+        operator_summary = daily.get("operator_summary") if isinstance(daily.get("operator_summary"), Mapping) else {}
     trading_counts = (
         f"desired={trading_day.get('desired_trades', {}).get('count', 'n/a')}, "
         f"submitted={trading_day.get('submitted_trades', {}).get('count', 'n/a')}, "
@@ -224,7 +224,7 @@ def build_research_completion_payload(
         _field("Evidence starvation", starvation_text),
         _field("Weekend research", weekend_text),
         _field("Health/report summary", json.dumps(health_summary, sort_keys=True) if health_summary else "n/a"),
-        _field("OpenClaw summary", openclaw_summary.get("summary") if openclaw_summary else "n/a"),
+        _field("Operator summary", operator_summary.get("summary") if operator_summary else "n/a"),
         _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
     ]
     payload: dict[str, Any] = {

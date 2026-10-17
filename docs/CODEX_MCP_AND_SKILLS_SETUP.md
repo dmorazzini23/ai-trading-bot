@@ -98,16 +98,6 @@ python tools/mcp_slack_alerts_server.py \
   --args '{"require_market_closed": true}'
 ```
 
-### OpenClaw runtime incident connector
-OpenClaw delivery is handled by `scripts/connector_incident_dispatch.py`, which posts to the OpenClaw connector dispatcher/gateway. It is not delivered by `mcp_slack_alerts_server.py`; that MCP server remains the Slack alert helper.
-
-- optional enable/disable: `AI_TRADING_CONNECTOR_OPENCLAW_ENABLED` (`1`/`0`)
-- optional change-only dedupe: `AI_TRADING_CONNECTOR_OPENCLAW_ON_CHANGE_ONLY` (`1`/`0`)
-- optional webhook target override: `AI_TRADING_OPENCLAW_RUNTIME_WEBHOOK_URL`
-- optional gateway URL override: `AI_TRADING_OPENCLAW_GATEWAY_URL`
-- optional token override: `AI_TRADING_OPENCLAW_HOOK_TOKEN`
-- optional config path override: `AI_TRADING_OPENCLAW_CONFIG_PATH`
-- optional dedupe-state path: `AI_TRADING_OPENCLAW_INCIDENT_STATE_PATH`
 
 ## Automated Incident Dispatch Timer
 
@@ -122,21 +112,8 @@ Optional dispatch controls:
 - `AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED=1`
 - `AI_TRADING_SLACK_EOD_REQUIRE_MARKET_CLOSED=1`
 - `AI_TRADING_CONNECTOR_SLACK_EOD_FORCE=0`
-- `AI_TRADING_CONNECTOR_OPENCLAW_ENABLED=1`
-- `AI_TRADING_CONNECTOR_OPENCLAW_ON_CHANGE_ONLY=1`
 - `AI_TRADING_CONNECTOR_FAIL_ON_ERROR=0`
 
-## Operator Assistant Policy
-
-OpenClaw/Slack is the fast operator layer. It should answer from artifacts and
-local health checks by default, not by running heavy work. Broad validation,
-training, replay/backtests, and code patches should be handed off as Codex
-`/goal` prompts unless the operator explicitly requests a deep implementation
-session. Runtime incident payloads include an `operatorAssistantPolicy` object
-with this boundary so OpenClaw can keep normal Slack chat quick while preserving
-Codex for thorough code changes.
-
-See [docs/OPERATOR_ASSISTANT_POLICY.md](/home/aiuser/ai-trading-bot/docs/OPERATOR_ASSISTANT_POLICY.md).
 
 ## Validation
 
@@ -148,6 +125,5 @@ scripts/ops_runtime_check.sh
 
 ## Notes
 - `mcp_slack_alerts_server.py` dedupes repeated alerts by fingerprint.
-- OpenClaw incident and model-readiness notices are dispatched by the connector timer through the OpenClaw gateway/dispatcher, not by `mcp_slack_alerts_server.py`.
 - `mcp_infra_cloud_server.py` writes restart actions to infra audit JSONL.
 - Secrets-manager support is available in `scripts/runtime_env_sync.py`.

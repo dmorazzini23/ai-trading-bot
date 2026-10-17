@@ -71,7 +71,7 @@ Installed plugin:
 - Do not install auto-git-add, smart-commit, auto-push, auto-format,
   broad auto-test, deployment, or Slack notification hooks in this repository.
 - Do not route Codex hook notifications into `#all-beatwallstreet`; the trading
-  bot already has its own deduped Slack/OpenClaw alert path.
+  bot already has its own deduped Slack alert path.
 - Use `bug-hunt-swarm` and `review-swarm` read-only unless the user explicitly
   asks to patch.
 - Use `orchestrate-batch-refactor` only for large scoped work with disjoint file

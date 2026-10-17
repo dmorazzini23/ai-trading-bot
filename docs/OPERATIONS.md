@@ -171,12 +171,12 @@ with a 2-hour default cap and writes `weekend_research_latest.json` plus
 Manual workflows generate gated promotion, live-cutover, incident-replay, and
 strategy-change artifacts.
 
-The automation never promotes production models or enables live money. Slack and
-OpenClaw summaries should read the generated artifacts instead of running heavy
+The automation never promotes production models or enables live money. Slack
+summaries should read the generated artifacts instead of running heavy
 training directly. See
 [docs/RESEARCH_AUTOMATION.md](/home/aiuser/ai-trading-bot/docs/RESEARCH_AUTOMATION.md)
 for commands and timer installation.
-Research dry-runs intentionally skip Slack/OpenClaw completion notifications.
+Research dry-runs intentionally skip Slack completion notifications.
 An evidence no-go exits with status `2` and is treated as a successful oneshot
 timer result for operator visibility; lock contention exits `75`, and
 infrastructure failures exit `1`. Notification delivery failures are logged by
@@ -675,3 +675,29 @@ reports model-staleness and replay-parity attention flags; these research
 changes do not remove those gates. To roll back, revert this patch's source and
 test changes and retain the research artifacts and retirement ledger for audit;
 no service unit or trading-authority configuration was changed.
+
+### Scheduled Slack Reports
+
+Two weekday reports post through the Slack incident webhook (hydrated from the
+managed secret like the connector timer). They replace the retired OpenClaw cron
+jobs; the old Monday runtime audit was not carried over.
+
+- `ai-trading-slack-report-preflight.timer`: 09:20 America/New_York, health and
+  readiness from `ai_trading.tools.market_preflight`.
+- `ai-trading-slack-report-close-recap.timer`: 16:45 America/New_York,
+  `scripts/market_close_recap.py`.
+
+They are systemd **user** units (no sudo; lingering is enabled for `aiuser`):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp packaging/systemd/user/ai-trading-slack-report* ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ai-trading-slack-report-preflight.timer ai-trading-slack-report-close-recap.timer
+systemctl --user list-timers 'ai-trading-slack-report*'
+```
+
+Manual send: `systemctl --user start ai-trading-slack-report@preflight.service`.
+Non-sending preview: build the text with
+`connector_incident_dispatch.build_scheduled_report("preflight")`.
+

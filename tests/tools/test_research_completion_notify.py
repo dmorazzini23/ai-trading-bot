@@ -42,7 +42,7 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
                 "daily_research": {"trade_allowed": True},
                 "trading_day": {"fills": 2},
             },
-            "slack_openclaw_summary": {
+            "operator_summary": {
                 "summary": "research_automation cadence=daily workflow=daily status=complete"
             },
         },

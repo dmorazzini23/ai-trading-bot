@@ -64,7 +64,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
         "automated_runtime_mutations": False,
         "live_money_cutover": "manual_only",
         "production_model_promotion": "manual_only",
-        "slack_openclaw_source": "generated_artifacts",
+        "operator_summary_source": "generated_artifacts",
     }
     step_names = {str(step["name"]) for step in payload["steps"]}  # type: ignore[index]
     assert "memory_hotspot_audit" in step_names
@@ -102,7 +102,7 @@ def test_daily_plan_writes_artifacts_without_running_steps(tmp_path: Path) -> No
     )
     summary = _read(summary_path)
     assert summary["health_report_summary"]["daily_research"]["status"] == "missing"
-    assert summary["slack_openclaw_summary"]["service"] == "ai-trading-research-automation"
+    assert summary["operator_summary"]["service"] == "ai-trading-research-automation"
     readiness = next(step for step in payload["steps"] if step["name"] == "live_capital_readiness")  # type: ignore[index]
     assert readiness["metadata"]["live_money_authority"] is False
     retention = next(step for step in payload["steps"] if step["name"] == "runtime_artifact_retention_plan")  # type: ignore[index]
@@ -862,7 +862,7 @@ def test_operator_summary_separates_blocked_from_failed(tmp_path: Path) -> None:
     assert summary["blocked_steps"] == ["runtime_gonogo_status"]
     assert summary["required_blocked_steps"] == []
     assert summary["optional_blocked_steps"] == ["runtime_gonogo_status"]
-    assert summary["slack_openclaw_summary"]["suggested_action"] == "review_summary_and_generated_artifacts"
+    assert summary["operator_summary"]["suggested_action"] == "review_summary_and_generated_artifacts"
 
 
 def test_json_stdout_artifact_keeps_final_payload(tmp_path: Path) -> None:
@@ -1143,7 +1143,7 @@ def test_operator_summary_reads_next_level_latest_artifacts(tmp_path: Path) -> N
     assert summary["health_report_summary"]["daily_research"]["trade_allowed"] is False
     assert summary["health_report_summary"]["trading_day"]["fills"] == 2
     assert summary["health_report_summary"]["live_capital_readiness"]["status"] == "blocked"
-    assert summary["slack_openclaw_summary"]["next_level_artifacts"]["daily_research"]["blocked_reasons"] == [
+    assert summary["operator_summary"]["next_level_artifacts"]["daily_research"]["blocked_reasons"] == [
         "runtime_gonogo_failed"
     ]
 

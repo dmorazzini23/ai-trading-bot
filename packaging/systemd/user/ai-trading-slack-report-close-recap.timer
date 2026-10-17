@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekday 16:45 ET market-close recap Slack report
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 16:45:00 America/New_York
+Unit=ai-trading-slack-report@close-recap.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

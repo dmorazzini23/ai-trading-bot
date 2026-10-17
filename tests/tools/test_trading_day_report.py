@@ -118,7 +118,7 @@ def test_trading_day_report_attributes_rejections_and_symbol_pnl():
     assert report["health_report_summary"]["expected_edge_calibration_status"] == "overestimated"
     assert "huggingface_research_status" not in report["health_report_summary"]
     assert "huggingface_research" not in report
-    assert report["openclaw_summary"]["severity"] == "warning"
+    assert report["operator_summary"]["severity"] == "warning"
     assert report["symbol_trade_flow"]["AAPL"] == {
         "desired": 1,
         "submitted": 1,
@@ -211,8 +211,8 @@ def test_trading_day_report_separates_metrics_control_skips_from_rejects():
     }
     assert report["health_report_summary"]["rejected"] == 1
     assert report["health_report_summary"]["controlled_skips"] == 2
-    assert report["openclaw_summary"]["severity"] == "warning"
-    assert "controlled_skips=2" in report["openclaw_summary"]["summary"]
+    assert report["operator_summary"]["severity"] == "warning"
+    assert "controlled_skips=2" in report["operator_summary"]["summary"]
 
 
 def test_trading_day_report_metrics_control_only_is_info_severity():
@@ -236,8 +236,8 @@ def test_trading_day_report_metrics_control_only_is_info_severity():
 
     assert report["rejected_trades"]["count"] == 0
     assert report["controlled_skips"]["count"] == 1
-    assert report["openclaw_summary"]["severity"] == "info"
-    assert report["openclaw_summary"]["suggested_action"] == (
+    assert report["operator_summary"]["severity"] == "info"
+    assert report["operator_summary"]["suggested_action"] == (
         "review controlled skips and live-capital readiness before next session"
     )
 
@@ -353,10 +353,10 @@ def test_trading_day_report_counts_only_canonical_parity_shadow_candidates():
     }
     assert report["health_report_summary"]["shadow_candidates"] == 1
     assert report["health_report_summary"]["controlled_skips"] == 1
-    assert report["openclaw_summary"]["severity"] == "info"
-    assert "controlled_skips=1" in report["openclaw_summary"]["summary"]
-    assert "shadow_candidates=1" in report["openclaw_summary"]["summary"]
-    assert "rejected=0" in report["openclaw_summary"]["summary"]
+    assert report["operator_summary"]["severity"] == "info"
+    assert "controlled_skips=1" in report["operator_summary"]["summary"]
+    assert "shadow_candidates=1" in report["operator_summary"]["summary"]
+    assert "rejected=0" in report["operator_summary"]["summary"]
 
 
 def test_parity_shadow_candidate_deduplicates_against_existing_intent():
@@ -676,7 +676,7 @@ def test_trading_day_report_cli_writes_latest_json_and_markdown(tmp_path: Path):
     assert payload["expected_edge_calibration"]["status"] == "calibrated"
     assert payload["weekend_research"]["status"] == "complete"
     assert payload["health_report_summary"]["fills"] == 1
-    assert payload["openclaw_summary"]["service"] == "ai-trading-research"
+    assert payload["operator_summary"]["service"] == "ai-trading-research"
     assert latest.is_file()
     markdown = md.read_text(encoding="utf-8")
     assert "Trading Day 2026-05-05" in markdown

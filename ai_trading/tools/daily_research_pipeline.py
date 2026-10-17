@@ -908,7 +908,7 @@ def build_daily_research_report(
             ),
         },
     }
-    report["openclaw_summary"] = {
+    report["operator_summary"] = {
         "service": "ai-trading-research",
         "severity": "info" if allowed else "warning",
         "summary": (

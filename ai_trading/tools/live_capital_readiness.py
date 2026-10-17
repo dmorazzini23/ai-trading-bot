@@ -572,7 +572,7 @@ def build_live_capital_readiness(
         "canary_plan_fresh": bool(freshness["canary_plan"]["fresh"]),
         "reasons": reasons,
     }
-    report["openclaw_summary"] = {
+    report["operator_summary"] = {
         "service": "ai-trading-live-capital",
         "severity": "info" if status in {"live_canary_allowed", "live_allowed"} else "warning",
         "summary": f"live_capital_readiness status={status} profile={profile.name}",

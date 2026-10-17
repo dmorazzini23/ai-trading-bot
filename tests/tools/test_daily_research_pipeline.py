@@ -246,7 +246,7 @@ def test_daily_research_report_blocks_on_runtime_gonogo_failure(monkeypatch):
     assert report["upward_trajectory"]["status"] == "ready"
     assert report["next_level_artifacts"]["upward_trajectory"]["candidate_count"] == 2
     assert report["next_level_artifacts"]["upward_trajectory"]["live_money_authority"] is False
-    assert report["openclaw_summary"]["severity"] == "warning"
+    assert report["operator_summary"]["severity"] == "warning"
 
 
 def test_daily_research_report_blocks_on_top_level_replay_governance_status(
@@ -521,7 +521,7 @@ def test_daily_research_pipeline_cli_writes_json_and_markdown(monkeypatch, tmp_p
     assert payload["diagnostic_sampling"]["state"]["count"] == 1
     assert payload["health_report_summary"]["trade_allowed"] is True
     assert payload["next_level_artifacts"]["diagnostic_sampling"]["paper_only"] is True
-    assert payload["openclaw_summary"]["service"] == "ai-trading-research"
+    assert payload["operator_summary"]["service"] == "ai-trading-research"
     assert latest.is_file()
     markdown = md.read_text(encoding="utf-8")
     assert "Daily Research 2026-05-05" in markdown

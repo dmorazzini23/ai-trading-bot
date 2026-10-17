@@ -1,7 +1,9 @@
 # Scheduled market preflight
 
-The OpenClaw market-preflight job runs at 09:20 America/New_York on weekdays.
-Its read-only health command, from /home/aiuser/ai-trading-bot, is:
+The market preflight runs at 09:20 America/New_York on weekdays via the
+`ai-trading-slack-report-preflight.timer` user unit, which formats this report and
+posts it to Slack (see docs/OPERATIONS.md "Scheduled Slack Reports"). The
+read-only health command, from /home/aiuser/ai-trading-bot, is:
 
 ```sh
 /home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.tools.market_preflight
@@ -27,10 +29,7 @@ an alarming job notification. The fixed Python command removes this quoting
 and jq syntax failure mode. Regression coverage includes blocked HTTP 200/503,
 true readiness, malformed bodies, wrong ok types, transport failure and HTTP 500.
 
-The scheduler gateway uses /home/aiuser/.local/bin/openclaw. The older CLI under
-/home/aiuser/.npm-global/bin must not be used to edit newer scheduler configuration.
-No CLI installation, delivery destination, notification policy, schedule or
-trading runtime setting is changed by this repair.
+(History: until 2026-10-17 this job ran in the OpenClaw gateway, which was retired.)
 
 Validation on September 17: 10 focused regression tests and 233 selected tests
 in the required market-hours validator passed, with lint/type/compile checks.
