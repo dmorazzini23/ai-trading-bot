@@ -1,6 +1,44 @@
 # Current handoff
 
-## October 16 evening deploy of `3fe07613e` — complete (start here)
+## October 17 weekend: clean venv, OpenClaw retired, EOD log fix (start here)
+
+Deployed `ad499f4fe` Sat ~01:50 ET, closed and flat, after a host reboot onto
+kernel 6.8.0-147. CI, CodeQL, SBOM and Workflow Lint pass. The prior spec is saved
+as `runtime/release_spec.3fe07613e.bak.json`.
+
+- **Clean venv** (no `--system-site-packages`), built offline from
+  `/home/aiuser/venv-rebuild/wheelhouse` exactly as CI does: `requirements-dev.txt`
+  + constraints, plus the RL and plot extras, plus an editable install. It now
+  matches the lock (torch 2.13.0+cpu, transformers 5.10.4, pyarrow 23.0.1,
+  cryptography 50.0.1); `pip check` is clean. Full validation on it: 7,399 passed,
+  3 skipped. The new skip is `ta`, which is not in the lock and not used at runtime.
+  The bot runs with 0 system-package mappings, torch not loaded, 845 MB RSS at
+  start. Secrets use the standalone `/usr/local/bin/aws` CLI v2, not boto3.
+  Rollback: stop, `rm -rf venv && mv venv.sys-bak venv`, start. Delete
+  `venv.sys-bak` (1.9 GB) and the wheelhouse (491 MB) after a clean session.
+- **EOD** `659f6dfee` (from the EOD session): `EOD_EXIT` is logged only for
+  accepted exits (otherwise `EOD_EXIT_SKIPPED`); insufficient-qty 40310000 is
+  non-retryable. Merged by hand with the cancel-then-flatten policy.
+- **OpenClaw retired** (`ad499f4fe`): repo code removed (connector 1,390 → ~470
+  lines; hooks, audit script, agent templates, policy doc). `openclaw_summary`
+  → `operator_summary`. On the server: 4 user units stopped and removed, both npm
+  installs (`~/.local`, `~/.npm-global`) uninstalled, `~/.openclaw`,
+  `~/ai-trading-bot/.openclaw` and `memory/` deleted. Backups:
+  `~/openclaw-backup-20261017.tar.gz` (455 MB, includes the cron job JSON) and
+  `~/openclaw-repo-workspace-backup-20261017.tar.gz`. Eleven `*OPENCLAW*` vars were
+  removed from `.env` (backup `~/env-backup-20261017-pre-openclaw-removal`); the
+  identity check still passes with the new `.env`.
+- **Replacement Slack reports**: user timers `ai-trading-slack-report-preflight`
+  (Mon–Fri 09:20 ET) and `-close-recap` (16:45 ET) run
+  `connector_incident_dispatch.py --report …`. They post via the Slack incident
+  webhook (to that webhook's channel, not the old DM). The send path was dry-run
+  verified (secret hydrated, Slack URL, nothing posted). First runs: Mon Oct 19.
+  The Monday runtime audit is dropped.
+
+Watch Monday: 09:20 and 16:45 Slack reports arrive; EOD cancel-then-flatten and
+`EOD_EXIT_SKIPPED` behavior; a flat close; RSS and swap on the new venv.
+
+## October 16 evening deploy of `3fe07613e` — complete
 
 The owner asked for items 1–5 end to end. Full validation passed (7,407 tests;
 `artifacts/maintenance/validation_20261016_batch/`). Pushed; CI, CodeQL, SBOM and
