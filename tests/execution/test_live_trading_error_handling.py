@@ -1543,3 +1543,49 @@ def test_execute_order_releases_capacity_reservation_on_terminal_reject(engine_f
 
     assert result is not None
     assert lt._safe_decimal(getattr(engine, "_cycle_reserved_opening_notional", None)) == Decimal("0")
+
+
+def test_insufficient_qty_rejection_is_nonretryable_not_conflict_retry(engine_factory, caplog):
+    """Regression for 2026-10-15: Alpaca 40310000 "insufficient qty available"
+    was retried once as an opposite-side conflict."""
+
+    from alpaca.common.exceptions import APIError as NativeAlpacaAPIError
+    from requests.exceptions import HTTPError
+
+    class InsufficientQtyClient:
+        def __init__(self):
+            self.submit_calls = 0
+
+        def submit_order(self, *, order_data):
+            self.submit_calls += 1
+            raise NativeAlpacaAPIError(
+                json.dumps({
+                    "code": 40310000,
+                    "message": "insufficient qty available for order (requested: 1, available: 0)",
+                }),
+                HTTPError("http_403", response=SimpleNamespace(status_code=403)),
+            )
+
+    client = InsufficientQtyClient()
+    engine = engine_factory(use_real_submit=True, trading_client=client)
+    policy_calls: list[Any] = []
+    engine._enforce_opposite_side_policy = lambda *args, **kwargs: policy_calls.append(args) or (True, None)
+    caplog.set_level("INFO", logger=lt.logger.name)
+
+    with pytest.raises(lt.NonRetryableBrokerError) as excinfo:
+        engine._submit_order_to_alpaca(
+            {
+                "symbol": "MSFT",
+                "side": "sell",
+                "quantity": 1,
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": "eod-2026-10-15-MSFT-sell",
+            }
+        )
+
+    assert excinfo.value.code == "insufficient_position_available"
+    assert "insufficient qty available" in str(excinfo.value.detail)
+    assert client.submit_calls == 1
+    assert policy_calls == []
+    assert not any(r.msg.startswith("ORDER_CONFLICT_RETRY") for r in caplog.records)

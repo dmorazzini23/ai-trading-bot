@@ -929,6 +929,26 @@ def _cancel_eod_conflicting_orders(api: Any, symbol: str, orders: list[Any]) -> 
             logger.info("EOD_PENDING_ORDER_CANCEL_REQUESTED", extra={"symbol": symbol, "order_id": str(order_id)})
 
 
+_EOD_EXIT_NOT_ACCEPTED_STATUSES = frozenset(
+    {"skipped", "rejected", "canceled", "cancelled", "failed", "expired"}
+)
+
+
+def _eod_exit_skip_reason(result: Any) -> str | None:
+    """Return why ``execute_order`` placed no exit order, or ``None`` if it did."""
+
+    if result is None:
+        return "no_order_submitted"
+    if isinstance(result, Mapping):
+        status, reason = result.get("status"), result.get("reason")
+    else:
+        status, reason = getattr(result, "status", None), getattr(result, "reason", None)
+    status_text = str(getattr(status, "value", status) or "").strip().lower()
+    if status_text in _EOD_EXIT_NOT_ACCEPTED_STATUSES:
+        return str(reason or status_text)
+    return None
+
+
 def exit_all_positions(ctx: Any) -> None:
     raw_positions = _list_positions_compat(ctx.api)
     held = sorted(
@@ -976,7 +996,7 @@ def exit_all_positions(ctx: Any) -> None:
                     f"eod-exit|{client_order_id}".encode("utf-8")
                 ).hexdigest()[:24]
                 try:
-                    execute_order(
+                    result = execute_order(
                         pos.symbol,
                         side,
                         qty,
@@ -991,6 +1011,14 @@ def exit_all_positions(ctx: Any) -> None:
                         "EOD_EXIT_SUBMISSION_UNCONFIRMED",
                         extra={"symbol": pos.symbol, "client_order_id": client_order_id,
                                "error": str(exc), "requires_broker_reconciliation": True},
+                    )
+                    continue
+                skip_reason = _eod_exit_skip_reason(result)
+                if skip_reason is not None:
+                    logger.warning(
+                        "EOD_EXIT_SKIPPED",
+                        extra={"symbol": pos.symbol, "qty": qty,
+                               "client_order_id": client_order_id, "reason": skip_reason},
                     )
                     continue
             else:

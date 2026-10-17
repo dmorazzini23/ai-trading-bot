@@ -1589,6 +1589,18 @@ def _is_duplicate_client_order_id_error(err: BaseException) -> bool:
     return any(token in detail for token in duplicate_tokens)
 
 
+def _is_insufficient_qty_error(err: BaseException) -> bool:
+    """Return ``True`` when the broker rejected a sell for lack of available shares.
+
+    Alpaca reuses code 40310000 for both opposite-side conflicts and
+    "insufficient qty available for order"; only the message tells them apart.
+    """
+
+    metadata = _extract_api_error_metadata(err)
+    detail = str(metadata.get("detail") or metadata.get("error") or err).strip().lower()
+    return "insufficient qty available" in detail
+
+
 def _broker_submit_outcome_ambiguous(
     err: Exception, metadata: Mapping[str, Any] | None = None,
 ) -> bool:
@@ -26478,6 +26490,8 @@ class ExecutionEngine:
 
     @staticmethod
     def _is_opposite_conflict_error(exc: Exception) -> bool:
+        if _is_insufficient_qty_error(exc):
+            return False
         metadata = _extract_api_error_metadata(exc)
         code = metadata.get("code")
         if code is not None and str(code) == "40310000":
@@ -35206,6 +35220,16 @@ class ExecutionEngine:
                     "closing_position": closing_position,
                 },
             )
+            if isinstance(e, _AlpacaAPIError) and _is_insufficient_qty_error(e):
+                # Shares are held by another open order or already gone; resubmitting
+                # the same order cannot succeed.
+                raise NonRetryableBrokerError(
+                    "insufficient_position_available",
+                    code="insufficient_position_available",
+                    status=_safe_int(error_status, 0) or None,
+                    symbol=str(order_data.get("symbol") or "") or None,
+                    detail=str(error_message),
+                ) from e
             if isinstance(e, _AlpacaAPIError) and self._is_opposite_conflict_error(e):
                 symbol = str(order_data.get("symbol") or "")
                 desired_side = str(order_data.get("side") or "")

@@ -132,3 +132,17 @@ def test_is_opposite_conflict_error_detects_conflict():
 
     engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
     assert engine._is_opposite_conflict_error(DummyError()) is True
+
+
+def test_insufficient_qty_40310000_is_not_an_opposite_conflict():
+    class DummyError(Exception):
+        def __init__(self):
+            self.code = "40310000"
+            self.status_code = 403
+            self.message = "insufficient qty available for order (requested: 1, available: 0)"
+
+        def __str__(self):
+            return self.message
+
+    engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
+    assert engine._is_opposite_conflict_error(DummyError()) is False

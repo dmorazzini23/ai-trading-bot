@@ -95,3 +95,40 @@ def test_eod_cancel_failure_still_defers_without_selling(monkeypatch, caplog):
 
     assert calls == []
     assert "EOD_PENDING_ORDER_CANCEL_FAILED" in caplog.text
+
+
+def test_eod_exit_logs_skip_instead_of_exit_when_no_order_is_placed(caplog):
+    """Regression for 2026-10-15: EOD_EXIT was logged for a skipped MSFT submit."""
+
+    results = {
+        'AAPL': None,
+        'MSFT': {'status': 'skipped', 'reason': 'insufficient_position_available'},
+        'AMZN': SimpleNamespace(status='rejected', reason=None),
+        'NVDA': {'id': 'broker-1', 'status': 'accepted'},
+    }
+    calls = []
+
+    def execute(symbol, side, qty, **kwargs):
+        calls.append(symbol)
+        return results[symbol]
+
+    ctx = SimpleNamespace(
+        api=SimpleNamespace(get_all_positions=lambda: [
+            SimpleNamespace(symbol=symbol, qty=1) for symbol in results
+        ]),
+        execute_order=execute,
+    )
+    caplog.set_level('INFO', logger=execution_flow.logger.name)
+    execution_flow.exit_all_positions(ctx)
+
+    assert calls == list(results)
+    exited = [r.symbol for r in caplog.records if r.msg == 'EOD_EXIT']
+    skipped = {r.symbol: (r.reason, r.client_order_id)
+               for r in caplog.records if r.msg == 'EOD_EXIT_SKIPPED'}
+    assert exited == ['NVDA']
+    assert {symbol: reason for symbol, (reason, _) in skipped.items()} == {
+        'AAPL': 'no_order_submitted',
+        'MSFT': 'insufficient_position_available',
+        'AMZN': 'rejected',
+    }
+    assert skipped['MSFT'][1].startswith('eod-') and skipped['MSFT'][1].endswith('-MSFT-sell')
