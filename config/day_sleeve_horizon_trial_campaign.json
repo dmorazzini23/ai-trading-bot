@@ -1,0 +1,69 @@
+{
+  "campaign_id": "day_sleeve_horizon_trial_20261018",
+  "status": "registered",
+  "authorization": "Owner adopted the research-reset amendment of 2026-10-18 (docs/RESEARCH_RESET_AMENDMENT_20261018.md) authorizing this one registered development trial; the October 14, 2026 review otherwise stands. Scheduled training remains paused.",
+  "max_trials": 1,
+  "hypotheses": ["fixed_histgb_day_sleeve_60_minute_horizon_after_costs_v1"],
+  "development_start": "2024-01-01",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "symbols": ["AAPL", "AMZN", "MSFT"],
+  "feed": "sip",
+  "adjustment": "split",
+  "acquisition": "artifacts/stock_development/acquisition.json",
+  "hypothesis": "The existing day-sleeve feature contract carries positive out-of-sample edge after 10 bps round-trip costs when the label horizon matches the runtime hold contract (60 minutes, flat before the close) instead of the five-minute horizon that every prior trial and the scheduled trainer used.",
+  "economic_motivation": "Runtime holds positions 600 to 7200 seconds and flattens 300 seconds before the close (AI_TRADING_MIN_POSITION_HOLD_SECONDS, AI_TRADING_MAX_POSITION_HOLD_SECONDS, AI_TRADING_EOD_FLATTEN_LEAD_SECONDS). Every model evaluated so far labeled a five-minute bar-open round trip net of a 10 to 12 bps cost: the always-long control lost 9.95 bps per opportunity by construction, the July 17 candidate's training labels had a mean realized edge of -11.93 bps with an 18.2 percent positive rate, and the scheduled trainer has reported no_qualified_candidate since. A five-minute gross move cannot clear a fixed 10 bps cost in large-cap names; a 60-minute horizon gives the same features a gross move of the order of the cost rather than one tenth of it. This is a horizon-contract question, not a new feature or family search.",
+  "model": "StandardScaler plus HistGradientBoostingClassifier(max_iter=200, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=200, l2_regularization=1.0, early_stopping=False, random_state=42); fixed before evaluation; no family or parameter search",
+  "classifier": {
+    "family": "hist_gradient_boosting",
+    "params": {
+      "max_iter": 200,
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 15,
+      "min_samples_leaf": 200,
+      "l2_regularization": 1.0,
+      "early_stopping": false,
+      "random_state": 42
+    }
+  },
+  "exit_horizon_minutes": 60,
+  "flatten_cutoff_et": "15:55",
+  "flatten_lead_minutes": 5,
+  "features": "Existing day-sleeve feature contract (day_sleeve_ml_feature_contract_v1: rsi, macd, atr, vwap, sma_50, sma_200, signal, atr_pct, vwap_distance, sma_spread, macd_signal_gap, rsi_centered) computed from runtime-equivalent finalized regular-session five-minute history with a ten-calendar-day lookback",
+  "decision": "Five-minute bar start plus five minutes and two seconds, identical to the retired replacement trial",
+  "entry": "First one-minute open strictly after the finalized decision",
+  "exit": "One-minute open 60 minutes after entry, same session only; opportunities whose exit would fall at or after 15:55 America/New_York are excluded, matching the runtime flatten lead",
+  "overlapping_positions": false,
+  "label": "Net return from entry open to exit open minus the fixed 10 bps round-trip cost; positive class when net return exceeds zero",
+  "cost_bps": 10,
+  "stress_round_trip_cost_bps": [6, 10, 20],
+  "cost_status": "fixed_unverified_scenarios_not_calibrated_execution_costs",
+  "decision_threshold": 0.5,
+  "validation": "Five chronological purged folds over the ordered development sessions (first chunk trains, each later chunk tests with expanding prior training), training-only scaling, purge of training labels whose exit falls after the fold boundary, one-session embargo, no overlapping positions per symbol",
+  "controls": ["cash", "always_long_on_identical_opportunities"],
+  "acceptance": "Positive aggregate net edge per common opportunity at 10 bps including abstentions as zero; positive whole-session bootstrap 95 percent lower bound; at least four of five profitable folds; at least 250 selected trades per fold; improvement over always-long on identical opportunities; positive aggregate net edge at 20 bps reported but not required. Passing permits planning a governed retrain with AI_TRADING_DAY_SLEEVE_HORIZON_BARS=12 only; it is not promotion or runtime authority.",
+  "bootstrap": {"unit": "whole_session_all_symbols_together", "replicates": 10000, "seed": 20261018},
+  "preconditions": [
+    "research-reset amendment docs/RESEARCH_RESET_AMENDMENT_20261018.md adopted and config/research_reset.json registered_trials cites this campaign_id",
+    "timestamp-only intraday sampling-support audit for the 60-minute grid passes before the trial is claimed",
+    "source hashes and 2024-2025 date bounds verified against artifacts/stock_development/acquisition.json",
+    "derived feature and label provenance verified; runtime-equivalent history parity verified",
+    "no 2026 data read; the reserved holdout is not opened"
+  ],
+  "required_implementation": [
+    "ai_trading.tools.model_replacement_trial: read exit horizon, flatten cutoff, classifier specification and bootstrap seed from the contract instead of hardcoded five-minute values; regression tests for 60-minute exits, the 15:55 cutoff and non-overlap",
+    "ai_trading.tools.research_feasibility: a timestamp-only support audit for a fixed intraday grid (decision time, entry minute, exit minute, cutoff) reporting possible opportunities per fold without reading prices",
+    "campaign ledger registration under artifacts/day_sleeve_horizon_trial_20261018/campaign_state.json using ai_trading.tools.experiment_ledger"
+  ],
+  "stop_rule": "Claim once immediately before model fitting; no automatic retry after claim; inadequate preflight or support blocks without consuming the trial; failed or inconclusive outcome retires this horizon hypothesis and does not authorize threshold, horizon, feature or family tuning",
+  "holdout_policy": "Do not read or evaluate September 9 to December 8, 2026; no automatic future test or promotion. Development data was used in earlier research and is not untouched.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical bar-open proxy with fixed costs; executable fills and per-fill fees are not established",
+  "limitations": [
+    "Bar-open markouts omit queue position, impact and distributions; they are not realized P&L.",
+    "Three symbols on 2024-2025 SIP data; passing does not generalize to the 100-symbol paper universe without a separately registered evaluation.",
+    "A fixed 60-minute exit is a proxy for the runtime stop, take-profit and trailing exits, not a replay of them."
+  ]
+}

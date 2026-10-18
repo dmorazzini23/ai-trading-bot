@@ -10,5 +10,16 @@
   "holdout_end": "2026-12-08",
   "allowed_work": ["evidence_reconciliation", "correctness_fixes", "weekly_scorecard", "registered_development_trial"],
   "paused_work": ["unregistered_search", "scheduled_training", "new_models", "discretionary_features"],
+  "registered_trials": ["day_sleeve_horizon_trial_20261018"],
+  "amendments": [
+    {
+      "date": "2026-10-18",
+      "record": "docs/RESEARCH_RESET_AMENDMENT_20261018.md",
+      "campaign_id": "day_sleeve_horizon_trial_20261018",
+      "contract": "config/day_sleeve_horizon_trial_campaign.json",
+      "ledger": "artifacts/day_sleeve_horizon_trial_20261018/campaign_state.json",
+      "scope": "one registered development trial; pause, holdout, gates and review date unchanged"
+    }
+  ],
   "promotion_authority": false
 }
