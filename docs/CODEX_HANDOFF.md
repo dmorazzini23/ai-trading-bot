@@ -1,6 +1,54 @@
 # Current handoff
 
-## October 18 evening deploy of `7e0a00365` — complete (start here)
+## October 18 late: six fixes and upgrades merged to main, not deployed (start here)
+
+`main` is `a0b6368d0` on origin; the live runtime checkout is still at
+`7e0a00365` (deployed 16:56 UTC, below). Full suite on the merged tree:
+7,543 passed, 3 skipped, under the new production read guard; ruff, mypy and
+compile clean on all 14 changed runtime files. Each piece was built in its own
+worktree by an Opus 5.5 agent and verified independently before merging.
+
+- **Loader** (`c57078890`): `get_strategies()` logs `STRATEGIES_NONE_RESOLVED`
+  and returns `[]` when nothing resolves (the dead `momentum` fallback is gone),
+  and warns once a day `STRATEGIES_NOT_CONSUMED_UNDER_NETTING` while
+  `AI_TRADING_NETTING_ENABLED=1`. The live `.env` still sets six names, so the
+  warning will appear after deploy until STRATEGIES is removed from `.env`.
+- **Replay freshness** (`93a222a1c`): age measured on the XNYS calendar with
+  closed-market hours excluded and at most one missed session; weekday behavior
+  unchanged. Removes the weekend `replay_fresh` failure; the counterfactual
+  failure is untouched.
+- **Retention** (`bad476786`): `scripts/prune_runtime_jsonl.sh` now archives
+  rotated segments under `recovery_backups/archive/` (never deletes), adds
+  `--dry-run`, caps execution_quality_events / broker_position_boundaries /
+  policy_ablation_events, lowers decision_records to 192 MiB, and archives
+  research runs older than 30 days with a model-registry reference guard. The
+  first apply after deploy rotates `decision_records.jsonl`. The two legacy
+  `.bak.gz` files the OLD script would have deleted this week are copied to
+  `recovery_backups/legacy_bak_preserved_20261018/`. Known follow-up, not
+  fixed: two whole-file readers in the trading process (`bot_engine.py`
+  `_load_recent_rejection_concentration_by_symbol`, ~9 s per cycle;
+  `runtime_performance_report._load_json_lines` on gate_effectiveness every
+  60 s, ~4 s and +295 MB).
+- **Multi-day trial tooling** (`743eb25fb`): `ai_trading.tools.registered_strategy_trial`,
+  a daily support audit in `research_feasibility`, and the draft
+  `config/cross_sectional_momentum_trial_campaign.json` (ETF universe; status
+  `draft_not_registered`). Owner decision pending: the ETF set clears support
+  only under the open/close-minute completeness rule; see
+  `docs/MULTI_DAY_STRATEGY_TRIAL_PROPOSAL_20261018.md`.
+- **Fee schedule** (`5c6dd615d`): `ai_trading/analytics/fee_schedule.py`,
+  `AI_TRADING_FEE_SCHEDULE_SOURCE=missing|declared` (default missing), consumers
+  label `declared_schedule` distinctly and never as broker evidence. Memo:
+  `docs/FEE_SCHEDULE_DECISION_20261018.md`. Not enabled.
+- **Test read isolation** (`5316effc8`): audit-hook read guard in
+  `tests/conftest.py` on top of the write guard; root cause of the stray
+  `logs/trades.jsonl` in the checkout was the conftest reset calling the
+  trade-log fallback (fixed). `tools/mcp_slack_alerts_server.py` runtime report
+  path now honors `AI_TRADING_RUNTIME_ROOT`.
+
+Deploy, when chosen: closed and flat, spec SHA update, identity checks,
+restart (procedure below). Rollback: checkout `7e0a00365`.
+
+## October 18 evening deploy of `7e0a00365` — complete
 
 Deployed Sun 16:56 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
 Lint passed on `7e0a00365`. The prior spec is saved as
