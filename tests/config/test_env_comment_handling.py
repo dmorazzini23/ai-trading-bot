@@ -1,6 +1,3 @@
-import importlib
-import sys
-
 import pytest
 
 from ai_trading.config.management import TradingConfig
@@ -10,29 +7,6 @@ from ai_trading.config.runtime import (
     _parse_numeric_sequence,
     _strip_inline_comment,
 )
-
-
-def _reload_config(monkeypatch, **env):
-    module_name = "ai_trading.config"
-    sys.modules.pop(module_name, None)
-    for key in [
-        "MAX_DRAWDOWN_THRESHOLD",
-        "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",
-        "AI_TRADING_TRADING_MODE",
-        "AI_TRADING_KELLY_FRACTION",
-        "AI_TRADING_CONF_THRESHOLD",
-        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
-    ]:
-        monkeypatch.delenv(key, raising=False)
-    for k, v in env.items():
-        monkeypatch.setenv(k, str(v))
-    return importlib.import_module(module_name)
-
-
-@pytest.fixture(autouse=True)
-def _cleanup():
-    yield
-    sys.modules.pop("ai_trading.config", None)
 
 
 def test_comment_stripped_from_float_env(monkeypatch):

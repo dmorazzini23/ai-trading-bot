@@ -803,3 +803,57 @@ def _module_import_env(request: pytest.FixtureRequest, monkeypatch: pytest.Monke
         for key in removed:
             monkeypatch.delenv(key, raising=False)
     yield
+
+
+_CONFIG_PACKAGE_KEY = pytest.StashKey[Any]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item):
+    item.stash[_CONFIG_PACKAGE_KEY] = sys.modules.get("ai_trading.config")
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item):
+    """Error the test that leaves ``ai_trading.config`` replaced or incomplete.
+
+    Popping the package from ``sys.modules`` while its submodules stay cached
+    makes the next import build a fresh package object that lacks attributes
+    such as ``settings``, breaking later ``monkeypatch.setattr`` dotted paths.
+    Runs after fixture teardown so monkeypatch-restored entries are not flagged,
+    and restores the package so only the offending test errors.
+    """
+
+    result = yield
+    original = item.stash.get(_CONFIG_PACKAGE_KEY, None)
+    package = sys.modules.get("ai_trading.config")
+    problems: list[str] = []
+    if original is not None and package is not original:
+        problems.append("replaced or removed the ai_trading.config package")
+        sys.modules["ai_trading.config"] = original
+        parent = sys.modules.get("ai_trading")
+        if parent is not None:
+            setattr(parent, "config", original)
+        package = original
+    if package is not None:
+        prefix = "ai_trading.config."
+        missing = {
+            name[len(prefix) :]: module
+            for name, module in list(sys.modules.items())
+            if module is not None
+            and name.startswith(prefix)
+            and "." not in name[len(prefix) :]
+            and not hasattr(package, name[len(prefix) :])
+        }
+        if missing:
+            problems.append(f"left ai_trading.config without submodule attributes {sorted(missing)}")
+            for attr, module in missing.items():
+                setattr(package, attr, module)
+    if problems:
+        pytest.fail(
+            f"{item.nodeid} {'; '.join(problems)}; restore sys.modules instead of "
+            "popping the package",
+            pytrace=False,
+        )
+    return result
