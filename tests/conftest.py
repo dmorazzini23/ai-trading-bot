@@ -10,6 +10,29 @@ _PYTEST_MODEL_REGISTRY_TMPDIR = tempfile.TemporaryDirectory(
 os.environ["MODEL_REGISTRY_DIR"] = _PYTEST_MODEL_REGISTRY_TMPDIR.name
 os.environ["AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL"] = "0"
 
+# Keep every test run out of the production state directories. ``ai_trading.paths``
+# resolves LOG_DIR, DATA_DIR, MODELS_DIR, CACHE_DIR and OUTPUT_DIR once at import
+# time, and LOG_DIR defaults to /var/log/ai-trading-bot even when no .env is
+# loaded, so a per-test monkeypatch is too late: these must be set before any
+# ``ai_trading`` import. The per-test ``_guard_production_dirs`` fixture below
+# fails any test that still writes into the production directories.
+_PYTEST_DIRS_TMPDIR = tempfile.TemporaryDirectory(prefix="ai-trading-pytest-dirs-")
+_PRODUCTION_LOG_DIR = os.environ.get("AI_TRADING_LOG_DIR") or "/var/log/ai-trading-bot"
+_PRODUCTION_MODELS_DIR = (
+    os.environ.get("AI_TRADING_MODELS_DIR") or "/var/lib/ai-trading-bot/models"
+)
+for _env_key, _relative in (
+    ("AI_TRADING_LOG_DIR", "logs"),
+    ("AI_TRADING_DATA_DIR", "data"),
+    ("AI_TRADING_MODELS_DIR", "models"),
+    ("AI_TRADING_CACHE_DIR", "cache"),
+    ("AI_TRADING_OUTPUT_DIR", "output"),
+):
+    _isolated_dir = os.path.join(_PYTEST_DIRS_TMPDIR.name, _relative)
+    os.makedirs(_isolated_dir, exist_ok=True)
+    os.environ[_env_key] = _isolated_dir
+os.environ["SLIPPAGE_LOG_PATH"] = os.path.join(_PYTEST_DIRS_TMPDIR.name, "logs", "slippage.csv")
+
 import sys as _sys
 
 import asyncio
@@ -331,6 +354,61 @@ def _block_network(monkeypatch):
         raise RuntimeError("Network disabled in tests")
 
     monkeypatch.setattr(socket, "create_connection", guard, raising=True)
+
+
+def _production_dir_signature() -> dict[str, tuple[int, int]]:
+    """Return (mtime_ns, size) for every regular file directly under the production dirs."""
+
+    signature: dict[str, tuple[int, int]] = {}
+    for directory in (_PRODUCTION_LOG_DIR, _PRODUCTION_MODELS_DIR):
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    stat_result = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                signature[entry.path] = (stat_result.st_mtime_ns, stat_result.st_size)
+    return signature
+
+
+@pytest.fixture(autouse=True)
+def _guard_production_dirs(request: pytest.FixtureRequest):
+    """Fail the test that writes into the production log or models directory.
+
+    Historically tests appended fixture rows to the live slippage log and
+    truncated the live reward log because the writers resolve their paths at
+    import time. The env isolation at the top of this module prevents that;
+    this guard catches any new path that bypasses it. Set
+    ``AI_TRADING_TEST_PRODUCTION_GUARD=0`` to disable it, for example when the
+    live service is known to be writing to those directories during the run.
+    """
+
+    enabled = str(os.environ.get("AI_TRADING_TEST_PRODUCTION_GUARD", "1")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not enabled:
+        yield
+        return
+    before = _production_dir_signature()
+    yield
+    after = _production_dir_signature()
+    changed = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+    if changed:
+        pytest.fail(
+            "test run modified production files (this test, or the live service during "
+            f"the test): {changed}. Tests must write only under tmp_path or the isolated "
+            "AI_TRADING_*_DIR locations set in tests/conftest.py.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)
