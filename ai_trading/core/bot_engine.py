@@ -38948,27 +38948,56 @@ def _session_bucket_from_ts(ts_value: datetime | None) -> str:
     return "offhours"
 
 
+_JSONL_TAIL_READ_CHUNK_BYTES = 1 << 20
+
+
 def _read_jsonl_records(path: str, *, max_records: int = 10000) -> list[dict[str, Any]]:
+    """Return the last ``max_records`` JSON-object lines of ``path`` in file order.
+
+    Reads backwards from the end of the file so cost scales with the requested
+    tail rather than the size of append-only runtime logs.
+    """
+
     src = Path(path)
     if not src.exists():
         return []
-    rows: deque[dict[str, Any]] = deque(maxlen=max(1, int(max_records)))
+    limit = max(1, int(max_records))
+    newest_first: list[dict[str, Any]] = []
+
+    def _collect(raw_line: bytes) -> bool:
+        raw = raw_line.strip()
+        if raw:
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, dict):
+                newest_first.append(payload)
+        return len(newest_first) >= limit
+
     try:
-        with src.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                raw = line.strip()
-                if not raw:
-                    continue
-                try:
-                    payload = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(payload, dict):
-                    rows.append(payload)
+        with src.open("rb") as handle:
+            position = handle.seek(0, os.SEEK_END)
+            remainder = b""
+            done = False
+            while position > 0 and not done:
+                read_size = min(_JSONL_TAIL_READ_CHUNK_BYTES, position)
+                position -= read_size
+                handle.seek(position)
+                lines = (handle.read(read_size) + remainder).split(b"\n")
+                # The first piece may continue in the preceding chunk.
+                remainder = lines.pop(0)
+                for raw_line in reversed(lines):
+                    if _collect(raw_line):
+                        done = True
+                        break
+            if not done:
+                _collect(remainder)
     except BOT_ENGINE_FALLBACK_EXC as exc:
         logger.warning("JSONL_READ_FAILED", extra={"error": str(exc), "path": str(path)})
         return []
-    return list(rows)
+    newest_first.reverse()
+    return newest_first
 
 
 def _latest_tca_timestamp(path: str) -> datetime | None:
