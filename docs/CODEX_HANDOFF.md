@@ -1,10 +1,22 @@
 # Current handoff
 
-## October 18: three fixes merged and pushed, trial registered, not deployed (start here)
+## October 18 deploy of `1e7c849f4` — complete (start here)
 
-`main` is `723649711` on origin; the live runtime checkout is still detached at
-`ad499f4fe`. Nothing from this batch is deployed. CI/CodeQL/SBOM/Workflow Lint
-were in progress on `b07c661ef` at push time; check them before any deploy.
+Deployed Sun 04:54 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint all passed on `1e7c849f4`. The prior spec is saved as
+`runtime/release_spec.ad499f4fe.bak.json`; the new spec changes only the SHA
+(resolved config hash and launch-profile hash are unchanged by the burn-in fix).
+Pre- and post-migration identity checks pass, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, 0 restarts, broker
+connected and flat, provider alpaca, RSS 692 MB at 80 s. Only the two existing
+flags remain (`required_model_stale`, `replay_live_parity_gate_failed`).
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach ad499f4fe`,
+restore that spec, restart.
+
+Four commits beyond the October 17 deploy, plus the test isolation fix
+(`7d85dbea3`, merged as `1e7c849f4`) that removed the order-dependent failure
+noted below. Watch Monday for `PAPER_BURN_IN_STATUS` accumulating cycles with
+no reset, and for closing sells arriving as `order_role: exit`.
 
 - **Burn-in config-hash churn** (PR 3165, merged as `af7b0497c`): `build_runtime`
   wrote the AUTO-resolved max position size into `cfg` after the open, changing
