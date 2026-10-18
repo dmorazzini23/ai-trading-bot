@@ -1,6 +1,41 @@
 # Current handoff
 
-## October 17 weekend: clean venv, OpenClaw retired, EOD log fix (start here)
+## October 18: three fixes merged and pushed, trial registered, not deployed (start here)
+
+`main` is `723649711` on origin; the live runtime checkout is still detached at
+`ad499f4fe`. Nothing from this batch is deployed. CI/CodeQL/SBOM/Workflow Lint
+were in progress on `b07c661ef` at push time; check them before any deploy.
+
+- **Burn-in config-hash churn** (PR 3165, merged as `af7b0497c`): `build_runtime`
+  wrote the AUTO-resolved max position size into `cfg` after the open, changing
+  `config_snapshot_hash` and resetting paper burn-in almost every session
+  (255 resets; cycles=1 at most opens). Declared settings are now frozen at
+  construction; rollout governance fails closed outside paper. Watch Monday for
+  `PAPER_BURN_IN_STATUS` cycles accumulating across the day and no new reset.
+- **Fill order_role** (`f03bc15a9`): closing sells were recorded as `entry` with
+  `closing_position: false` (50 of 64 sells since Sep 1). The submit-time
+  closing decision now travels into reconciled fill records. Historical records
+  are unchanged; TCA, markout and the symbol live-expectancy gate read the new
+  records only going forward.
+- **Trial tooling** (`3fd9617ff`): `model_replacement_trial` and
+  `research_feasibility` read horizon, cutoff, classifier and bootstrap from a
+  `--contract`; the Sept 21 contract is unchanged in behavior and hash.
+- **Reset amendment** (`723649711`): the owner authorized one registered
+  development trial, `day_sleeve_horizon_trial_20261018` (60-minute label
+  horizon, existing feature contract, 2024–2025 SIP for AAPL/AMZN/MSFT). See
+  `docs/RESEARCH_RESET_AMENDMENT_20261018.md` and the proposal. Ledger
+  `artifacts/day_sleeve_horizon_trial_20261018/campaign_state.json`, hash
+  `46604293…`, zero trials claimed; preflight partitions and the support audit
+  (8,934 opportunities) are present. Claiming with `--fit` is a separate owner
+  decision from a closed, flat window.
+- Known pre-existing test pollution: with `tests/config tests/core tests/execution
+  tests/runtime tests/app` in one run, `test_module_entrypoint_loads_dotenv_before_standalone_settings`
+  fails (passes alone); a side session is fixing it.
+
+Deploy, when chosen: closed and flat, release spec update, identity checks, then
+`sudo systemctl restart ai-trading.service`. Rollback: checkout `ad499f4fe`.
+
+## October 17 weekend: clean venv, OpenClaw retired, EOD log fix
 
 Deployed `ad499f4fe` Sat ~01:50 ET, closed and flat, after a host reboot onto
 kernel 6.8.0-147. CI, CodeQL, SBOM and Workflow Lint pass. The prior spec is saved
