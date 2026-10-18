@@ -27,11 +27,16 @@ class RetentionRule:
     keep_lines: int
 
 
+# Mirrors the caps in scripts/prune_runtime_jsonl.sh, which performs the
+# archive-backed rotation on the packaged prune timer.
 _DEFAULT_RULES: tuple[RetentionRule, ...] = (
-    RetentionRule("decision_records.jsonl", 268_435_456, 50_000),
+    RetentionRule("decision_records.jsonl", 201_326_592, 50_000),
     RetentionRule("config_snapshots.jsonl", 268_435_456, 30_000),
     RetentionRule("gate_effectiveness.jsonl", 268_435_456, 300_000),
     RetentionRule("ml_shadow_predictions.jsonl", 268_435_456, 100_000),
+    RetentionRule("execution_quality_events.jsonl", 67_108_864, 100_000),
+    RetentionRule("broker_position_boundaries.jsonl", 33_554_432, 150_000),
+    RetentionRule("policy_ablation_events.jsonl", 33_554_432, 100_000),
     RetentionRule("order_events.jsonl", 134_217_728, 150_000),
     RetentionRule("fill_events.jsonl", 134_217_728, 150_000),
     RetentionRule("tca_records.jsonl", 134_217_728, 150_000),
