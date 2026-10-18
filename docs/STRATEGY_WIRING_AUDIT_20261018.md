@@ -132,6 +132,14 @@ Minor defect, not exercised live: if every requested name were unknown,
 `get_strategies` falls back to `REGISTRY.get("momentum")` (:19182). `momentum` is
 no longer a registry key, so the list would be empty.
 
+Follow-up (fixed after this audit): `get_strategies` no longer falls back to
+`momentum`. When no requested name resolves it logs `STRATEGIES_NONE_RESOLVED`
+at ERROR with the unknown names and the registry keys, and returns an empty
+list. When the netting pipeline is enabled and strategies load, it logs one
+`STRATEGIES_NOT_CONSUMED_UNDER_NETTING` warning naming
+`AI_TRADING_NETTING_ENABLED`. `.env.example` now leaves `STRATEGIES` commented
+out and recommends leaving it unset under netting.
+
 `pead_event` is not an earnings strategy. It reads no earnings calendar. It
 fires on any daily gap of at least 3% with volume of at least 1.8× the 40-day
 average and same-sign follow-through (`strategies/pead_event.py`).

@@ -19108,9 +19108,24 @@ def _import_all_strategy_submodules(pkg_name: str):
     return pkg
 
 
+def _strategies_netting_pipeline_enabled() -> bool:
+    """Return whether the live netting pipeline governs decisions."""
+    try:
+        cfg = get_trading_config()
+    except BOT_ENGINE_FALLBACK_EXC:
+        return False
+    return bool(getattr(cfg, "netting_enabled", False))
+
+
 def get_strategies():
-    """Load configured strategies with safe defaults."""  # AI-AGENT-REF: robust strategy selection
+    """Load configured strategies with safe defaults.
+
+    ``STRATEGIES`` only feeds the legacy non-netting path
+    (``run_multi_strategy``). Under ``AI_TRADING_NETTING_ENABLED=1`` the
+    instances are created but never consulted by the live decision path.
+    """  # AI-AGENT-REF: robust strategy selection
     wanted: list[str] | None = None  # AI-AGENT-REF: ensure variable always defined
+    explicit_request = True
     try:
         from ai_trading.config.settings import get_settings
 
@@ -19146,6 +19161,7 @@ def get_strategies():
             ]
     if not wanted:
         wanted = ["momentum"]
+        explicit_request = False
 
     try:
         from ai_trading.strategies import (
@@ -19157,10 +19173,13 @@ def get_strategies():
 
     selected: list[object] = []
     names: list[str] = []
+    unknown: list[str] = []
     for name in wanted:
         cls = REGISTRY.get(name)
         if cls is None:
-            logger.warning("Unknown strategy %s; skipping.", name)
+            unknown.append(name)
+            if explicit_request:
+                logger.warning("Unknown strategy %s; skipping.", name)
             continue
         try:
             inst = cls()
@@ -19178,11 +19197,17 @@ def get_strategies():
         ) as e:
             logger.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
 
-    if not selected:
-        default_cls = REGISTRY.get("momentum")
-        if default_cls is not None:
-            selected = [default_cls()]
-            names = [default_cls.__name__]
+    if explicit_request and unknown and len(unknown) == len(wanted):
+        logger.error(
+            "STRATEGIES_NONE_RESOLVED",
+            extra={
+                "requested": list(wanted),
+                "unknown": list(unknown),
+                "registry_keys": sorted(str(key) for key in REGISTRY),
+                "loaded": 0,
+            },
+        )
+        return []
 
     if names:
         _strategies = ", ".join(sorted(names))
@@ -19190,6 +19215,21 @@ def get_strategies():
             f"Loaded strategies: {_strategies}",
             key="loaded_strategies_once",
         )  # AI-AGENT-REF: pre-format and provide key for logger_once
+        if _strategies_netting_pipeline_enabled():
+            logger_once.warning(
+                "STRATEGIES_NOT_CONSUMED_UNDER_NETTING",
+                key="strategies_not_consumed_under_netting",
+                extra={
+                    "strategies": sorted(names),
+                    "governing_flag": "AI_TRADING_NETTING_ENABLED",
+                    "detail": (
+                        "STRATEGIES instances are created but the live netting "
+                        "decision path never calls them; they only apply when "
+                        "AI_TRADING_NETTING_ENABLED=0 (legacy path). Leave "
+                        "STRATEGIES unset under netting."
+                    ),
+                },
+            )
 
     return selected
 
