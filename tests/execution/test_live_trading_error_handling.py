@@ -399,6 +399,70 @@ def test_execute_order_preserves_sell_short_lifecycle_side(engine_factory):
     assert engine._last_submit_outcome["side"] == "sell_short"
 
 
+@pytest.mark.parametrize(
+    ("side", "held_qty", "expected_closing", "expected_role"),
+    [("sell", 5, True, "exit"), ("buy", 0, False, "entry")],
+)
+def test_reconciled_fill_keeps_submit_time_closing_role(
+    engine_factory, monkeypatch, side, held_qty, expected_closing, expected_role,
+):
+    def _submit_limit_stub(symbol, side, quantity, limit_price, **kwargs):
+        return {
+            "id": "pending-close-1",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+        }
+
+    positions = {"AAPL": held_qty}
+    engine = engine_factory()
+    engine.submit_limit_order = _submit_limit_stub
+    engine._position_quantity = lambda symbol: positions.get(symbol, 0)
+
+    result = engine.execute_order("AAPL", side, 5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert engine._pending_orders["pending-close-1"]["closing_position"] is expected_closing
+    # The broker fill flattens the long before reconciliation sees it, so the
+    # role must come from the submit-time decision, not post-fill inventory.
+    positions["AAPL"] = 0
+    engine.trading_client = SimpleNamespace(
+        get_order_by_id=lambda _order_id: {
+            "id": "pending-close-1",
+            "symbol": "AAPL",
+            "side": side,
+            "qty": "5",
+            "filled_qty": "5",
+            "filled_avg_price": "100.0",
+            "status": "filled",
+            "filled_at": datetime(2026, 10, 16, 15, 45, tzinfo=UTC).isoformat(),
+        }
+    )
+    fill_records: list[dict[str, Any]] = []
+    engine._runtime_exec_event_persistence_enabled = lambda: True
+    engine._record_runtime_order_event = lambda _payload: None
+    engine._record_runtime_fill_event = lambda payload: fill_records.append(dict(payload))
+    monkeypatch.setattr(lt, "record_trade_fill", lambda _payload: None)
+    for name in (
+        "_update_symbol_loss_cooldown_from_fill",
+        "_arm_symbol_reentry_cooldown_from_fill",
+        "_reconcile_pending_tca_from_fill",
+        "_record_cycle_order_outcome",
+        "_update_markout_feedback",
+        "_update_execution_learning_feedback",
+    ):
+        setattr(engine, name, lambda **_kwargs: None)
+
+    engine._reconcile_pending_order_runtime_artifacts(open_orders=[])
+
+    assert len(fill_records) == 1
+    assert fill_records[0]["side"] == side
+    assert fill_records[0]["closing_position"] is expected_closing
+    assert fill_records[0]["order_role"] == expected_role
+
+
 def test_execute_order_rejects_ambiguous_qty_and_notional(engine_factory):
     engine = engine_factory()
 
