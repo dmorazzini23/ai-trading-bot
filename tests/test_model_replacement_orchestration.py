@@ -24,13 +24,13 @@ def campaign(tmp_path, monkeypatch):
     monkeypatch.setattr(trial, 'load_governed_development_timestamps', lambda *a: (None, provenance))
     monkeypatch.setattr(trial, 'regular_bars', lambda minutes, days: minutes)
     builds = []
-    def build(minutes, bars, *, symbol):
+    def build(minutes, bars, *, symbol, spec=None):
         builds.append(symbol)
         return pd.DataFrame([dict(symbol=symbol, decision_at=pd.Timestamp('2024-01-02T15:05:02Z'))])
     monkeypatch.setattr(trial, 'labeled_rows', build)
     monkeypatch.setattr(trial, 'validate_rows', lambda *a: None)
     monkeypatch.setattr(trial, 'splits', lambda *a: [])
-    def evaluate(rows, folds):
+    def evaluate(rows, folds, spec=None):
         return dict(status='hypothesis_rejected', promotion_authority=False,
                     _predictions=rows.copy())
     monkeypatch.setattr(trial, 'evaluate', evaluate)

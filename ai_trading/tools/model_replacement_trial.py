@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +19,65 @@ from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.tools.experiment_ledger import (
     claim_campaign_trial, finish_campaign_trial, register_campaign,
 )
-from ai_trading.tools.research_feasibility import load_governed_development_timestamps
+from ai_trading.tools.research_feasibility import (
+    FEATURE_LOOKBACK, IntradayGrid, chronological_folds, intraday_schedule,
+    load_governed_development_timestamps,
+)
 from ai_trading.tools.stock_development_readiness import valid_bars
 from ai_trading.utils.market_calendar import is_trading_day, session_info
 
 LOGGER = get_logger(__name__)
 CONTRACT_HASH = '7e41c0bb3b658ebc9e1f21fbf453098fc7aaf3490a66c5a9268f3b19b63f68e5'
 FEATURES = list(DAY_SLEEVE_ML_FEATURE_COLUMNS)
+LEGACY_CONTRACT = Path('config/model_replacement_campaign.json')
+LEGACY_DIRECTORY = 'artifacts/model_replacement_20260921'
+LEGACY_CLASSIFIER: dict[str, Any] = {'family': 'logistic_regression',
+                                     'params': {'C': 1.0, 'class_weight': 'balanced', 'max_iter': 1000, 'random_state': 42}}
+CLASSIFIER_FAMILIES = ('logistic_regression', 'hist_gradient_boosting')
+
+
+@dataclass(frozen=True)
+class TrialSpec:
+    """Contract values that fix labels, the classifier and the bootstrap."""
+
+    grid: IntradayGrid = IntradayGrid(5)
+    cost_bps: float = 10.0
+    threshold: float = .5
+    classifier_family: str = 'logistic_regression'
+    classifier_params: tuple[tuple[str, Any], ...] = tuple(sorted(LEGACY_CLASSIFIER['params'].items()))
+    seed: int = 42
+    replicates: int = 10000
+
+
+def contract_spec(contract: dict[str, Any], *, legacy: bool = False) -> TrialSpec:
+    """Only the registered Sept 21 contract may rely on its historical defaults."""
+    grid = IntradayGrid.from_protocol(contract)
+    classifier = contract.get('classifier')
+    if not legacy and (grid is None or classifier is None):
+        raise ValueError('contract must declare exit_horizon_minutes and classifier')
+    classifier = LEGACY_CLASSIFIER if classifier is None else classifier
+    if (not isinstance(classifier, dict) or set(classifier) != {'family', 'params'}
+            or classifier['family'] not in CLASSIFIER_FAMILIES or not isinstance(classifier['params'], dict)):
+        raise ValueError('unsupported classifier specification')
+    replicates = int(contract['bootstrap']['replicates'])
+    if replicates <= 0 or replicates % 100:
+        raise ValueError('bootstrap replicates must be a positive multiple of 100')
+    return TrialSpec(grid=grid or IntradayGrid(5), cost_bps=float(contract['cost_bps']),
+                     threshold=float(contract['decision_threshold']), classifier_family=classifier['family'],
+                     classifier_params=tuple(sorted(classifier['params'].items())),
+                     seed=int(contract['bootstrap']['seed']), replicates=replicates)
+
+
+def build_classifier(spec: TrialSpec) -> Any:
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    params = dict(spec.classifier_params)
+    if spec.classifier_family == 'logistic_regression':
+        from sklearn.linear_model import LogisticRegression
+        return make_pipeline(StandardScaler(), LogisticRegression(**params))
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    return make_pipeline(StandardScaler(), HistGradientBoostingClassifier(**params))
 
 
 def digest(path: Path) -> str:
@@ -56,20 +110,13 @@ def regular_bars(frame: pd.DataFrame, sessions: list[str]) -> pd.DataFrame:
     return pd.concat(parts)
 
 
-def labeled_rows(minutes: pd.DataFrame, bars: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
+def labeled_rows(minutes: pd.DataFrame, bars: pd.DataFrame, *, symbol: str,
+                 spec: TrialSpec = TrialSpec()) -> pd.DataFrame:
     """Canonical features computed independently from the actual rolling history."""
     rows = []
-    for i, stamp in enumerate(bars.index):
-        decision = stamp + pd.Timedelta(minutes=5, seconds=2)
-        entry = decision.ceil('min')
-        exit_at = entry + pd.Timedelta(minutes=5)
-        session = session_info(stamp.tz_convert('America/New_York').date())
-        if exit_at >= pd.Timestamp(session.end_utc):
-            continue
-        start = bars.index.searchsorted(decision - pd.Timedelta(days=10))
-        history = bars.iloc[start:i + 1]
-        if len(history) < 200:
-            continue
+    cost = spec.cost_bps
+    for i, stamp, decision, entry, exit_at in intraday_schedule(bars.index, spec.grid):
+        history = bars.iloc[bars.index.searchsorted(decision - FEATURE_LOOKBACK):i + 1]
         if entry not in minutes.index or exit_at not in minutes.index:
             raise ValueError('missing entry or exit bar')
         features = build_day_sleeve_features(history).iloc[0]
@@ -78,7 +125,7 @@ def labeled_rows(minutes: pd.DataFrame, bars: pd.DataFrame, *, symbol: str) -> p
         rows.append(dict(symbol=symbol, session=str(stamp.tz_convert('America/New_York').date()),
                          feature_start=history.index[0], bar_start=stamp, decision_at=decision,
                          entry_at=entry, exit_at=exit_at, entry_price=entry_price, exit_price=exit_price,
-                         gross_bps=gross, net_bps=gross - 10.0, label=int(gross > 10.0),
+                         gross_bps=gross, net_bps=gross - cost, label=int(gross > cost),
                          **{c: float(features[c]) for c in FEATURES}))
         if len(rows) % 2000 == 0:
             LOGGER.info('REPLACEMENT_FEATURE_PROGRESS', extra={'symbol': symbol, 'rows': len(rows)})
@@ -87,7 +134,7 @@ def labeled_rows(minutes: pd.DataFrame, bars: pd.DataFrame, *, symbol: str) -> p
     return pd.DataFrame(rows)
 
 
-def validate_rows(rows: pd.DataFrame, contract: dict[str, Any]) -> None:
+def validate_rows(rows: pd.DataFrame, contract: dict[str, Any], spec: TrialSpec = TrialSpec()) -> None:
     if rows.empty or rows.duplicated(['symbol', 'decision_at']).any():
         raise ValueError('empty or duplicate derived observations')
     if set(rows.symbol) != set(contract['symbols']):
@@ -105,12 +152,15 @@ def validate_rows(rows: pd.DataFrame, contract: dict[str, Any]) -> None:
         raise ValueError('decision finality mismatch')
     if not (rows.entry_at == rows.decision_at.dt.ceil('min')).all():
         raise ValueError('entry must be strictly after finalized decision')
-    if not (rows.exit_at == rows.entry_at + pd.Timedelta(minutes=5)).all():
+    if not (rows.exit_at == rows.entry_at + pd.Timedelta(minutes=spec.grid.exit_minutes)).all():
         raise ValueError('exit horizon mismatch')
+    cutoffs = {day: spec.grid.cutoff(pd.Timestamp(day).date()) for day in rows.session.unique()}
+    if not (rows.exit_at < pd.to_datetime(rows.session.map(cutoffs), utc=True)).all():
+        raise ValueError('exit at or after flatten cutoff')
     if not (rows.exit_at.dt.tz_convert('America/New_York').dt.date.astype(str) == rows.session).all():
         raise ValueError('label crosses session date')
     gross = (rows.exit_price / rows.entry_price - 1) * 10000
-    if not np.allclose(rows.gross_bps, gross) or not np.allclose(rows.net_bps, gross - 10):
+    if not np.allclose(rows.gross_bps, gross) or not np.allclose(rows.net_bps, gross - spec.cost_bps):
         raise ValueError('label arithmetic mismatch')
     if not (rows.label == (rows.net_bps > 0).astype(int)).all():
         raise ValueError('label class mismatch')
@@ -124,11 +174,8 @@ def splits(rows: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
     days = sorted(rows.session.unique())
     if len(days) < 30:
         raise ValueError('insufficient development sessions')
-    chunks = np.array_split(np.asarray(days), 6)
     folds = []
-    for chunk in chunks[1:]:
-        first = days.index(chunk[0])
-        embargo_day = days[first - 1]
+    for embargo_day, chunk in chronological_folds(days):
         cutoff = pd.Timestamp(session_info(pd.Timestamp(embargo_day).date()).start_utc)
         train = np.flatnonzero((rows.session < embargo_day) & (rows.exit_at < cutoff))
         test = np.flatnonzero(rows.session.isin(chunk))
@@ -138,36 +185,33 @@ def splits(rows: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
     return folds
 
 
-def bootstrap_lower(rows: pd.DataFrame, values: np.ndarray) -> float:
+def bootstrap_lower(rows: pd.DataFrame, values: np.ndarray, *, seed: int = 42, replicates: int = 10000) -> float:
     grouped = pd.DataFrame({'session': rows.session.to_numpy(), 'value': values}).groupby('session').value.agg(['sum', 'count'])
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     means = []
     sums, counts = grouped['sum'].to_numpy(), grouped['count'].to_numpy()
-    for _ in range(100):
+    for _ in range(replicates // 100):
         indices = rng.integers(0, len(grouped), size=(100, len(grouped)))
         means.extend((sums[indices].sum(axis=1) / counts[indices].sum(axis=1)).tolist())
     return float(np.quantile(means, .025))
 
 
-def evaluate(rows: pd.DataFrame, folds: list[tuple[np.ndarray, np.ndarray]]) -> dict[str, Any]:
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
+def evaluate(rows: pd.DataFrame, folds: list[tuple[np.ndarray, np.ndarray]],
+             spec: TrialSpec = TrialSpec()) -> dict[str, Any]:
     from sklearn.exceptions import ConvergenceWarning
     import warnings
 
     results: list[dict[str, Any]] = []
     predictions = []
     for number, (train, test) in enumerate(folds, 1):
-        model = make_pipeline(StandardScaler(), LogisticRegression(
-            C=1.0, class_weight='balanced', max_iter=1000, random_state=42))
+        model = build_classifier(spec)
         with warnings.catch_warnings():
             warnings.simplefilter('error', ConvergenceWarning)
             model.fit(rows.iloc[train][FEATURES], rows.iloc[train].label)
         scores = model.predict_proba(rows.iloc[test][FEATURES])[:, 1]
         observed = rows.iloc[test].copy()
         observed['probability'] = scores
-        observed['selected'] = scores >= .5
+        observed['selected'] = scores >= spec.threshold
         observed['strategy_bps'] = np.where(observed.selected, observed.net_bps, 0.)
         observed['fold'] = number
         predictions.append(observed)
@@ -177,7 +221,7 @@ def evaluate(rows: pd.DataFrame, folds: list[tuple[np.ndarray, np.ndarray]]) -> 
                             selected_trades=int(observed.selected.sum()),
                             mean_net_bps_per_opportunity=float(observed.strategy_bps.mean())))
     oof = pd.concat(predictions, ignore_index=True)
-    lower = bootstrap_lower(oof, oof.strategy_bps.to_numpy())
+    lower = bootstrap_lower(oof, oof.strategy_bps.to_numpy(), seed=spec.seed, replicates=spec.replicates)
     improvement = oof.strategy_bps - oof.net_bps
     supported = all(f['selected_trades'] >= 250 for f in results)
     passed = (supported and sum(f['mean_net_bps_per_opportunity'] > 0 for f in results) >= 4
@@ -194,14 +238,19 @@ def evaluate(rows: pd.DataFrame, folds: list[tuple[np.ndarray, np.ndarray]]) -> 
                 _predictions=oof)
 
 
-def run(root: Path, *, fit: bool) -> dict[str, Any]:
+def run(root: Path, *, fit: bool, contract_path: Path = LEGACY_CONTRACT) -> dict[str, Any]:
     root = root.resolve()
-    contract_path = root / 'config/model_replacement_campaign.json'
+    contract_path = (root / contract_path).resolve()
     contract = json.loads(contract_path.read_text())
     canonical = hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    if canonical != CONTRACT_HASH:
+    legacy = canonical == CONTRACT_HASH
+    if not legacy and contract_path == (root / LEGACY_CONTRACT).resolve():
         raise ValueError('replacement contract differs from registered specification')
-    directory = root / 'artifacts/model_replacement_20260921'
+    if not legacy and not re.fullmatch(r'[a-z0-9_]+', str(contract.get('campaign_id', ''))):
+        raise ValueError('contract campaign_id must name its artifact directory')
+    spec = contract_spec(contract, legacy=legacy)
+    build_classifier(spec)  # Reject an invalid classifier before any data read or claim.
+    directory = root / (LEGACY_DIRECTORY if legacy else f"artifacts/{contract['campaign_id']}")
     state_path = directory / 'campaign_state.json'
     # Require the original registration. A different root must not create a budget.
     if not state_path.is_file():
@@ -233,7 +282,7 @@ def run(root: Path, *, fit: bool) -> dict[str, Any]:
         minutes.index = pd.DatetimeIndex(pd.to_datetime(minutes.pop('timestamp'), utc=True))
         if minutes.index.min() < pd.Timestamp(contract['development_start'], tz='UTC') or minutes.index.max() >= pd.Timestamp(contract['development_end'], tz='UTC') + pd.Timedelta(days=1):
             raise ValueError('source outside development interval')
-        part = labeled_rows(minutes, regular_bars(minutes, days), symbol=symbol)
+        part = labeled_rows(minutes, regular_bars(minutes, days), symbol=symbol, spec=spec)
         if digest(path) != source['sha256']:
             raise ValueError('source changed during feature construction')
         temporary = output.with_suffix('.parquet.tmp')
@@ -243,7 +292,7 @@ def run(root: Path, *, fit: bool) -> dict[str, Any]:
                                   code=code_hashes, rows=len(part), promotion_authority=False))
         parts.append(part)
     rows = pd.concat(parts, ignore_index=True).sort_values(['decision_at', 'symbol']).reset_index(drop=True)
-    validate_rows(rows, contract)
+    validate_rows(rows, contract, spec)
     folds = splits(rows)
     preflight = dict(status='preflight_passed', signature=signature, rows=len(rows),
                      folds=len(folds), provenance=provenance, code=code_hashes,
@@ -254,7 +303,7 @@ def run(root: Path, *, fit: bool) -> dict[str, Any]:
     claim_campaign_trial(state_path, hypothesis_id=contract['hypotheses'][0], evidence_signature=signature,
                          evaluation_start=contract['development_start'], evaluation_end=contract['development_end'], quality_passed=True)
     # A crash after claim intentionally prevents automatic refitting.
-    report = evaluate(rows, folds)
+    report = evaluate(rows, folds, spec)
     predictions = report.pop('_predictions')
     predictions.to_parquet(directory / 'oof_predictions.parquet', index=False)
     report.update(signature=signature, contract_hash=canonical, predictions_sha256=digest(directory / 'oof_predictions.parquet'))
@@ -267,9 +316,11 @@ def run(root: Path, *, fit: bool) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository-root', type=Path, required=True)
+    parser.add_argument('--contract', type=Path, default=LEGACY_CONTRACT,
+                        help='campaign contract, relative to the repository root unless absolute')
     parser.add_argument('--fit', action='store_true')
     args = parser.parse_args()
-    result = run(args.repository_root, fit=args.fit)
+    result = run(args.repository_root, fit=args.fit, contract_path=args.contract)
     LOGGER.info('REPLACEMENT_TRIAL_RESULT', extra={'result': result})
 
 
