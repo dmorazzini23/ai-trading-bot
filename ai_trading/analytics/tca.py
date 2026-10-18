@@ -484,8 +484,14 @@ def reconcile_pending_tca_with_fill(
     correlation_id: str | None = None,
     account_id: str | None = None,
     trading_mode: str | None = None,
+    fee_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """Append a resolved TCA row for a previously pending TCA order when available."""
+    """Append a resolved TCA row for a previously pending TCA order when available.
+
+    ``fee_provenance`` carries declared-schedule labels (``fee_source``,
+    ``fee_basis``, ``fee_schedule_hash`` ...) so a declared fee is never read
+    downstream as an unlabeled or broker-verified fee.
+    """
 
     identifiers: set[str] = set()
     if client_order_id not in (None, ""):
@@ -684,6 +690,9 @@ def reconcile_pending_tca_with_fill(
         # Recovery has observed fill time but no independently verified broker
         # submission-time basis; do not certify latency from old request fields.
         resolved["fill_latency_ms"] = None
+    if fee_provenance and fee_amount is not None:
+        resolved.update({str(key): value for key, value in fee_provenance.items()})
+        resolved["total_fee_verified"] = False
     write_tca_record(path, resolved)
     return True, "reconciled"
 

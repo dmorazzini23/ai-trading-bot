@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from ai_trading.analytics.fee_schedule import is_declared_schedule_fee
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.utils.market_calendar import session_info
@@ -221,6 +222,9 @@ def reconcile_evidence(*, decisions: list[dict[str, Any]], orders: list[dict[str
                 or row.get("fee_basis") != "per_fill_total"):
             if fee_source == "configured_estimate":
                 counts["fees_estimated"] += 1
+            elif is_declared_schedule_fee(row):
+                # Declared schedule fees are labeled but never broker evidence.
+                counts["fees_declared_schedule"] += 1
             fee = None
         counts["fees_known" if fee is not None else "fees_missing"] += 1
         accepted.append({"fill_id": fill_id, "quantity_key": str(row.get("order_id") or row.get("client_order_id") or ""), "symbol": str(row["symbol"]), "side": row["side"], "qty": qty, "price": price, "fee_per_share": fee / qty if fee is not None else None, "timestamp": timestamp})

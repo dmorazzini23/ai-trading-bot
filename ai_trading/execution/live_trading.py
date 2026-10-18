@@ -263,6 +263,11 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
 
 
 from ai_trading.analytics.tca import finalize_stale_pending_tca, reconcile_pending_tca_with_fill, write_tca_record
+from ai_trading.analytics.fee_schedule import (
+    FEE_SOURCE_DECLARED_SCHEDULE,
+    declared_fee_fields,
+    declared_fee_provenance,
+)
 from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
     is_safe_mode_active,
@@ -18227,6 +18232,31 @@ class ExecutionEngine:
             raw_source = str(source_value).strip().lower()
             if raw_source and raw_source != normalized_source:
                 fill_record["source_detail"] = raw_source
+        declared_fee_provenance_fields: dict[str, Any] | None = None
+        if fee_source in {"missing", "configured_estimate"}:
+            # Owner-declared schedule (disabled by default). Broker-sourced fees
+            # always win; the declared result is labeled and never broker evidence.
+            try:
+                declared_fields = declared_fee_fields(
+                    side=side_normalized,
+                    qty=float(qty_value),
+                    price=float(fill_price),
+                    fill_ts=timestamp,
+                    venue=venue_value,
+                )
+            except LIVE_TRADING_FALLBACK_EXC:
+                logger.error(
+                    "FEE_SCHEDULE_DECLARED_APPLY_FAILED",
+                    extra={"symbol": symbol, "order_id": order_id, "client_order_id": client_order_id},
+                    exc_info=True,
+                )
+                declared_fields = {"fee_schedule_status": "apply_failed"}
+            if declared_fields:
+                fill_record.update(declared_fields)
+                if declared_fields.get("fee_source") == FEE_SOURCE_DECLARED_SCHEDULE:
+                    fee_amount = float(declared_fields["fee_amount"])
+                    fee_source = FEE_SOURCE_DECLARED_SCHEDULE
+                    declared_fee_provenance_fields = declared_fee_provenance(fill_record)
         try:
             record_trade_fill(fill_record)
         except LIVE_TRADING_FALLBACK_EXC:
@@ -18277,6 +18307,7 @@ class ExecutionEngine:
             correlation_id=(
                 str(fill_record.get("correlation_id") or "").strip() or None
             ),
+            fee_provenance=declared_fee_provenance_fields,
         )
 
     def _reconcile_pending_tca_from_fill(
@@ -18293,6 +18324,7 @@ class ExecutionEngine:
         fee_amount: float | None,
         source: str | None,
         correlation_id: str | None = None,
+        fee_provenance: Mapping[str, Any] | None = None,
     ) -> None:
         """Resolve pending TCA entries for a newly observed fill."""
 
@@ -18336,6 +18368,7 @@ class ExecutionEngine:
             fill_ts=timestamp,
             fee_amount=fee_amount,
             source=source,
+            fee_provenance=fee_provenance,
         )
         if resolved:
             logger.info(
@@ -18533,6 +18566,7 @@ class ExecutionEngine:
                 fill_ts=fill_ts,
                 fee_amount=fee_amount,
                 source=source_token,
+                fee_provenance=declared_fee_provenance(row),
                 allow_symbol_qty_fallback=correlation_id is None,
                 fallback_window_seconds=float(
                     _config_float("AI_TRADING_TCA_BACKFILL_SYMBOL_FALLBACK_WINDOW_SEC", 12.0 * 3600.0)

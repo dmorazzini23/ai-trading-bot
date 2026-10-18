@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from ai_trading.analytics.fee_schedule import is_declared_schedule_fee
 from ai_trading.config.management import get_env
 from ai_trading.contracts import position_snapshot_from_position
 from ai_trading.logging import get_logger
@@ -369,7 +370,9 @@ def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str
         observed_execution_counts[str(row["order_id"])] += 1
         fee = _number(row.get("fee_amount"))
         complete_fee = row.get("fee_basis") == "per_fill_total" and row.get("fee_currency") == "USD" and row.get("fee_source") in {"broker_payload", "broker_activity"} and fee is not None and fee >= 0
-        fee_coverage["explicit_total_fee" if complete_fee else "total_fee_unknown"] += 1
+        # A declared-schedule fee is a distinct class: labeled, never counted as
+        # an explicit broker total, and the broker total stays unknown.
+        fee_coverage["explicit_total_fee" if complete_fee else "declared_schedule_fee_broker_total_unknown" if is_declared_schedule_fee(row) else "total_fee_unknown"] += 1
     broker: dict[str, Any] = defaultdict(lambda: 0)
     broker_execution_counts: Counter[str] = Counter()
     fees = []

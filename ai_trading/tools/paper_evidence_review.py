@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from ai_trading.analytics.fee_schedule import FEE_PROVENANCE_DECLARED, fee_provenance_class
 from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.tools.execution_evidence_reconciliation import _number, _read, reconcile_session
@@ -136,6 +137,13 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
             rejected["observed_fee_contract_missing_or_invalid"] += 1
         pair = pairs[-1]
         pair["observed_fee_bps"] = actual_fee / (prices[1] * quantities[1]) * 10000 if actual_fee is not None else None
+        provenance = {fee_provenance_class(row) for row in actual}
+        pair["observed_fee_provenance"] = next(iter(provenance)) if len(provenance) == 1 else "mixed"
+        if pair["observed_fee_provenance"] == FEE_PROVENANCE_DECLARED:
+            # Declared schedule: reportable net cost, never a broker fee contract.
+            declared_fee = sum(float(_number(row.get("fee_amount")) or 0.0) for row in actual)
+            pair["declared_schedule_observed_fee_bps"] = declared_fee / (prices[1] * quantities[1]) * 10000
+            pair["declared_schedule_observed_total_cost_bps"] = actual_bps + declared_fee / (reference * quantities[1]) * 10000
         pair["net_cost_contract_valid"] = sim_fee is not None and actual_fee is not None
         if sim_fee is not None and actual_fee is not None:
             sim_net = sim_bps + sim_fee / (reference * quantities[0]) * 10000
@@ -150,7 +158,7 @@ def compare_execution_costs(replay: dict[str, Any], fills: list[dict[str, Any]],
                    "rejection_details_limit": 100}
     supported = len(pairs) >= 30 and sessions >= 5
     net_status = "validated" if supported and len(net_pairs) == len(pairs) else "insufficient_execution_evidence" if len(net_pairs) == len(pairs) and pairs else "unavailable_without_simulated_and_observed_fee_contracts"
-    return {**diagnostics, "status": "comparison_available" if supported else "insufficient_execution_evidence", "minimum_orders": 30, "minimum_sessions": 5, "paired_orders": len(pairs), "sessions": sessions, "pairs": pairs, "rejection_counts": dict(rejected), "mean_slippage_error_bps": float(np.mean(errors)) if errors else None, "p90_absolute_slippage_error_bps": float(np.quantile(np.abs(errors), .9)) if errors else None, "net_cost_validation": net_status, "net_cost_paired_orders": len(net_pairs), "mean_net_cost_error_bps": float(np.mean([row["net_cost_error_bps"] for row in net_pairs])) if net_pairs else None, "fee_contract": {"currency": "USD", "basis": "per_fill_total", "cost_denominator": "arrival_price_times_each_quantity", "validation_meaning": "complete_comparable_measurements_not_cost_accuracy_or_profitability"}, "limitations": ["Identical arrival benchmark required; quantities may differ and are reported.", "Paper fills do not validate market impact or queue position.", "No promotion authority; sample thresholds establish comparison support, not profitability."]}
+    return {**diagnostics, "status": "comparison_available" if supported else "insufficient_execution_evidence", "minimum_orders": 30, "minimum_sessions": 5, "paired_orders": len(pairs), "sessions": sessions, "pairs": pairs, "rejection_counts": dict(rejected), "mean_slippage_error_bps": float(np.mean(errors)) if errors else None, "p90_absolute_slippage_error_bps": float(np.quantile(np.abs(errors), .9)) if errors else None, "net_cost_validation": net_status, "net_cost_paired_orders": len(net_pairs), "observed_fee_provenance_counts": dict(Counter(row.get("observed_fee_provenance") for row in pairs)), "declared_schedule_paired_orders": sum(row.get("observed_fee_provenance") == FEE_PROVENANCE_DECLARED for row in pairs), "mean_net_cost_error_bps": float(np.mean([row["net_cost_error_bps"] for row in net_pairs])) if net_pairs else None, "fee_contract": {"currency": "USD", "basis": "per_fill_total", "cost_denominator": "arrival_price_times_each_quantity", "validation_meaning": "complete_comparable_measurements_not_cost_accuracy_or_profitability"}, "limitations": ["Identical arrival benchmark required; quantities may differ and are reported.", "Paper fills do not validate market impact or queue position.", "No promotion authority; sample thresholds establish comparison support, not profitability."]}
 
 
 def latest_completed_session(now: datetime) -> str:
