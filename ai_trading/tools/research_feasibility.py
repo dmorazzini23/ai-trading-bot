@@ -174,6 +174,179 @@ def sampling_support(protocol: dict[str, Any], indices: dict[str, pd.DatetimeInd
     return {"status": "support_possible_not_strategy_eligible" if possible else "blocked_sampling_support", "possible_common_periods": len(common), "candidate_periods": len(candidate_indices), "maximum_possible_selections": maximum_selections, "supported_quarters_upper_bound": supported_quarters_upper, "minimum_required": {"periods": 60, "selections": 100, "quarters_with_12_selections": 6}, "common_entry_dates": [dates[i].isoformat() for i in sorted(common)], "periods_by_quarter": dict(folds), "symbols": by_symbol, "invalid_inputs": invalid, "prices_read_for_analysis": False, "strategy_outcomes_computed": False, "trial_claimed": False, "promotion_authority": False, "limitations": ["Possible observations are upper bounds; actual signal selection and valid prices can reduce support.", "Missing bars may reflect no eligible trades; this audit alone does not identify their cause.", "Passing this audit cannot reopen a consumed campaign or authorize a new trial."]}
 
 
+DAILY_COMPLETENESS_RULES = ("every_minute", "open_and_close_minutes")
+DAILY_FOLD_KIND = "calendar_quarter_of_entry_session"
+# Holdout-year data is never read by a development study, whatever the contract says.
+HOLDOUT_YEAR_START = "2026-01-01"
+
+
+@dataclass(frozen=True)
+class DailyGrid:
+    """Daily rebalance grid and session-completeness rule shared with the registered strategy trial."""
+
+    lookback_sessions: int
+    hold_sessions: int
+    completeness: str = "every_minute"
+    # open_and_close_minutes: only the first and last regular minutes are required unless a floor is declared.
+    minimum_coverage: float = 1.0
+
+    @classmethod
+    def from_protocol(cls, protocol: dict[str, Any]) -> DailyGrid:
+        grid, rule = protocol.get("rebalance_grid"), protocol.get("session_completeness")
+        if not isinstance(grid, dict) or not isinstance(rule, dict):
+            raise ValueError("protocol must declare rebalance_grid and session_completeness")
+        lookback, hold = grid.get("lookback_sessions"), grid.get("hold_sessions")
+        if any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in (lookback, hold)):
+            raise ValueError("lookback_sessions and hold_sessions must be positive integers")
+        name = rule.get("rule")
+        if name not in DAILY_COMPLETENESS_RULES:
+            raise ValueError("unsupported session completeness rule")
+        coverage = rule.get("minimum_minute_coverage", 1.0 if name == "every_minute" else 0.0)
+        if isinstance(coverage, bool) or not isinstance(coverage, (int, float)) or not 0 <= coverage <= 1:
+            raise ValueError("minimum_minute_coverage must lie in [0, 1]")
+        if name == "every_minute" and coverage != 1:
+            raise ValueError("every_minute completeness implies full coverage")
+        return cls(lookback, hold, name, float(coverage))
+
+    def schedule(self, sessions: int) -> list[tuple[int, int, int]]:
+        """Decide after the close of t, enter at the open of t+1, exit at the open of t+1+hold.
+
+        The next decision is t+hold, so its entry coincides with the previous exit and holds never overlap.
+        """
+        last = sessions - 1 - self.hold_sessions
+        return [(t, t + 1, t + 1 + self.hold_sessions) for t in range(self.lookback_sessions, last, self.hold_sessions)]
+
+    def required_sessions(self, decision: int) -> range:
+        """Every session from the lookback start through the exit must be complete; gaps never shorten a window."""
+        return range(decision - self.lookback_sessions, decision + self.hold_sessions + 2)
+
+    def session_complete(self, present: np.ndarray) -> bool:
+        if self.completeness == "every_minute":
+            return bool(present.all())
+        return bool(present[0] and present[-1] and present.mean() >= self.minimum_coverage)
+
+
+def daily_development_dates(protocol: dict[str, Any]) -> list[date]:
+    """Development sessions, refusing any window that touches the holdout or the holdout year."""
+    start, end = protocol["development_start"], protocol["development_end"]
+    if not start <= end < protocol["holdout_start"] <= protocol["holdout_end"]:
+        raise ValueError("invalid development interval or holdout overlap")
+    if end >= HOLDOUT_YEAR_START:
+        raise ValueError("development window must end before 2026; holdout-year data is never read")
+    dates = list(_trading_days(start, end))
+    if not dates:
+        raise ValueError("no development sessions")
+    return dates
+
+
+@cache
+def _trading_days(start: str, end: str) -> tuple[date, ...]:
+    return tuple(day.date() for day in pd.date_range(start, end) if is_trading_day(day.date()))
+
+
+@cache
+def _session_minutes(day: date) -> pd.DatetimeIndex:
+    session = session_info(day)
+    return pd.date_range(session.start_utc, session.end_utc, freq="min", inclusive="left")
+
+
+def regular_session_minutes(dates: list[date]) -> list[pd.DatetimeIndex]:
+    """Expected regular-session minute stamps per date; calendar lookups are cached because they are slow."""
+    return [_session_minutes(day) for day in dates]
+
+
+def daily_session_flags(index: pd.DatetimeIndex, parts: list[pd.DatetimeIndex], grid: DailyGrid) -> np.ndarray:
+    """Per-session completeness from timestamps alone (early closes use their own session length)."""
+    present = parts[0].append(parts[1:]).isin(index)
+    bounds = np.cumsum([0] + [len(part) for part in parts])
+    return np.array([grid.session_complete(present[a:b]) for a, b in zip(bounds[:-1], bounds[1:])], dtype=bool)
+
+
+def strategy_bucket(protocol: dict[str, Any]) -> int:
+    """Buy signals per decision for a full universe, mirroring CrossSectionalMomentumStrategy's bucket rule."""
+    params, universe = protocol["strategy_parameters"], len(protocol["symbols"])
+    if universe < int(params["min_universe"]):
+        return 0
+    return max(1, int(round(universe * float(params["top_quantile"]))))
+
+
+def quarter_fold(day: date | str) -> str:
+    return str(pd.Timestamp(day).to_period("Q"))
+
+
+def usable_daily_periods(grid: DailyGrid, schedule: list[tuple[int, int, int]], flags: dict[str, np.ndarray], symbols: list[str]) -> list[tuple[int, int, int]]:
+    if any(symbol not in flags for symbol in symbols):
+        return []
+    return [row for row in schedule if all(flags[s][j] for s in symbols for j in grid.required_sessions(row[0]))]
+
+
+def daily_rebalance_support(protocol: dict[str, Any], indices: dict[str, pd.DatetimeIndex]) -> dict[str, Any]:
+    """Count possible daily-rebalance decisions and selections per fold using timestamps, never prices."""
+    grid = DailyGrid.from_protocol(protocol)
+    if protocol.get("folds") != DAILY_FOLD_KIND:
+        raise ValueError(f"folds must be {DAILY_FOLD_KIND}")
+    thresholds = protocol["support_thresholds"]
+    dates = daily_development_dates(protocol)
+    symbols = list(protocol["symbols"])
+    parts = regular_session_minutes(dates)
+    schedule = grid.schedule(len(dates))
+    # The alternative rule is reported for transparency only; the contract's rule decides support.
+    rules = {rule: grid if rule == grid.completeness else DailyGrid(grid.lookback_sessions, grid.hold_sessions, rule, 1.0 if rule == "every_minute" else 0.0) for rule in DAILY_COMPLETENESS_RULES}
+    lower, upper = pd.Timestamp(protocol["development_start"], tz=NEW_YORK), pd.Timestamp(protocol["development_end"], tz=NEW_YORK) + pd.Timedelta(days=1)
+    invalid: list[str] = []
+    flags: dict[str, dict[str, np.ndarray]] = {rule: {} for rule in rules}
+    by_symbol: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        if symbol not in indices:
+            invalid.append(f"symbol_missing:{symbol}")
+            continue
+        index = indices[symbol]
+        if index.tz is None or index.hasnans or index.has_duplicates or not index.is_monotonic_increasing:
+            invalid.append(f"invalid_timestamp_grain:{symbol}")
+        if index.tz is None:
+            continue
+        if len(index) and (index.min() < lower or index.max() >= upper or index.max() >= pd.Timestamp(HOLDOUT_YEAR_START, tz="UTC")):
+            invalid.append(f"timestamps_outside_development:{symbol}")
+        for rule, rule_grid in rules.items():
+            flags[rule][symbol] = daily_session_flags(index, parts, rule_grid)
+        contract_flags = flags[grid.completeness][symbol]
+        by_symbol[symbol] = {"expected_sessions": len(dates), "complete_sessions_by_rule": {rule: int(f[symbol].sum()) for rule, f in flags.items()}, "incomplete_sessions": int((~contract_flags).sum()), "first_incomplete_sessions": [dates[i].isoformat() for i in np.flatnonzero(~contract_flags)[:10]]}
+    bucket = strategy_bucket(protocol)
+    by_rule = {}
+    for rule, rule_grid in rules.items():
+        periods = usable_daily_periods(rule_grid, schedule, flags[rule], symbols)
+        by_rule[rule] = {"possible_periods": len(periods), "possible_selections": len(periods) * bucket}
+    periods = usable_daily_periods(grid, schedule, flags[grid.completeness], symbols)
+    counts = Counter(quarter_fold(dates[entry]) for _, entry, _ in periods)
+    folds = [{"fold": fold, "possible_periods": n, "possible_selections": n * bucket} for fold, n in sorted(counts.items())]
+    supported_folds = sum(row["possible_selections"] >= thresholds["minimum_selections_per_fold"] for row in folds)
+    reasons = []
+    if invalid:
+        reasons.append("invalid_inputs")
+    if bucket == 0:
+        reasons.append("universe_below_strategy_min_universe")
+    if len(periods) < thresholds["minimum_decision_periods"]:
+        reasons.append("decision_periods_below_minimum")
+    if len(periods) * bucket < thresholds["minimum_selections"]:
+        reasons.append("selections_below_minimum")
+    if supported_folds < thresholds["minimum_supported_folds"]:
+        reasons.append("supported_folds_below_minimum")
+    return {
+        "status": "blocked_sampling_support" if reasons else "support_possible_not_strategy_eligible",
+        "audit": "daily_rebalance_grid_timestamp_only", "blocking_reasons": reasons,
+        "grid": {"decision": "after_close_of_session_t_using_closes_through_t", "entry": "open_of_session_t_plus_1", "exit": f"open_of_session_t_plus_{1 + grid.hold_sessions}", "lookback_sessions": grid.lookback_sessions, "hold_sessions": grid.hold_sessions, "overlapping_positions": False, "session_completeness": grid.completeness, "minimum_minute_coverage": grid.minimum_coverage, "required_complete_sessions_per_period": grid.lookback_sessions + grid.hold_sessions + 2},
+        "universe": {"symbols": symbols, "size": len(symbols), "strategy_min_universe": int(protocol["strategy_parameters"]["min_universe"]), "top_quantile": float(protocol["strategy_parameters"]["top_quantile"]), "buy_selections_per_period": bucket},
+        "development_sessions": len(dates), "candidate_periods": len(schedule),
+        "possible_periods": len(periods), "possible_selections": len(periods) * bucket,
+        "supported_folds": supported_folds, "folds": folds, "fold_kind": DAILY_FOLD_KIND,
+        "by_completeness_rule": by_rule, "minimum_required": dict(thresholds),
+        "common_entry_dates": [dates[entry].isoformat() for _, entry, _ in periods],
+        "symbols": by_symbol, "invalid_inputs": invalid,
+        "prices_read_for_analysis": False, "strategy_outcomes_computed": False, "trial_claimed": False, "promotion_authority": False,
+        "limitations": ["Possible selections are upper bounds; price validity checks and the strategy's own abstentions can reduce support.", "Completeness is judged from timestamps; the trial additionally rejects sessions with invalid prices.", "Passing this audit cannot reopen a consumed campaign or authorize a new trial."],
+    }
+
+
 def load_governed_development_timestamps(protocol: dict[str, Any], acquisition_path: Path) -> tuple[dict[str, pd.DatetimeIndex], dict[str, Any]]:
     """Verify frozen source hashes and inspect only their timestamp columns."""
     acquisition_raw = acquisition_path.read_bytes()
@@ -222,6 +395,13 @@ def load_governed_development_timestamps(protocol: dict[str, Any], acquisition_p
 
 def audit_sampling_acquisition(protocol: dict[str, Any], acquisition_path: Path) -> dict[str, Any]:
     """Audit fixed-grid support after canonical source verification."""
+    if "rebalance_grid" in protocol:
+        DailyGrid.from_protocol(protocol)
+        daily_development_dates(protocol)  # Refuse holdout or holdout-year windows before any file read.
+        indices, provenance = load_governed_development_timestamps(protocol, acquisition_path)
+        report = daily_rebalance_support(protocol, indices)
+        report.update(provenance)
+        return report
     intraday = IntradayGrid.from_protocol(protocol) is not None
     indices, provenance = load_governed_development_timestamps(protocol, acquisition_path)
     report = intraday_support(protocol, indices) if intraday else sampling_support(protocol, indices)
