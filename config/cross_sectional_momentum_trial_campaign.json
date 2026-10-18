@@ -1,0 +1,84 @@
+{
+  "campaign_id": "cross_sectional_momentum_trial_20261018",
+  "status": "draft_not_registered",
+  "authorization": "None yet. This is a draft. It takes effect only if the owner adopts a research-reset amendment naming this campaign_id, adds it to config/research_reset.json registered_trials, sets status to registered and registers it with ai_trading.tools.experiment_ledger.register_campaign before any preflight. Proposal: docs/MULTI_DAY_STRATEGY_TRIAL_PROPOSAL_20261018.md.",
+  "max_trials": 1,
+  "hypotheses": ["cross_sectional_momentum_63_session_top_quintile_long_only_5_session_hold_v1"],
+  "hypothesis": "The unmodified CrossSectionalMomentumStrategy (63-session lookback, top quantile 0.2, min_universe 6), scored on its buy signals only, earns positive net returns after a fixed 10 bps round-trip cost and beats an equal-weight always-long basket of the same universe on identical dates, when it rebalances every 5 sessions with non-overlapping holds.",
+  "economic_motivation": "Medium-horizon relative strength across asset classes and sectors (Moskowitz and Grinblatt 1999; Asness, Moskowitz and Pedersen 2013) is a documented multi-week effect. A 5-session hold gives a gross move several times larger than a 10 bps cost, which the three failed intraday trials did not. The strategy class already exists in the runtime registry; this tests it as written, not a new model.",
+  "strategy": "cross_sectional_momentum",
+  "strategy_parameters": {"lookback": 63, "top_quantile": 0.2, "min_universe": 6},
+  "strategy_construction": "REGISTRY[strategy]() with no arguments; the runner refuses to proceed unless the instance's lookback, top_quantile and min_universe equal strategy_parameters. No parameter search.",
+  "signal_side": "buy",
+  "signal_policy": "Only buy (top-bucket) signals are scored. sell_short signals are ignored: paper runs with TRADING__ALLOW_SHORTS=0 and the ETF precedent allowed no shorts.",
+  "development_start": "2024-01-01",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "symbols": ["DIA", "IWM", "QQQ", "SPY", "XLE", "XLF"],
+  "universe_choice": "Chosen by the timestamp-only daily support audit run against both verified development acquisitions on 2026-10-18 before any price was read. The stock set (AAPL, AMZN, MSFT) has 3 names, below min_universe 6, so the strategy can never emit a signal. The ETF set has exactly 6 names and meets every support threshold under the open_and_close_minutes rule; see the proposal for counts.",
+  "feed": "sip",
+  "adjustment": "split",
+  "acquisition": "artifacts/research_foundation/acquisition_sip_repaired.json",
+  "session_completeness": {
+    "rule": "open_and_close_minutes",
+    "minimum_minute_coverage": 0.0,
+    "rationale": "The rule needs only the session's first-minute open (entry and exit) and last-minute close (signal). A session counts if both minutes are present and every present minute has valid price geometry and positive volume; no minute-coverage floor is imposed. No interpolation or invented bars. This is the data contract docs/RESEARCH_RESET.md named on 2026-09-09 for a future campaign ('require only the completed closes and executable entry/exit observations used by the fixed rule'). DIA's 973 missing minutes in 243 sessions include no opening or closing minute; the largest gap in one session is 16 minutes. A 98 percent coverage floor was audited first, from timestamps only, and blocked (20 possible periods); it is disclosed in the proposal. This rule does not alter the consumed ETF trend campaign."
+  },
+  "daily_bar": "Regular-session OHLCV aggregated from verified one-minute bars: open = first regular minute open, high = max high, low = min low, close = last regular minute close, volume = sum; early closes use their own session end.",
+  "rebalance_grid": {"lookback_sessions": 63, "hold_sessions": 5},
+  "decision": "After the close of development session t (index 63, then every 5 sessions), generate_signals receives each symbol's daily closes for sessions 0..t only.",
+  "entry": "Regular-session open of session t+1.",
+  "exit": "Regular-session open of session t+6 (t+1+hold); the next entry is the same open, so holds never overlap.",
+  "period_eligibility": "A decision period counts only if every universe symbol has a complete session for every session from t-63 through t+6; incomplete sessions never shorten a lookback or move entry or exit dates.",
+  "overlapping_positions": false,
+  "allocation": "Equal notional across the period's buy signals (one of six for a full universe); abstention holds cash at zero return; no leverage, shorts, compounding or volatility targeting.",
+  "primary_round_trip_cost_bps": 10,
+  "cost_tiers": [
+    {"name": "primary", "round_trip_bps": 10, "role": "decision"},
+    {"name": "stress_high", "round_trip_bps": 20, "role": "required_positive_aggregate"},
+    {"name": "stress_low", "round_trip_bps": 6, "role": "reported_only"},
+    {"name": "measured_paper_taker_median", "round_trip_bps": 2.8, "role": "reported_only", "source": "docs/PAPER_ROUND_TRIP_COST_EVIDENCE_20261018.md", "note": "Median decision-time quoted spread (full-spread taker round trip) on AAPL, AMZN and MSFT paper fills; measured on stocks, not on this ETF universe. Declared before evaluation; it can never change the decision."}
+  ],
+  "cost_accounting": "Every period charges each selected slot one full round trip at the tier cost, even when the same symbol is selected again; the equal-weight always-long control is charged identically, so the paired comparison against always-long is cost-neutral.",
+  "cost_status": "fixed_unverified_scenarios_not_calibrated_execution_costs",
+  "controls": ["cash", "equal_weight_always_long_on_identical_dates"],
+  "folds": "calendar_quarter_of_entry_session",
+  "support_thresholds": {
+    "minimum_decision_periods": 60,
+    "minimum_selections": 60,
+    "minimum_selections_per_fold": 10,
+    "minimum_supported_folds": 6
+  },
+  "support_rationale": "60 decision periods is the ETF trend precedent. With six names the strategy buys exactly one per period, so selections equal periods and the bootstrap unit is the period; the precedent's 100-selection count was for six independent per-symbol slots. Ten selections per quarter is 80 percent of the about 12.5 non-overlapping 5-session periods a quarter can hold.",
+  "acceptance": {
+    "positive_cash_lower_bound_at_primary": true,
+    "positive_always_long_lower_bound": true,
+    "positive_aggregate_at_stress_high": true,
+    "minimum_profitable_folds": 5,
+    "summary": "All of: adequate support; positive 95 percent circular-block-bootstrap lower bound of net return per period versus cash at 10 bps; positive lower bound of the paired difference versus equal-weight always-long; positive aggregate net per period at 20 bps; at least 5 profitable quarters at 10 bps. The 6 bps and 2.8 bps tiers are reported only."
+  },
+  "bootstrap": {"unit": "circular_blocks_of_decision_periods", "block_periods": 4, "replicates": 10000, "seed": 20261018},
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "preconditions": [
+    "research-reset amendment adopted and config/research_reset.json registered_trials cites this campaign_id",
+    "status set to registered and the contract registered under artifacts/cross_sectional_momentum_trial_20261018/campaign_state.json before any preflight",
+    "timestamp-only daily support audit passes for this contract",
+    "non-claiming preflight passes: source hashes, 2024-2025 date bounds, no 2026 timestamp, complete-session panel"
+  ],
+  "stop_rule": "Claim once immediately before signals are generated; no automatic retry after a claim, even after a crash. A failed preflight or support audit blocks without consuming the trial. A failed or inconclusive result retires this hypothesis and authorizes no lookback, quantile, hold, universe, cost or completeness tuning.",
+  "holdout_policy": "Do not read or evaluate September 9 to December 8, 2026, or any 2026 data; no automatic future test or promotion. The ETF development data was used by the consumed September trend campaign and is not untouched.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical regular-session open-to-open markouts on split-adjusted prices with fixed costs; executable fills and per-fill fees are not established.",
+  "limitations": [
+    "Split-adjusted price markouts omit distributions and cash interest; they are not total returns.",
+    "Six ETFs give one selection per period; a passing result does not generalize to the stock paper universe without a separately registered evaluation.",
+    "The ETF development data was already used by the September trend study; the same 2024-2025 window is not untouched.",
+    "The measured paper cost tier comes from stock fills and is reported only."
+  ]
+}
