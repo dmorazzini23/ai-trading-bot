@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "schedule_id": "<FILL: e.g. declared_alpaca_us_equity_fees_v1>",
+  "evidence_class": "declared_schedule_not_broker_confirmed_per_fill",
+  "promotion_authority": false,
+  "currency": "USD",
+  "provenance": {
+    "source_url": "<FILL: exact URL of the Alpaca Regulatory Fees page or brokerage fee schedule the rates were copied from>",
+    "retrieved_at": "<FILL: ISO-8601 timestamp with offset when the source was retrieved>",
+    "declared_by": "<FILL: name of the owner declaring this schedule>",
+    "declared_at": "<FILL: ISO-8601 timestamp with offset of the declaration>",
+    "document_sha256": "<FILL: sha256 of the retrieved source document, or remove this key>",
+    "document_version_marker": "<FILL: version or date marker printed on the source document, or remove this key>",
+    "reset_amendment": "<FILL: path of the research-reset amendment authorizing use, or remove this key>"
+  },
+  "effective_from": "<FILL: YYYY-MM-DD first trading date the declared rates apply>",
+  "effective_to": null,
+  "rounding": {
+    "mode": "<FILL: none | ceil | half_up>",
+    "scope": "<FILL: per_fill | per_component>",
+    "increment_usd": "<FILL: e.g. 0.01; ignored when mode is none>",
+    "note": "Alpaca rounds daily account totals; a per-fill rule cannot reproduce daily aggregation."
+  },
+  "venues": {
+    "DEFAULT": {
+      "components": [
+        {
+          "name": "commission",
+          "category": "commission",
+          "basis": "per_share",
+          "rate": "<FILL: USD per share commission from the fee schedule; declare 0 explicitly only if the schedule says so>",
+          "sides": ["buy", "sell"]
+        },
+        {
+          "name": "sec_section_31",
+          "category": "regulatory",
+          "basis": "per_notional",
+          "rate": "<FILL: USD per USD of sale proceeds from the Alpaca Regulatory Fees page>",
+          "sides": ["sell"]
+        },
+        {
+          "name": "finra_taf",
+          "category": "regulatory",
+          "basis": "per_share",
+          "rate": "<FILL: USD per share sold from the Alpaca Regulatory Fees page>",
+          "max_usd_per_fill": "<FILL: per-trade TAF cap in USD from the same page, or remove this key>",
+          "sides": ["sell"]
+        },
+        {
+          "name": "cat",
+          "category": "regulatory",
+          "basis": "per_share",
+          "rate": "<FILL: USD per executed equivalent share from the Alpaca Regulatory Fees page>",
+          "sides": ["buy", "sell"]
+        }
+      ]
+    }
+  },
+  "not_covered": [
+    "borrow fees",
+    "exchange/ECN access fees or rebates",
+    "penny rounding of daily account totals"
+  ]
+}

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from ai_trading.analytics.fee_schedule import fee_provenance_class
 from ai_trading.config.research_policy import reset_policy
 
 from ai_trading.logging import get_logger
@@ -97,6 +98,7 @@ def execution_chain(decisions: list[dict[str, Any]], orders: list[dict[str, Any]
         else:
             unique[key] = row
     complete = 0
+    fee_provenance: Counter[str] = Counter()
     for key, fill in unique.items():
         gaps: set[str] = set()
         if key in conflicts:
@@ -142,13 +144,16 @@ def execution_chain(decisions: list[dict[str, Any]], orders: list[dict[str, Any]
         if not causal_orders:
             gaps.add("causal_account_order_unverified")
         fee = _number(fill.get("fee_amount"))
+        # Declared-schedule fees are labeled separately and never satisfy the
+        # broker-sourced fee link of the causal chain.
+        fee_provenance[fee_provenance_class(fill)] += 1
         if fill.get("fee_source") not in {"broker_payload", "broker_activity"} or fill.get("fee_basis") != "per_fill_total" or fill.get("fee_currency") != "USD" or fee is None or fee < 0:
             gaps.add("verified_total_fees_missing")
         if gaps:
             counts.update(gaps)
         else:
             complete += 1
-    return {"unique_fills": len(unique), "complete_chains": complete, "complete_chain_fraction": complete / len(unique) if unique and not counts.get("fill_id_missing") and not conflicts else None, "gap_counts": dict(counts), "status": "supported" if unique and complete == len(unique) and not counts.get("fill_id_missing") else "evidence_pending", "scope": "seven_day_observed_fills_not_broker_completeness_or_round_trip_profit"}
+    return {"unique_fills": len(unique), "complete_chains": complete, "complete_chain_fraction": complete / len(unique) if unique and not counts.get("fill_id_missing") and not conflicts else None, "gap_counts": dict(counts), "fee_provenance_counts": dict(fee_provenance), "fee_provenance_note": "declared_schedule fees are reportable net-cost inputs from an owner-declared schedule, not broker-sourced evidence; they never complete a chain", "status": "supported" if unique and complete == len(unique) and not counts.get("fill_id_missing") else "evidence_pending", "scope": "seven_day_observed_fills_not_broker_completeness_or_round_trip_profit"}
 
 
 def read_json_source(path: Path, now: datetime, *, max_age_days: int = 8) -> tuple[dict[str, Any], dict[str, Any]]:

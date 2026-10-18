@@ -24,6 +24,7 @@ from ai_trading.contracts import position_snapshot_from_position
 from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.analytics.fee_schedule import FEE_PROVENANCE_DECLARED, is_declared_schedule_fee
 
 try:
     from sqlalchemy.exc import SQLAlchemyError as _SQLAlchemyError
@@ -2331,6 +2332,10 @@ def _as_tca_leg_event(row: dict[str, Any]) -> _TCALegEvent | None:
     )
     if verified_fee:
         fee_evidence = "verified"
+    elif fee_source is not None and is_declared_schedule_fee(row):
+        # Owner-declared schedule: usable for net-cost reporting, labeled
+        # separately, never promoted to broker-verified evidence.
+        fee_evidence = FEE_PROVENANCE_DECLARED
     elif fee_source is None or fee_cost == 0.0:
         # TCA generation can write fees=0 when no fee was supplied. That is
         # an unknown fee, not broker evidence of a zero charge.
@@ -2451,6 +2456,11 @@ def _enrich_direct_trades_with_tca_costs(
             fee_evidence = "unknown"
         elif all(event.fee_evidence == "verified" for event in fee_events):
             fee_evidence = "verified"
+        elif all(
+            event.fee_evidence in {"verified", FEE_PROVENANCE_DECLARED}
+            for event in fee_events
+        ):
+            fee_evidence = FEE_PROVENANCE_DECLARED
         else:
             fee_evidence = "estimated"
 
@@ -3123,6 +3133,8 @@ def _aggregate_closed_trades(
         pnl_basis = "reported_trade_pnl_fee_unassessed"
     elif fee_evidence_counts.get("estimated", 0):
         pnl_basis = "costed_estimate"
+    elif fee_evidence_counts.get(FEE_PROVENANCE_DECLARED, 0):
+        pnl_basis = "declared_fee_schedule_not_broker_verified"
     else:
         pnl_basis = "verified_fee_basis"
     summary.update(
@@ -3152,6 +3164,16 @@ def _aggregate_closed_trades(
                 "nonzero_slippage_trades": int(nonzero_slippage_trades),
                 "fee_sources": dict(sorted(fee_sources.items())),
                 "fee_evidence": dict(sorted(fee_evidence_counts.items())),
+                "declared_schedule_fee_trades": int(
+                    fee_evidence_counts.get(FEE_PROVENANCE_DECLARED, 0)
+                ),
+                "declared_schedule_note": (
+                    "declared_schedule fees are computed from an owner-declared "
+                    "fee schedule with recorded provenance; they are not "
+                    "broker-sourced per-fill totals"
+                    if fee_evidence_counts.get(FEE_PROVENANCE_DECLARED, 0)
+                    else None
+                ),
                 "attributed_fee_cost": total_fee_cost,
                 "slippage_sources": dict(sorted(slippage_sources.items())),
             },
