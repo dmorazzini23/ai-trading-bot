@@ -540,6 +540,34 @@ def test_pending_candidate_bootstrap_enriches_durable_intent_from_artifact(monke
     assert candidates["ord-partial"]["event_seq"] == 2
 
 
+def test_pending_candidate_bootstrap_keeps_durable_closing_flag(monkeypatch, tmp_path):
+    engine = _engine_stub()
+
+    class _IntentStore:
+        def get_open_intents(self):
+            return [
+                SimpleNamespace(
+                    broker_order_id="ord-close",
+                    intent_id="cid-close",
+                    status="accepted",
+                    symbol="AAPL",
+                    side="sell",
+                    quantity=5,
+                    metadata_json=json.dumps({"closing_position": True}),
+                    updated_at="2026-10-16T15:40:00+00:00",
+                )
+            ]
+
+    engine.order_manager = SimpleNamespace(_intent_store=_IntentStore())
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+
+    candidates = engine._load_pending_candidates_from_runtime_order_events()
+
+    assert candidates["ord-close"]["closing_position"] is True
+
+
 def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)

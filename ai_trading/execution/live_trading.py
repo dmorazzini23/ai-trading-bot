@@ -24797,6 +24797,9 @@ class ExecutionEngine:
         ).strip().lower()
         submission_context: dict[str, Any] = {
             "order_type": actual_order_type,
+            # Broker reconciliation builds the fill record from the pending
+            # entry, so the submit-time closing decision must travel with it.
+            "closing_position": bool(closing_position),
         }
         if actual_tif:
             submission_context["time_in_force"] = actual_tif
@@ -35792,6 +35795,7 @@ class ExecutionEngine:
                 "decision_timestamp",
                 "quote_timestamp",
                 "order_role",
+                "closing_position",
                 "session",
                 "paper_sampling",
                 "paper_sampling_policy",
@@ -35919,6 +35923,7 @@ class ExecutionEngine:
                 "decision_timestamp",
                 "quote_timestamp",
                 "order_role",
+                "closing_position",
                 "session",
                 "paper_sampling",
                 "paper_sampling_policy",
@@ -35973,6 +35978,7 @@ class ExecutionEngine:
                     "decision_timestamp",
                     "quote_timestamp",
                     "order_role",
+                    "closing_position",
                     "session",
                     "paper_sampling",
                     "paper_sampling_policy",
