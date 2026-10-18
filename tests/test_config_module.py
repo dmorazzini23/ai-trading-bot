@@ -7,8 +7,11 @@ import pytest
 
 def _reload_config(monkeypatch, **env):
     module_name = "ai_trading.config"
-    if module_name in list(sys.modules):
-        del sys.modules[module_name]
+    parent = importlib.import_module("ai_trading")
+    # Record the package and its parent attribute so monkeypatch restores both;
+    # leaving a re-imported package behind drops attributes like ``settings``.
+    monkeypatch.setattr(parent, "config", getattr(parent, "config", None), raising=False)
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
     for k in [
         "MAX_DRAWDOWN_THRESHOLD",
         "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",
@@ -21,13 +24,6 @@ def _reload_config(monkeypatch, **env):
     for k, v in env.items():
         monkeypatch.setenv(k, str(v))
     return importlib.import_module(module_name)
-
-
-@pytest.fixture(autouse=True)
-def _cleanup():
-    yield
-    import sys
-    sys.modules.pop("ai_trading.config", None)
 
 
 def test_missing_drawdown_threshold(monkeypatch):
