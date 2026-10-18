@@ -1,6 +1,34 @@
 # Current handoff
 
-## October 18 night: /healthz latency fix merged to main, deploy pending (start here)
+## October 18 night deploy of `68792e2ca` — complete (start here)
+
+Deployed Sun 23:26 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint passed on `68792e2ca` (merge of `claude/modest-shtern-ae9515`, the
+`/healthz` latency fix below). Prior spec saved as
+`runtime/release_spec.7ce1acdc9.bak.json`; the new spec changes only the SHA.
+Note for the manual pre-migration identity check: run it with the unit's
+`Environment=` lines and `/run/ai-trading-bot/ai-trading-runtime.env` sourced,
+otherwise it reports `mode: sim` and blocks on config/profile hash. Both
+identity reports pass on `68792e2ca`, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC` (0 positions, 0 open orders,
+fresh), 0 errors, 0 restarts, RSS 599 MB at ~100 s. Only the designed
+`STRATEGIES_NOT_CONSUMED_UNDER_NETTING` warning. `/healthz` now answers in
+0.29–0.32 s (was 3.6–6.5 s); still 503 `required_model_stale` with only
+`replay_counterfactual` failing, basis `exchange_calendar`, as before. The
+connectors dispatcher's `health_payload_unavailable` runs should stop; confirm
+Monday. Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach
+7ce1acdc9`, restore that spec, restart.
+
+Monday watch list (unchanged plus one): burn-in cycles accumulating with no
+reset; closing sells as `order_role: exit`; first real EOD recap in Slack after
+the close; the prune timer's first archive rotation of `decision_records.jsonl`;
+cycle times; dispatcher minute-runs no longer timing out on health.
+
+Loose ends still open: drop duplicate branch `claude/charming-cohen-e6dade`
+(subset of merged `271a896e6`); archive finished Slack/latency sessions;
+`venv.sys-bak` deletion after Monday; remove `STRATEGIES` from `.env`.
+
+## October 18 night: /healthz latency root cause (merged in `68792e2ca`)
 
 Branch `claude/modest-shtern-ae9515`, merged to main after `3744697b9`. `/healthz` on :9001 took ~3 s per request
 because `.env` sets `AI_TRADING_HEALTH_REQUIRE_{OMS_INVARIANTS,OMS_LIFECYCLE_PARITY,
@@ -42,7 +70,7 @@ silence it). The replay gate now reports only `replay_counterfactual` with
 Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 7e0a00365`,
 restore that spec, restart.
 
-**Known, pre-existing, not fixed:** `/healthz` takes 3.6–6.5 s per request
+**Known at the time, fixed by `68792e2ca`:** `/healthz` took 3.6–6.5 s per request
 (503 while degraded is expected). The connectors dispatcher's health timeout is
 5 s, so roughly half of its minute-runs record `health_payload_unavailable`
 (48 in the three hours before this deploy, on `7e0a00365`). Root cause is the
