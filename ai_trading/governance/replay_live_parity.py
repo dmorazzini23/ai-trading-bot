@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
+from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
+from ai_trading.logging import get_logger
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+from ai_trading.utils import market_calendar
 
 
 REPLAY_GOVERNANCE_SCHEMA_VERSION = "3.0.0"
+REPLAY_FRESHNESS_CALENDAR = "XNYS"
+_EXCHANGE_TZ = ZoneInfo("America/New_York")
+# Calendar-aware freshness only matters while at most one completed session has
+# been missed; spans longer than this are always judged on wall-clock age.
+_MAX_CALENDAR_SPAN_DAYS = 15
+_CALENDAR_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
+    *AI_TRADING_FALLBACK_EXCEPTIONS,
+    ValueError,
+)
+
+logger = get_logger(__name__)
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -54,6 +70,92 @@ def _parse_ts(raw: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+@lru_cache(maxsize=256)
+def _exchange_session_close_utc(session_date: date) -> datetime | None:
+    """Return the XNYS close for ``session_date`` or ``None`` when closed."""
+
+    try:
+        session = market_calendar.session_info(session_date)
+    except ValueError:
+        return None
+    return session.end_utc.astimezone(UTC)
+
+
+def _exchange_day_start_utc(session_date: date) -> datetime:
+    return datetime(
+        session_date.year,
+        session_date.month,
+        session_date.day,
+        tzinfo=_EXCHANGE_TZ,
+    ).astimezone(UTC)
+
+
+def _replay_session_age(ts: datetime, now: datetime) -> dict[str, Any]:
+    """Measure replay artifact age on the exchange calendar.
+
+    Hours that fall on non-trading exchange days (weekends and holidays) are
+    excluded from ``session_age_hours``; on spans made only of trading days the
+    result equals wall-clock age. ``sessions_since_replay`` counts exchange
+    sessions whose close falls in ``(ts, now]`` and ``covered_session`` is the
+    latest session that had closed when the artifact was written.
+    """
+
+    wall_age_hours = max((now - ts).total_seconds(), 0.0) / 3600.0
+    start_day = ts.astimezone(_EXCHANGE_TZ).date()
+    end_day = max(now, ts).astimezone(_EXCHANGE_TZ).date()
+    span_days = (end_day - start_day).days
+    if span_days > _MAX_CALENDAR_SPAN_DAYS:
+        return {
+            "basis": "wall_clock",
+            "reason": "replay_age_span_exceeds_calendar_window",
+            "session_age_hours": float(wall_age_hours),
+            "non_trading_hours_excluded": 0.0,
+            "sessions_since_replay": None,
+            "covered_session": None,
+        }
+
+    excluded_seconds = 0.0
+    sessions_since = 0
+    for offset in range(span_days + 1):
+        day = start_day + timedelta(days=offset)
+        close_utc = _exchange_session_close_utc(day)
+        if close_utc is None:
+            window_start = max(_exchange_day_start_utc(day), ts)
+            window_end = min(
+                _exchange_day_start_utc(day + timedelta(days=1)),
+                now,
+            )
+            if window_end > window_start:
+                excluded_seconds += (window_end - window_start).total_seconds()
+        elif ts < close_utc <= now:
+            sessions_since += 1
+
+    covered_session: date | None = None
+    probe = start_day
+    for _ in range(_MAX_CALENDAR_SPAN_DAYS):
+        close_utc = _exchange_session_close_utc(probe)
+        if close_utc is not None and close_utc <= ts:
+            covered_session = probe
+            break
+        probe -= timedelta(days=1)
+
+    excluded_hours = excluded_seconds / 3600.0
+    return {
+        "basis": "exchange_calendar",
+        "reason": None,
+        "session_age_hours": float(max(wall_age_hours - excluded_hours, 0.0)),
+        "non_trading_hours_excluded": float(excluded_hours),
+        "sessions_since_replay": int(sessions_since),
+        "covered_session": (
+            covered_session.isoformat() if covered_session is not None else None
+        ),
+    }
 
 
 def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
@@ -159,14 +261,59 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
     age_hours: float | None = None
     future_skew_seconds = 0.0
     future_dated = False
+    session_age: dict[str, Any] = {
+        "basis": None,
+        "reason": None,
+        "session_age_hours": None,
+        "non_trading_hours_excluded": None,
+        "sessions_since_replay": None,
+        "covered_session": None,
+    }
     if ts is not None:
-        delta_seconds = (datetime.now(UTC) - ts).total_seconds()
+        now = _utcnow()
+        delta_seconds = (now - ts).total_seconds()
         future_skew_seconds = max(-delta_seconds, 0.0)
         future_dated = bool(future_skew_seconds > float(max_future_skew_seconds))
         age_hours = max(delta_seconds, 0.0) / 3600.0
+        try:
+            session_age = _replay_session_age(ts, now)
+        except _CALENDAR_FALLBACK_EXCEPTIONS as exc:
+            # Degrade to wall-clock age (today's rule); never fail health.
+            logger.warning(
+                "REPLAY_FRESHNESS_CALENDAR_UNAVAILABLE",
+                extra={
+                    "calendar": REPLAY_FRESHNESS_CALENDAR,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            session_age = {
+                "basis": "wall_clock",
+                "reason": "replay_freshness_calendar_unavailable",
+                "session_age_hours": float(age_hours),
+                "non_trading_hours_excluded": 0.0,
+                "sessions_since_replay": None,
+                "covered_session": None,
+            }
+    wall_clock_fresh = bool(
+        age_hours is not None and age_hours <= float(max_age_hours)
+    )
+    # Exchange-calendar freshness: weekend/holiday hours do not age the
+    # artifact, but only while it has missed at most one completed session.
+    # On spans of trading days only, session age equals wall-clock age, so the
+    # weekday threshold is unchanged and this never makes freshness stricter.
+    sessions_since_replay = session_age.get("sessions_since_replay")
+    session_age_hours = session_age.get("session_age_hours")
+    calendar_fresh = bool(
+        session_age.get("basis") == "exchange_calendar"
+        and session_age_hours is not None
+        and float(session_age_hours) <= float(max_age_hours)
+        and sessions_since_replay is not None
+        and int(sessions_since_replay) <= 1
+    )
     fresh = bool(
         age_hours is not None
-        and age_hours <= float(max_age_hours)
+        and (wall_clock_fresh or calendar_fresh)
         and not future_dated
     )
     violations_raw = payload.get("violations")
@@ -218,6 +365,15 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
         "ts": ts.isoformat() if ts is not None else None,
         "ts_source": "payload" if ts is not None else None,
         "age_hours": float(age_hours) if age_hours is not None else None,
+        "age_basis": session_age.get("basis"),
+        "age_basis_reason": session_age.get("reason"),
+        "freshness_calendar": REPLAY_FRESHNESS_CALENDAR,
+        "session_age_hours": session_age_hours,
+        "non_trading_hours_excluded": session_age.get("non_trading_hours_excluded"),
+        "sessions_since_replay": sessions_since_replay,
+        "covered_session": session_age.get("covered_session"),
+        "wall_clock_fresh": bool(wall_clock_fresh),
+        "calendar_fresh": bool(calendar_fresh),
         "future_dated": bool(future_dated),
         "future_skew_seconds": float(future_skew_seconds),
         "max_future_skew_seconds": float(max_future_skew_seconds),
@@ -502,6 +658,19 @@ def summarize_replay_live_parity_gate(
             "replay_policy_hash_matches": replay_contract_ok,
             "replay_fresh": bool(replay_fresh),
             "replay_age_hours": replay_snapshot.get("age_hours"),
+            "replay_age_basis": replay_snapshot.get("age_basis"),
+            "replay_session_age_hours": replay_snapshot.get("session_age_hours"),
+            "replay_non_trading_hours_excluded": replay_snapshot.get(
+                "non_trading_hours_excluded"
+            ),
+            "sessions_since_replay": replay_snapshot.get("sessions_since_replay"),
+            "replay_covered_session": replay_snapshot.get("covered_session"),
+            "replay_freshness_calendar": replay_snapshot.get("freshness_calendar"),
+            "replay_freshness_rule": (
+                "fresh when wall-clock age <= max_replay_age_hours, or when "
+                "exchange-session age (weekend/holiday hours excluded) <= "
+                "max_replay_age_hours and sessions_since_replay <= 1"
+            ),
             "replay_future_dated": bool(replay_future_dated),
             "replay_future_skew_seconds": replay_snapshot.get("future_skew_seconds"),
             "replay_violations_count": int(replay_violations_count),

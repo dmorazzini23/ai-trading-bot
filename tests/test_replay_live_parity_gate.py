@@ -3,11 +3,23 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+import pytest
+
+from ai_trading.governance import replay_live_parity
 from ai_trading.governance.replay_live_parity import (
     REPLAY_GOVERNANCE_SCHEMA_VERSION,
     summarize_replay_live_parity_gate,
 )
+
+_ET = ZoneInfo("America/New_York")
+_LIFECYCLE_OK = {
+    "enabled": True,
+    "available": True,
+    "ok": True,
+    "total_violations": 0,
+}
 
 
 def _write_replay_artifact(
@@ -404,3 +416,225 @@ def test_replay_live_parity_gate_fails_on_stale_source_data(
     assert "replay_source_fresh" in payload["failed_checks"]
     assert payload["observed"]["replay_source_data_fresh"] is False
     assert payload["observed"]["replay_source_age_hours"] == 200.0
+
+
+def _gate_at(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    artifact_ts: datetime,
+    now: datetime,
+) -> dict:
+    data_root = tmp_path / "data-root"
+    artifact = data_root / "runtime" / "replay_outputs" / "replay_hash_session.json"
+    _write_replay_artifact(artifact, ts=artifact_ts.astimezone(UTC))
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.setattr(
+        replay_live_parity,
+        "_utcnow",
+        lambda: now.astimezone(UTC),
+    )
+    return summarize_replay_live_parity_gate(oms_lifecycle_parity=_LIFECYCLE_OK)
+
+
+@pytest.mark.parametrize(
+    ("artifact_ts", "now", "sessions_since", "covered"),
+    [
+        # Friday-evening artifact, checked Sunday afternoon.
+        (
+            datetime(2026, 10, 16, 20, 0, tzinfo=_ET),
+            datetime(2026, 10, 18, 12, 0, tzinfo=_ET),
+            0,
+            "2026-10-16",
+        ),
+        # Live 2026-10-18 case: Saturday 04:59 UTC artifact, 35.1h wall-clock.
+        (
+            datetime(2026, 10, 17, 4, 59, tzinfo=UTC),
+            datetime(2026, 10, 18, 16, 5, tzinfo=UTC),
+            0,
+            "2026-10-16",
+        ),
+        # Regular Friday 05:20 ET timer artifact (covers Thursday) on Sunday.
+        (
+            datetime(2026, 10, 16, 5, 20, tzinfo=_ET),
+            datetime(2026, 10, 18, 12, 0, tzinfo=_ET),
+            1,
+            "2026-10-15",
+        ),
+    ],
+)
+def test_replay_fresh_holds_over_weekend_on_exchange_calendar(
+    monkeypatch,
+    tmp_path: Path,
+    artifact_ts: datetime,
+    now: datetime,
+    sessions_since: int,
+    covered: str,
+) -> None:
+    payload = _gate_at(monkeypatch, tmp_path, artifact_ts=artifact_ts, now=now)
+
+    observed = payload["observed"]
+    assert observed["replay_age_hours"] > 24.0
+    assert observed["replay_fresh"] is True
+    assert payload["checks"]["replay_fresh"] is True
+    assert "replay_fresh" not in payload["failed_checks"]
+    assert observed["replay_age_basis"] == "exchange_calendar"
+    assert observed["replay_session_age_hours"] <= 24.0
+    assert observed["replay_non_trading_hours_excluded"] > 0.0
+    assert observed["sessions_since_replay"] == sessions_since
+    assert observed["replay_covered_session"] == covered
+    assert observed["replay_freshness_calendar"] == "XNYS"
+    assert payload["thresholds"]["max_replay_age_hours"] == 24.0
+    assert payload["thresholds"]["require_fresh_replay"] is True
+
+
+def test_replay_stale_monday_after_open_with_friday_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # Friday 05:20 ET artifact covers Thursday; Friday's session completed and
+    # Monday's refresh is missing, so Monday after the open it is stale.
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 10, 16, 5, 20, tzinfo=_ET),
+        now=datetime(2026, 10, 19, 10, 0, tzinfo=_ET),
+    )
+
+    observed = payload["observed"]
+    assert observed["replay_fresh"] is False
+    assert "replay_fresh" in payload["failed_checks"]
+    assert observed["sessions_since_replay"] == 1
+    assert observed["replay_session_age_hours"] == pytest.approx(28.0 + 2.0 / 3.0)
+    assert observed["replay_covered_session"] == "2026-10-15"
+
+
+def test_replay_fresh_across_market_holiday(monkeypatch, tmp_path: Path) -> None:
+    # Wednesday 2026-11-25 artifact; Thursday 2026-11-26 is Thanksgiving.
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 11, 25, 5, 20, tzinfo=_ET),
+        now=datetime(2026, 11, 27, 5, 0, tzinfo=_ET),
+    )
+
+    observed = payload["observed"]
+    assert observed["replay_age_hours"] > 47.0
+    assert observed["replay_fresh"] is True
+    assert "replay_fresh" not in payload["failed_checks"]
+    assert observed["replay_non_trading_hours_excluded"] == pytest.approx(24.0)
+    assert observed["sessions_since_replay"] == 1
+    assert observed["replay_covered_session"] == "2026-11-24"
+
+
+def test_replay_stale_when_holiday_span_misses_two_sessions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # Written before Wednesday's close; by Friday's early close (13:00 ET) two
+    # completed sessions are missing even though session age is under 24h.
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 11, 25, 15, 0, tzinfo=_ET),
+        now=datetime(2026, 11, 27, 13, 30, tzinfo=_ET),
+    )
+
+    observed = payload["observed"]
+    assert observed["replay_session_age_hours"] < 24.0
+    assert observed["sessions_since_replay"] == 2
+    assert observed["replay_fresh"] is False
+    assert "replay_fresh" in payload["failed_checks"]
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_fresh"),
+    [
+        # Same threshold as wall-clock age on trading days: fresh at 23h40m...
+        (datetime(2026, 10, 14, 5, 0, tzinfo=_ET), True),
+        # ...and stale once 24h pass after missing Tuesday's session.
+        (datetime(2026, 10, 14, 6, 0, tzinfo=_ET), False),
+        (datetime(2026, 10, 15, 12, 0, tzinfo=_ET), False),
+    ],
+)
+def test_replay_weekday_freshness_matches_wall_clock(
+    monkeypatch,
+    tmp_path: Path,
+    now: datetime,
+    expected_fresh: bool,
+) -> None:
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 10, 13, 5, 20, tzinfo=_ET),
+        now=now,
+    )
+
+    observed = payload["observed"]
+    assert observed["replay_non_trading_hours_excluded"] == 0.0
+    assert observed["replay_session_age_hours"] == pytest.approx(
+        observed["replay_age_hours"]
+    )
+    assert observed["replay_fresh"] is expected_fresh
+    assert ("replay_fresh" in payload["failed_checks"]) is (not expected_fresh)
+
+
+def test_replay_session_freshness_honors_max_age_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_MAX_REPLAY_AGE_HOURS", "2")
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 10, 16, 20, 0, tzinfo=_ET),
+        now=datetime(2026, 10, 18, 12, 0, tzinfo=_ET),
+    )
+
+    assert payload["thresholds"]["max_replay_age_hours"] == 2.0
+    assert payload["observed"]["replay_session_age_hours"] == pytest.approx(4.0)
+    assert payload["observed"]["replay_fresh"] is False
+    assert "replay_fresh" in payload["failed_checks"]
+
+
+def test_replay_freshness_require_override_waives_stale_check(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_FRESH_REPLAY", "0")
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 10, 16, 5, 20, tzinfo=_ET),
+        now=datetime(2026, 10, 19, 10, 0, tzinfo=_ET),
+    )
+
+    assert payload["observed"]["replay_fresh"] is False
+    assert payload["checks"]["replay_fresh"] is True
+    assert payload["thresholds"]["require_fresh_replay"] is False
+
+
+def test_replay_freshness_falls_back_to_wall_clock_without_calendar(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def _calendar_down(_session_date):
+        raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(
+        replay_live_parity,
+        "_exchange_session_close_utc",
+        _calendar_down,
+    )
+    payload = _gate_at(
+        monkeypatch,
+        tmp_path,
+        artifact_ts=datetime(2026, 10, 16, 20, 0, tzinfo=_ET),
+        now=datetime(2026, 10, 18, 12, 0, tzinfo=_ET),
+    )
+
+    observed = payload["observed"]
+    assert observed["replay_age_basis"] == "wall_clock"
+    assert observed["sessions_since_replay"] is None
+    assert observed["replay_fresh"] is False
+    assert "replay_fresh" in payload["failed_checks"]
