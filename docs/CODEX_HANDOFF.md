@@ -1,6 +1,52 @@
 # Current handoff
 
-## October 18 deploy of `1e7c849f4` — complete (start here)
+## October 18 evening deploy of `7e0a00365` — complete (start here)
+
+Deployed Sun 16:56 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint passed on `7e0a00365`. The prior spec is saved as
+`runtime/release_spec.1e7c849f4.bak.json`; the new spec changes only the SHA.
+Identity checks pass pre- and post-migration, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, 0 warnings, 0 restarts,
+broker connected and flat, RSS 733 MB at 93 s. Only `required_model_stale` and
+`replay_live_parity_gate_failed` remain (the latter also shows `replay_fresh`
+over weekends; a card proposes a calendar-aware fix).
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 1e7c849f4`,
+restore that spec, restart.
+
+What this deploy carries beyond `1e7c849f4`:
+
+- **Readable Slack messages** (`0103d585a`): one shared formatter
+  (`ai_trading/monitoring/slack_format.py`) for incidents, EOD recap, preflight,
+  close recap and research notices. Four test messages were posted from the
+  merged code before deploy; the connectors timer now runs the new code and
+  dedupes exactly as before (incident fingerprint unchanged, nothing re-sent).
+- **EOD recap now sends after the close** (`e3488b0ec`): eligibility uses the
+  shared market-closed check (health reason or data-provider reason), so
+  `required_model_stale` no longer blocks it. First real send: Monday after
+  the close. Its P&L, closed trades, win rate, profit factor and losers all
+  derive from report-date fills (Eastern boundary); cumulative trade-history
+  loss drivers are kept under `trade_history` and never shown as the day's
+  losers.
+- **Incident flap debounce**: a changed trigger set must persist two
+  consecutive evaluations before re-alerting
+  (`AI_TRADING_SLACK_TRIGGER_CHANGE_CONFIRMATIONS`, default 2); hard outage
+  triggers alert at once. The Oct 13–18 journal showed 98 sends alternating
+  on broker connected/unknown.
+- **Test isolation** (`042adb507`): tests can no longer write to the
+  production log, data, model, cache or output directories; a guard fails any
+  test that does. The live `slippage.csv` still holds 693 fixture rows and
+  `reward_log.csv` is header-only; archive and reset them (owner decision).
+- Study reports: `docs/PAPER_ROUND_TRIP_COST_EVIDENCE_20261018.md` and
+  `docs/STRATEGY_WIRING_AUDIT_20261018.md`.
+
+Open on the host (owner, needs password): remove the dangling
+`/usr/local/bin/openclaw-admin` symlink and reinstall
+`packaging/systemd/ai-trading-connectors.service` (installed copy still says
+"Slack + OpenClaw"). Six proposed task cards cover the remaining fixes and
+upgrades (loader fallback, test read isolation, calendar-aware replay
+freshness, multi-day trial harness, declared fee schedule, JSONL retention).
+
+## October 18 deploy of `1e7c849f4` — complete
 
 Deployed Sun 04:54 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
 Lint all passed on `1e7c849f4`. The prior spec is saved as
