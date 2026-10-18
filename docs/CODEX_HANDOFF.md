@@ -24,9 +24,18 @@ reset; closing sells as `order_role: exit`; first real EOD recap in Slack after
 the close; the prune timer's first archive rotation of `decision_records.jsonl`;
 cycle times; dispatcher minute-runs no longer timing out on health.
 
-Loose ends still open: drop duplicate branch `claude/charming-cohen-e6dade`
-(subset of merged `271a896e6`); archive finished Slack/latency sessions;
-`venv.sys-bak` deletion after Monday; remove `STRATEGIES` from `.env`.
+Cleanup done Sun 23:48 UTC on the owner's instruction: duplicate branch
+`claude/charming-cohen-e6dade` and its worktree deleted; the five finished
+Slack-chain and latency sessions archived (their worktrees removed);
+`venv.sys-bak` (1.9 GB, April) deleted; `STRATEGIES` removed from the live
+`.env` (removed value: cross_sectional_momentum, multi_factor_quality_value,
+pairs_stat_arb, pead_event, low_beta_defensive, time_series_momentum_overlay).
+The identity check confirmed the removal leaves both spec hashes unchanged.
+Service restarted closed and flat on `68792e2ca`: identity pass, all three
+anchors, 0 warnings, 0 errors, 0 restarts, `/healthz` 0.27 s. Merged branches
+`claude/{affectionate-lehmann-4c08b7,modest-shtern-ae9515,practical-cray-ffebdc,
+slack-readability,eloquent-elbakyan-2b19ec,upbeat-carson-2abade}` and the six
+`worktree-agent-*` worktrees remain for the owner to prune.
 
 ## October 18 night: /healthz latency root cause (merged in `68792e2ca`)
 
