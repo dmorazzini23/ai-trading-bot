@@ -116,13 +116,14 @@ def _is_non_blocking_rejection_gate(gate_name: str) -> bool:
 
 
 def _runtime_report_payload() -> dict[str, Any]:
+    runtime_root = _runtime_root({})
     report_path_raw = str(
         os.getenv("AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH")
-        or (_DEFAULT_RUNTIME_ROOT / "runtime_performance_report_latest.json")
+        or (runtime_root / "runtime_performance_report_latest.json")
     ).strip()
     report_path = Path(report_path_raw).expanduser()
     if not report_path.is_absolute():
-        report_path = (_DEFAULT_RUNTIME_ROOT / report_path).resolve()
+        report_path = (runtime_root / report_path).resolve()
     if report_path.exists():
         cached = _read_json_object(report_path)
         if cached:
