@@ -18,6 +18,15 @@ Four commits beyond the October 17 deploy, plus the test isolation fix
 noted below. Watch Monday for `PAPER_BURN_IN_STATUS` accumulating cycles with
 no reset, and for closing sells arriving as `order_role: exit`.
 
+**Trial outcome (04:57 UTC):** `day_sleeve_horizon_trial_20261018` ran and is
+`inconclusive_budget_consumed`; hypothesis retired. Net -0.854 bps per
+opportunity at 10 bps, bootstrap lower bound -1.49, 1 of 5 folds profitable,
+4 of 5 folds under 250 selections; +8.7 bps over always-long (-9.57). Better
+than the five-minute trial (-3.20) but not positive. No artifact saved, no gate
+changed; the stale-model deadlock stands. Record:
+`docs/DAY_SLEEVE_HORIZON_TRIAL_RESULT_20261018.md`. Next decision is the
+owner's: a different hypothesis needs a new pre-registered contract.
+
 - **Burn-in config-hash churn** (PR 3165, merged as `af7b0497c`): `build_runtime`
   wrote the AUTO-resolved max position size into `cfg` after the open, changing
   `config_snapshot_hash` and resetting paper burn-in almost every session

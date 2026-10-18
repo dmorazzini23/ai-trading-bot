@@ -1,10 +1,10 @@
 # Proposal: registered day-sleeve horizon trial (draft, October 18, 2026)
 
 **Status:** adopted and registered on October 18, 2026 by the
-[reset amendment](RESEARCH_RESET_AMENDMENT_20261018.md). The campaign contract
-`config/day_sleeve_horizon_trial_campaign.json` is frozen in
-`artifacts/day_sleeve_horizon_trial_20261018/campaign_state.json`. The trial is
-**not claimed, trained or deployed**; the preconditions below still apply.
+[reset amendment](RESEARCH_RESET_AMENDMENT_20261018.md), then run the same day.
+Outcome **`inconclusive_budget_consumed`**; the hypothesis is retired. See the
+[result record](DAY_SLEEVE_HORIZON_TRIAL_RESULT_20261018.md). Nothing below
+authorizes a rerun or tuning.
 
 ## Why this is needed
 
