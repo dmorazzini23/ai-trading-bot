@@ -96,4 +96,6 @@ def test_auto_max_position_mode_overrides_provided_size(monkeypatch, caplog):
         runtime = build_runtime(cfg)
 
     assert runtime.params["MAX_POSITION_SIZE"] == expected_size
-    assert cfg.max_position_size == expected_size
+    # cfg keeps the operator-declared value; the resolved size lives in params.
+    assert cfg.max_position_size == 99999.0
+    assert "max_position_size_meta" not in cfg.to_dict()

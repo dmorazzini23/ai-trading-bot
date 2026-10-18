@@ -39,11 +39,16 @@ def auto_sizing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _rebuilt_cfg() -> TradingConfig:
-    """Return a cfg after the first-cycle runtime rebuild has mutated it."""
+    """Return a cfg after a runtime rebuild plus an in-place ``_values`` write.
+
+    ``build_runtime`` no longer writes the resolved size into cfg, but other
+    runtime code still writes ``_values`` directly; the hash must ignore both.
+    """
 
     cfg = TradingConfig.from_env(_ENV)
-    core_runtime.build_runtime(cfg)
-    assert cfg.max_position_size == 3266.0
+    runtime = core_runtime.build_runtime(cfg)
+    assert runtime.params["MAX_POSITION_SIZE"] == 3266.0
+    cfg._values["max_position_size"] = 3266.0
     return cfg
 
 
