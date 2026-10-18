@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 import hashlib
 import importlib
 import json
@@ -339,6 +340,9 @@ def _tail_jsonl_rows(path: Path, *, max_rows: int) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             rows.append(payload)
     return rows
+
+
+_REPORT_DATE_TZ = ZoneInfo("America/New_York")
 
 
 def _runtime_event_path(args: dict[str, Any], *, env_key: str, default_relative: str) -> Path:
@@ -806,7 +810,9 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
     events: list[tuple[datetime, int, dict[str, Any]]] = []
     for index, row in enumerate(rows):
         ts = _parse_iso_ts(row.get("ts") or row.get("entry_time") or row.get("timestamp"))
-        if ts is None or ts.date() != report_day:
+        # Report dates are exchange sessions, so the day boundary is Eastern time,
+        # not UTC: a 20:30 ET fill on the report date is 00:30 UTC the next day.
+        if ts is None or ts.astimezone(_REPORT_DATE_TZ).date() != report_day:
             continue
         side = str(row.get("side") or "").strip().lower()
         if side not in {"buy", "sell", "sell_short"}:
@@ -840,6 +846,9 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
     books: dict[str, list[dict[str, float | str]]] = {}
     pnl_by_symbol: dict[str, float] = {}
     closed_trades = 0
+    winning_trades = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
     for _ts, _index, event in events:
         symbol = str(event["symbol"])
         side = str(event["side"])
@@ -857,6 +866,11 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
                 pnl = (lot_price - price) * close_qty
             pnl_by_symbol[symbol] = pnl_by_symbol.get(symbol, 0.0) + pnl
             closed_trades += 1
+            if pnl > 0:
+                winning_trades += 1
+                gross_profit += pnl
+            elif pnl < 0:
+                gross_loss += -pnl
             remaining -= close_qty
             lot["qty"] = lot_qty - close_qty
             if float(lot["qty"]) <= 1e-9:
@@ -877,6 +891,11 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
         for symbol, pnl in sorted(pnl_by_symbol.items(), key=lambda item: (item[1], item[0]))
         if pnl < 0
     ][:3]
+    win_rate = (float(winning_trades) / float(closed_trades)) if closed_trades > 0 else None
+    if gross_loss > 0:
+        profit_factor: float | None = gross_profit / gross_loss
+    else:
+        profit_factor = None
     return {
         "status": "ready",
         "path": str(fill_events_path),
@@ -884,7 +903,13 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
         "fill_rows_seen": int(len(rows)),
         "same_day_fill_events": int(len(events)),
         "closed_trades": int(closed_trades),
+        "winning_trades": int(winning_trades),
+        "win_rate": win_rate,
+        "gross_profit": float(gross_profit),
+        "gross_loss": float(gross_loss),
+        "profit_factor": profit_factor,
         "net_pnl": float(sum(pnl_by_symbol.values())),
+        "pnl_by_symbol": {symbol: float(pnl) for symbol, pnl in sorted(pnl_by_symbol.items())},
         "open_qty_by_symbol": open_qty_by_symbol,
         "top_loss_symbols": top_losses,
     }
@@ -1030,6 +1055,40 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         closed_trades = observed_obj.get("closed_trades")
     same_day_fill_summary = _same_day_fill_round_trip_summary(args, report_date)
     same_day_net_pnl = _float_or_none(same_day_fill_summary.get("net_pnl"))
+    same_day_ready = str(same_day_fill_summary.get("status") or "") == "ready"
+    trade_history_pnl_basis = str(
+        daily_trade_row.get("operational_pnl_source")
+        or daily_trade_row.get("_report_source")
+        or "unavailable"
+    )
+    trade_history_fields = {
+        "net_pnl": net_pnl,
+        "profit_factor": profit_factor,
+        "win_rate": win_rate,
+        "closed_trades": closed_trades,
+        "top_loss_symbols": top_loss_items,
+        "pnl_basis": trade_history_pnl_basis,
+    }
+    if same_day_ready:
+        # Every trading field on the recap derives from the same report-date fill
+        # records. The trade-history values stay available for the discrepancy check.
+        net_pnl = same_day_net_pnl
+        profit_factor = _float_or_none(same_day_fill_summary.get("profit_factor"))
+        win_rate = _float_or_none(same_day_fill_summary.get("win_rate"))
+        closed_trades = same_day_fill_summary.get("closed_trades")
+        top_loss_items = [
+            dict(item)
+            for item in same_day_fill_summary.get("top_loss_symbols") or []
+            if isinstance(item, dict)
+        ]
+        pnl_basis = "same_day_fills"
+        top_loss_basis = "same_day_fills"
+    else:
+        # ``trade_history.top_loss_drivers`` is cumulative across the whole history,
+        # not scoped to the report date, so it must never be shown as the day's losers.
+        top_loss_items = []
+        pnl_basis = trade_history_pnl_basis
+        top_loss_basis = "unavailable"
     pnl_discrepancy: dict[str, Any] | None = None
     accounting_net_pnl = _float_or_none(accounting_trade_row.get("net_pnl"))
     if accounting_net_pnl is not None and same_day_net_pnl is not None:
@@ -1046,11 +1105,8 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "go_no_go_gate_passed": go_no_go_obj.get("gate_passed"),
         "go_no_go_failed_checks": list(go_no_go_obj.get("failed_checks") or []),
         "net_pnl": net_pnl,
-        "pnl_basis": str(
-            daily_trade_row.get("operational_pnl_source")
-            or daily_trade_row.get("_report_source")
-            or "unavailable"
-        ),
+        "pnl_basis": pnl_basis,
+        "trade_history": trade_history_fields,
         "same_day_fill_summary": same_day_fill_summary,
         "pnl_discrepancy": pnl_discrepancy,
         "profit_factor": profit_factor,
@@ -1068,10 +1124,14 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "health_status": str(health.get("status") or "unknown"),
         "health_reason": str(health.get("reason") or "unknown"),
         "provider_status": str(data_provider_obj.get("status") or "unknown"),
+        "provider_reason": str(
+            data_provider_obj.get("reason") or data_provider_obj.get("reason_code") or "unknown"
+        ),
         "provider_active": str(data_provider_obj.get("active") or "unknown"),
         "using_backup": bool(data_provider_obj.get("using_backup", False)),
         "broker_status": str(broker_obj.get("status") or "unknown"),
         "top_loss_symbols": top_loss_items,
+        "top_loss_basis": top_loss_basis,
         "timestamp": str(health.get("timestamp") or utc_now_iso()),
     }
     snapshot["learning"] = _collect_learning_snapshot(args, health)
@@ -1178,6 +1238,25 @@ def _should_suppress_startup_warmup_health_alert(
         "warmup_cycle",
         "startup",
     }
+
+
+_IMMEDIATE_INCIDENT_TRIGGERS = frozenset({"broker_disconnected", "data_provider_backup_active"})
+
+
+def _trigger_change_confirmations(args: dict[str, Any]) -> int:
+    """Consecutive evaluations a changed trigger set must persist before it re-alerts.
+
+    The connectors timer evaluates every minute. A broker snapshot that reads
+    ``unknown`` for one cycle (restart, warm-up, a slow broker read) adds and then
+    removes go/no-go triggers, and each flip used to bypass the repeat cooldown and
+    re-send the same incident. Requiring the changed set on two consecutive
+    evaluations drops one-cycle blips; a real change still alerts within a minute.
+    """
+
+    raw = args.get("trigger_change_confirmations")
+    if raw in (None, ""):
+        raw = os.getenv("AI_TRADING_SLACK_TRIGGER_CHANGE_CONFIRMATIONS")
+    return max(1, _int_arg(raw, default=2))
 
 
 def _incident_startup_grace_seconds(args: dict[str, Any]) -> int:
@@ -1829,9 +1908,20 @@ def _eod_message_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
     severity = slack_fmt.Severity.WARNING if flags else slack_fmt.Severity.OK
     title = f"Daily recap · {slack_fmt.fmt_day(snapshot.get('report_date') or 'unknown')}"
     net_pnl = slack_fmt.fmt_money(snapshot.get("net_pnl"))
-    pnl_line = f"*Net P&L {net_pnl}*  ·  fills basis {slack_fmt.fmt_money(same_day_fill.get('net_pnl'))}"
-    if discrepancy.get("status") == "mismatch":
-        pnl_line += "  ·  :warning: mismatch"
+    pnl_basis = str(snapshot.get("pnl_basis") or "")
+    if pnl_basis == "same_day_fills":
+        # The headline already is the fills figure; show the accounting figure
+        # only when it disagrees, so the reader sees both numbers side by side.
+        pnl_line = f"*Net P&L {net_pnl}*  ·  basis fills"
+        if discrepancy.get("status") == "mismatch":
+            pnl_line += (
+                f"  ·  accounting {slack_fmt.fmt_money(discrepancy.get('accounting_net_pnl'))}"
+                "  ·  :warning: mismatch"
+            )
+    else:
+        pnl_line = f"*Net P&L {net_pnl}*  ·  fills basis {slack_fmt.fmt_money(same_day_fill.get('net_pnl'))}"
+        if discrepancy.get("status") == "mismatch":
+            pnl_line += "  ·  :warning: mismatch"
 
     blocks: list[dict[str, Any]] = [
         slack_fmt.header_block(severity, title),
@@ -1998,6 +2088,59 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
                 "snapshot": snapshot,
             }
 
+    trigger_change_confirmations = _trigger_change_confirmations(args)
+    pending_trigger_set_raw = prior.get("pending_trigger_set")
+    # A newly observed hard outage alerts at once; only derived triggers that
+    # follow a transient snapshot (go/no-go, edge realism, capture) are confirmed.
+    hard_trigger_appeared = bool(
+        (current_triggers - prior_triggers) & _IMMEDIATE_INCIDENT_TRIGGERS
+    )
+    if (
+        trigger_set_changed
+        and prior_sent_at is not None
+        and not force
+        and not hard_trigger_appeared
+        and trigger_change_confirmations > 1
+    ):
+        pending_trigger_set = sorted(current_triggers)
+        pending_count = (
+            _int_arg(prior.get("pending_trigger_set_count"), default=0) + 1
+            if pending_trigger_set_raw == pending_trigger_set
+            else 1
+        )
+        if pending_count < trigger_change_confirmations:
+            pending_payload = {
+                key: value
+                for key, value in prior.items()
+                if not key.startswith("pending_trigger_set")
+            }
+            pending_payload.update(
+                {
+                    "pending_trigger_set": pending_trigger_set,
+                    "pending_trigger_set_count": pending_count,
+                    "pending_trigger_set_seen_at": utc_now_iso(),
+                }
+            )
+            _save_state(state_path, pending_payload)
+            return {
+                "sent": False,
+                "reason": "trigger_change_confirmation_pending",
+                "fingerprint": fingerprint,
+                "incident_signature": signature,
+                "state_path": str(state_path),
+                "triggers": triggers,
+                "snapshot": snapshot,
+                "pending_trigger_set_count": pending_count,
+                "trigger_change_confirmations": trigger_change_confirmations,
+            }
+    elif pending_trigger_set_raw is not None:
+        # The trigger set is back to the last sent incident: the change was a
+        # one-cycle blip and is dropped without re-alerting.
+        prior = {
+            key: value for key, value in prior.items() if not key.startswith("pending_trigger_set")
+        }
+        _save_state(state_path, prior)
+
     if on_change_only and prior_sent_at is not None and not force and not trigger_set_changed:
         if repeat_cooldown_minutes > 0:
             elapsed = now - prior_sent_at
@@ -2106,8 +2249,10 @@ def tool_runtime_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         args.get("require_market_closed"),
         default=_bool_arg(os.getenv("AI_TRADING_SLACK_EOD_REQUIRE_MARKET_CLOSED"), default=True),
     )
-    health_reason = str(snapshot.get("health_reason") or "").strip().lower()
-    market_closed = health_reason == "market_closed"
+    # The health reason is a readiness verdict (for example ``required_model_stale``)
+    # and keeps precedence over ``market_closed`` for months at a time; the data
+    # provider reason reports the session state regardless.
+    market_closed = _market_closed_snapshot(snapshot)
     report_date = str(snapshot.get("report_date") or "").strip()
     training_gate = _after_hours_training_gate(report_date, args)
     block_on_training_gate = _block_eod_on_training_gate(args)
@@ -2137,8 +2282,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
         args.get("require_market_closed"),
         default=_bool_arg(os.getenv("AI_TRADING_SLACK_EOD_REQUIRE_MARKET_CLOSED"), default=True),
     )
-    health_reason = str(snapshot.get("health_reason") or "").strip().lower()
-    market_closed = health_reason == "market_closed"
+    market_closed = _market_closed_snapshot(snapshot)
     training_gate = _after_hours_training_gate(report_date, args)
     block_on_training_gate = _block_eod_on_training_gate(args)
     snapshot["training_gate"] = training_gate

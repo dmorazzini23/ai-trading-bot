@@ -1984,7 +1984,9 @@ def test_collect_eod_summary_does_not_reuse_stale_trade_row_for_fresh_report_dat
     assert "*Closed trades*\nn/a" in _block_text(slack_srv._eod_message_payload(snapshot))
 
 
-def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatch) -> None:
+def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(
+    monkeypatch, tmp_path: Path
+) -> None:
     def _fake_runtime_report() -> dict[str, Any]:
         return {
             "go_no_go": {
@@ -2029,6 +2031,8 @@ def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatc
 
     monkeypatch.setattr(slack_srv, "_runtime_report_payload", _fake_runtime_report)
     monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+    # No same-day fill log: the recap falls back to the report's daily trade stats.
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", str(tmp_path / "missing_fill_events.jsonl"))
 
     snapshot = slack_srv._collect_eod_summary_snapshot({})
     assert snapshot["report_date"] == "2026-03-27"
@@ -2038,7 +2042,9 @@ def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatc
     assert snapshot["closed_trades"] == 11
 
 
-def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -> None:
+def test_collect_eod_summary_uses_nested_report_daily_trade_stats(
+    monkeypatch, tmp_path: Path
+) -> None:
     def _fake_runtime_report() -> dict[str, Any]:
         return {
             "go_no_go": {
@@ -2089,6 +2095,8 @@ def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -
 
     monkeypatch.setattr(slack_srv, "_runtime_report_payload", _fake_runtime_report)
     monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+    # No same-day fill log: the recap falls back to the report's daily trade stats.
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", str(tmp_path / "missing_fill_events.jsonl"))
 
     snapshot = slack_srv._collect_eod_summary_snapshot({})
     assert snapshot["report_date"] == "2026-05-04"
@@ -2097,7 +2105,11 @@ def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -
     assert snapshot["profit_factor"] == 0.934
     assert snapshot["win_rate"] == 0.542
     assert snapshot["closed_trades"] == 24
-    assert snapshot["top_loss_symbols"] == [{"symbol": "AMZN", "net_pnl": -3.54}]
+    # Cumulative loss drivers are never shown as the day's losers without
+    # report-date fills; they stay available under ``trade_history``.
+    assert snapshot["top_loss_symbols"] == []
+    assert snapshot["top_loss_basis"] == "unavailable"
+    assert snapshot["trade_history"]["top_loss_symbols"] == [{"symbol": "AMZN", "net_pnl": -3.54}]
     message = _block_text(slack_srv._eod_message_payload(snapshot))
     assert "*Net P&L -$0.45*" in message
     assert "*Closed trades*\n24" in message
@@ -2185,14 +2197,16 @@ def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
 
     snapshot = slack_srv._collect_eod_summary_snapshot({})
 
-    assert snapshot["net_pnl"] == -0.19
-    assert snapshot["pnl_basis"] == "same_day_fill_pairs"
+    assert snapshot["net_pnl"] == -0.18999999999999773
+    assert snapshot["pnl_basis"] == "same_day_fills"
+    assert snapshot["trade_history"]["pnl_basis"] == "same_day_fill_pairs"
+    assert snapshot["trade_history"]["net_pnl"] == -0.19
     assert snapshot["same_day_fill_summary"]["net_pnl"] == -0.18999999999999773
     assert snapshot["same_day_fill_summary"]["closed_trades"] == 1
     assert snapshot["same_day_fill_summary"]["open_qty_by_symbol"] == {}
     assert snapshot["pnl_discrepancy"]["status"] == "mismatch"
     message = _block_text(slack_srv._eod_message_payload(snapshot))
-    assert "*Net P&L -$0.19*  ·  fills basis -$0.19  ·  :warning: mismatch" in message
+    assert "*Net P&L -$0.19*  ·  basis fills  ·  accounting -$7.41  ·  :warning: mismatch" in message
     assert "P&L mismatch between accounting and fills" in message
 
 
