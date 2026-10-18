@@ -1,5 +1,20 @@
 # Current handoff
 
+## October 18 evening: /healthz latency root cause (branch, not merged or deployed)
+
+Branch `claude/modest-shtern-ae9515`. `/healthz` on :9001 took ~3 s per request
+because `.env` sets `AI_TRADING_HEALTH_REQUIRE_{OMS_INVARIANTS,OMS_LIFECYCLE_PARITY,
+REPLAY_LIVE_PARITY_GATE,DB_READY}=1`, so those gates skip the async health cache
+and run inline on every request. Out-of-process timings against live data: OMS
+reconciliation invariants ~0.7-0.8 s and lifecycle parity ~0.7-1.0 s (one SQL query
+and connection per intent, 2,255 intents each); replay gate ~1.6-2.5 s (parses all
+139 `replay_hash_*.json`, 163 MB, to find the newest). Concurrent probes serialize
+on the GIL: three concurrent curls each took ~11 s. Fix: a bulk
+`EventStore.list_oms_event_types_by_intent` query and a per-file signature cache of
+replay artifact `ts`. Full canonical payload ~3.4 s -> ~0.3 s warm (first call
+~1.9 s); gate outputs identical on live data. Remaining spike contributors: the
+in-process whole-file readers noted below.
+
 ## October 18 late: six fixes and upgrades merged to main, not deployed (start here)
 
 `main` is `a0b6368d0` on origin; the live runtime checkout is still at

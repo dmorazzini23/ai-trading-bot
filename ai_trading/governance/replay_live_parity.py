@@ -4,6 +4,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,15 @@ _CALENDAR_FALLBACK_EXCEPTIONS: tuple[type[Exception], ...] = (
 )
 
 logger = get_logger(__name__)
+
+# Replay artifact path -> ((inode, mtime_ns, size), payload ts, parsed ok).
+_REPLAY_ARTIFACT_TS_CACHE: dict[
+    str, tuple[tuple[int, int, int], datetime | None, bool]
+] = {}
+_REPLAY_ARTIFACT_PAYLOAD_CACHE: dict[
+    str, tuple[tuple[str, tuple[int, int, int]], dict[str, Any]]
+] = {}
+_REPLAY_ARTIFACT_CACHE_LOCK = Lock()
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -158,6 +168,79 @@ def _replay_session_age(ts: datetime, now: datetime) -> dict[str, Any]:
     }
 
 
+def _read_replay_governance_artifact(path: Path) -> dict[str, Any] | None:
+    try:
+        raw_payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw_payload, Mapping):
+        return None
+    return dict(raw_payload)
+
+
+def _replay_artifact_signature(path: Path) -> tuple[int, int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (int(stat.st_ino), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _select_latest_replay_governance_artifact(
+    candidates: list[Path],
+) -> tuple[Path, dict[str, Any] | None, str | None]:
+    """Pick the newest artifact by payload ``ts`` (ties by path).
+
+    Each artifact's ``ts`` is memoized by file signature so health reads only
+    re-parse artifacts that changed instead of every multi-MB replay report.
+    """
+
+    missing_ts = datetime.fromtimestamp(0.0, UTC)
+    parsed: dict[str, dict[str, Any]] = {}
+    ranked: list[tuple[datetime, str, Path, tuple[int, int, int] | None, bool]] = []
+    with _REPLAY_ARTIFACT_CACHE_LOCK:
+        live_keys: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            live_keys.add(key)
+            signature = _replay_artifact_signature(path)
+            cached = _REPLAY_ARTIFACT_TS_CACHE.get(key)
+            if signature is not None and cached is not None and cached[0] == signature:
+                ranked.append((cached[1] or missing_ts, key, path, signature, cached[2]))
+                continue
+            payload = _read_replay_governance_artifact(path)
+            valid = payload is not None
+            payload_ts = _parse_ts(payload.get("ts")) if payload is not None else None
+            if payload is not None:
+                parsed[key] = payload
+            if signature is not None:
+                _REPLAY_ARTIFACT_TS_CACHE[key] = (signature, payload_ts, valid)
+            ranked.append((payload_ts or missing_ts, key, path, signature, valid))
+        for stale_key in set(_REPLAY_ARTIFACT_TS_CACHE) - live_keys:
+            _REPLAY_ARTIFACT_TS_CACHE.pop(stale_key, None)
+
+        _, key, candidate, signature, valid = max(
+            ranked,
+            key=lambda item: (item[0], item[1]),
+        )
+        if not valid:
+            return candidate, None, "replay_governance_artifact_invalid"
+        winner = parsed.get(key)
+        cached_winner = _REPLAY_ARTIFACT_PAYLOAD_CACHE.get("latest")
+        if winner is None and cached_winner is not None and signature is not None and (
+            cached_winner[0] == (key, signature)
+        ):
+            winner = cached_winner[1]
+        if winner is None:
+            winner = _read_replay_governance_artifact(candidate)
+            if winner is None:
+                _REPLAY_ARTIFACT_TS_CACHE.pop(key, None)
+                return candidate, None, "replay_governance_artifact_invalid"
+        if signature is not None:
+            _REPLAY_ARTIFACT_PAYLOAD_CACHE["latest"] = ((key, signature), winner)
+        return candidate, dict(winner), None
+
+
 def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
     enabled = bool(
         get_env("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", True, cast=bool)
@@ -214,38 +297,8 @@ def _load_latest_replay_governance_snapshot() -> dict[str, Any]:
             "max_age_hours": float(max_age_hours),
         }
 
-    ranked_candidates: list[
-        tuple[datetime, str, Path, dict[str, Any] | None, str | None]
-    ] = []
-    missing_ts = datetime.fromtimestamp(0.0, UTC)
-    for path in candidates:
-        try:
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            ranked_candidates.append(
-                (missing_ts, str(path), path, None, "replay_governance_artifact_invalid")
-            )
-            continue
-        if not isinstance(raw_payload, Mapping):
-            ranked_candidates.append(
-                (missing_ts, str(path), path, None, "replay_governance_artifact_invalid")
-            )
-            continue
-        payload = dict(raw_payload)
-        payload_ts = _parse_ts(payload.get("ts"))
-        ranked_candidates.append(
-            (
-                payload_ts if payload_ts is not None else missing_ts,
-                str(path),
-                path,
-                payload,
-                None,
-            )
-        )
-
-    _, _, candidate, payload, load_error = max(
-        ranked_candidates,
-        key=lambda item: (item[0], item[1]),
+    candidate, payload, load_error = _select_latest_replay_governance_artifact(
+        candidates
     )
     if payload is None:
         return {

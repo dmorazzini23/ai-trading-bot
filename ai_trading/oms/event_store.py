@@ -1000,6 +1000,50 @@ class EventStore:
                 conn.rollback()
         return [dict(row) for row in rows]
 
+    def list_oms_event_types_by_intent(
+        self,
+        intent_ids: Iterable[str],
+        *,
+        limit_per_intent: int = 5000,
+    ) -> dict[str, list[str]]:
+        """Return each intent's OMS event types in ``event_id`` order.
+
+        Bulk equivalent of calling ``list_oms_events(intent_id=...)`` per intent
+        and keeping only ``event_type``; one query per chunk of intents instead
+        of one query and connection per intent.
+        """
+
+        assert _OMS_EVENTS_TABLE is not None
+        cap = max(1, int(limit_per_intent))
+        wanted = list(dict.fromkeys(str(value) for value in intent_ids if value not in (None, "")))
+        grouped: dict[str, list[str]] = {intent_id: [] for intent_id in wanted}
+        if not wanted:
+            return grouped
+        chunk_size = 500
+        with self._engine.connect() as conn:
+            try:
+                for start in range(0, len(wanted), chunk_size):
+                    chunk = wanted[start : start + chunk_size]
+                    stmt = (
+                        select(
+                            _OMS_EVENTS_TABLE.c.intent_id,
+                            _OMS_EVENTS_TABLE.c.event_type,
+                        )
+                        .where(_OMS_EVENTS_TABLE.c.intent_id.in_(chunk))
+                        .order_by(_OMS_EVENTS_TABLE.c.event_id.asc())
+                    )
+                    result = conn.execute(stmt)
+                    try:
+                        for row_intent_id, row_event_type in result:
+                            bucket = grouped.get(str(row_intent_id))
+                            if bucket is not None and len(bucket) < cap:
+                                bucket.append(row_event_type)
+                    finally:
+                        result.close()
+            finally:
+                conn.rollback()
+        return grouped
+
     def list_decision_events(self, *, symbol: str | None = None, limit: int = 500,
                              idempotency_key: str | None = None) -> list[dict[str, Any]]:
         """List decision events optionally filtered by symbol."""

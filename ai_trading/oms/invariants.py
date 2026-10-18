@@ -53,10 +53,14 @@ def evaluate_oms_reconciliation_invariants(
 
     try:
         intents = intent_store.list_intents(limit=max(1, int(limit)))
+        event_types_by_intent = event_store.list_oms_event_types_by_intent(
+            [intent.intent_id for intent in intents],
+            limit_per_intent=5000,
+        )
         for intent in intents:
             scanned += 1
-            events = event_store.list_oms_events(intent_id=intent.intent_id, limit=5000)
-            event_types = {str(row.get("event_type") or "").strip().upper() for row in events}
+            raw_event_types = event_types_by_intent.get(str(intent.intent_id), [])
+            event_types = {str(value or "").strip().upper() for value in raw_event_types}
             event_types.discard("")
 
             if "INTENT_CREATED" not in event_types:
@@ -184,13 +188,17 @@ def evaluate_oms_lifecycle_parity_invariants(
 
     try:
         intents = intent_store.list_intents(limit=max(1, int(limit)))
+        event_types_by_intent = event_store.list_oms_event_types_by_intent(
+            [intent.intent_id for intent in intents],
+            limit_per_intent=5000,
+        )
         for intent in intents:
             scanned += 1
-            rows = event_store.list_oms_events(intent_id=intent.intent_id, limit=5000)
+            raw_event_types = event_types_by_intent.get(str(intent.intent_id), [])
             event_types = [
-                str(row.get("event_type") or "").strip().upper()
-                for row in rows
-                if str(row.get("event_type") or "").strip()
+                str(value or "").strip().upper()
+                for value in raw_event_types
+                if str(value or "").strip()
             ]
             event_set = set(event_types)
             normalized_status = normalize_intent_status(
