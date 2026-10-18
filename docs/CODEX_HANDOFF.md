@@ -1,9 +1,34 @@
 # Current handoff
 
-## October 18 late: six fixes and upgrades merged to main, not deployed (start here)
+## October 18 night deploy of `7ce1acdc9` — complete (start here)
 
-`main` is `a0b6368d0` on origin; the live runtime checkout is still at
-`7e0a00365` (deployed 16:56 UTC, below). Full suite on the merged tree:
+Deployed Sun 19:52 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint passed on `7ce1acdc9`. Prior spec saved as
+`runtime/release_spec.7e0a00365.bak.json`; the new spec changes only the SHA
+(config and launch-profile hashes unchanged; the fee-schedule fields default to
+`missing`). Identity checks pass pre- and post-migration, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, 0 restarts, broker
+connected and flat, RSS 729 MB at 89 s. Exactly one WARNING as designed:
+`STRATEGIES_NOT_CONSUMED_UNDER_NETTING` (remove STRATEGIES from `.env` to
+silence it). The replay gate now reports only `replay_counterfactual` with
+`sessions_since_replay=0`, basis `exchange_calendar`.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 7e0a00365`,
+restore that spec, restart.
+
+**Known, pre-existing, not fixed:** `/healthz` takes 3.6–6.5 s per request
+(503 while degraded is expected). The connectors dispatcher's health timeout is
+5 s, so roughly half of its minute-runs record `health_payload_unavailable`
+(48 in the three hours before this deploy, on `7e0a00365`). Root cause is the
+whole-file loads inside the health/go-no-go path (see the retention follow-up
+below); either bound those readers or raise the dispatcher timeout.
+
+Monday watch list: burn-in cycles accumulating with no reset; closing sells as
+`order_role: exit`; first real EOD recap in Slack after the close; the prune
+timer's first archive rotation of `decision_records.jsonl`; cycle times.
+
+## October 18 late: six fixes and upgrades merged to main
+
+`main` is `7ce1acdc9` on origin and deployed (above). Full suite on the merged tree:
 7,543 passed, 3 skipped, under the new production read guard; ruff, mypy and
 compile clean on all 14 changed runtime files. Each piece was built in its own
 worktree by an Opus 5.5 agent and verified independently before merging.
