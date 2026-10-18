@@ -1269,6 +1269,266 @@ def test_deduped_other_incident_clears_pending_outage_confirmation(monkeypatch, 
     assert len(posts) == 1
 
 
+def _market_closed_degraded_snapshot() -> dict[str, Any]:
+    """Shape of the Oct 18 market-closed incident (fingerprint 6af3931c...)."""
+
+    return {
+        "runtime_gonogo_block_openings_enabled": True,
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["closed_trades", "win_rate", "acceptance_rate"],
+        "execution_capture_ratio": 0.315,
+        "slippage_drag_bps": 8.38,
+        "expected_edge_per_accept_bps": 41.63,
+        "edge_realism_gap_ratio": 0.07,
+        "health_ok": False,
+        "health_status": "degraded",
+        "health_reason": "required_model_stale",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "connected",
+        "service_phase": "active",
+        "service_phase_since": "2026-10-17T05:49:55+00:00",
+        "timestamp": "2026-10-18T03:08:37Z",
+    }
+
+
+def _health_timeout_snapshot() -> dict[str, Any]:
+    """The same runtime read through a timed-out ``/healthz`` (fingerprint 143e628a...)."""
+
+    snapshot = _market_closed_degraded_snapshot()
+    snapshot.update(
+        {
+            "health_reason": "health_payload_unavailable",
+            "provider_status": "unknown",
+            "provider_active": "unknown",
+            "provider_reason": "health_payload_unavailable",
+            "broker_status": "unknown",
+            "service_phase": "unknown",
+            "service_phase_since": "",
+            "timestamp": "2026-10-18T03:07:36Z",
+        }
+    )
+    return snapshot
+
+
+def _notify_sequence(
+    monkeypatch, tmp_path: Path, snapshots: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    posts: list[dict[str, Any]] = []
+    queue = list(snapshots)
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", lambda _args: dict(queue.pop(0)))
+    monkeypatch.setattr(
+        slack_srv, "_post_slack_message", lambda _url, payload, **_kwargs: posts.append(payload) or 200
+    )
+    args = {
+        "state_path": str(tmp_path / "slack_state.json"),
+        "webhook_url": "https://hooks.slack.test/example",
+    }
+    results = [slack_srv.tool_notify_incident_channel(args) for _ in snapshots]
+    return results, posts
+
+
+def test_health_timeout_snapshot_changes_triggers_not_just_broker_status() -> None:
+    closed = _market_closed_degraded_snapshot()
+    timed_out = _health_timeout_snapshot()
+
+    assert slack_srv._evaluate_incident_triggers(closed, {}) == ["health_degraded"]
+    # The fallback payload loses ``market_closed``, so market-hours triggers return:
+    # fingerprint-only tweaks to ``broker_status`` cannot stop this flip.
+    assert slack_srv._evaluate_incident_triggers(timed_out, {}) == [
+        "edge_realism_gap_high",
+        "go_no_go_failed",
+        "go_no_go_failed_checks",
+        "health_degraded",
+    ]
+
+
+def test_safe_health_payload_retries_timed_out_read_with_longer_timeout(monkeypatch) -> None:
+    timeouts: list[float] = []
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        timeouts.append(timeout_s)
+        if len(timeouts) == 1:
+            return slack_srv._health_unavailable_payload(
+                port=port, url="http://127.0.0.1:9001/healthz", error="timed out"
+            )
+        return {"ok": False, "status": "degraded", "reason": "required_model_stale",
+                "broker": {"status": "connected"}}
+
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+
+    health = slack_srv._safe_health_payload(port=9001, timeout_s=5.0, retry_timeout_s=25.0)
+
+    assert timeouts == [5.0, 25.0]
+    assert health["reason"] == "required_model_stale"
+    assert health["broker"]["status"] == "connected"
+
+
+def test_safe_health_payload_reports_both_failures_when_retry_fails(monkeypatch) -> None:
+    timeouts: list[float] = []
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        timeouts.append(timeout_s)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+
+    health = slack_srv._safe_health_payload(port=9001, timeout_s=5.0, retry_timeout_s=25.0)
+
+    assert timeouts == [5.0, 25.0]
+    assert health["reason"] == "health_payload_unavailable"
+    assert health["broker"] == {"status": "unknown"}
+    assert health["health_error"] == "timed out; retry: timed out"
+
+
+def test_safe_health_payload_does_not_retry_a_readable_payload_or_when_disabled(
+    monkeypatch,
+) -> None:
+    timeouts: list[float] = []
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        timeouts.append(timeout_s)
+        if port == 9002:
+            raise TimeoutError("timed out")
+        return {"ok": False, "status": "degraded", "reason": "required_model_stale"}
+
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+
+    assert slack_srv._safe_health_payload(port=9001, timeout_s=5.0, retry_timeout_s=25.0)[
+        "reason"
+    ] == "required_model_stale"
+    assert slack_srv._safe_health_payload(port=9002, timeout_s=5.0)["reason"] == (
+        "health_payload_unavailable"
+    )
+    assert timeouts == [5.0, 5.0]
+    assert slack_srv._health_retry_timeout_s({}) == 25.0
+    assert slack_srv._health_retry_timeout_s({"health_retry_timeout_s": 0}) == 0.0
+
+
+def test_collect_runtime_snapshot_recovers_market_closed_state_after_slow_health_read(
+    monkeypatch, tmp_path: Path
+) -> None:
+    timeouts: list[float] = []
+
+    def _fake_health_payload(*, port: int, timeout_s: float) -> dict[str, Any]:
+        timeouts.append(timeout_s)
+        if len(timeouts) == 1:
+            raise TimeoutError("timed out")
+        return {
+            "ok": False,
+            "status": "degraded",
+            "reason": "required_model_stale",
+            "data_provider": {"status": "warming_up", "active": "alpaca", "reason": "market_closed"},
+            "broker": {"status": "connected"},
+            "service_state": {"status": "ready", "phase": "active", "reason": "market_closed"},
+        }
+
+    monkeypatch.setattr(
+        slack_srv,
+        "_runtime_report_payload",
+        lambda: {"go_no_go": {"gate_passed": False, "failed_checks": ["win_rate"]}},
+    )
+    monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
+    monkeypatch.setattr(
+        slack_srv,
+        "_collect_execution_window_snapshot",
+        lambda _args: {"execution_window_minutes": 30},
+    )
+    monkeypatch.setattr(
+        slack_srv,
+        "_collect_gate_window_snapshot",
+        lambda _args: {"gate_window_rows": 0, "gate_window_minutes": 60},
+    )
+
+    snapshot = slack_srv._collect_runtime_snapshot({"health_timeout_s": 5.0})
+
+    assert timeouts == [5.0, 25.0]
+    assert snapshot["broker_status"] == "connected"
+    assert snapshot["provider_reason"] == "market_closed"
+    assert slack_srv._evaluate_incident_triggers(snapshot, {}) == ["health_degraded"]
+
+
+def test_health_timeout_flap_does_not_resend_recent_incidents(monkeypatch, tmp_path: Path) -> None:
+    closed = _market_closed_degraded_snapshot()
+    timed_out = _health_timeout_snapshot()
+    # Oct 18 17:03-17:56: a clustered run of timed-out reads confirms the
+    # unavailable-shaped incident, then the readable snapshot returns.
+    results, posts = _notify_sequence(
+        monkeypatch,
+        tmp_path,
+        [closed, timed_out, timed_out, timed_out, closed, closed, timed_out, timed_out, timed_out, closed, closed],
+    )
+
+    assert [result["sent"] for result in results] == [
+        True, False, False, True, False, False, False, False, False, False, False,
+    ]
+    assert results[0]["fingerprint"] != results[3]["fingerprint"]
+    assert results[5]["reason"] == "recent_signature_cooldown_active"
+    assert results[8]["reason"] == "repeat_cooldown_active"
+    assert results[10]["reason"] == "recent_signature_cooldown_active"
+    assert len(posts) == 2
+    state = json.loads((tmp_path / "slack_state.json").read_text(encoding="utf-8"))
+    assert set(state["recent_signatures"]) == {
+        results[0]["incident_signature"],
+        results[3]["incident_signature"],
+    }
+
+
+def test_recent_signature_resends_after_repeat_cooldown_expires(monkeypatch, tmp_path: Path) -> None:
+    closed = _market_closed_degraded_snapshot()
+    timed_out = _health_timeout_snapshot()
+    results, posts = _notify_sequence(
+        monkeypatch, tmp_path, [closed, timed_out, timed_out, timed_out]
+    )
+    assert [result["sent"] for result in results] == [True, False, False, True]
+
+    state_path = tmp_path / "slack_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    stale = (datetime.now(UTC) - timedelta(minutes=46)).isoformat().replace("+00:00", "Z")
+    state["recent_signatures"][results[0]["incident_signature"]] = stale
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    later, later_posts = _notify_sequence(monkeypatch, tmp_path, [closed, closed])
+
+    assert [result["sent"] for result in later] == [False, True]
+    assert later[0]["reason"] == "trigger_change_confirmation_pending"
+    assert len(posts) + len(later_posts) == 3
+
+
+def test_new_incident_shape_still_alerts_after_flapping(monkeypatch, tmp_path: Path) -> None:
+    closed = _market_closed_degraded_snapshot()
+    timed_out = _health_timeout_snapshot()
+    outage = dict(closed, broker_status="disconnected")
+    results, posts = _notify_sequence(
+        monkeypatch, tmp_path, [closed, timed_out, timed_out, timed_out, closed, closed, outage]
+    )
+
+    assert [result["sent"] for result in results] == [True, False, False, True, False, False, True]
+    assert "broker_disconnected" in results[6]["triggers"]
+    assert len(posts) == 3
+
+
+def test_unavailable_read_breaks_a_pending_trigger_change_streak(
+    monkeypatch, tmp_path: Path
+) -> None:
+    closed = _market_closed_degraded_snapshot()
+    timed_out = _health_timeout_snapshot()
+    # Oct 18 17:48-17:50: readable, unavailable, readable used to count as two
+    # consecutive readable evaluations and re-send the market-closed incident.
+    results, posts = _notify_sequence(
+        monkeypatch, tmp_path, [timed_out, timed_out, closed, timed_out, closed]
+    )
+
+    assert [result["sent"] for result in results] == [False, True, False, False, False]
+    assert results[2]["reason"] == "trigger_change_confirmation_pending"
+    assert results[3]["reason"] == "health_unavailable_confirmation_pending"
+    assert results[4]["reason"] == "trigger_change_confirmation_pending"
+    assert results[4]["pending_trigger_set_count"] == 1
+    assert len(posts) == 1
+
+
 def test_notify_incident_channel_can_disable_health_unavailable_confirmation(
     monkeypatch, tmp_path: Path
 ) -> None:
