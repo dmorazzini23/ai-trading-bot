@@ -44,6 +44,7 @@ _DEFAULT_EOD_STATE = _DEFAULT_RUNTIME_ROOT / "slack_eod_state.json"
 _DEFAULT_INCIDENT_REPEAT_COOLDOWN_MINUTES = 45
 _DEFAULT_HEALTH_PORT = 9001
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
+_DEFAULT_HEALTH_RETRY_TIMEOUT_SECONDS = 25.0
 _STARTUP_WARMUP_HEALTH_REASONS = frozenset(
     {
         "startup",
@@ -207,12 +208,41 @@ def _health_payload(port: int, timeout_s: float) -> dict[str, Any]:
         return _health_unavailable_payload(port=port, url=url, error=str(exc))
 
 
-def _safe_health_payload(port: int, timeout_s: float) -> dict[str, Any]:
-    try:
-        return _health_payload(port=port, timeout_s=timeout_s)
-    except Exception as exc:
-        url = f"http://127.0.0.1:{port}/healthz"
-        return _health_unavailable_payload(port=port, url=url, error=str(exc))
+def _safe_health_payload(
+    port: int, timeout_s: float, retry_timeout_s: float = 0.0
+) -> dict[str, Any]:
+    """Read ``/healthz``, retrying a failed read once with ``retry_timeout_s``.
+
+    ``/healthz`` answers in ~3s and spikes to 6-20s for minutes at a time, so
+    a single read under the 5s default intermittently times out. The fallback
+    payload reports broker/provider ``unknown`` and drops the ``market_closed``
+    reason, which re-enables market-hours triggers and flips the incident between
+    two fingerprints every few minutes. A refused connection still fails fast.
+    """
+
+    def _read(read_timeout_s: float) -> dict[str, Any]:
+        try:
+            return _health_payload(port=port, timeout_s=read_timeout_s)
+        except Exception as exc:
+            url = f"http://127.0.0.1:{port}/healthz"
+            return _health_unavailable_payload(port=port, url=url, error=str(exc))
+
+    health = _read(timeout_s)
+    if health.get("reason") == "health_payload_unavailable" and retry_timeout_s > 0:
+        retried = _read(max(timeout_s, retry_timeout_s))
+        if retried.get("reason") == "health_payload_unavailable":
+            retried["health_error"] = (
+                f"{health.get('health_error')}; retry: {retried.get('health_error')}"
+            )[:500]
+        return retried
+    return health
+
+
+def _health_retry_timeout_s(args: dict[str, Any]) -> float:
+    raw = args.get("health_retry_timeout_s")
+    if raw in (None, ""):
+        return _DEFAULT_HEALTH_RETRY_TIMEOUT_SECONDS
+    return max(0.0, float(raw))
 
 
 def _incident_state_path(args: dict[str, Any]) -> Path:
@@ -603,7 +633,9 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     timeout_s = float(
         args.get("health_timeout_s") or _DEFAULT_HEALTH_TIMEOUT_SECONDS
     )
-    health = _safe_health_payload(port=port, timeout_s=timeout_s)
+    health = _safe_health_payload(
+        port=port, timeout_s=timeout_s, retry_timeout_s=_health_retry_timeout_s(args)
+    )
     data_provider = health.get("data_provider") or {}
     broker = health.get("broker") or {}
     service_state = health.get("service_state") or {}
@@ -1006,7 +1038,9 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     timeout_s = float(
         args.get("health_timeout_s") or _DEFAULT_HEALTH_TIMEOUT_SECONDS
     )
-    health = _safe_health_payload(port=port, timeout_s=timeout_s)
+    health = _safe_health_payload(
+        port=port, timeout_s=timeout_s, retry_timeout_s=_health_retry_timeout_s(args)
+    )
     data_provider = health.get("data_provider")
     data_provider_obj = data_provider if isinstance(data_provider, dict) else {}
     broker = health.get("broker")
@@ -1589,6 +1623,29 @@ def _material_incident_triggers_for_dedupe(triggers: list[str] | set[str]) -> li
     return sorted(material)
 
 
+def _recent_incident_signatures(
+    prior: dict[str, Any], now: datetime, repeat_cooldown_minutes: int
+) -> dict[str, datetime]:
+    """Signatures sent within the repeat cooldown, keyed to their last send time."""
+
+    if repeat_cooldown_minutes <= 0:
+        return {}
+    candidates: dict[str, Any] = {}
+    raw = prior.get("recent_signatures")
+    if isinstance(raw, dict):
+        candidates.update(raw)
+    prior_signature = str(prior.get("incident_signature") or "").strip()
+    if prior_signature and prior.get("sent_at"):
+        candidates[prior_signature] = prior.get("sent_at")
+    cutoff = now - timedelta(minutes=repeat_cooldown_minutes)
+    recent: dict[str, datetime] = {}
+    for key, value in candidates.items():
+        sent_at = _parse_iso_ts(value)
+        if str(key).strip() and sent_at is not None and sent_at > cutoff:
+            recent[str(key).strip()] = sent_at
+    return recent
+
+
 def _incident_repeat_cooldown_minutes(args: dict[str, Any]) -> int:
     raw = args.get("repeat_cooldown_minutes")
     if raw is None:
@@ -2069,7 +2126,13 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
         pending_signature = str(prior.get("pending_health_unavailable_signature") or "")
         pending_seen_at = _parse_iso_ts(prior.get("pending_health_unavailable_seen_at"))
         if pending_signature != signature or pending_seen_at is None:
-            pending_payload = dict(prior)
+            # An unconfirmed unavailable read interrupts a pending trigger-set
+            # change, so the readings either side of it are not consecutive.
+            pending_payload = {
+                key: value
+                for key, value in prior.items()
+                if not key.startswith("pending_trigger_set")
+            }
             pending_payload.update(
                 {
                     "pending_health_unavailable_signature": signature,
@@ -2141,6 +2204,34 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
             key: value for key, value in prior.items() if not key.startswith("pending_trigger_set")
         }
         _save_state(state_path, prior)
+
+    recent_signatures = _recent_incident_signatures(prior, now, repeat_cooldown_minutes)
+    recent_signature_sent_at = recent_signatures.get(signature)
+    if (
+        on_change_only
+        and not force
+        and trigger_set_changed
+        and not hard_trigger_appeared
+        and recent_signature_sent_at is not None
+    ):
+        # Flapping between two incident shapes (for example an unreadable
+        # ``/healthz`` and the real market-closed snapshot) would otherwise reset
+        # the repeat cooldown on every flip and re-send both.
+        next_eligible_at = (
+            (recent_signature_sent_at + timedelta(minutes=repeat_cooldown_minutes))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        return {
+            "sent": False,
+            "reason": "recent_signature_cooldown_active",
+            "fingerprint": fingerprint,
+            "incident_signature": signature,
+            "state_path": str(state_path),
+            "triggers": triggers,
+            "snapshot": snapshot,
+            "next_eligible_at": next_eligible_at,
+        }
 
     if on_change_only and prior_sent_at is not None and not force and not trigger_set_changed:
         if repeat_cooldown_minutes > 0:
@@ -2224,10 +2315,18 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     timeout_s = float(args.get("timeout_s") or 5.0)
     status_code = _post_slack_message(webhook_url, payload, timeout_s=timeout_s)
 
+    sent_at = utc_now_iso()
     state_payload = {
         "fingerprint": fingerprint,
         "incident_signature": signature,
-        "sent_at": utc_now_iso(),
+        "sent_at": sent_at,
+        "recent_signatures": {
+            **{
+                key: value.isoformat().replace("+00:00", "Z")
+                for key, value in recent_signatures.items()
+            },
+            signature: sent_at,
+        },
         "triggers": triggers,
         "snapshot": snapshot,
         "status_code": status_code,
