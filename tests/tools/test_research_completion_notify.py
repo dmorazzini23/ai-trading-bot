@@ -7,6 +7,17 @@ from typing import Any, Mapping
 from ai_trading.tools import research_completion_notify
 
 
+def _all_text(payload: Mapping[str, Any]) -> str:
+    """All rendered text in the payload's blocks, newline-joined."""
+    parts: list[str] = []
+    for block in payload["blocks"]:
+        if isinstance(block.get("text"), dict):
+            parts.append(block["text"]["text"])
+        parts.extend(field["text"] for field in block.get("fields", []))
+        parts.extend(element["text"] for element in block.get("elements", []))
+    return "\n".join(parts)
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(dict(payload)), encoding="utf-8")
@@ -99,35 +110,34 @@ def test_research_completion_payload_reads_latest_artifacts(tmp_path: Path) -> N
     )
 
     assert payload["channel"] == "#all-beatwallstreet"
-    assert payload["text"].startswith("ai-trading research daily finished: complete")
-    section_field_counts = [
-        len(block.get("fields", []))
-        for block in payload["blocks"]
-        if block.get("type") == "section"
-    ]
-    assert section_field_counts
-    assert max(section_field_counts) <= 10
-    field_text = "\n".join(
-        field["text"]
-        for block in payload["blocks"]
-        if block.get("type") == "section"
-        for field in block.get("fields", [])
+    blocks = payload["blocks"]
+    assert blocks[0]["type"] == "header"
+    assert blocks[0]["text"]["text"] == "🟠 Research daily · complete · next session: paper trade"
+    assert payload["text"] == (
+        "[WARNING] Research daily · complete · next session: paper trade — trade allowed: yes · 0 blocked reasons"
     )
-    assert "paper_trade" in field_text
-    assert "daily:daily:daily-20260505T210000Z" in field_text
-    assert "/runtime/research/daily/run" in field_text
-    assert "blocked" in field_text
-    assert "multi_horizon_lightweight" in field_text
-    assert "runtime_gonogo_status" in field_text
-    assert "desired=3" in field_text
-    assert "controlled_skips=4" in field_text
-    assert "AMZN:consider_promotion/high" in field_text
-    assert "MSFT:collect_more_evidence/low" in field_text
-    assert "overestimated / keep_tiny_sampling" in field_text
-    assert "starved / widen_paper_diagnostic_sampling" in field_text
-    assert "Hugging Face" not in field_text
-    assert "research_automation cadence=daily workflow=daily status=complete" in field_text
-    assert '"trade_allowed": true' in field_text
+    assert all(len(block.get("fields", [])) <= 10 for block in blocks)
+    assert [field["text"] for field in blocks[1]["fields"]] == [
+        "*Recommended mode*\npaper trade",
+        "*Trade allowed*\nyes",
+        "*Live readiness*\nblocked",
+        "*Operator action*\nreview summary and generated artifacts",
+    ]
+    assert blocks[2]["text"]["text"] == "*Blocked reasons*\n• none"
+    assert blocks[3]["text"]["text"] == (
+        "*Trading day*\ndesired 3 · submitted 2 · fills 2 · rejected 1 · controlled skips 4"
+    )
+    text = _all_text(payload)
+    assert "AMZN consider promotion/high" in text
+    assert "MSFT collect more evidence/low" in text
+    assert "*Expected edge*\noverestimated → keep tiny sampling" in text
+    assert "*Evidence starvation*\nstarved → widen paper diagnostic sampling" in text
+    assert "*Steps*\n• Blocked (1): runtime gonogo status\n• Skipped (1): multi horizon lightweight" in text
+    assert "research_automation cadence=daily workflow=daily status=complete" in text
+    assert "*Report checks* — 0 of 2 OK; needs attention:\n• daily research: no status" in text
+    assert "Run daily-20260505T210000Z · exit 0 · current artifacts" in text
+    assert "`/runtime/research/research_automation_report.json`" in text
+    assert "{" not in text and "Hugging Face" not in text
 
 
 def test_research_completion_payload_includes_weekend_artifact_summary(tmp_path: Path) -> None:
@@ -167,17 +177,11 @@ def test_research_completion_payload_includes_weekend_artifact_summary(tmp_path:
         channel="#all-beatwallstreet",
     )
 
-    field_text = "\n".join(
-        field["text"]
-        for block in payload["blocks"]
-        if block.get("type") == "section"
-        for field in block.get("fields", [])
-    )
-    assert "symbols=AAPL,AMZN" in field_text
-    assert "max_candidates=100" in field_text
-    assert "max_replay=15" in field_text
-    assert "research_only=true" in field_text
-    assert "review_broad_research_then_wait_for_sunday_validation" in field_text
+    assert payload["blocks"][0]["text"]["text"] == "🟢 Research weekend-saturday · complete"
+    assert (
+        "*Weekend research (research only)*\n2 symbols (AAPL, AMZN), ≤100 candidates, ≤15 replays · "
+        "Monday: review broad research then wait for sunday validation"
+    ) in _all_text(payload)
 
 
 def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Path) -> None:
@@ -203,16 +207,11 @@ def test_research_completion_payload_marks_failed_exit_code_failed(tmp_path: Pat
         run_status="infrastructure_failed",
     )
 
-    assert payload["text"].startswith("ai-trading research daily finished: infrastructure_failed")
-    field_text = "\n".join(
-        field["text"]
-        for block in payload["blocks"]
-        if block.get("type") == "section"
-        for field in block.get("fields", [])
-    )
-    assert "*Report status*\nunknown" in field_text
-    assert "*Artifact freshness*\nstale_latest_suppressed" in field_text
-    assert "stale_complete.json" not in field_text
+    assert payload["text"].startswith("[CRITICAL] Research daily · infrastructure failed")
+    assert payload["blocks"][0]["text"]["text"].startswith("🔴 Research daily · infrastructure failed")
+    text = _all_text(payload)
+    assert "exit 1 · stale latest artifacts suppressed" in text
+    assert "stale_complete.json" not in text
 
 
 def test_research_completion_payload_preserves_blocked_status_on_blocked_exit(
@@ -240,7 +239,8 @@ def test_research_completion_payload_preserves_blocked_status_on_blocked_exit(
         channel="#all-beatwallstreet",
     )
 
-    assert payload["text"].startswith("ai-trading research daily finished: blocked")
+    assert payload["text"].startswith("[WARNING] Research daily · blocked")
+    assert "*Steps*\n• Blocked (1): runtime gonogo status" in _all_text(payload)
 
 
 def test_research_completion_payload_suppresses_locked_stale_latest(tmp_path: Path) -> None:
@@ -266,16 +266,10 @@ def test_research_completion_payload_suppresses_locked_stale_latest(tmp_path: Pa
         run_status="locked",
     )
 
-    assert payload["text"].startswith("ai-trading research daily finished: locked")
-    field_text = "\n".join(
-        field["text"]
-        for block in payload["blocks"]
-        if block.get("type") == "section"
-        for field in block.get("fields", [])
-    )
-    assert "*Report status*\nunknown" in field_text
-    assert "*Artifact freshness*\nstale_latest_suppressed" in field_text
-    assert "old_complete.json" not in field_text
+    assert payload["text"].startswith("[WARNING] Research daily · locked")
+    text = _all_text(payload)
+    assert "exit 75 · stale latest artifacts suppressed" in text
+    assert "old_complete.json" not in text
 
 
 def test_research_completion_notify_dry_run_does_not_post(tmp_path: Path, capsys) -> None:

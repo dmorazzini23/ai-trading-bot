@@ -15,6 +15,7 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
+from ai_trading.monitoring import slack_format as slack_fmt
 from ai_trading.runtime.atomic_io import atomic_write_text
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -1574,216 +1575,191 @@ def _post_slack_message(webhook_url: str, payload: dict[str, Any], timeout_s: fl
         raise RuntimeError(f"Slack webhook request failed: {exc.reason}") from exc
 
 
-def _slack_plain_text(text: str, *, max_len: int = 150) -> dict[str, Any]:
-    value = str(text or "").strip()
-    if len(value) > max_len:
-        value = f"{value[: max_len - 1]}…"
-    return {"type": "plain_text", "text": value or "n/a", "emoji": True}
-
-
-def _slack_mrkdwn(text: str, *, max_len: int = 3000) -> dict[str, Any]:
-    value = str(text or "").strip()
-    if len(value) > max_len:
-        value = f"{value[: max_len - 1]}…"
-    return {"type": "mrkdwn", "text": value or "n/a"}
-
-
-def _slack_field(label: str, value: Any) -> dict[str, Any]:
-    return _slack_mrkdwn(f"*{label}*\n{value}", max_len=2000)
-
-
-def _slack_section(
-    text: str | None = None,
-    *,
-    fields: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    block: dict[str, Any] = {"type": "section"}
-    if text is not None:
-        block["text"] = _slack_mrkdwn(text)
-    if fields:
-        block["fields"] = fields[:10]
-    return block
-
-
-def _slack_context(*items: str) -> dict[str, Any]:
-    return {"type": "context", "elements": [_slack_mrkdwn(item, max_len=300) for item in items[:10]]}
+_INCIDENT_TRIGGER_LABELS = {
+    "go_no_go_failed": "Go/no-go gate failed",
+    "go_no_go_failed_checks": "Go/no-go reported failed checks",
+    "execution_capture_ratio_low": "Execution capture ratio is below target",
+    "execution_fill_ratio_low": "Recent fill ratio is below target",
+    "pre_execution_checks_spike": "Pre-execution order-check failures are spiking",
+    "rejection_concentration_high": "One rejection reason is dominating decisions",
+    "edge_realism_gap_high": "Live realized edge is lagging expected edge",
+    "health_degraded": "Runtime health is degraded",
+    "data_provider_backup_active": "Data provider is running on backup feed",
+    "broker_disconnected": "Broker connection is not healthy",
+}
+# Most important first; the first trigger present becomes the headline.
+_INCIDENT_TRIGGER_PRIORITY = (
+    "broker_disconnected",
+    "health_degraded",
+    "data_provider_backup_active",
+    "go_no_go_failed",
+    "pre_execution_checks_spike",
+    "execution_fill_ratio_low",
+    "execution_capture_ratio_low",
+    "edge_realism_gap_high",
+    "rejection_concentration_high",
+    "go_no_go_failed_checks",
+)
+_INCIDENT_TRIGGER_ACTIONS = {
+    "broker_disconnected": "Check broker connectivity on `/healthz`; orders cannot route while it is down.",
+    "health_degraded": "Check the reason on `/healthz` and `journalctl -u ai-trading.service`.",
+    "data_provider_backup_active": "Primary feed is down; confirm backup quotes are fresh.",
+    "go_no_go_failed": "Openings stay gated until the failed go/no-go checks pass.",
+    "pre_execution_checks_spike": "Review the top pre-check blockers.",
+    "execution_fill_ratio_low": "Review recent order outcomes in the runtime performance report.",
+    "execution_capture_ratio_low": "Review edge capture in the runtime performance report.",
+    "edge_realism_gap_high": "Review edge calibration; realized edge is lagging expectations.",
+    "rejection_concentration_high": "Review the dominant rejection gate.",
+}
+# Metric fields promoted next to the impact section when their trigger fires.
+_INCIDENT_TRIGGER_METRIC = {
+    "execution_capture_ratio_low": "capture",
+    "execution_fill_ratio_low": "fill",
+    "pre_execution_checks_spike": "precheck",
+    "rejection_concentration_high": "rejection",
+    "edge_realism_gap_high": "realism",
+}
+_INCIDENT_DEFAULT_METRICS = ("slippage", "capture")
+_INCIDENT_MAX_METRIC_FIELDS = 4
+_CRITICAL_HEALTH_STATUSES = frozenset({"unavailable", "down", "error", "unhealthy"})
 
 
 def _incident_trigger_labels(triggers: list[str]) -> list[str]:
-    trigger_map = {
-        "go_no_go_failed": "Go/no-go gate failed",
-        "go_no_go_failed_checks": "Go/no-go reported failed checks",
-        "execution_capture_ratio_low": "Execution capture ratio is below target",
-        "execution_fill_ratio_low": "Recent fill ratio is below target",
-        "pre_execution_checks_spike": "Pre-execution order-check failures are spiking",
-        "rejection_concentration_high": "One rejection reason is dominating decisions",
-        "edge_realism_gap_high": "Live realized edge is lagging expected edge",
-        "health_degraded": "Runtime health is degraded",
-        "data_provider_backup_active": "Data provider is running on backup feed",
-        "broker_disconnected": "Broker connection is not healthy",
-    }
-    return [trigger_map.get(trigger, trigger) for trigger in triggers]
+    return [_INCIDENT_TRIGGER_LABELS.get(trigger, slack_fmt.humanize(trigger)) for trigger in triggers]
 
 
-def _incident_message_text(snapshot: dict[str, Any], triggers: list[str]) -> str:
-    failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
-    checks_text = ", ".join(failed_checks) if failed_checks else "none"
+def _ordered_incident_triggers(triggers: list[str]) -> list[str]:
+    rank = {name: index for index, name in enumerate(_INCIDENT_TRIGGER_PRIORITY)}
+    return sorted(triggers, key=lambda name: rank.get(name, len(rank)))
+
+
+def _incident_severity(snapshot: dict[str, Any], triggers: list[str]) -> slack_fmt.Severity:
+    health_status = str(snapshot.get("health_status") or "").strip().lower()
+    if "broker_disconnected" in triggers or health_status in _CRITICAL_HEALTH_STATUSES:
+        return slack_fmt.Severity.CRITICAL
+    return slack_fmt.Severity.WARNING if triggers else slack_fmt.Severity.INFO
+
+
+def _provider_text(snapshot: dict[str, Any]) -> str:
+    text = (
+        f"{slack_fmt.capitalized(snapshot.get('provider_active') or 'n/a')} — "
+        f"{slack_fmt.humanize(snapshot.get('provider_status') or 'unknown')}"
+    )
+    return f"{text} (backup feed)" if snapshot.get("using_backup") is True else text
+
+
+def _incident_metric_fields(snapshot: dict[str, Any]) -> dict[str, tuple[str, str]]:
     window_minutes = _int_arg(snapshot.get("execution_window_minutes"), default=30)
     fill_samples = _int_arg(snapshot.get("execution_fill_ratio_samples"), default=0)
     fill_filled = _int_arg(snapshot.get("execution_fill_ratio_filled"), default=0)
-    precheck_fail_count = _int_arg(snapshot.get("precheck_failure_count"), default=0)
-    execution_skipped_count = _int_arg(snapshot.get("execution_skipped_count"), default=0)
-    precheck_top_details_raw = list(
-        snapshot.get("precheck_failure_top_actionable_details")
-        or snapshot.get("precheck_failure_top_details")
-        or []
-    )
-    precheck_top_details: list[str] = []
-    for item in precheck_top_details_raw[:3]:
-        if not isinstance(item, dict):
-            continue
-        detail = str(item.get("detail") or "").strip()
-        if not detail:
-            continue
-        count = _int_arg(item.get("count"), default=0)
-        precheck_top_details.append(f"{detail.replace('_', ' ')}={count}")
-    precheck_top_details_text = ", ".join(precheck_top_details) if precheck_top_details else "n/a"
-    top_concentration_gate = str(snapshot.get("top_rejection_concentration_gate") or "").strip()
-    top_concentration_ratio = _float_or_none(snapshot.get("top_rejection_concentration_ratio"))
-    rejected_records = _int_arg(snapshot.get("gate_rejected_records"), default=0)
-    trigger_lines = [f"- {label}" for label in _incident_trigger_labels(triggers)] or ["- None"]
-    return "\n".join(
-        [
-            "🚨 ai-trading incident update",
-            "",
-            "⚠️ What triggered this alert:",
-            *trigger_lines,
-            "",
-            "📊 Current status:",
-            f"- Go/No-Go: {_fmt_gate_status(snapshot.get('go_no_go_gate_passed'))}",
-            f"- Failed checks: {checks_text}",
-            f"- Execution capture ratio: {_fmt_num(snapshot.get('execution_capture_ratio'), digits=3)}",
-            (
-                f"- Fill ratio ({window_minutes}m): "
-                f"{_fmt_num(snapshot.get('execution_fill_ratio'), digits=3)} "
-                f"(filled={fill_filled}, samples={fill_samples})"
-            ),
-            (
-                f"- Pre-check failure spike ({window_minutes}m): "
-                f"count={precheck_fail_count}, "
-                f"ratio={_fmt_num(snapshot.get('precheck_failure_ratio'), digits=3)}, "
-                f"skipped={execution_skipped_count}"
-            ),
-            f"- Top pre-check blockers ({window_minutes}m): {precheck_top_details_text}",
-            f"- Slippage drag: {_fmt_num(snapshot.get('slippage_drag_bps'), digits=3)} bps",
-            (
-                "- Edge realism gap: "
-                f"ratio={_fmt_num(snapshot.get('edge_realism_gap_ratio'), digits=3)} "
-                f"(realized/expected), "
-                f"realization_gap_bps={_fmt_num(snapshot.get('realization_gap_bps'), digits=3)}"
-            ),
-            (
-                "- Rejection concentration: "
-                f"{top_concentration_gate or 'n/a'} "
-                f"({_fmt_pct(top_concentration_ratio, digits=1, assume_ratio=True)} "
-                f"of rejected, rejected_records={rejected_records})"
-            ),
-            f"- Health: {snapshot.get('health_status')} ({snapshot.get('health_reason')})",
-            f"- Operational state: {snapshot.get('operational_state') or 'unknown'}",
-            (
-                f"- Data provider: {snapshot.get('provider_active')} / {snapshot.get('provider_status')} "
-                f"(reason={snapshot.get('provider_reason')}, backup={_fmt_bool(snapshot.get('using_backup'))})"
-            ),
-            f"- Broker: {snapshot.get('broker_status')}",
-            "",
-            f"🕒 Timestamp: {snapshot.get('timestamp')}",
-        ]
-    )
-
-
-def _incident_message_blocks(snapshot: dict[str, Any], triggers: list[str]) -> list[dict[str, Any]]:
-    failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
-    checks_text = ", ".join(failed_checks) if failed_checks else "none"
-    window_minutes = _int_arg(snapshot.get("execution_window_minutes"), default=30)
-    fill_samples = _int_arg(snapshot.get("execution_fill_ratio_samples"), default=0)
-    fill_filled = _int_arg(snapshot.get("execution_fill_ratio_filled"), default=0)
-    precheck_fail_count = _int_arg(snapshot.get("precheck_failure_count"), default=0)
-    execution_skipped_count = _int_arg(snapshot.get("execution_skipped_count"), default=0)
-    trigger_labels = _incident_trigger_labels(triggers)
-    trigger_text = "\n".join(f"• {label}" for label in trigger_labels) if trigger_labels else "• None"
-    top_concentration_gate = str(snapshot.get("top_rejection_concentration_gate") or "").strip()
-    top_concentration_ratio = _float_or_none(snapshot.get("top_rejection_concentration_ratio"))
-    rejected_records = _int_arg(snapshot.get("gate_rejected_records"), default=0)
-
-    precheck_top_details_raw = list(
-        snapshot.get("precheck_failure_top_actionable_details")
-        or snapshot.get("precheck_failure_top_details")
-        or []
-    )
-    blockers: list[str] = []
-    for item in precheck_top_details_raw[:3]:
-        if not isinstance(item, dict):
-            continue
-        detail = str(item.get("detail") or "").strip()
-        if not detail:
-            continue
-        blockers.append(f"{detail.replace('_', ' ')}={_int_arg(item.get('count'), default=0)}")
-    blockers_text = ", ".join(blockers) if blockers else "n/a"
-
-    return [
-        {"type": "header", "text": _slack_plain_text("🚨 ai-trading incident update")},
-        _slack_section(
-            fields=[
-                _slack_field("Go/No-Go", _fmt_gate_status(snapshot.get("go_no_go_gate_passed"))),
-                _slack_field("Failed checks", checks_text),
-                _slack_field(
-                    "Health",
-                    f"{snapshot.get('health_status') or 'unknown'} ({snapshot.get('health_reason') or 'n/a'})",
-                ),
-                _slack_field("Operational state", str(snapshot.get("operational_state") or "unknown")),
-                _slack_field(
-                    "Provider",
-                    (
-                        f"{snapshot.get('provider_active') or 'n/a'} / "
-                        f"{snapshot.get('provider_status') or 'unknown'}"
-                    ),
-                ),
-            ],
-        ),
-        {"type": "divider"},
-        _slack_section(f"*Triggered by*\n{trigger_text}"),
-        _slack_section(
-            fields=[
-                _slack_field("Capture ratio", _fmt_num(snapshot.get("execution_capture_ratio"), digits=3)),
-                _slack_field(
-                    f"Fill ratio ({window_minutes}m)",
-                    (
-                        f"{_fmt_num(snapshot.get('execution_fill_ratio'), digits=3)} "
-                        f"({fill_filled}/{fill_samples})"
-                    ),
-                ),
-                _slack_field(
-                    f"Pre-check failures ({window_minutes}m)",
-                    f"{precheck_fail_count} failures, {execution_skipped_count} skipped",
-                ),
-                _slack_field("Top blockers", blockers_text),
-                _slack_field("Slippage drag", f"{_fmt_num(snapshot.get('slippage_drag_bps'), digits=3)} bps"),
-                _slack_field(
-                    "Rejection concentration",
-                    (
-                        f"{top_concentration_gate or 'n/a'} "
-                        f"({_fmt_pct(top_concentration_ratio, digits=1, assume_ratio=True)}, "
-                        f"records={rejected_records})"
-                    ),
-                ),
-            ],
-        ),
-        _slack_context(
-            f"Broker: {snapshot.get('broker_status') or 'unknown'}",
-            f"Backup feed: {_fmt_bool(snapshot.get('using_backup'))}",
-            f"Timestamp: {snapshot.get('timestamp') or 'n/a'}",
-        ),
+    if fill_samples:
+        fill_text = (
+            f"{slack_fmt.fmt_pct(snapshot.get('execution_fill_ratio'))} "
+            f"({fill_filled}/{fill_samples} orders)"
+        )
+    else:
+        fill_text = "no orders in window"
+    blockers = [
+        f"{slack_fmt.humanize(item.get('detail'))} ({slack_fmt.fmt_count(item.get('count'))})"
+        for item in list(
+            snapshot.get("precheck_failure_top_actionable_details")
+            or snapshot.get("precheck_failure_top_details")
+            or []
+        )
+        if isinstance(item, dict) and str(item.get("detail") or "").strip()
     ]
+    precheck_text = (
+        f"{slack_fmt.fmt_count(_int_arg(snapshot.get('precheck_failure_count'), default=0))} failed, "
+        f"{slack_fmt.fmt_count(_int_arg(snapshot.get('execution_skipped_count'), default=0))} skipped"
+    )
+    if blockers:
+        precheck_text += f" — top: {slack_fmt.inline_list(blockers, limit=3)}"
+    gate = str(snapshot.get("top_rejection_concentration_gate") or "").strip()
+    return {
+        "slippage": ("Slippage drag", slack_fmt.fmt_bps(snapshot.get("slippage_drag_bps"))),
+        "capture": (
+            "Edge capture (realized ÷ expected)",
+            slack_fmt.fmt_ratio(snapshot.get("execution_capture_ratio")),
+        ),
+        "realism": (
+            "Edge realism",
+            (
+                f"{slack_fmt.fmt_ratio(snapshot.get('edge_realism_gap_ratio'))} "
+                f"(gap {slack_fmt.fmt_bps(snapshot.get('realization_gap_bps'))})"
+            ),
+        ),
+        "fill": (f"Fill ratio ({window_minutes}m)", fill_text),
+        "precheck": (f"Pre-check failures ({window_minutes}m)", precheck_text),
+        "rejection": (
+            "Top rejection reason",
+            (
+                f"{slack_fmt.humanize(gate) if gate else 'n/a'} — "
+                f"{slack_fmt.fmt_pct(snapshot.get('top_rejection_concentration_ratio'))} of "
+                f"{slack_fmt.fmt_count(_int_arg(snapshot.get('gate_rejected_records'), default=0))} rejections"
+            ),
+        ),
+    }
+
+
+def _incident_message_payload(snapshot: dict[str, Any], triggers: list[str]) -> dict[str, Any]:
+    ordered = _ordered_incident_triggers(list(triggers))
+    severity = _incident_severity(snapshot, ordered)
+    labels = _incident_trigger_labels(ordered)
+    title = labels[0] if labels else "Incident update"
+    if len(labels) > 1:
+        title += f" (+{len(labels) - 1} more)"
+
+    failed_checks = [slack_fmt.humanize(item) for item in snapshot.get("go_no_go_failed_checks") or []]
+    gate_passed = snapshot.get("go_no_go_gate_passed")
+    if gate_passed is True:
+        gate_text = "Pass"
+    elif gate_passed is False:
+        gate_text = f"Fail — {len(failed_checks)} checks"
+    else:
+        gate_text = "Unknown"
+    health_reason = slack_fmt.humanize(snapshot.get("health_reason"))
+    health_text = f"{slack_fmt.capitalized(snapshot.get('health_status') or 'unknown')} — {health_reason}"
+
+    metrics = _incident_metric_fields(snapshot)
+    metric_keys = [_INCIDENT_TRIGGER_METRIC[name] for name in ordered if name in _INCIDENT_TRIGGER_METRIC]
+    for default_key in _INCIDENT_DEFAULT_METRICS:
+        if default_key not in metric_keys:
+            metric_keys.append(default_key)
+    metric_keys = metric_keys[:_INCIDENT_MAX_METRIC_FIELDS]
+    other_metrics = [f"{label}: {value}" for key, (label, value) in metrics.items() if key not in metric_keys]
+    actions = [_INCIDENT_TRIGGER_ACTIONS[name] for name in ordered if name in _INCIDENT_TRIGGER_ACTIONS]
+
+    blocks: list[dict[str, Any]] = [
+        slack_fmt.header_block(severity, title),
+        slack_fmt.section_block(f"*What happened*\n{slack_fmt.bullets(labels)}"),
+        slack_fmt.fields_block(
+            [
+                ("Health", health_text),
+                ("Go/No-Go", gate_text),
+                ("Data provider", _provider_text(snapshot)),
+                ("Broker", slack_fmt.humanize(snapshot.get("broker_status") or "unknown")),
+            ],
+            title="Impact",
+        ),
+        slack_fmt.fields_block([metrics[key] for key in metric_keys]),
+    ]
+    if actions:
+        blocks.append(slack_fmt.section_block(f"*Action*\n{slack_fmt.bullets(actions, limit=3)}"))
+    blocks.append(
+        slack_fmt.context_block(
+            f"Failing checks: {slack_fmt.inline_list(failed_checks, limit=3)}" if failed_checks else "",
+            f"State: {slack_fmt.humanize(snapshot.get('operational_state') or 'unknown')}",
+            slack_fmt.fmt_time(snapshot.get("timestamp")),
+        )
+    )
+    blocks.append(slack_fmt.context_block(" · ".join(other_metrics)))
+    text = slack_fmt.fallback_text(
+        severity,
+        title,
+        f"health: {health_reason}",
+        f"go/no-go: {gate_text.lower()}",
+    )
+    return slack_fmt.message(text, blocks)
 
 
 def _eod_fingerprint(snapshot: dict[str, Any]) -> str:
@@ -1804,304 +1780,122 @@ def _eod_fingerprint(snapshot: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _fmt_num(value: Any, *, digits: int = 3) -> str:
-    number = _float_or_none(value)
-    if number is None:
-        return "n/a"
-    return f"{number:.{digits}f}"
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def _fmt_bool(value: Any) -> str:
-    if value is True:
-        return "yes"
-    if value is False:
-        return "no"
-    return "n/a"
+def _eod_open_flags(snapshot: dict[str, Any]) -> list[str]:
+    flags: list[str] = []
+    failed_checks = [slack_fmt.humanize(item) for item in snapshot.get("go_no_go_failed_checks") or []]
+    if snapshot.get("go_no_go_gate_passed") is False:
+        flags.append(f"Go/no-go failed: {slack_fmt.inline_list(failed_checks, limit=3)}")
+    health_status = str(snapshot.get("health_status") or "").strip().lower()
+    if health_status not in {"ok", "healthy", "ready"}:
+        flags.append(
+            f"Health {slack_fmt.humanize(health_status or 'unknown')}: "
+            f"{slack_fmt.humanize(snapshot.get('health_reason'))}"
+        )
+    discrepancy = _mapping(snapshot.get("pnl_discrepancy"))
+    if discrepancy.get("status") == "mismatch":
+        flags.append(
+            f"P&L mismatch between accounting and fills: {slack_fmt.fmt_money(discrepancy.get('delta'))}"
+        )
+    training_gate = _mapping(snapshot.get("training_gate"))
+    if training_gate and training_gate.get("ready") is False:
+        flags.append(f"Training gate not ready: {slack_fmt.humanize(training_gate.get('reason'))}")
+    mismatches = _int_arg(snapshot.get("open_position_reconciliation_mismatch_count"), default=0)
+    if mismatches:
+        flags.append(
+            f"Position reconciliation: {mismatches} mismatches, max qty delta "
+            f"{slack_fmt.fmt_ratio(snapshot.get('open_position_reconciliation_max_abs_delta_qty'), digits=3)}"
+        )
+    return flags
 
 
-def _fmt_gate_status(value: Any) -> str:
-    if value is True:
-        return "PASS"
-    if value is False:
-        return "FAIL"
-    return "UNKNOWN"
-
-
-def _fmt_pct(value: Any, *, digits: int = 1, assume_ratio: bool = False) -> str:
-    number = _float_or_none(value)
-    if number is None:
-        return "n/a"
-    if assume_ratio:
-        number *= 100.0
-    return f"{number:.{digits}f}%"
-
-
-def _fmt_currency(value: Any, *, digits: int = 2) -> str:
-    number = _float_or_none(value)
-    if number is None:
-        return "n/a"
-    return f"${number:,.{digits}f}"
-
-
-def _fmt_count(value: Any) -> str:
-    number = _float_or_none(value)
-    if number is None:
-        return "n/a"
-    return str(int(number))
-
-
-def _fmt_duration_s(value: Any, *, digits: int = 1) -> str:
-    number = _float_or_none(value)
-    if number is None:
-        return "n/a"
-    return f"{number:.{digits}f}s"
-
-
-def _eod_message_text(snapshot: dict[str, Any]) -> str:
-    failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
-    checks_text = ", ".join(failed_checks) if failed_checks else "none"
-    training_gate = snapshot.get("training_gate")
-    training_gate_obj = training_gate if isinstance(training_gate, dict) else {}
-    losses = snapshot.get("top_loss_symbols")
-    losses_rows = losses if isinstance(losses, list) else []
-    losses_text = ", ".join(
-        f"{str(item.get('symbol') or 'n/a')} ({_fmt_currency(item.get('net_pnl'), digits=1)})"
-        for item in losses_rows
+def _eod_message_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    same_day_fill = _mapping(snapshot.get("same_day_fill_summary"))
+    discrepancy = _mapping(snapshot.get("pnl_discrepancy"))
+    learning = _mapping(snapshot.get("learning"))
+    after_hours = _mapping(learning.get("after_hours"))
+    exec_learning = _mapping(learning.get("execution_learning"))
+    exec_autotune = _mapping(learning.get("execution_autotune"))
+    model_liveness = _mapping(learning.get("model_liveness"))
+    losses = [
+        f"{item.get('symbol') or 'n/a'} {slack_fmt.fmt_money(item.get('net_pnl'))}"
+        for item in snapshot.get("top_loss_symbols") or []
         if isinstance(item, dict)
-    )
-    if not losses_text:
-        losses_text = "none"
-    same_day_fill = snapshot.get("same_day_fill_summary")
-    same_day_fill_obj = same_day_fill if isinstance(same_day_fill, dict) else {}
-    pnl_discrepancy = snapshot.get("pnl_discrepancy")
-    pnl_discrepancy_obj = pnl_discrepancy if isinstance(pnl_discrepancy, dict) else {}
-    pnl_check = str(pnl_discrepancy_obj.get("status") or same_day_fill_obj.get("status") or "n/a")
-    if pnl_discrepancy_obj.get("delta") is not None:
-        pnl_check = f"{pnl_check}, delta={_fmt_currency(pnl_discrepancy_obj.get('delta'))}"
-
-    learning = snapshot.get("learning")
-    learning_obj = learning if isinstance(learning, dict) else {}
-    after_hours = learning_obj.get("after_hours")
-    after_hours_obj = after_hours if isinstance(after_hours, dict) else {}
-    exec_learning = learning_obj.get("execution_learning")
-    exec_learning_obj = exec_learning if isinstance(exec_learning, dict) else {}
-    exec_autotune = learning_obj.get("execution_autotune")
-    exec_autotune_obj = exec_autotune if isinstance(exec_autotune, dict) else {}
-    model_liveness = learning_obj.get("model_liveness")
-    model_liveness_obj = model_liveness if isinstance(model_liveness, dict) else {}
-
-    return "\n".join(
-        [
-            "📘 ai-trading EOD summary",
-            f"Date: {snapshot.get('report_date') or 'unknown'}",
-            "",
-            (
-                f"✅ Go/No-Go: {_fmt_gate_status(snapshot.get('go_no_go_gate_passed'))} "
-                f"(failed checks: {checks_text})"
-            ),
-            "",
-            "💰 Day performance:",
-            f"- Operational net PnL: {_fmt_currency(snapshot.get('net_pnl'))}",
-            f"- Same-day fill PnL: {_fmt_currency(same_day_fill_obj.get('net_pnl'))}",
-            f"- PnL check: {pnl_check}",
-            f"- Profit factor: {_fmt_num(snapshot.get('profit_factor'), digits=3)}",
-            f"- Win rate: {_fmt_pct(snapshot.get('win_rate'), digits=1, assume_ratio=True)}",
-            f"- Closed trades: {_fmt_count(snapshot.get('closed_trades'))}",
-            "",
-            "⚙️ Execution quality:",
-            f"- Capture ratio: {_fmt_num(snapshot.get('execution_capture_ratio'), digits=3)}",
-            f"- Slippage drag: {_fmt_num(snapshot.get('slippage_drag_bps'), digits=3)} bps",
-            f"- Reject rate: {_fmt_pct(snapshot.get('order_reject_rate_pct'), digits=2)}",
-            (
-                f"- Reconciliation: mismatches={snapshot.get('open_position_reconciliation_mismatch_count')}, "
-                f"max abs delta qty={_fmt_num(snapshot.get('open_position_reconciliation_max_abs_delta_qty'), digits=3)}"
-            ),
-            "",
-            "🩺 Runtime health:",
-            f"- Health: {snapshot.get('health_status')} ({snapshot.get('health_reason')})",
-            (
-                f"- Data provider: {snapshot.get('provider_active')} / {snapshot.get('provider_status')} "
-                f"(backup={_fmt_bool(snapshot.get('using_backup'))})"
-            ),
-            f"- Broker: {snapshot.get('broker_status')}",
-            "",
-            "🧠 Learning models:",
-            (
-                f"- Training completion gate: ready={_fmt_bool(training_gate_obj.get('ready'))}, "
-                f"reason={training_gate_obj.get('reason') or 'n/a'}, "
-                f"marker_date={training_gate_obj.get('marker_date') or 'n/a'}"
-            ),
-            (
-                f"- After-hours model: {after_hours_obj.get('model_name') or 'n/a'} "
-                f"[{after_hours_obj.get('governance_status') or 'n/a'}], "
-                f"promotion gate={after_hours_obj.get('promotion_gate_passed')}, "
-                f"confidence gate={after_hours_obj.get('promotion_confidence_gate_passed')}, "
-                f"rows={after_hours_obj.get('rows')}, "
-                f"model_id={after_hours_obj.get('model_id') or 'n/a'}"
-            ),
-            (
-                f"- Promotion confidence: enabled={_fmt_bool(after_hours_obj.get('promotion_confidence_enabled'))}, "
-                f"reason={after_hours_obj.get('promotion_confidence_reason') or 'n/a'}"
-            ),
-            (
-                f"- Execution learning: samples={exec_learning_obj.get('samples')}, "
-                f"fill_rate={_fmt_pct(exec_learning_obj.get('fill_rate'), digits=1, assume_ratio=True)}, "
-                f"mean_slippage={_fmt_num(exec_learning_obj.get('mean_slippage_bps'), digits=3)} bps, "
-                f"mean_net_edge={_fmt_num(exec_learning_obj.get('mean_net_edge_bps'), digits=3)} bps"
-            ),
-            (
-                f"- Execution autotune: enabled={_fmt_bool(exec_autotune_obj.get('enabled'))}, "
-                f"active={_fmt_bool(exec_autotune_obj.get('active'))}, "
-                f"bias={exec_autotune_obj.get('profile_bias') or 'n/a'}, "
-                f"samples={exec_autotune_obj.get('sample_count')}, "
-                f"reason={exec_autotune_obj.get('reason') or 'n/a'}"
-            ),
-            (
-                f"- Model liveness: ml_age={_fmt_duration_s(model_liveness_obj.get('ml_age_s'))}, "
-                f"rl_age={_fmt_duration_s(model_liveness_obj.get('rl_age_s'))}, "
-                f"last_ml={model_liveness_obj.get('last_ml_signal_ts') or 'n/a'}, "
-                f"last_rl={model_liveness_obj.get('last_rl_signal_ts') or 'n/a'}"
-            ),
-            "",
-            f"📉 Top loss symbols: {losses_text}",
-            f"🕒 Timestamp: {snapshot.get('timestamp')}",
-        ]
-    )
-
-
-def _eod_message_blocks(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
-    checks_text = ", ".join(failed_checks) if failed_checks else "none"
-    training_gate = snapshot.get("training_gate")
-    training_gate_obj = training_gate if isinstance(training_gate, dict) else {}
-    losses = snapshot.get("top_loss_symbols")
-    losses_rows = losses if isinstance(losses, list) else []
-    losses_text = ", ".join(
-        f"{str(item.get('symbol') or 'n/a')} ({_fmt_currency(item.get('net_pnl'), digits=1)})"
-        for item in losses_rows
-        if isinstance(item, dict)
-    )
-    if not losses_text:
-        losses_text = "none"
-    same_day_fill = snapshot.get("same_day_fill_summary")
-    same_day_fill_obj = same_day_fill if isinstance(same_day_fill, dict) else {}
-    pnl_discrepancy = snapshot.get("pnl_discrepancy")
-    pnl_discrepancy_obj = pnl_discrepancy if isinstance(pnl_discrepancy, dict) else {}
-    pnl_check = str(pnl_discrepancy_obj.get("status") or same_day_fill_obj.get("status") or "n/a")
-    if pnl_discrepancy_obj.get("delta") is not None:
-        pnl_check = f"{pnl_check}, delta={_fmt_currency(pnl_discrepancy_obj.get('delta'))}"
-
-    learning = snapshot.get("learning")
-    learning_obj = learning if isinstance(learning, dict) else {}
-    after_hours = learning_obj.get("after_hours")
-    after_hours_obj = after_hours if isinstance(after_hours, dict) else {}
-    exec_learning = learning_obj.get("execution_learning")
-    exec_learning_obj = exec_learning if isinstance(exec_learning, dict) else {}
-    exec_autotune = learning_obj.get("execution_autotune")
-    exec_autotune_obj = exec_autotune if isinstance(exec_autotune, dict) else {}
-    model_liveness = learning_obj.get("model_liveness")
-    model_liveness_obj = model_liveness if isinstance(model_liveness, dict) else {}
-
-    return [
-        {"type": "header", "text": _slack_plain_text("📘 ai-trading EOD summary")},
-        _slack_section(
-            (
-                f"*Date:* {snapshot.get('report_date') or 'unknown'}\n"
-                f"*Readiness Go/No-Go:* {_fmt_gate_status(snapshot.get('go_no_go_gate_passed'))} "
-                f"(failed checks: {checks_text})"
-            )
-        ),
-        {"type": "divider"},
-        _slack_section(
-            "*Day performance*",
-            fields=[
-                _slack_field("Operational net PnL", _fmt_currency(snapshot.get("net_pnl"))),
-                _slack_field("Same-day fill PnL", _fmt_currency(same_day_fill_obj.get("net_pnl"))),
-                _slack_field("PnL check", pnl_check),
-                _slack_field("Closed trades", _fmt_count(snapshot.get("closed_trades"))),
-                _slack_field("Win rate", _fmt_pct(snapshot.get("win_rate"), digits=1, assume_ratio=True)),
-                _slack_field("Profit factor", _fmt_num(snapshot.get("profit_factor"), digits=3)),
-                _slack_field("Top loss symbols", losses_text),
-            ],
-        ),
-        _slack_section(
-            "*Execution quality*",
-            fields=[
-                _slack_field("Capture ratio", _fmt_num(snapshot.get("execution_capture_ratio"), digits=3)),
-                _slack_field("Slippage drag", f"{_fmt_num(snapshot.get('slippage_drag_bps'), digits=3)} bps"),
-                _slack_field("Reject rate", _fmt_pct(snapshot.get("order_reject_rate_pct"), digits=2)),
-                _slack_field(
-                    "Reconciliation",
-                    (
-                        f"mismatches={snapshot.get('open_position_reconciliation_mismatch_count')}, "
-                        f"max_delta={_fmt_num(snapshot.get('open_position_reconciliation_max_abs_delta_qty'), digits=3)}"
-                    ),
-                ),
-            ],
-        ),
-        _slack_section(
-            "*Runtime health*",
-            fields=[
-                _slack_field(
-                    "Health",
-                    f"{snapshot.get('health_status') or 'unknown'} ({snapshot.get('health_reason') or 'n/a'})",
-                ),
-                _slack_field(
-                    "Provider",
-                    (
-                        f"{snapshot.get('provider_active') or 'n/a'} / "
-                        f"{snapshot.get('provider_status') or 'unknown'} "
-                        f"(backup={_fmt_bool(snapshot.get('using_backup'))})"
-                    ),
-                ),
-                _slack_field("Broker", snapshot.get("broker_status") or "unknown"),
-            ],
-        ),
-        _slack_section(
-            "*Learning models*",
-            fields=[
-                _slack_field(
-                    "Training gate",
-                    (
-                        f"ready={_fmt_bool(training_gate_obj.get('ready'))}, "
-                        f"reason={training_gate_obj.get('reason') or 'n/a'}"
-                    ),
-                ),
-                _slack_field(
-                    "After-hours",
-                    (
-                        f"{after_hours_obj.get('model_name') or 'n/a'} "
-                        f"[{after_hours_obj.get('governance_status') or 'n/a'}], "
-                        f"rows={after_hours_obj.get('rows') or 'n/a'}"
-                    ),
-                ),
-                _slack_field(
-                    "Execution learning",
-                    (
-                        f"samples={exec_learning_obj.get('samples') or 'n/a'}, "
-                        f"fill_rate={_fmt_pct(exec_learning_obj.get('fill_rate'), digits=1, assume_ratio=True)}, "
-                        f"slippage={_fmt_num(exec_learning_obj.get('mean_slippage_bps'), digits=3)} bps"
-                    ),
-                ),
-                _slack_field(
-                    "Autotune",
-                    (
-                        f"enabled={_fmt_bool(exec_autotune_obj.get('enabled'))}, "
-                        f"bias={exec_autotune_obj.get('profile_bias') or 'n/a'}, "
-                        f"samples={exec_autotune_obj.get('sample_count') or 'n/a'}"
-                    ),
-                ),
-                _slack_field(
-                    "Liveness",
-                    (
-                        f"ml_age={_fmt_duration_s(model_liveness_obj.get('ml_age_s'))}, "
-                        f"rl_age={_fmt_duration_s(model_liveness_obj.get('rl_age_s'))}"
-                    ),
-                ),
-            ],
-        ),
-        _slack_context(f"Timestamp: {snapshot.get('timestamp') or 'n/a'}"),
     ]
+    flags = _eod_open_flags(snapshot)
+    severity = slack_fmt.Severity.WARNING if flags else slack_fmt.Severity.OK
+    title = f"Daily recap · {slack_fmt.fmt_day(snapshot.get('report_date') or 'unknown')}"
+    net_pnl = slack_fmt.fmt_money(snapshot.get("net_pnl"))
+    pnl_line = f"*Net P&L {net_pnl}*  ·  fills basis {slack_fmt.fmt_money(same_day_fill.get('net_pnl'))}"
+    if discrepancy.get("status") == "mismatch":
+        pnl_line += "  ·  :warning: mismatch"
+
+    blocks: list[dict[str, Any]] = [
+        slack_fmt.header_block(severity, title),
+        slack_fmt.section_block(pnl_line),
+        slack_fmt.fields_block(
+            [
+                ("Closed trades", slack_fmt.fmt_count(snapshot.get("closed_trades"))),
+                (
+                    "Win rate · profit factor",
+                    f"{slack_fmt.fmt_pct(snapshot.get('win_rate'))} · {slack_fmt.fmt_ratio(snapshot.get('profit_factor'))}",
+                ),
+                (
+                    "Fills today",
+                    (
+                        f"{slack_fmt.fmt_count(same_day_fill.get('same_day_fill_events'))} fills, "
+                        f"{slack_fmt.fmt_count(same_day_fill.get('closed_trades'))} round trips"
+                    ),
+                ),
+                ("Reject rate", slack_fmt.fmt_pct(snapshot.get("order_reject_rate_pct"), digits=2, ratio=False)),
+                (
+                    "Slippage · edge capture",
+                    (
+                        f"{slack_fmt.fmt_bps(snapshot.get('slippage_drag_bps'))} · "
+                        f"{slack_fmt.fmt_ratio(snapshot.get('execution_capture_ratio'))}"
+                    ),
+                ),
+                ("Biggest losers", slack_fmt.inline_list(losses, limit=3)),
+            ],
+            title="Trading",
+        ),
+        slack_fmt.fields_block(
+            [
+                ("Data provider", _provider_text(snapshot)),
+                ("Broker", slack_fmt.humanize(snapshot.get("broker_status") or "unknown")),
+            ],
+            title="Data & broker",
+        ),
+        slack_fmt.section_block(f"*Open flags*\n{slack_fmt.bullets(flags)}"),
+        slack_fmt.context_block(
+            (
+                f"Model: {after_hours.get('model_name') or 'n/a'} "
+                f"({slack_fmt.humanize(after_hours.get('governance_status'))}, "
+                f"{slack_fmt.fmt_count(after_hours.get('rows'))} rows, "
+                f"promotion gate {slack_fmt.yes_no(after_hours.get('promotion_gate_passed'))})"
+            ),
+            (
+                f"Exec learning: {slack_fmt.fmt_count(exec_learning.get('samples'))} samples, "
+                f"fill {slack_fmt.fmt_pct(exec_learning.get('fill_rate'))}, "
+                f"slippage {slack_fmt.fmt_bps(exec_learning.get('mean_slippage_bps'))}, "
+                f"net edge {slack_fmt.fmt_bps(exec_learning.get('mean_net_edge_bps'))}"
+            ),
+            (
+                f"Autotune: {slack_fmt.humanize(exec_autotune.get('profile_bias'))} "
+                f"({slack_fmt.fmt_count(exec_autotune.get('sample_count'))} samples)"
+            ),
+            (
+                f"Signal age: ML {slack_fmt.fmt_age(model_liveness.get('ml_age_s'))}, "
+                f"RL {slack_fmt.fmt_age(model_liveness.get('rl_age_s'))}"
+            ),
+        ),
+        slack_fmt.context_block(f"Generated {slack_fmt.fmt_time(snapshot.get('timestamp'))}"),
+    ]
+    text = slack_fmt.fallback_text(severity, title, f"net P&L {net_pnl}", f"{len(flags)} open flags")
+    return slack_fmt.message(text, blocks)
 
 
 def tool_runtime_incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
@@ -2113,6 +1907,7 @@ def tool_runtime_incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "should_alert": bool(triggers),
         "fingerprint": _incident_fingerprint(snapshot, triggers),
         "incident_signature": _incident_signature(snapshot, triggers),
+        "message_preview": _incident_message_payload(snapshot, triggers),
     }
 
 
@@ -2279,10 +2074,7 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
 
     webhook_url = _slack_webhook_url(args)
     channel = str(args.get("channel") or "").strip()
-    payload: dict[str, Any] = {
-        "text": _incident_message_text(snapshot, triggers),
-        "blocks": _incident_message_blocks(snapshot, triggers),
-    }
+    payload: dict[str, Any] = _incident_message_payload(snapshot, triggers)
     if channel:
         payload["channel"] = channel
     timeout_s = float(args.get("timeout_s") or 5.0)
@@ -2324,6 +2116,7 @@ def tool_runtime_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     return {
         "snapshot": snapshot,
         "fingerprint": _eod_fingerprint(snapshot),
+        "message_preview": _eod_message_payload(snapshot),
         "market_closed": market_closed,
         "report_date": report_date,
         "training_gate": training_gate,
@@ -2395,10 +2188,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
 
     webhook_url = _slack_webhook_url(args)
     channel = str(args.get("channel") or os.getenv("AI_TRADING_SLACK_EOD_CHANNEL", "")).strip()
-    payload: dict[str, Any] = {
-        "text": _eod_message_text(snapshot),
-        "blocks": _eod_message_blocks(snapshot),
-    }
+    payload: dict[str, Any] = _eod_message_payload(snapshot)
     if channel:
         payload["channel"] = channel
     timeout_s = float(args.get("timeout_s") or 5.0)

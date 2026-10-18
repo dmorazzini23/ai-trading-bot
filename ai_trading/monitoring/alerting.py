@@ -17,6 +17,7 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import logger
+from ai_trading.monitoring import slack_format as slack_fmt
 from ai_trading.utils import http
 from ai_trading.utils.timing import HTTP_TIMEOUT
 from ai_trading.utils.http import clamp_request_timeout
@@ -127,6 +128,32 @@ class EmailAlerter:
         html_body += '\n            </div>\n        </body>\n        </html>\n        '
         return html_body
 
+_SLACK_SEVERITY = {AlertSeverity.INFO: slack_fmt.Severity.INFO, AlertSeverity.WARNING: slack_fmt.Severity.WARNING, AlertSeverity.CRITICAL: slack_fmt.Severity.CRITICAL, AlertSeverity.EMERGENCY: slack_fmt.Severity.CRITICAL}
+
+
+def _slack_metadata_value(value: Any) -> str:
+    """Render metadata without dict/list dumps."""
+    if isinstance(value, dict):
+        return slack_fmt.inline_list((f'{slack_fmt.humanize(key)}: {item}' for key, item in value.items()), limit=5)
+    if isinstance(value, (list, tuple, set)):
+        return slack_fmt.inline_list(value, limit=5)
+    return slack_fmt.truncate(value, 300) or 'n/a'
+
+
+def _slack_alert_message(alert: Alert) -> dict[str, Any]:
+    """Block Kit body for an Alert: severity header, message, metadata fields, context line."""
+    severity = _SLACK_SEVERITY.get(alert.severity, slack_fmt.Severity.INFO)
+    if alert.severity == AlertSeverity.EMERGENCY:
+        title = f'EMERGENCY: {alert.title}'
+    else:
+        title = alert.title
+    blocks = [slack_fmt.header_block(severity, title), slack_fmt.section_block(alert.message)]
+    if alert.metadata:
+        blocks.append(slack_fmt.fields_block([(slack_fmt.capitalized(key), _slack_metadata_value(value)) for key, value in alert.metadata.items()]))
+    blocks.append(slack_fmt.context_block(f'Source: {alert.source}' if alert.source else '', slack_fmt.fmt_time(alert.timestamp)))
+    return slack_fmt.message(slack_fmt.fallback_text(severity, title, slack_fmt.truncate(alert.message, 200)), blocks)
+
+
 class SlackAlerter:
     """
     Slack alerting system for team notifications.
@@ -158,16 +185,7 @@ class SlackAlerter:
             if not self.enabled:
                 logger.warning(f'Slack not configured - logging alert: {alert.title}')
                 return False
-            color_map = {AlertSeverity.INFO: '#36a64f', AlertSeverity.WARNING: '#ff9500', AlertSeverity.CRITICAL: '#ff0000', AlertSeverity.EMERGENCY: '#8b0000'}
-            color = color_map.get(alert.severity, '#808080')
-            payload: dict[str, Any] = {'channel': self.channel, 'username': 'Trading Bot', 'icon_emoji': ':robot_face:', 'attachments': [{'color': color, 'title': f'[{alert.severity.value.upper()}] {alert.title}', 'text': alert.message, 'fields': [{'title': 'Source', 'value': alert.source, 'short': True}, {'title': 'Time', 'value': alert.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC'), 'short': True}], 'footer': 'AI Trading Bot', 'ts': int(alert.timestamp.timestamp())}]}
-            if alert.metadata:
-                attachments = payload.get('attachments', [])
-                first_attachment = attachments[0] if isinstance(attachments, list) and attachments else None
-                fields = first_attachment.get('fields') if isinstance(first_attachment, dict) else None
-                for key, value in alert.metadata.items():
-                    if isinstance(fields, list):
-                        fields.append({'title': key, 'value': str(value), 'short': True})
+            payload: dict[str, Any] = {'channel': self.channel, 'username': 'Trading Bot', 'icon_emoji': ':robot_face:', **_slack_alert_message(alert)}
             response = http.post(
                 self.webhook_url, json=payload, timeout=clamp_request_timeout(HTTP_TIMEOUT)
             )

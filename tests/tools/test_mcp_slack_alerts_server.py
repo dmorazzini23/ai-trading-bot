@@ -12,6 +12,17 @@ import pytest
 from tools import mcp_slack_alerts_server as slack_srv
 
 
+def _block_text(payload: dict[str, Any]) -> str:
+    """All rendered mrkdwn/plain text in a Block Kit payload, newline-joined."""
+    parts: list[str] = []
+    for block in payload["blocks"]:
+        if isinstance(block.get("text"), dict):
+            parts.append(block["text"]["text"])
+        parts.extend(field["text"] for field in block.get("fields", []))
+        parts.extend(element["text"] for element in block.get("elements", []))
+    return "\n".join(parts)
+
+
 def test_operational_states_distinguish_abstention_from_qualification_and_incidents() -> None:
     healthy = {
         "ok": True, "status": "healthy", "attention_flags": [],
@@ -957,9 +968,12 @@ def test_incident_message_includes_top_precheck_blockers() -> None:
         "timestamp": "2026-04-02T19:00:00Z",
     }
 
-    text = slack_srv._incident_message_text(snapshot, ["pre_execution_checks_spike"])
+    payload = slack_srv._incident_message_payload(snapshot, ["pre_execution_checks_spike"])
 
-    assert "Top pre-check blockers (30m): symbol reentry cooldown=9, opening min notional=6" in text
+    assert (
+        "*Pre-check failures (30m)*\n15 failed, 20 skipped — top: symbol reentry cooldown (9), "
+        "opening min notional (6)"
+    ) in _block_text(payload)
 
 
 def test_notify_incident_channel_dedupes(monkeypatch, tmp_path: Path) -> None:
@@ -1005,11 +1019,12 @@ def test_notify_incident_channel_dedupes(monkeypatch, tmp_path: Path) -> None:
     assert len(posts) == 1
     payload = posts[0]["payload"]
     assert isinstance(payload, dict)
-    assert "ai-trading incident update" in str(payload.get("text"))
+    assert str(payload.get("text")).startswith("[WARNING] ")
     blocks = payload.get("blocks")
     assert isinstance(blocks, list)
     assert blocks[0]["type"] == "header"
-    assert any("Triggered by" in str(block) for block in blocks)
+    assert blocks[0]["text"]["text"].startswith("🟠 ")
+    assert blocks[1]["text"]["text"].startswith("*What happened*\n• ")
 
 
 def test_incident_acknowledgement_and_recovery_allow_new_occurrence(monkeypatch, tmp_path: Path) -> None:
@@ -1719,11 +1734,12 @@ def test_notify_eod_summary_sends_once_per_report_date(monkeypatch, tmp_path: Pa
     assert isinstance(payload, dict)
     text = payload.get("text")
     assert isinstance(text, str)
-    assert "ai-trading EOD summary" in text
+    assert "Daily recap" in text
     blocks = payload.get("blocks")
     assert isinstance(blocks, list)
     assert blocks[0]["type"] == "header"
-    assert any("Day performance" in str(block) for block in blocks)
+    assert "Daily recap" in blocks[0]["text"]["text"]
+    assert any(block.get("text", {}).get("text") == "*Trading*" for block in blocks)
 
 
 def test_notify_eod_summary_respects_market_closed_gate(monkeypatch) -> None:
@@ -1965,7 +1981,7 @@ def test_collect_eod_summary_does_not_reuse_stale_trade_row_for_fresh_report_dat
     assert snapshot["profit_factor"] is None
     assert snapshot["win_rate"] is None
     assert snapshot["closed_trades"] is None
-    assert "- Closed trades: n/a" in slack_srv._eod_message_text(snapshot)
+    assert "*Closed trades*\nn/a" in _block_text(slack_srv._eod_message_payload(snapshot))
 
 
 def test_collect_eod_summary_prefers_daily_trade_stats_for_daily_kpis(monkeypatch) -> None:
@@ -2082,10 +2098,9 @@ def test_collect_eod_summary_uses_nested_report_daily_trade_stats(monkeypatch) -
     assert snapshot["win_rate"] == 0.542
     assert snapshot["closed_trades"] == 24
     assert snapshot["top_loss_symbols"] == [{"symbol": "AMZN", "net_pnl": -3.54}]
-    message = slack_srv._eod_message_text(snapshot)
-    assert "💰 Day performance:" in message
-    assert "- Operational net PnL: $-0.45" in message
-    assert "- Closed trades: 24" in message
+    message = _block_text(slack_srv._eod_message_payload(snapshot))
+    assert "*Net P&L -$0.45*" in message
+    assert "*Closed trades*\n24" in message
 
 
 def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
@@ -2176,10 +2191,9 @@ def test_collect_eod_summary_flags_same_day_fill_pnl_mismatch(
     assert snapshot["same_day_fill_summary"]["closed_trades"] == 1
     assert snapshot["same_day_fill_summary"]["open_qty_by_symbol"] == {}
     assert snapshot["pnl_discrepancy"]["status"] == "mismatch"
-    message = slack_srv._eod_message_text(snapshot)
-    assert "- Operational net PnL: $-0.19" in message
-    assert "- Same-day fill PnL: $-0.19" in message
-    assert "- PnL check: mismatch" in message
+    message = _block_text(slack_srv._eod_message_payload(snapshot))
+    assert "*Net P&L -$0.19*  ·  fills basis -$0.19  ·  :warning: mismatch" in message
+    assert "P&L mismatch between accounting and fills" in message
 
 
 def test_collect_eod_summary_degrades_when_health_payload_fails(monkeypatch) -> None:
@@ -2209,3 +2223,228 @@ def test_collect_eod_summary_degrades_when_health_payload_fails(monkeypatch) -> 
     assert snapshot["provider_status"] == "unknown"
     assert snapshot["broker_status"] == "unknown"
     assert isinstance(snapshot["learning"], dict)
+
+
+def _assert_block_kit_limits(payload: dict[str, Any]) -> None:
+    blocks = payload["blocks"]
+    assert 0 < len(blocks) <= 50
+    assert blocks[0]["type"] == "header"
+    assert len(blocks[0]["text"]["text"]) <= 150
+    for block in blocks:
+        assert block["type"] in {"header", "section", "context", "divider"}
+        assert len(block.get("fields", [])) <= 10
+        assert len(block.get("elements", [])) <= 10
+        if block["type"] == "context":
+            assert block["elements"]
+        if block["type"] == "section":
+            assert "text" in block or block.get("fields")
+    text = _block_text(payload)
+    assert "{" not in text and "}" not in text  # no dict/JSON dumps
+
+
+_INCIDENT_SNAPSHOT: dict[str, Any] = {
+    "go_no_go_gate_passed": False,
+    "go_no_go_failed_checks": ["closed_trades", "win_rate", "acceptance_rate", "live_samples_sufficient"],
+    "execution_capture_ratio": 0.3150917379726395,
+    "slippage_drag_bps": 8.384140428738098,
+    "edge_realism_gap_ratio": 0.06992671570268809,
+    "realization_gap_bps": -51.30234220420759,
+    "execution_fill_ratio": None,
+    "execution_fill_ratio_samples": 0,
+    "execution_window_minutes": 30,
+    "gate_rejected_records": 266704,
+    "top_rejection_concentration_gate": "LONG_ONLY_SHORT_SUPPRESSED",
+    "top_rejection_concentration_ratio": 0.0889,
+    "health_status": "degraded",
+    "health_reason": "required_model_stale",
+    "operational_state": "blocked_qualification",
+    "provider_active": "alpaca",
+    "provider_status": "warming_up",
+    "using_backup": False,
+    "broker_status": "connected",
+    "timestamp": "2026-10-16T19:55:35Z",
+}
+
+
+def test_incident_payload_structure_for_single_trigger() -> None:
+    payload = slack_srv._incident_message_payload(dict(_INCIDENT_SNAPSHOT), ["health_degraded"])
+
+    _assert_block_kit_limits(payload)
+    blocks = payload["blocks"]
+    assert blocks[0]["text"]["text"] == "🟠 Runtime health is degraded"
+    assert payload["text"] == (
+        "[WARNING] Runtime health is degraded — health: required model stale · go/no-go: fail — 4 checks"
+    )
+    assert blocks[1]["text"]["text"] == "*What happened*\n• Runtime health is degraded"
+    impact = blocks[2]
+    assert impact["text"]["text"] == "*Impact*"
+    assert [field["text"] for field in impact["fields"]] == [
+        "*Health*\nDegraded — required model stale",
+        "*Go/No-Go*\nFail — 4 checks",
+        "*Data provider*\nAlpaca — warming up",
+        "*Broker*\nconnected",
+    ]
+    assert [field["text"] for field in blocks[3]["fields"]] == [
+        "*Slippage drag*\n8.4 bps",
+        "*Edge capture (realized ÷ expected)*\n0.32",
+    ]
+    assert blocks[4]["text"]["text"].startswith("*Action*\n• Check the reason on `/healthz`")
+    context = [element["text"] for element in blocks[5]["elements"]]
+    assert context == [
+        "Failing checks: closed trades, win rate, acceptance rate (+1 more)",
+        "State: blocked qualification",
+        "Fri Oct 16, 3:55 PM ET",
+    ]
+    others = blocks[6]["elements"][0]["text"]
+    assert "Fill ratio (30m): no orders in window" in others
+    assert "Top rejection reason: long only short suppressed — 8.9% of 266,704 rejections" in others
+
+
+def test_incident_payload_critical_orders_and_truncates_triggers() -> None:
+    snapshot = dict(_INCIDENT_SNAPSHOT)
+    snapshot.update(
+        broker_status="disconnected",
+        using_backup=True,
+        provider_active="yahoo",
+        provider_status="degraded",
+        precheck_failure_count=41,
+        execution_skipped_count=37,
+        precheck_failure_top_actionable_details=[
+            {"detail": "insufficient_buying_power", "count": 19},
+            {"detail": "stale_quote", "count": 12},
+            {"detail": "price_collar_breach", "count": 6},
+            {"detail": "max_order_size", "count": 4},
+        ],
+    )
+    triggers = [
+        "go_no_go_failed",
+        "go_no_go_failed_checks",
+        "pre_execution_checks_spike",
+        "health_degraded",
+        "data_provider_backup_active",
+        "broker_disconnected",
+        "edge_realism_gap_high",
+    ]
+
+    payload = slack_srv._incident_message_payload(snapshot, triggers)
+
+    _assert_block_kit_limits(payload)
+    blocks = payload["blocks"]
+    assert blocks[0]["text"]["text"] == "🔴 Broker connection is not healthy (+6 more)"
+    assert payload["text"].startswith("[CRITICAL] Broker connection is not healthy (+6 more)")
+    what = blocks[1]["text"]["text"].splitlines()
+    assert what[1:3] == ["• Broker connection is not healthy", "• Runtime health is degraded"]
+    assert what[-1] == "• …and 2 more"
+    assert len(what) == 7
+    assert "*Data provider*\nYahoo — degraded (backup feed)" in [f["text"] for f in blocks[2]["fields"]]
+    metric_labels = [field["text"].split("\n", 1)[0] for field in blocks[3]["fields"]]
+    assert metric_labels == [
+        "*Pre-check failures (30m)*",
+        "*Edge realism*",
+        "*Slippage drag*",
+        "*Edge capture (realized ÷ expected)*",
+    ]
+    assert "price collar breach (6) (+1 more)" in blocks[3]["fields"][0]["text"]
+    assert blocks[4]["text"]["text"].splitlines()[-1] == "• …and 3 more"
+
+
+def test_eod_payload_reads_top_down_and_lists_open_flags() -> None:
+    snapshot: dict[str, Any] = {
+        "report_date": "2026-10-16",
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["win_rate"],
+        "net_pnl": -3.9400142214482634,
+        "same_day_fill_summary": {"net_pnl": 0.76, "same_day_fill_events": 7, "closed_trades": 4},
+        "pnl_discrepancy": {"status": "mismatch", "delta": -4.700014221448226},
+        "profit_factor": 0.0,
+        "win_rate": 0.0,
+        "closed_trades": 1,
+        "execution_capture_ratio": 0.315,
+        "slippage_drag_bps": 8.384,
+        "order_reject_rate_pct": 1.25,
+        "open_position_reconciliation_mismatch_count": 2,
+        "open_position_reconciliation_max_abs_delta_qty": 3.0,
+        "health_status": "degraded",
+        "health_reason": "required_model_stale",
+        "provider_active": "alpaca",
+        "provider_status": "healthy",
+        "using_backup": False,
+        "broker_status": "connected",
+        "top_loss_symbols": [
+            {"symbol": "META", "net_pnl": -122.94},
+            {"symbol": "QQQ", "net_pnl": -75.18},
+            {"symbol": "AMD", "net_pnl": -35.53},
+            {"symbol": "TSLA", "net_pnl": -1.0},
+        ],
+        "training_gate": {"ready": False, "reason": "training_not_complete_for_report_date"},
+        "learning": {
+            "after_hours": {
+                "model_name": "histgb",
+                "governance_status": "shadow",
+                "rows": 300868,
+                "model_id": "ml_edge-histgb-236ba0fe-20260717200350-4045d5c5",
+            },
+            "model_liveness": {"ml_age_s": 5400.0},
+        },
+        "timestamp": "2026-10-16T20:45:00Z",
+    }
+
+    payload = slack_srv._eod_message_payload(snapshot)
+
+    _assert_block_kit_limits(payload)
+    blocks = payload["blocks"]
+    assert blocks[0]["text"]["text"] == "🟠 Daily recap · Fri Oct 16"
+    assert payload["text"] == "[WARNING] Daily recap · Fri Oct 16 — net P&L -$3.94 · 5 open flags"
+    assert blocks[1]["text"]["text"] == "*Net P&L -$3.94*  ·  fills basis +$0.76  ·  :warning: mismatch"
+    trading = [field["text"] for field in blocks[2]["fields"]]
+    assert trading == [
+        "*Closed trades*\n1",
+        "*Win rate · profit factor*\n0.0% · 0.00",
+        "*Fills today*\n7 fills, 4 round trips",
+        "*Reject rate*\n1.25%",
+        "*Slippage · edge capture*\n8.4 bps · 0.32",
+        "*Biggest losers*\nMETA -$122.94, QQQ -$75.18, AMD -$35.53 (+1 more)",
+    ]
+    assert blocks[3]["text"]["text"] == "*Data & broker*"
+    flags = blocks[4]["text"]["text"].splitlines()
+    assert flags == [
+        "*Open flags*",
+        "• Go/no-go failed: win rate",
+        "• Health degraded: required model stale",
+        "• P&L mismatch between accounting and fills: -$4.70",
+        "• Training gate not ready: training not complete for report date",
+        "• Position reconciliation: 2 mismatches, max qty delta 3.000",
+    ]
+    rendered = _block_text(payload)
+    assert "Signal age: ML 90m, RL n/a" in rendered
+    assert "236ba0fe" not in rendered
+
+
+def test_eod_payload_is_ok_when_nothing_is_flagged() -> None:
+    payload = slack_srv._eod_message_payload(
+        {
+            "report_date": "2026-10-16",
+            "go_no_go_gate_passed": True,
+            "health_status": "healthy",
+            "net_pnl": 12.5,
+            "timestamp": "2026-10-16T20:45:00Z",
+        }
+    )
+
+    assert payload["blocks"][0]["text"]["text"] == "🟢 Daily recap · Fri Oct 16"
+    assert "*Open flags*\n• none" in _block_text(payload)
+
+
+def test_incident_snapshot_tool_returns_message_preview_without_posting(monkeypatch) -> None:
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", lambda _args: dict(_INCIDENT_SNAPSHOT))
+    monkeypatch.setattr(
+        slack_srv,
+        "_post_slack_message",
+        lambda *_args, **_kwargs: pytest.fail("snapshot tool must not post"),
+    )
+
+    result = slack_srv.tool_runtime_incident_snapshot({})
+
+    preview = result["message_preview"]
+    assert preview == slack_srv._incident_message_payload(result["snapshot"], result["triggers"])
+    _assert_block_kit_limits(preview)

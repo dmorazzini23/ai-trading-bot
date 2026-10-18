@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -268,7 +269,7 @@ def test_load_runtime_env_defaults_does_not_override_existing(tmp_path: Path) ->
 
 
 def test_format_preflight_report_summarizes_health() -> None:
-    text = dispatch.format_preflight_report(
+    payload = dispatch.format_preflight_report(
         {
             "report_status": "complete",
             "readiness_verdict": "blocked",
@@ -281,21 +282,54 @@ def test_format_preflight_report_summarizes_health() -> None:
             "data_provider": {"active": "alpaca", "status": "healthy"},
         }
     )
-    assert text.startswith("*Market preflight: blocked*")
-    assert "0 positions, 0 open orders" in text
-    assert "required_model_stale" in text
+    blocks = payload["blocks"]
+    assert payload["text"] == "[WARNING] Market preflight · blocked — required model stale · 1 flags"
+    assert blocks[0] == {
+        "type": "header",
+        "text": {"type": "plain_text", "text": "🟠 Market preflight · blocked", "emoji": True},
+    }
+    assert [field["text"] for field in blocks[1]["fields"]] == [
+        "*Health*\nDegraded (HTTP 503) — required model stale",
+        "*Service*\nready (active)",
+        "*Broker*\nconnected — 0 positions, 0 open orders",
+        "*Data provider*\nAlpaca — healthy",
+    ]
+    assert blocks[2]["text"]["text"] == "*Open flags*\n• required model stale"
+    assert blocks[3]["type"] == "context"
+    assert "required_model_stale" not in json.dumps(blocks)
+
+
+def test_format_preflight_report_ready_verdict_is_ok() -> None:
+    payload = dispatch.format_preflight_report(
+        {
+            "report_status": "complete",
+            "readiness_verdict": "ready",
+            "status": "healthy",
+            "http_status": 200,
+            "reason": "runtime_health_ok",
+            "attention_flags": [],
+            "service_state": {"status": "ready", "phase": "active"},
+            "broker": {"status": "connected", "positions_count": 2, "open_orders_count": 1},
+            "data_provider": {"active": "alpaca", "status": "healthy"},
+        }
+    )
+    assert payload["blocks"][0]["text"]["text"] == "🟢 Market preflight · ready"
+    assert payload["blocks"][2]["text"]["text"] == "*Open flags*\n• none"
 
 
 def test_format_preflight_report_flags_unreadable_health() -> None:
-    text = dispatch.format_preflight_report(
+    payload = dispatch.format_preflight_report(
         {"report_status": "failed", "error_type": "URLError", "error": "refused"}
     )
-    assert "FAILED" in text and "URLError: refused" in text
+    assert payload["text"].startswith("[CRITICAL] Market preflight failed")
+    assert payload["blocks"][0]["text"]["text"].startswith("🔴 Market preflight failed")
+    assert payload["blocks"][1]["text"]["text"] == "*What happened*\nURLError: refused"
 
 
 def test_run_scheduled_report_posts_text_through_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(dispatch, "build_scheduled_report", lambda kind: f"report:{kind}")
+    report_payload = {"text": "[OK] close", "blocks": [{"type": "header"}]}
+    monkeypatch.setattr(dispatch, "build_scheduled_report", lambda kind: report_payload)
 
     result = dispatch.run_scheduled_report(
         "close-recap",
@@ -304,7 +338,7 @@ def test_run_scheduled_report_posts_text_through_webhook(monkeypatch: pytest.Mon
     )
 
     assert result["sent"] is True
-    assert posted == [("https://hooks.slack.test/abc", {"text": "report:close-recap"})]
+    assert posted == [("https://hooks.slack.test/abc", report_payload)]
 
 
 def test_run_scheduled_report_skips_without_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -317,3 +351,18 @@ def test_run_scheduled_report_skips_without_webhook(monkeypatch: pytest.MonkeyPa
 def test_main_rejects_unknown_report(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dispatch, "_load_runtime_env_defaults", lambda *a, **k: {})
     assert dispatch.main(["--report", "weekly-audit"]) == 2
+
+
+def test_build_scheduled_close_recap_returns_block_kit_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("AI_TRADING_RECAP_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_RECAP_SKIP_SYSTEM", "1")
+    monkeypatch.setenv("AI_TRADING_RECAP_DATE", "2026-10-16")
+
+    payload = dispatch.build_scheduled_report("close-recap")
+
+    assert set(payload) == {"text", "blocks"}
+    assert payload["blocks"][0]["type"] == "header"
+    assert payload["blocks"][0]["text"]["text"] == "🟠 Market close · Fri Oct 16 · needs review"
+    assert "**" not in json.dumps(payload)
