@@ -2462,3 +2462,22 @@ def test_incident_snapshot_tool_returns_message_preview_without_posting(monkeypa
     preview = result["message_preview"]
     assert preview == slack_srv._incident_message_payload(result["snapshot"], result["triggers"])
     _assert_block_kit_limits(preview)
+
+
+def test_runtime_report_payload_reads_cached_report_under_runtime_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "runtime_performance_report_latest.json").write_text(
+        json.dumps({"source": "runtime_root_fixture"}), encoding="utf-8"
+    )
+    monkeypatch.setenv("AI_TRADING_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.delenv("AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH", raising=False)
+
+    def _unexpected_module_run(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("cached runtime report under AI_TRADING_RUNTIME_ROOT was ignored")
+
+    monkeypatch.setattr(slack_srv, "_run_module_json", _unexpected_module_run)
+
+    assert slack_srv._runtime_report_payload() == {"source": "runtime_root_fixture"}

@@ -15,23 +15,128 @@ os.environ["AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL"] = "0"
 # time, and LOG_DIR defaults to /var/log/ai-trading-bot even when no .env is
 # loaded, so a per-test monkeypatch is too late: these must be set before any
 # ``ai_trading`` import. The per-test ``_guard_production_dirs`` fixture below
-# fails any test that still writes into the production directories.
+# fails any test that still writes into, or opens anything under, the production
+# directories.
 _PYTEST_DIRS_TMPDIR = tempfile.TemporaryDirectory(prefix="ai-trading-pytest-dirs-")
 _PRODUCTION_LOG_DIR = os.environ.get("AI_TRADING_LOG_DIR") or "/var/log/ai-trading-bot"
 _PRODUCTION_MODELS_DIR = (
     os.environ.get("AI_TRADING_MODELS_DIR") or "/var/lib/ai-trading-bot/models"
 )
+
+
+def _production_state_roots() -> tuple[str, ...]:
+    """Return the production state roots the read guard protects.
+
+    The canonical systemd StateDirectory/LogsDirectory/CacheDirectory roots are
+    always protected. Directories inherited from the invoking shell (for example
+    after ``set -a; . .env``) are added when they are absolute and do not contain
+    the checkout or the temp directory the tests themselves use.
+    """
+
+    roots = [
+        "/var/lib/ai-trading-bot",
+        "/var/log/ai-trading-bot",
+        "/var/cache/ai-trading-bot",
+    ]
+    protected_children = (
+        os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)),
+        os.path.abspath(tempfile.gettempdir()),
+    )
+    for key in (
+        "AI_TRADING_DATA_DIR",
+        "AI_TRADING_LOG_DIR",
+        "AI_TRADING_MODELS_DIR",
+        "AI_TRADING_CACHE_DIR",
+        "AI_TRADING_OUTPUT_DIR",
+        "AI_TRADING_RUNTIME_ROOT",
+        "STATE_DIRECTORY",
+    ):
+        raw = str(os.environ.get(key) or "").split(":")[0].strip()
+        if not raw or not os.path.isabs(raw):
+            continue
+        candidate = os.path.normpath(raw)
+        if candidate == os.sep or any(
+            child == candidate or child.startswith(candidate + os.sep)
+            for child in protected_children
+        ):
+            continue
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
+_PRODUCTION_STATE_ROOTS = _production_state_roots()
+
+# Drop inherited settings that point at production state (``DATABASE_URL`` for
+# the OMS sqlite store, absolute decision-record/fill-event/report paths from a
+# sourced .env, ...), so module defaults resolve under the isolated dirs below.
+for _env_key, _env_value in list(os.environ.items()):
+    if any(_root in _env_value for _root in _PRODUCTION_STATE_ROOTS):
+        os.environ.pop(_env_key, None)
+
+# Runtime artifacts whose defaults are relative (``runtime/...``) resolve under
+# ``AI_TRADING_DATA_DIR``, which ``_env_defaults`` points at a per-test
+# ``tmp_path``. Unset them unconditionally so a developer shell cannot redirect
+# the OMS database, decision records, fill events, research reports or
+# after-hours state to a shared location.
+for _env_key in (
+    "DATABASE_URL",
+    "STATE_DIRECTORY",
+    "AI_TRADING_OMS_INTENT_STORE_PATH",
+    "AI_TRADING_OMS_EVENT_JSONL_PATH",
+    "AI_TRADING_DECISION_LOG_PATH",
+    "AI_TRADING_FILL_EVENTS_PATH",
+    "AI_TRADING_TCA_PATH",
+    "AI_TRADING_RESEARCH_REPORT_ROOT",
+    "AI_TRADING_RESEARCH_DATA_DIR",
+    "AI_TRADING_DAILY_RESEARCH_REPORT_PATH",
+    "AI_TRADING_AFTER_HOURS_TRAINING_STATE_PATH",
+    "AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH",
+    "AI_TRADING_AFTER_HOURS_REPORT_DIR",
+    "AI_TRADING_AFTER_HOURS_REPORT_LATEST_PATH",
+    "AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH",
+    "AI_TRADING_RUNTIME_PERF_FILL_EVENTS_PATH",
+    "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+    "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+    "AI_TRADING_RUNTIME_PERF_GATE_LOG_PATH",
+    "AI_TRADING_RUNTIME_PERF_EDGE_REALISM_STATE_PATH",
+):
+    os.environ.pop(_env_key, None)
+
 for _env_key, _relative in (
     ("AI_TRADING_LOG_DIR", "logs"),
     ("AI_TRADING_DATA_DIR", "data"),
     ("AI_TRADING_MODELS_DIR", "models"),
     ("AI_TRADING_CACHE_DIR", "cache"),
     ("AI_TRADING_OUTPUT_DIR", "output"),
+    # tools/mcp_* servers and scripts/market_close_recap.py default to
+    # /var/lib/ai-trading-bot/runtime when these are unset.
+    ("AI_TRADING_RUNTIME_ROOT", "runtime"),
+    ("AI_TRADING_RECAP_RUNTIME_DIR", "runtime"),
+    # ai_trading.data.fetch_yf defaults to /var/cache/ai-trading-bot/yf.
+    ("YF_CACHE_DIR", os.path.join("cache", "yf")),
 ):
     _isolated_dir = os.path.join(_PYTEST_DIRS_TMPDIR.name, _relative)
     os.makedirs(_isolated_dir, exist_ok=True)
     os.environ[_env_key] = _isolated_dir
 os.environ["SLIPPAGE_LOG_PATH"] = os.path.join(_PYTEST_DIRS_TMPDIR.name, "logs", "slippage.csv")
+_PYTEST_TRADE_LOG_FILE = os.path.join(_PYTEST_DIRS_TMPDIR.name, "logs", "trades.jsonl")
+# File settings whose code default is an absolute production path.
+for _env_key, _relative in (
+    # ai_trading.telemetry.runtime_prom_metrics, tools/mcp_metrics_query_server.py
+    ("AI_TRADING_RUNTIME_DAILY_REPORT_PATH", "daily_performance_report.json"),
+    # ai_trading.core.netting_execution_context
+    (
+        "AI_TRADING_GATE_AUTO_DISABLE_RUNTIME_GONOGO_PATH",
+        "runtime_performance_report_latest.json",
+    ),
+    # tools/mcp_slack_alerts_server.py
+    ("AI_TRADING_SLACK_INCIDENT_STATE_PATH", "slack_incident_state.json"),
+    ("AI_TRADING_SLACK_EOD_STATE_PATH", "slack_eod_state.json"),
+    # tools/mcp_infra_cloud_server.py
+    ("AI_TRADING_INFRA_AUDIT_PATH", "infra_actions_audit.jsonl"),
+):
+    os.environ[_env_key] = os.path.join(_PYTEST_DIRS_TMPDIR.name, "runtime", _relative)
 
 import sys as _sys
 
@@ -377,29 +482,109 @@ def _production_dir_signature() -> dict[str, tuple[int, int]]:
     return signature
 
 
-@pytest.fixture(autouse=True)
-def _guard_production_dirs(request: pytest.FixtureRequest):
-    """Fail the test that writes into the production log or models directory.
+# Audit events whose first argument (or ``src``/``dst`` pair) is a filesystem path.
+# ``os.stat``/``Path.exists`` are not audited, so existence probes do not trip the
+# read guard; opening, listing, connecting to or mutating a production file does.
+_PRODUCTION_ACCESS_EVENTS = frozenset(
+    {
+        "open",
+        "os.listdir",
+        "os.scandir",
+        "glob.glob",
+        "sqlite3.connect",
+        "os.mkdir",
+        "os.remove",
+        "os.rename",
+        "os.rmdir",
+        "os.truncate",
+        "os.chmod",
+        "os.utime",
+        "shutil.copyfile",
+        "shutil.copytree",
+        "shutil.move",
+        "shutil.rmtree",
+    }
+)
+_PRODUCTION_ACCESS_STATE: dict[str, Any] = {"active": False, "hits": []}
 
-    Historically tests appended fixture rows to the live slippage log and
-    truncated the live reward log because the writers resolve their paths at
-    import time. The env isolation at the top of this module prevents that;
-    this guard catches any new path that bypasses it. Set
-    ``AI_TRADING_TEST_PRODUCTION_GUARD=0`` to disable it, for example when the
-    live service is known to be writing to those directories during the run.
-    """
 
-    enabled = str(os.environ.get("AI_TRADING_TEST_PRODUCTION_GUARD", "1")).strip().lower() in {
+def _production_path_hit(value: object) -> str | None:
+    if isinstance(value, int) or value is None:
+        return None
+    try:
+        raw = os.fsdecode(os.fspath(value))  # type: ignore[arg-type]
+    except TypeError:
+        return None
+    if raw.startswith("file:"):
+        raw = raw[len("file:") :].split("?", 1)[0]
+    if not raw:
+        return None
+    resolved = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(os.getcwd(), raw))
+    for root in _PRODUCTION_STATE_ROOTS:
+        if resolved == root or resolved.startswith(root + os.sep):
+            return resolved
+    return None
+
+
+def _production_access_audit_hook(event: str, args: tuple[Any, ...]) -> None:
+    if not _PRODUCTION_ACCESS_STATE["active"] or event not in _PRODUCTION_ACCESS_EVENTS:
+        return
+    candidates = args[:2] if event in {"os.rename", "shutil.copyfile", "shutil.copytree", "shutil.move"} else args[:1]
+    for candidate in candidates:
+        try:
+            hit = _production_path_hit(candidate)
+        except Exception:  # noqa: BLE001 - an audit hook must never break the audited call
+            hit = None
+        if hit is not None:
+            _PRODUCTION_ACCESS_STATE["hits"].append((event, hit))
+
+
+# Audit hooks cannot be removed; it is installed once and only records while a
+# test body runs (see ``_guard_production_dirs``).
+sys.addaudithook(_production_access_audit_hook)
+
+
+def _production_guard_enabled() -> bool:
+    return str(os.environ.get("AI_TRADING_TEST_PRODUCTION_GUARD", "1")).strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
-    if not enabled:
+
+
+@pytest.fixture(autouse=True)
+def _guard_production_dirs(request: pytest.FixtureRequest):
+    """Fail the test that reads or writes production state.
+
+    Historically tests appended fixture rows to the live slippage log and
+    truncated the live reward log because the writers resolve their paths at
+    import time, and other tests silently read the live runtime artifacts
+    (``fill_events.jsonl``, runtime reports) because tool defaults point at
+    /var/lib/ai-trading-bot/runtime. The env isolation at the top of this
+    module prevents both; this guard catches any path that bypasses it:
+
+    * read guard: a ``sys.addaudithook`` hook records every open/list/connect/
+      mutate audit event under ``_PRODUCTION_STATE_ROOTS`` while the test runs;
+    * write guard: (mtime, size) of files directly under the production log and
+      models directories must not change during the test.
+
+    Set ``AI_TRADING_TEST_PRODUCTION_GUARD=0`` to disable both, for example when
+    the live service is known to be writing to those directories during the run.
+    """
+
+    if not _production_guard_enabled():
         yield
         return
     before = _production_dir_signature()
-    yield
+    hits: list[tuple[str, str]] = []
+    _PRODUCTION_ACCESS_STATE["hits"] = hits
+    _PRODUCTION_ACCESS_STATE["active"] = True
+    try:
+        yield
+    finally:
+        _PRODUCTION_ACCESS_STATE["active"] = False
+        _PRODUCTION_ACCESS_STATE["hits"] = []
     after = _production_dir_signature()
     changed = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
     if changed:
@@ -407,6 +592,18 @@ def _guard_production_dirs(request: pytest.FixtureRequest):
             "test run modified production files (this test, or the live service during "
             f"the test): {changed}. Tests must write only under tmp_path or the isolated "
             "AI_TRADING_*_DIR locations set in tests/conftest.py.",
+            pytrace=False,
+        )
+    if hits:
+        accessed = sorted({f"{event} {path}" for event, path in hits})
+        shown = accessed[:20]
+        more = f" (+{len(accessed) - len(shown)} more)" if len(accessed) > len(shown) else ""
+        pytest.fail(
+            "test accessed production state under "
+            f"{', '.join(_PRODUCTION_STATE_ROOTS)}: {shown}{more}. Give the test explicit "
+            "fixture data under tmp_path (pass runtime_root/state_path/report paths or "
+            "monkeypatch the path env var) instead of relying on production defaults. "
+            "Set AI_TRADING_TEST_PRODUCTION_GUARD=0 to disable this guard.",
             pytrace=False,
         )
 
@@ -729,7 +926,11 @@ def _reset_bot_engine_state():
         bot_engine._TRADE_LOG_CACHE_LOADED = False
         bot_engine._TRADE_LOGGER_SINGLETON = None
         bot_engine._TRADE_LOG_FALLBACK_PATH = None
-        bot_engine.TRADE_LOG_FILE = bot_engine.default_trade_log_path()
+        # Do not call ``default_trade_log_path()`` here: it creates ./logs/trades.jsonl
+        # in the checkout and, when a test has made cwd/logs unwritable, falls back to
+        # the production /var/log/ai-trading-bot directory. Tests that exercise path
+        # resolution call it explicitly.
+        bot_engine.TRADE_LOG_FILE = _PYTEST_TRADE_LOG_FILE
         if hasattr(bot_engine, "_RUNTIME_READY"):
             bot_engine._RUNTIME_READY = False
         if hasattr(bot_engine, "_HEALTH_CHECK_FAILURES"):
