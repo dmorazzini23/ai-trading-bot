@@ -213,19 +213,8 @@ def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
     if not sizing_meta:
         sizing_meta = {"mode": mode, "capital_cap": getattr(cfg, "capital_cap", 0.0)}
 
-    storage = getattr(cfg, "_values", None)
-    if isinstance(storage, dict):
-        storage["max_position_size"] = float(resolved)
-        if sizing_meta:
-            storage["max_position_size_meta"] = dict(sizing_meta)
-    if getattr(cfg, "max_position_size", None) != resolved:
-        try:
-            object.__setattr__(cfg, "max_position_size", float(resolved))
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            try:
-                setattr(cfg, "max_position_size", float(resolved))
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
+    # The resolved size lives in ``params`` (and the bot_engine global); cfg
+    # keeps the operator-declared value so its runtime cache key stays stable.
     if resolved <= 0:
         raise ValueError("AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be positive")
     params["MAX_POSITION_SIZE"] = float(resolved)

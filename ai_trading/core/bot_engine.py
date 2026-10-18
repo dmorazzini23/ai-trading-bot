@@ -41600,6 +41600,9 @@ def _rollout_replay_advance_eligibility(
     return True, ""
 
 
+_ROLLOUT_FAIL_CLOSED_MULTIPLIER = 0.05
+
+
 def _update_rollout_governance_state(
     *,
     state: BotState,
@@ -41623,13 +41626,13 @@ def _update_rollout_governance_state(
             "ineligible_reason": "",
         },
     }
+    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
     try:
         env_snapshot = _rollout_env_snapshot()
         burn_in_policy = build_burn_in_policy(env_snapshot)
         ramp_policy = build_capital_ramp_policy(env_snapshot)
         path = _resolve_rollout_state_path()
         current_rollout_state = load_rollout_state(path)
-        execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
         telemetry = {
             "order_pacing_cap_hit_rate_pct": float(
                 slo_derisk_details.get("order_pacing_cap_hit_rate_pct", 0.0) or 0.0
@@ -41663,10 +41666,32 @@ def _update_rollout_governance_state(
         save_rollout_state(path, updated_state)
         state.rollout_state_path = str(path)
     except BOT_ENGINE_FALLBACK_EXC as exc:
-        logger.warning("ROLLOUT_GOVERNANCE_UPDATE_FAILED", extra={"error": str(exc)})
-        state.capital_ramp_multiplier = 1.0
-        state.burn_in_ready = True
-        state.burn_in_block_reason = ""
+        if execution_mode in {"paper", "sim"}:
+            logger.warning(
+                "ROLLOUT_GOVERNANCE_UPDATE_FAILED",
+                extra={"error": str(exc), "execution_mode": execution_mode},
+            )
+            state.capital_ramp_multiplier = 1.0
+            state.burn_in_ready = True
+            state.burn_in_block_reason = ""
+            return summary
+        # Outside paper/sim an unverifiable burn-in must not unlock full size.
+        logger.error(
+            "ROLLOUT_GOVERNANCE_UPDATE_FAILED",
+            extra={"error": str(exc), "execution_mode": execution_mode, "fail_closed": True},
+        )
+        state.capital_ramp_multiplier = _ROLLOUT_FAIL_CLOSED_MULTIPLIER
+        state.burn_in_ready = False
+        state.burn_in_block_reason = "ROLLOUT_GOVERNANCE_UNAVAILABLE"
+        summary["burn_in_ready"] = False
+        summary["burn_in_reason"] = "ROLLOUT_GOVERNANCE_UNAVAILABLE"
+        summary["capital_ramp"].update(
+            {
+                "multiplier": _ROLLOUT_FAIL_CLOSED_MULTIPLIER,
+                "advance_eligible": False,
+                "ineligible_reason": "ROLLOUT_GOVERNANCE_UNAVAILABLE",
+            }
+        )
         return summary
 
     previous_multiplier = float(getattr(state, "capital_ramp_multiplier", 1.0) or 1.0)

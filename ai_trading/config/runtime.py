@@ -2814,13 +2814,14 @@ def _detect_env_alias_conflict(spec: ConfigSpec, env_map: Mapping[str, str]) -> 
 class TradingConfig:
     """Immutable container mapping config specifications to resolved values."""
 
-    __slots__ = ("_values", "_mode_effective")
+    __slots__ = ("_values", "_mode_effective", "_declared")
 
     def __init__(
         self,
         _explicit_fields: Iterable[str] | None = None,
         _env_map: Mapping[str, Any] | None = None,
         _mode_effective: Mapping[str, Any] | None = None,
+        _declared: Mapping[str, Any] | None = None,
         **values: Any,
     ) -> None:
         normalized: dict[str, Any] = {}
@@ -2845,6 +2846,14 @@ class TradingConfig:
 
         object.__setattr__(self, "_values", normalized)
         object.__setattr__(self, "_mode_effective", resolved_mode_effective)
+        # Freeze the operator-declared settings at construction. Runtime code
+        # still writes resolved values (e.g. AUTO max_position_size) into
+        # ``_values``; those must not change the config identity hash.
+        object.__setattr__(
+            self,
+            "_declared",
+            copy.deepcopy(dict(_declared if _declared is not None else normalized)),
+        )
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - attribute passthrough
         try:
@@ -2878,6 +2887,7 @@ class TradingConfig:
             raise AttributeError(f"TradingConfig has no fields: {names}")
 
         values = self.to_dict()
+        declared = dict(self._declared)
         for key, value in updates.items():
             spec = SPEC_BY_FIELD.get(key)
             if spec is not None:
@@ -2887,19 +2897,32 @@ class TradingConfig:
             elif key == "app_env":
                 value = _normalize_env_label(value, default="test")
             values[key] = value
+            declared[key] = value
 
         if {"alpaca_base_url", "app_env"} & updates.keys():
             values["paper"] = _infer_paper_mode(values)
+            declared["paper"] = _infer_paper_mode(declared)
 
-        return TradingConfig(_mode_effective=self._mode_effective, **values)
+        return TradingConfig(
+            _mode_effective=self._mode_effective,
+            _declared=declared,
+            **values,
+        )
 
     def snapshot_sanitized(self) -> dict[str, Any]:
+        """Return a secret-free snapshot of the operator-declared settings.
+
+        Reads the values frozen at construction rather than ``_values`` so
+        runtime-resolved fields do not alter ``config_snapshot_hash``.
+        """
+
+        declared = self._declared
         mode_snapshot = self.mode_effective_snapshot()
-        mode_snapshot["adaptive_enabled"] = bool(getattr(self, "trading_mode_adaptive_enabled", False))
+        mode_snapshot["adaptive_enabled"] = bool(declared.get("trading_mode_adaptive_enabled", False))
         declared_settings = {
             spec.field: (
-                "configured" if self._values.get(spec.field) else "absent"
-            ) if spec.mask else self._values.get(spec.field)
+                "configured" if declared.get(spec.field) else "absent"
+            ) if spec.mask else declared.get(spec.field)
             for spec in CONFIG_SPECS
         }
         declared_settings_hash = hashlib.sha256(
@@ -2913,32 +2936,32 @@ class TradingConfig:
         data = {
             "declared_settings_hash": declared_settings_hash,
             "risk": {
-                "capital_cap": self.capital_cap,
-                "dollar_risk_limit": self.dollar_risk_limit,
-                "daily_loss_limit": self.daily_loss_limit,
-                "max_drawdown_threshold": self.max_drawdown_threshold,
+                "capital_cap": declared.get("capital_cap"),
+                "dollar_risk_limit": declared.get("dollar_risk_limit"),
+                "daily_loss_limit": declared.get("daily_loss_limit"),
+                "max_drawdown_threshold": declared.get("max_drawdown_threshold"),
             },
             "mode": mode_snapshot,
             "data": {
-                "feed": getattr(self, "alpaca_data_feed", None),
+                "feed": declared.get("alpaca_data_feed"),
                 "provider": (
-                    getattr(self, "data_provider", None)
-                    or (self.data_provider_priority[0] if getattr(self, "data_provider_priority", None) else None)
+                    declared.get("data_provider")
+                    or (declared["data_provider_priority"][0] if declared.get("data_provider_priority") else None)
                 ),
             },
             "execution": {
-                "mode": getattr(self, "execution_mode", None),
-                "shadow_mode": bool(getattr(self, "shadow_mode", False)),
-                "order_timeout_seconds": getattr(self, "order_timeout_seconds", None),
-                "slippage_limit_bps": getattr(self, "slippage_limit_bps", None),
-                "price_providers": tuple(getattr(self, "price_provider_order", ()) or ()),
-                "intraday_feed": getattr(self, "data_feed_intraday", None),
-                "execution_feed": getattr(self, "alpaca_execution_feed", None),
-                "reference_feed": getattr(self, "alpaca_reference_feed", None),
+                "mode": declared.get("execution_mode"),
+                "shadow_mode": bool(declared.get("shadow_mode", False)),
+                "order_timeout_seconds": declared.get("order_timeout_seconds"),
+                "slippage_limit_bps": declared.get("slippage_limit_bps"),
+                "price_providers": tuple(declared.get("price_provider_order", ()) or ()),
+                "intraday_feed": declared.get("data_feed_intraday"),
+                "execution_feed": declared.get("alpaca_execution_feed"),
+                "reference_feed": declared.get("alpaca_reference_feed"),
             },
             "auth": {
-                "alpaca_api_key": "***" if getattr(self, "alpaca_api_key", None) else "",
-                "alpaca_secret_key": "***" if getattr(self, "alpaca_secret_key", None) else "",
+                "alpaca_api_key": "***" if declared.get("alpaca_api_key") else "",
+                "alpaca_secret_key": "***" if declared.get("alpaca_secret_key") else "",
             },
         }
         return data
@@ -2957,7 +2980,12 @@ class TradingConfig:
     def __deepcopy__(self, memo: dict[int, Any]) -> "TradingConfig":
         copied_values = copy.deepcopy(self._values, memo)
         copied_mode_effective = copy.deepcopy(self._mode_effective, memo)
-        return TradingConfig(_mode_effective=copied_mode_effective, **copied_values)
+        copied_declared = copy.deepcopy(self._declared, memo)
+        return TradingConfig(
+            _mode_effective=copied_mode_effective,
+            _declared=copied_declared,
+            **copied_values,
+        )
 
     @classmethod
     def from_env(

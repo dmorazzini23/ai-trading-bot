@@ -2382,7 +2382,6 @@ def run_cycle() -> None:
         enhance_runtime_with_context,
     )
     from ai_trading.config.management import TradingConfig
-    from ai_trading.config import get_settings
     from ai_trading.data import fetch as data_fetcher_module
     from ai_trading.data import provider_monitor
     from ai_trading.data.provider_monitor import safe_mode_reason
@@ -2462,18 +2461,6 @@ def run_cycle() -> None:
         )
     except MAIN_FALLBACK_EXC:
         logger.debug("EXEC_CONFIG_RESOLVED_LOG_FAILED", exc_info=True)
-
-    # Carry through a pre-resolved max position size if available on Settings.
-    S = get_settings()
-    mps = getattr(S, "max_position_size", None)
-    if mps is not None:
-        try:
-            object.__setattr__(cfg, "max_position_size", float(mps))
-        except MAIN_FALLBACK_EXC:
-            try:
-                setattr(cfg, "max_position_size", float(mps))
-            except MAIN_FALLBACK_EXC:  # pragma: no cover - defensive
-                logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
 
     state, runtime, _ = _resolve_cached_context(cfg, BotState, build_runtime)
 
