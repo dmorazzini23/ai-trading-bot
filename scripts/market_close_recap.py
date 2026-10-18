@@ -32,6 +32,10 @@ JOURNAL_FAILURE_PATTERN = re.compile(
     r"\b(?:ERROR|Exception|Traceback|CRITICAL)\b",
     re.IGNORECASE,
 )
+_NEXT_ACTION = (
+    "Leave the service running. Review any blocked research/model-readiness sections before "
+    "the next open; no restart is indicated by this recap."
+)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -271,23 +275,45 @@ def _operator_issues() -> list[str]:
     return issues
 
 
-def build_recap() -> str:
+def _collect_recap_inputs() -> dict[str, Any]:
     day = _utc_today()
     service = _service_summary()
     health_text, health = _health_summary()
-    fills = _fill_summary(day)
-    trading_text, warnings = _trading_day_summary(day)
-    journal = _journal_summary(day)
-    operator_issues = _operator_issues()
+    inputs: dict[str, Any] = {
+        "day": day,
+        "service": service,
+        "health_text": health_text,
+        "health": health,
+        "fills": _fill_summary(day),
+    }
+    inputs["trading_text"], inputs["warnings"] = _trading_day_summary(day)
+    inputs["journal"] = _journal_summary(day)
+    inputs["operator_issues"] = _operator_issues()
 
     broker_flat = False
     if isinstance(health, dict):
         broker = health.get("broker") if isinstance(health.get("broker"), dict) else {}
         broker_flat = broker.get("open_orders_count") == 0 and broker.get("positions_count") == 0
+    inputs["healthy"] = bool(
+        isinstance(health, dict) and health.get("ok") is True and broker_flat
+        and health.get("broker", {}).get("connected") is True
+        and not health.get("readiness_failures") and service == "ai-trading.service active"
+    )
+    return inputs
 
-    if (isinstance(health, dict) and health.get("ok") is True and broker_flat
-            and health.get("broker", {}).get("connected") is True
-            and not health.get("readiness_failures") and service == "ai-trading.service active"):
+
+def build_recap() -> str:
+    inputs = _collect_recap_inputs()
+    service = inputs["service"]
+    health_text = inputs["health_text"]
+    health = inputs["health"]
+    fills = inputs["fills"]
+    trading_text = inputs["trading_text"]
+    warnings = inputs["warnings"]
+    journal = inputs["journal"]
+    operator_issues = inputs["operator_issues"]
+
+    if inputs["healthy"]:
         verdict = "Healthy close: service is up, broker is connected, and exposure is flat."
     elif isinstance(health, dict):
         readiness_failures = health.get("readiness_failures")
@@ -331,9 +357,84 @@ def build_recap() -> str:
         " ".join(issues),
         "",
         "**Next action**",
-        "Leave the service running. Review any blocked research/model-readiness sections before the next open; no restart is indicated by this recap.",
+        _NEXT_ACTION,
     ]
     return "\n".join(lines)
+
+
+def _journal_line(journal: str) -> str:
+    """One line for Slack: the event count, never the raw log excerpts."""
+
+    head = journal.split("; latest:", 1)[0] if "; latest:" in journal else journal
+    return head.strip()
+
+
+def build_recap_payload() -> dict[str, Any]:
+    """The close recap as a Slack Block Kit payload, built from the same inputs as build_recap."""
+
+    from ai_trading.monitoring import slack_format as fmt
+
+    inputs = _collect_recap_inputs()
+    health = inputs["health"] if isinstance(inputs["health"], dict) else {}
+    broker = health.get("broker") if isinstance(health.get("broker"), dict) else {}
+    provider = health.get("provider_state") if isinstance(health.get("provider_state"), dict) else {}
+    if not provider and isinstance(health.get("data_provider"), dict):
+        provider = health["data_provider"]
+    readiness = health.get("readiness_failures")
+    readiness_items = [fmt.humanize(item) for item in readiness] if isinstance(readiness, list) else []
+    fills = inputs["fills"]
+    healthy = bool(inputs["healthy"])
+    severity = fmt.Severity.OK if healthy else fmt.Severity.WARNING
+    title = f"Market close · {fmt.fmt_day(inputs['day'])} · {'healthy' if healthy else 'needs review'}"
+
+    if fills.get("available"):
+        last_fill = fmt.fmt_time(fills["last_ts"], with_date=False) if fills.get("last_ts") else "n/a"
+        fill_text = (
+            f"*{fills['fills']} fills* (qty {fills['qty']:g}) in "
+            f"{fmt.inline_list(fills['symbols'])} · last {last_fill}\n"
+            f"Realized edge sum {fills['edge_bps']:.2f} bps _(unweighted diagnostic, not net P&L)_"
+        )
+    else:
+        fill_text = f"Fills unavailable: {fills.get('reason') or 'unknown'}"
+
+    service = str(inputs["service"])
+    if health:
+        health_value = f"{fmt.humanize(health.get('status'))} — {fmt.humanize(health.get('reason'))}"
+        broker_value = (
+            f"{'connected' if broker.get('connected') is True else 'not connected'} — "
+            f"{fmt.fmt_count(broker.get('positions_count'))} positions, "
+            f"{fmt.fmt_count(broker.get('open_orders_count'))} open orders"
+        )
+        provider_value = f"{fmt.capitalized(provider.get('active') or 'n/a')} — {fmt.humanize(provider.get('status'))}"
+    else:
+        health_value = str(inputs["health_text"])
+        broker_value = provider_value = "n/a"
+
+    flags = [f"Readiness: {item}" for item in readiness_items]
+    flags.extend(str(item) for item in inputs["warnings"])
+    flags.extend(str(item) for item in inputs["operator_issues"])
+    operating_mode = health.get("operating_mode") if isinstance(health.get("operating_mode"), dict) else {}
+    mode_summary = operating_mode.get("summary") if isinstance(operating_mode.get("summary"), str) else ""
+
+    blocks = [
+        fmt.header_block(severity, title),
+        fmt.section_block(f"*Trading*\n{fill_text}\n{inputs['trading_text']}"),
+        fmt.fields_block(
+            [
+                ("Service", "active" if service == "ai-trading.service active" else service),
+                ("Health", health_value),
+                ("Broker", broker_value),
+                ("Data provider", provider_value),
+            ],
+            title="Service & data",
+        ),
+        fmt.section_block(f"*Open flags*\n{fmt.bullets(flags)}"),
+        fmt.section_block(f"*Next action*\n{_NEXT_ACTION}"),
+        fmt.context_block(mode_summary, f"Journal: {_journal_line(str(inputs['journal']))}"),
+    ]
+    fill_count = fills.get("fills") if fills.get("available") else "n/a"
+    text = fmt.fallback_text(severity, title, f"{fill_count} fills", f"{len(flags)} open flags")
+    return fmt.message(text, blocks)
 
 
 def main() -> int:

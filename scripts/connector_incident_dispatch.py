@@ -364,32 +364,65 @@ def run_dispatch(
 SCHEDULED_REPORTS = ("preflight", "close-recap")
 
 
-def format_preflight_report(report: Mapping[str, Any]) -> str:
-    """Render the market_preflight health report as a short Slack message."""
+_PREFLIGHT_VERDICT_SEVERITY = {"ready": "OK", "blocked": "WARNING"}
+
+
+def format_preflight_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Render the market_preflight health report as a Slack Block Kit payload."""
+    from ai_trading.monitoring import slack_format as fmt
+
     if report.get("report_status") != "complete":
-        return (
-            "*Market preflight: FAILED*\n"
-            f"Health endpoint unreadable: {report.get('error_type')}: {report.get('error')}\n"
-            "Check ai-trading.service before the open."
+        title = "Market preflight failed — health endpoint unreadable"
+        detail = f"{report.get('error_type')}: {report.get('error')}"
+        return fmt.message(
+            fmt.fallback_text(fmt.Severity.CRITICAL, title, detail),
+            [
+                fmt.header_block(fmt.Severity.CRITICAL, title),
+                fmt.section_block(f"*What happened*\n{fmt.truncate(detail, 500)}"),
+                fmt.section_block("*Action*\n• Check `ai-trading.service` before the open."),
+            ],
         )
     broker = report.get("broker") if isinstance(report.get("broker"), Mapping) else {}
     provider = report.get("data_provider") if isinstance(report.get("data_provider"), Mapping) else {}
     service = report.get("service_state") if isinstance(report.get("service_state"), Mapping) else {}
-    flags = ", ".join(str(flag) for flag in report.get("attention_flags") or []) or "none"
-    return "\n".join(
+    verdict = str(report.get("readiness_verdict") or "unknown").strip().lower()
+    severity = fmt.Severity[_PREFLIGHT_VERDICT_SEVERITY.get(verdict, "WARNING")]
+    flags = [fmt.humanize(flag) for flag in report.get("attention_flags") or []]
+    reason = fmt.humanize(report.get("reason"))
+    title = f"Market preflight · {verdict}"
+    return fmt.message(
+        fmt.fallback_text(severity, title, reason, f"{len(flags)} flags"),
         [
-            f"*Market preflight: {report.get('readiness_verdict')}*",
-            f"Health {report.get('status')} (HTTP {report.get('http_status')}), reason {report.get('reason')}",
-            f"Service {service.get('status')} ({service.get('phase')}); attention flags: {flags}",
-            f"Broker {broker.get('status')}: {broker.get('positions_count')} positions, "
-            f"{broker.get('open_orders_count')} open orders",
-            f"Data provider {provider.get('active')} ({provider.get('status')})",
-            "A blocked verdict reflects model/replay gates, not service liveness.",
-        ]
+            fmt.header_block(severity, title),
+            fmt.fields_block(
+                [
+                    (
+                        "Health",
+                        f"{fmt.capitalized(report.get('status'))} (HTTP {report.get('http_status')}) — {reason}",
+                    ),
+                    ("Service", f"{fmt.humanize(service.get('status'))} ({fmt.humanize(service.get('phase'))})"),
+                    (
+                        "Broker",
+                        f"{fmt.humanize(broker.get('status'))} — {fmt.fmt_count(broker.get('positions_count'))} "
+                        f"positions, {fmt.fmt_count(broker.get('open_orders_count'))} open orders",
+                    ),
+                    (
+                        "Data provider",
+                        f"{fmt.capitalized(provider.get('active') or 'n/a')} — {fmt.humanize(provider.get('status'))}",
+                    ),
+                ]
+            ),
+            fmt.section_block(f"*Open flags*\n{fmt.bullets(flags)}"),
+            fmt.context_block(
+                "A blocked verdict reflects model/replay gates, not service liveness.",
+                fmt.now_label(),
+            ),
+        ],
     )
 
 
-def build_scheduled_report(kind: str) -> str:
+def build_scheduled_report(kind: str) -> dict[str, Any]:
+    """Build a scheduled report as a Slack webhook payload ({"text", "blocks"})."""
     if kind == "preflight":
         from ai_trading.tools import market_preflight
 
@@ -406,8 +439,7 @@ def build_scheduled_report(kind: str) -> str:
             raise RuntimeError("market_close_recap.py not found")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        # Slack mrkdwn bolds with single asterisks.
-        return str(module.build_recap()).replace("**", "*")
+        return dict(module.build_recap_payload())
     raise ValueError(f"unknown scheduled report: {kind}")
 
 
@@ -425,12 +457,12 @@ def run_scheduled_report(
     if not webhook:
         summary["skipped_reason"] = "missing_webhook"
         return summary
-    text = build_scheduled_report(kind)
+    payload = build_scheduled_report(kind)
     if poster is None:
         from tools import mcp_slack_alerts_server as slack_srv
 
         poster = slack_srv._post_slack_message
-    summary["status_code"] = poster(webhook, {"text": text})
+    summary["status_code"] = poster(webhook, payload)
     summary["sent"] = True
     return summary
 

@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 from ai_trading.config.management import get_env
 from ai_trading.config.managed_secrets import hydrate_managed_secrets
+from ai_trading.monitoring import slack_format as fmt
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.tools.symbol_promotion_comparison import symbol_promotion_digest
 
@@ -78,16 +79,37 @@ def _step_statuses(report: Mapping[str, Any]) -> tuple[list[str], list[str], lis
     return failed, skipped, blocked
 
 
-def _field(label: str, value: Any) -> dict[str, Any]:
-    text = str(value if value not in (None, "") else "n/a")
-    return {"type": "mrkdwn", "text": f"*{label}*\n{text[:1800]}"}
+_PASSING_CHECK_STATUSES = frozenset({"passed", "complete", "ok", "ready", "healthy", "current"})
 
 
-def _field_sections(fields: list[dict[str, Any]], *, chunk_size: int = 10) -> list[dict[str, Any]]:
-    return [
-        {"type": "section", "fields": fields[index : index + chunk_size]}
-        for index in range(0, len(fields), chunk_size)
-    ]
+def _count(report: Mapping[str, Any], key: str) -> Any:
+    row = report.get(key)
+    return row.get("count", "n/a") if isinstance(row, Mapping) else "n/a"
+
+
+def _status_next(report: Mapping[str, Any], next_key: str) -> str:
+    if not report:
+        return "n/a"
+    return f"{fmt.humanize(report.get('status'))} → {fmt.humanize(report.get(next_key))}"
+
+
+def _report_checks_text(health_summary: Mapping[str, Any]) -> str:
+    """Summarize report checks as 'X of N OK' plus the ones that need attention."""
+
+    attention: list[str] = []
+    passing = 0
+    for name, value in sorted(health_summary.items()):
+        check_status = value.get("status") if isinstance(value, Mapping) else value
+        if str(check_status).strip().lower() in _PASSING_CHECK_STATUSES:
+            passing += 1
+        elif check_status in (None, ""):
+            attention.append(f"{fmt.humanize(name)}: no status")
+        else:
+            attention.append(f"{fmt.humanize(name)}: {fmt.humanize(check_status)}")
+    heading = f"*Report checks* — {passing} of {len(health_summary)} OK"
+    if not attention:
+        return heading
+    return f"{heading}; needs attention:\n{fmt.bullets(attention)}"
 
 
 def build_research_completion_payload(
@@ -145,18 +167,12 @@ def build_research_completion_payload(
     report_status = str(report.get("status") or summary.get("status") or "unknown")
     report_config = report.get("config") if isinstance(report.get("config"), Mapping) else {}
     run_id = str(report_config.get("run_id") or report.get("run_id") or "n/a")
-    run_dir = str(report_config.get("run_dir") or "n/a")
-    correlation_id = f"{cadence}:{workflow}:{run_id}"
     status = run_status or report_status
     if exit_code != 0 and report_status not in {"blocked", "failed"}:
         status = run_status or "failed"
-    failed_text = ", ".join(failed) if failed else "none"
-    skipped_text = ", ".join(skipped) if skipped else "none"
-    blocked_steps_text = ", ".join(blocked_steps) if blocked_steps else "none"
     blocked = list(summary.get("blocked_reasons") or report.get("blocked_reasons") or [])
     if cadence == "daily" and isinstance(daily.get("blocked_reasons"), list):
         blocked.extend(str(item) for item in daily.get("blocked_reasons", []))
-    blocked_text = ", ".join(str(item) for item in blocked) if blocked else "none"
     readiness_status = str(readiness.get("status") or "n/a")
     recommended_mode = str(daily.get("recommended_next_session_mode") or "n/a")
     trade_allowed = daily.get("trade_allowed")
@@ -166,86 +182,93 @@ def build_research_completion_payload(
     operator_summary = summary.get("operator_summary")
     if not isinstance(operator_summary, Mapping):
         operator_summary = daily.get("operator_summary") if isinstance(daily.get("operator_summary"), Mapping) else {}
-    trading_counts = (
-        f"desired={trading_day.get('desired_trades', {}).get('count', 'n/a')}, "
-        f"submitted={trading_day.get('submitted_trades', {}).get('count', 'n/a')}, "
-        f"rejected={trading_day.get('rejected_trades', {}).get('count', 'n/a')}, "
-        f"controlled_skips={trading_day.get('controlled_skips', {}).get('count', 'n/a')}, "
-        f"fills={trading_day.get('realized_fills', {}).get('count', 'n/a')}"
-    )
-    symbol_promotion_text = symbol_promotion_digest(symbol_promotion)
-    edge_text = (
-        f"{edge_calibration.get('status', 'n/a')} / "
-        f"{edge_calibration.get('recommended_next_action', 'n/a')}"
-    )
-    starvation_text = (
-        f"{evidence_starvation.get('status', 'n/a')} / "
-        f"{evidence_starvation.get('recommendation', 'n/a')}"
-    )
     weekend_schedule = report.get("weekend_schedule") if isinstance(report.get("weekend_schedule"), Mapping) else {}
     monday_preparation = report.get("monday_preparation") if isinstance(report.get("monday_preparation"), Mapping) else {}
-    weekend_text = "n/a"
-    if str(cadence).startswith("weekend-"):
-        weekend_text = (
-            f"symbols={weekend_schedule.get('effective_symbols', 'n/a')}, "
-            f"max_candidates={weekend_schedule.get('max_candidates', 'n/a')}, "
-            f"max_replay={weekend_schedule.get('max_replay_candidates', 'n/a')}, "
-            f"monday_action={monday_preparation.get('recommended_operator_action', 'n/a')}, "
-            "research_only=true"
-        )
-    title = f"ai-trading research {cadence} finished: {status}"
-    text = (
-        f"{title}\n"
-        f"Workflow: {workflow}\n"
-        f"Run: {run_id}\n"
-        f"Exit code: {exit_code}\n"
-        f"Live-capital readiness: {readiness_status}\n"
-        f"Recommended mode: {recommended_mode}"
-    )
-    fields = [
-        _field("Workflow", workflow),
-        _field("Run correlation", correlation_id),
-        _field("Run directory", run_dir),
-        _field("Run status", run_status or "n/a"),
-        _field("Exit code", exit_code),
-        _field("Report status", report_status),
-        _field("Artifact freshness", "stale_latest_suppressed" if suppress_stale else "current_latest"),
-        _field("Operator action", summary.get("operator_action")),
-        _field("Blocked reasons", blocked_text),
-        _field("Failed steps", failed_text),
-        _field("Blocked steps", blocked_steps_text),
-        _field("Skipped steps", skipped_text),
-        _field("Recommended mode", recommended_mode),
-        _field("Live readiness", readiness_status),
-        _field("Trade allowed", str(trade_allowed).lower() if trade_allowed is not None else "n/a"),
-        _field("Trading day", trading_counts),
-        _field("Symbol promotion", symbol_promotion_text),
-        _field("Expected edge", edge_text),
-        _field("Evidence starvation", starvation_text),
-        _field("Weekend research", weekend_text),
-        _field("Health/report summary", json.dumps(health_summary, sort_keys=True) if health_summary else "n/a"),
-        _field("Operator summary", operator_summary.get("summary") if operator_summary else "n/a"),
-        _field("Run report", report.get("paths", {}).get("report") if isinstance(report.get("paths"), Mapping) else None),
+
+    if status in {"failed", "infrastructure_failed"} or failed:
+        severity = fmt.Severity.CRITICAL
+    elif status in {"blocked", "locked"} or blocked_steps:
+        severity = fmt.Severity.WARNING
+    else:
+        severity = fmt.Severity.OK
+    title = f"Research {cadence} · {fmt.humanize(status)}"
+    if recommended_mode != "n/a":
+        title += f" · next session: {fmt.humanize(recommended_mode)}"
+
+    blocks: list[dict[str, Any]] = [
+        fmt.header_block(severity, title),
+        fmt.fields_block(
+            [
+                ("Recommended mode", fmt.humanize(recommended_mode)),
+                ("Trade allowed", fmt.yes_no(trade_allowed)),
+                ("Live readiness", fmt.humanize(readiness_status)),
+                ("Operator action", fmt.humanize(summary.get("operator_action"))),
+            ]
+        ),
+        fmt.section_block(f"*Blocked reasons*\n{fmt.bullets(fmt.humanize(item) for item in blocked)}"),
     ]
-    payload: dict[str, Any] = {
-        "text": text,
-        "blocks": [
-            {"type": "header", "text": {"type": "plain_text", "text": title[:150], "emoji": True}},
-            *_field_sections(fields),
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": (
-                            f"Channel target: {channel or '#all-beatwallstreet'} | "
-                            f"Generated: {datetime.now(UTC).isoformat().replace('+00:00', 'Z')}"
-                        ),
-                    }
-                ],
-            },
-        ],
-    }
+    if trading_day:
+        counts = " · ".join(
+            f"{label} {_count(trading_day, key)}"
+            for label, key in (
+                ("desired", "desired_trades"),
+                ("submitted", "submitted_trades"),
+                ("fills", "realized_fills"),
+                ("rejected", "rejected_trades"),
+                ("controlled skips", "controlled_skips"),
+            )
+        )
+        blocks.append(fmt.section_block(f"*Trading day*\n{counts}"))
+    signal_fields: list[tuple[str, Any]] = []
+    if cadence == "daily" and not suppress_stale:
+        signal_fields = [
+            ("Symbol promotion", symbol_promotion_digest(symbol_promotion).replace(":", " ").replace("_", " ")),
+            ("Expected edge", _status_next(edge_calibration, "recommended_next_action")),
+            ("Evidence starvation", _status_next(evidence_starvation, "recommendation")),
+        ]
+    if str(cadence).startswith("weekend-"):
+        symbols = [item for item in str(weekend_schedule.get("effective_symbols") or "").split(",") if item.strip()]
+        signal_fields.append(
+            (
+                "Weekend research (research only)",
+                (
+                    f"{len(symbols)} symbols ({fmt.inline_list(symbols, limit=5)}), "
+                    f"≤{weekend_schedule.get('max_candidates', 'n/a')} candidates, "
+                    f"≤{weekend_schedule.get('max_replay_candidates', 'n/a')} replays · Monday: "
+                    f"{fmt.humanize(monday_preparation.get('recommended_operator_action'))}"
+                ),
+            )
+        )
+    if signal_fields:
+        blocks.append(fmt.fields_block(signal_fields))
+    steps = [
+        f"{label} ({len(names)}): {fmt.inline_list((fmt.humanize(name) for name in names), limit=3)}"
+        for label, names in (("Failed", failed), ("Blocked", blocked_steps), ("Skipped", skipped))
+        if names
+    ]
+    if steps:
+        blocks.append(fmt.section_block(f"*Steps*\n{fmt.bullets(steps)}"))
+    if operator_summary and operator_summary.get("summary"):
+        blocks.append(fmt.section_block(f"*Operator summary*\n{operator_summary.get('summary')}"))
+    if health_summary:
+        blocks.append(fmt.section_block(_report_checks_text(health_summary)))
+    freshness = "stale latest artifacts suppressed" if suppress_stale else "current artifacts"
+    report_paths = report.get("paths") if isinstance(report.get("paths"), Mapping) else {}
+    report_path = report_paths.get("report")
+    blocks.append(
+        fmt.context_block(
+            f"Run {run_id} · exit {exit_code} · {freshness}",
+            f"Report: `{report_path}`" if report_path else "",
+            f"Generated {fmt.now_label()}",
+        )
+    )
+    text = fmt.fallback_text(
+        severity,
+        title,
+        f"trade allowed: {fmt.yes_no(trade_allowed)}",
+        f"{len(blocked)} blocked reasons",
+    )
+    payload = fmt.message(text, blocks)
     if channel:
         payload["channel"] = channel
     return payload

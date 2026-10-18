@@ -90,10 +90,46 @@ def test_slack_alerter_posts_payload_with_metadata(monkeypatch: pytest.MonkeyPat
 
     assert alerter.send_alert(alert) is True
     payload = calls[0]["json"]
-    fields = payload["attachments"][0]["fields"]
     assert payload["channel"] == "#ops"
-    assert payload["attachments"][0]["color"] == "#ff9500"
-    assert {"title": "stale_seconds", "value": "90", "short": True} in fields
+    assert payload["text"] == "[WARNING] Broker stale — Open-order snapshot is stale"
+    blocks = payload["blocks"]
+    assert [block["type"] for block in blocks] == ["header", "section", "section", "context"]
+    assert blocks[0]["text"]["text"] == "🟠 Broker stale"
+    assert blocks[1]["text"]["text"] == "Open-order snapshot is stale"
+    assert blocks[2]["fields"] == [{"type": "mrkdwn", "text": "*Stale seconds*\n90"}]
+    assert blocks[3]["elements"][0]["text"] == "Source: OMS"
+    assert blocks[3]["elements"][1]["text"].endswith(" ET")
+
+
+def test_slack_alerter_renders_emergency_and_nested_metadata_without_dumps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> Response:
+        calls.append(json)
+        return Response()
+
+    monkeypatch.setattr(alerting.http, "post", fake_post)
+    alert = alerting.Alert(
+        "Kill switch",
+        "Trading halted",
+        alerting.AlertSeverity.EMERGENCY,
+        metadata={"limits": {"max_drawdown": 0.05}, "symbols": ["AAPL", "MSFT"]},
+    )
+
+    assert alerting.SlackAlerter("https://hooks.example/slack").send_alert(alert) is True
+    blocks = calls[0]["blocks"]
+    assert blocks[0]["text"]["text"] == "🔴 EMERGENCY: Kill switch"
+    assert [field["text"] for field in blocks[2]["fields"]] == [
+        "*Limits*\nmax drawdown: 0.05",
+        "*Symbols*\nAAPL, MSFT",
+    ]
+    assert "{" not in str([field["text"] for field in blocks[2]["fields"]])
 
 
 def test_slack_alerter_handles_http_failure(monkeypatch: pytest.MonkeyPatch) -> None:

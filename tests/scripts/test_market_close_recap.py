@@ -300,3 +300,95 @@ def test_healthy_close_requires_connection_readiness_and_active_service(
     monkeypatch.setattr(recap, "_journal_summary", lambda day: "journal")
     monkeypatch.setattr(recap, "_operator_issues", lambda: [])
     assert ("Healthy close:" in recap.build_recap()) is healthy
+
+
+def _recap_payload_text(payload: dict) -> str:
+    parts: list[str] = []
+    for block in payload["blocks"]:
+        if isinstance(block.get("text"), dict):
+            parts.append(block["text"]["text"])
+        parts.extend(field["text"] for field in block.get("fields", []))
+        parts.extend(element["text"] for element in block.get("elements", []))
+    return "\n".join(parts)
+
+
+def _stub_recap_inputs(monkeypatch, *, journal: str, healthy: bool = False) -> None:
+    monkeypatch.setattr(recap, "_utc_today", lambda: "2026-10-16")
+    monkeypatch.setattr(recap, "_service_summary", lambda: "ai-trading.service active")
+    monkeypatch.setattr(recap, "_health_summary", lambda: ("health", {
+        "ok": healthy, "status": "healthy" if healthy else "degraded",
+        "reason": "runtime_health_ok" if healthy else "required_model_stale",
+        "readiness_failures": [] if healthy else ["required_model_stale"],
+        "broker": {"connected": True, "positions_count": 0, "open_orders_count": 0},
+        "provider_state": {"active": "alpaca", "status": "warming_up"},
+        "operating_mode": {"summary": "Paper diagnostics enabled; qualified model unavailable."},
+    }))
+    monkeypatch.setattr(recap, "_fill_summary", lambda day: {
+        "available": True, "day": day, "fills": 7, "qty": 8.0, "edge_bps": -1.6,
+        "symbols": {"AAPL": {}, "AMZN": {}, "MSFT": {}}, "sides": {},
+        "last_ts": "2026-10-16T19:55:35.000083+00:00",
+    })
+    monkeypatch.setattr(recap, "_trading_day_summary", lambda day: (
+        f"reset paper-session report pending for {day}", ["Reset evidence reports missing or stale"],
+    ))
+    monkeypatch.setattr(recap, "_journal_summary", lambda day: journal)
+    monkeypatch.setattr(recap, "_operator_issues", lambda: [])
+
+
+def test_build_recap_payload_reads_top_down_without_raw_journal_lines(monkeypatch):
+    raw_line = '{"level": "ERROR", "msg": "SLO ALERT: realized_slippage_bps changed from warning to critical"}'
+    _stub_recap_inputs(
+        monkeypatch,
+        journal=f"12 relevant events in the bounded journal sample; latest: {raw_line}",
+    )
+
+    payload = recap.build_recap_payload()
+
+    blocks = payload["blocks"]
+    assert [block["type"] for block in blocks] == [
+        "header", "section", "section", "section", "section", "context",
+    ]
+    assert blocks[0]["text"]["text"] == "🟠 Market close · Fri Oct 16 · needs review"
+    assert payload["text"] == "[WARNING] Market close · Fri Oct 16 · needs review — 7 fills · 2 open flags"
+    assert blocks[1]["text"]["text"] == (
+        "*Trading*\n*7 fills* (qty 8) in AAPL, AMZN, MSFT · last 3:55 PM ET\n"
+        "Realized edge sum -1.60 bps _(unweighted diagnostic, not net P&L)_\n"
+        "reset paper-session report pending for 2026-10-16"
+    )
+    assert blocks[2]["text"]["text"] == "*Service & data*"
+    assert [field["text"] for field in blocks[2]["fields"]] == [
+        "*Service*\nactive",
+        "*Health*\ndegraded — required model stale",
+        "*Broker*\nconnected — 0 positions, 0 open orders",
+        "*Data provider*\nAlpaca — warming up",
+    ]
+    assert blocks[3]["text"]["text"] == (
+        "*Open flags*\n• Readiness: required model stale\n• Reset evidence reports missing or stale"
+    )
+    assert blocks[4]["text"]["text"].startswith("*Next action*\nLeave the service running.")
+    text = _recap_payload_text(payload)
+    assert "Journal: 12 relevant events in the bounded journal sample" in text
+    assert "SLO ALERT" not in text and "{" not in text
+
+
+def test_build_recap_payload_healthy_close_is_ok(monkeypatch):
+    _stub_recap_inputs(monkeypatch, journal="journal", healthy=True)
+    monkeypatch.setattr(recap, "_trading_day_summary", lambda day: ("trading day ok", []))
+
+    payload = recap.build_recap_payload()
+
+    assert payload["blocks"][0]["text"]["text"] == "🟢 Market close · Fri Oct 16 · healthy"
+    assert "*Open flags*\n• none" in _recap_payload_text(payload)
+
+
+def test_build_recap_payload_without_health_or_fills(monkeypatch):
+    _stub_recap_inputs(monkeypatch, journal="journal unavailable exit=1: denied")
+    monkeypatch.setattr(recap, "_health_summary", lambda: ("health unavailable: refused", None))
+    monkeypatch.setattr(recap, "_fill_summary", lambda day: {"available": False, "reason": "fill_events.jsonl missing"})
+
+    payload = recap.build_recap_payload()
+
+    text = _recap_payload_text(payload)
+    assert "Fills unavailable: fill_events.jsonl missing" in text
+    assert "*Health*\nhealth unavailable: refused" in text
+    assert "Journal: journal unavailable exit=1: denied" in text
