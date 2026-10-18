@@ -62,9 +62,12 @@ def test_oms_invariants_record_reconciliation_and_lifecycle_violations(monkeypat
         def __init__(self, *_, **__) -> None:
             pass
 
-        def list_oms_events(self, *, intent_id: str, limit: int):
-            assert limit == 5000
-            return event_rows[intent_id]
+        def list_oms_event_types_by_intent(self, intent_ids, *, limit_per_intent: int):
+            assert limit_per_intent == 5000
+            return {
+                intent_id: [row["event_type"] for row in event_rows[intent_id]]
+                for intent_id in intent_ids
+            }
 
         def close(self) -> None:
             closed.append("event")

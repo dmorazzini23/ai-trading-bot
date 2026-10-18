@@ -1,6 +1,33 @@
 # Current handoff
 
-## October 18 night deploy of `7ce1acdc9` — complete (start here)
+## October 18 night: /healthz latency fix merged to main, deploy pending (start here)
+
+Branch `claude/modest-shtern-ae9515`, merged to main after `3744697b9`. `/healthz` on :9001 took ~3 s per request
+because `.env` sets `AI_TRADING_HEALTH_REQUIRE_{OMS_INVARIANTS,OMS_LIFECYCLE_PARITY,
+REPLAY_LIVE_PARITY_GATE,DB_READY}=1`, so those gates skip the async health cache
+and run inline on every request. Out-of-process timings against live data: OMS
+reconciliation invariants ~0.7-0.8 s and lifecycle parity ~0.7-1.0 s (one SQL query
+and connection per intent, 2,255 intents each); replay gate ~1.6-2.5 s (parses all
+139 `replay_hash_*.json`, 163 MB, to find the newest). Concurrent probes serialize
+on the GIL: three concurrent curls each took ~11 s. Fix: a bulk
+`EventStore.list_oms_event_types_by_intent` query and a per-file signature cache of
+replay artifact `ts`. Full canonical payload ~3.4 s -> ~0.3 s warm (first call
+~1.9 s); gate outputs identical on live data.
+
+Second commit, same branch: the two in-process whole-file readers below.
+`/healthz` does not call `build_report` (it reads
+`runtime_performance_report_latest.json`, ~5 ms); these readers slowed health
+only by holding the GIL in the trading process. `bot_engine._read_jsonl_records`
+now reads backwards from EOF until `max_records` rows are found (all 12
+callers), so `_load_recent_rejection_concentration_by_symbol` went from ~3.1 s to
+~0.8 s. The rest is parsing the 4,000-record window, which is 45 MB of the
+252 MB file. `_summarize_gate_effectiveness_daily` keeps a per-path fold of the
+complete lines already read and parses only appended bytes. It rebuilds on a
+new inode, on shrink, or when the 256 bytes before the offset change. Cost went
+from ~1.4-1.9 s per call to ~1.3 s on the first call and ~1 ms after that.
+Out-of-process outputs on live data hash-identical before and after.
+
+## October 18 night deploy of `7ce1acdc9` — complete
 
 Deployed Sun 19:52 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
 Lint passed on `7ce1acdc9`. Prior spec saved as

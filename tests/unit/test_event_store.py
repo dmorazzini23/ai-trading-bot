@@ -77,6 +77,48 @@ def test_event_store_enforces_source_idempotency_uniqueness(tmp_path: Path) -> N
     assert rows[0]["event_type"] == "INTENT_CREATED"
 
 
+def test_event_store_bulk_event_types_match_per_intent_listing(tmp_path: Path) -> None:
+    store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events_bulk.db'}")
+    sequence = [
+        ("intent-a", "INTENT_CREATED"),
+        ("intent-b", "INTENT_CREATED"),
+        ("intent-a", "SUBMIT_CLAIMED"),
+        ("intent-a", "SUBMIT_ACK"),
+        ("intent-b", "INTENT_CLOSED"),
+        ("intent-a", "ORDER_FILLED"),
+    ]
+    for index, (intent_id, event_type) in enumerate(sequence):
+        assert store.append_oms_event_payload(
+            event_type=event_type,
+            event_source="unit_test",
+            idempotency_key=f"bulk-key-{index}",
+            intent_id=intent_id,
+            payload={},
+        )
+
+    grouped = store.list_oms_event_types_by_intent(
+        ["intent-a", "intent-b", "intent-missing", "intent-a"],
+    )
+
+    for intent_id in ("intent-a", "intent-b"):
+        expected = [
+            row["event_type"]
+            for row in store.list_oms_events(intent_id=intent_id, limit=5000)
+        ]
+        assert grouped[intent_id] == expected
+    assert grouped["intent-a"] == [
+        "INTENT_CREATED",
+        "SUBMIT_CLAIMED",
+        "SUBMIT_ACK",
+        "ORDER_FILLED",
+    ]
+    assert grouped["intent-missing"] == []
+    assert list(grouped) == ["intent-a", "intent-b", "intent-missing"]
+    capped = store.list_oms_event_types_by_intent(["intent-a"], limit_per_intent=2)
+    assert capped == {"intent-a": ["INTENT_CREATED", "SUBMIT_CLAIMED"]}
+    assert store.list_oms_event_types_by_intent([]) == {}
+
+
 def test_event_store_enforces_intent_sequence_uniqueness(tmp_path: Path) -> None:
     store = EventStore(url=f"sqlite:///{tmp_path / 'oms_events_sequence.db'}")
     inserted_first = store.append_oms_event_payload(

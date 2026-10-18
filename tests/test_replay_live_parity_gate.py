@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -321,6 +322,57 @@ def test_replay_live_parity_gate_selects_newest_payload_ts_over_lexical_name(
     assert payload["replay_governance"]["path"] == str(newer_lexically_earlier)
     assert payload["replay_governance"]["violations_count"] == 0
     assert payload["replay_governance"]["ts_source"] == "payload"
+
+
+def test_replay_live_parity_gate_reparses_only_changed_artifacts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data-root"
+    output_dir = data_root / "runtime" / "replay_outputs"
+    now = datetime.now(UTC)
+    older = output_dir / "replay_hash_older.json"
+    newer = output_dir / "replay_hash_newer.json"
+    _write_replay_artifact(older, ts=now - timedelta(hours=3), violations_count=2)
+    _write_replay_artifact(newer, ts=now - timedelta(hours=1))
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+
+    parsed_paths: list[str] = []
+    original_read = replay_live_parity._read_replay_governance_artifact
+
+    def _counting_read(path: Path):
+        parsed_paths.append(path.name)
+        return original_read(path)
+
+    monkeypatch.setattr(
+        replay_live_parity,
+        "_read_replay_governance_artifact",
+        _counting_read,
+    )
+
+    first = summarize_replay_live_parity_gate(oms_lifecycle_parity=_LIFECYCLE_OK)
+    assert first["replay_governance"]["path"] == str(newer)
+    assert sorted(parsed_paths) == ["replay_hash_newer.json", "replay_hash_older.json"]
+
+    parsed_paths.clear()
+    second = summarize_replay_live_parity_gate(oms_lifecycle_parity=_LIFECYCLE_OK)
+    assert parsed_paths == []
+    assert second["replay_governance"] == first["replay_governance"]
+
+    # Rewriting the older artifact with a newer payload ts must re-rank it.
+    _write_replay_artifact(older, ts=now - timedelta(minutes=5), violations_count=2)
+    bumped_ns = older.stat().st_mtime_ns + 1_000_000_000
+    os.utime(older, ns=(bumped_ns, bumped_ns))
+    parsed_paths.clear()
+    third = summarize_replay_live_parity_gate(oms_lifecycle_parity=_LIFECYCLE_OK)
+    assert parsed_paths == ["replay_hash_older.json"]
+    assert third["replay_governance"]["path"] == str(older)
+    assert third["replay_governance"]["violations_count"] == 2
+
+    # A corrupted artifact drops out of the ranking instead of serving its cached ts.
+    older.write_text("{not json", encoding="utf-8")
+    fourth = summarize_replay_live_parity_gate(oms_lifecycle_parity=_LIFECYCLE_OK)
+    assert fourth["replay_governance"]["path"] == str(newer)
 
 
 def test_replay_live_parity_gate_reports_cap_adjustments_without_failing(

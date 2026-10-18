@@ -11,6 +11,7 @@ from functools import lru_cache
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from queue import Empty, Queue
 from statistics import median
@@ -4196,37 +4197,57 @@ def summarize_counterfactual_learning_state(path: Path) -> dict[str, Any]:
     return summary
 
 
-def _summarize_gate_effectiveness_daily(path: Path) -> list[dict[str, Any]]:
-    rows = _load_json_lines(path)
-    buckets: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        ts = _parse_timestamp(row.get("ts"))
-        if ts is None:
-            continue
-        day = ts.date().isoformat()
-        total_records = max(0, _as_int(row.get("records_total")) or 0)
-        accepted_records = max(0, _as_int(row.get("accepted_records")) or 0)
-        rejected_raw = _as_int(row.get("rejected_records"))
-        rejected_records = (
-            max(0, rejected_raw)
-            if rejected_raw is not None
-            else max(0, total_records - accepted_records)
-        )
-        expected_edge = _as_float(row.get("total_expected_net_edge_bps")) or 0.0
-        bucket = buckets.setdefault(
-            day,
-            {
-                "date": day,
-                "total_records": 0,
-                "accepted_records": 0,
-                "rejected_records": 0,
-                "total_expected_net_edge_bps": 0.0,
-            },
-        )
-        bucket["total_records"] += int(total_records)
-        bucket["accepted_records"] += int(accepted_records)
-        bucket["rejected_records"] += int(rejected_records)
-        bucket["total_expected_net_edge_bps"] += float(expected_edge)
+def _fold_gate_effectiveness_row(
+    buckets: dict[str, dict[str, Any]],
+    row: Mapping[str, Any],
+) -> None:
+    ts = _parse_timestamp(row.get("ts"))
+    if ts is None:
+        return
+    day = ts.date().isoformat()
+    total_records = max(0, _as_int(row.get("records_total")) or 0)
+    accepted_records = max(0, _as_int(row.get("accepted_records")) or 0)
+    rejected_raw = _as_int(row.get("rejected_records"))
+    rejected_records = (
+        max(0, rejected_raw)
+        if rejected_raw is not None
+        else max(0, total_records - accepted_records)
+    )
+    expected_edge = _as_float(row.get("total_expected_net_edge_bps")) or 0.0
+    bucket = buckets.setdefault(
+        day,
+        {
+            "date": day,
+            "total_records": 0,
+            "accepted_records": 0,
+            "rejected_records": 0,
+            "total_expected_net_edge_bps": 0.0,
+        },
+    )
+    bucket["total_records"] += int(total_records)
+    bucket["accepted_records"] += int(accepted_records)
+    bucket["rejected_records"] += int(rejected_records)
+    bucket["total_expected_net_edge_bps"] += float(expected_edge)
+
+
+def _fold_gate_effectiveness_line(
+    buckets: dict[str, dict[str, Any]],
+    raw_line: bytes,
+) -> None:
+    payload = raw_line.strip()
+    if not payload:
+        return
+    try:
+        parsed = json.loads(payload.decode("utf-8"))
+    except json.JSONDecodeError:
+        return
+    if isinstance(parsed, dict):
+        _fold_gate_effectiveness_row(buckets, parsed)
+
+
+def _gate_effectiveness_daily_rows(
+    buckets: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for day in sorted(buckets.keys()):
         bucket = buckets[day]
@@ -4248,6 +4269,62 @@ def _summarize_gate_effectiveness_daily(path: Path) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# Per-path fold of complete gate_effectiveness.jsonl lines already read, so
+# repeated reports only parse appended lines. The cache is dropped when the
+# file is replaced, shrinks, or the bytes before the stored offset change.
+_GATE_DAILY_GUARD_BYTES = 256
+_GATE_DAILY_CACHE: dict[str, dict[str, Any]] = {}
+_GATE_DAILY_CACHE_LOCK = threading.Lock()
+
+
+def _copy_gate_buckets(
+    buckets: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {day: dict(bucket) for day, bucket in buckets.items()}
+
+
+def _summarize_gate_effectiveness_daily(path: Path) -> list[dict[str, Any]]:
+    key = str(path)
+    with _GATE_DAILY_CACHE_LOCK, path.open("rb") as handle:
+        stat = os.fstat(handle.fileno())
+        identity = (int(stat.st_dev), int(stat.st_ino))
+        entry = _GATE_DAILY_CACHE.get(key)
+        if entry is not None:
+            offset = int(entry["offset"])
+            guard = bytes(entry["guard"])
+            reusable = entry["identity"] == identity and int(stat.st_size) >= offset
+            if reusable and guard:
+                handle.seek(offset - len(guard))
+                reusable = handle.read(len(guard)) == guard
+            if not reusable:
+                entry = None
+        offset = int(entry["offset"]) if entry is not None else 0
+        buckets = _copy_gate_buckets(entry["buckets"]) if entry is not None else {}
+        handle.seek(offset)
+        consumed = 0
+        fragment = b""
+        for raw_line in handle:
+            if not raw_line.endswith(b"\n"):
+                fragment = raw_line
+                break
+            consumed += len(raw_line)
+            _fold_gate_effectiveness_line(buckets, raw_line)
+        new_offset = offset + consumed
+        guard_start = max(0, new_offset - _GATE_DAILY_GUARD_BYTES)
+        handle.seek(guard_start)
+        new_guard = handle.read(new_offset - guard_start)
+        _GATE_DAILY_CACHE[key] = {
+            "identity": identity,
+            "offset": new_offset,
+            "guard": new_guard,
+            "buckets": _copy_gate_buckets(buckets),
+        }
+    if fragment:
+        # An unterminated final line still counts now but is re-read once complete.
+        _fold_gate_effectiveness_line(buckets, fragment)
+    return _gate_effectiveness_daily_rows(buckets)
 
 
 def summarize_gate_effectiveness(
