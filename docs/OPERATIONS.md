@@ -502,6 +502,42 @@ Repeated Alpaca failures can trigger provider safe-mode:
 Resume only after Alpaca data is healthy again and the halt condition has been
 cleared intentionally.
 
+### Runtime JSONL retention
+
+`ai-trading-runtime-prune.timer` (every 30 minutes) runs
+`scripts/prune_runtime_jsonl.sh`. It archives evidence and never deletes it.
+
+- A live JSONL file above its byte cap keeps the newest 80% of the cap (and at
+  most `*_KEEP_LINES` rows). The full file before rotation is hard-linked,
+  gzip-compressed and tested at
+  `runtime/recovery_backups/archive/jsonl/<name>/<file>.<UTC>.gz`.
+- Caps: `decision_records` 192 MiB; `config_snapshots`, `gate_effectiveness`
+  and `ml_shadow_predictions` 256 MiB; `order_events`, `fill_events` and
+  `tca_records` 128 MiB; `execution_quality_events` and `oms_events` 64 MiB;
+  `broker_position_boundaries` and `policy_ablation_events` 32 MiB;
+  `memory_samples` 5 MB. Override with `AI_TRADING_<FILE>_MAX_BYTES` and
+  `AI_TRADING_<FILE>_KEEP_LINES`. `ai_trading.tools.runtime_artifact_retention`
+  uses the same caps for its plan.
+- Research report run directories (`research_reports/{daily,weekly,weekend,monthly}/<UTC>_<kind>`)
+  are archived when both the run timestamp and every file are older than
+  `AI_TRADING_RESEARCH_REPORT_ARCHIVE_DAYS` (default 30). A verified archive goes to
+  `runtime/recovery_backups/archive/research_reports/<cadence>/<run>.tar.gz`,
+  and only then is the source directory removed. Runs named in model/registry
+  JSON, top-level runtime JSON, small runtime JSONL, recent reports or
+  `latest/` stay in place. `latest/`, `huggingface/` (the configured HF cache),
+  `manual/` and top-level report files are never moved. At most
+  `AI_TRADING_RESEARCH_REPORT_ARCHIVE_MAX_DIRS` (default 25) runs are archived
+  per invocation. `AI_TRADING_RESEARCH_REPORT_ARCHIVE_ENABLED=0` disables this step.
+- Preview without changes:
+  `bash scripts/prune_runtime_jsonl.sh --dry-run` (as `aiuser`, with
+  `AI_TRADING_RUNTIME_DIR` and `AI_TRADING_DATA_DIR` set).
+- Restore a report run:
+  `tar -C runtime/research_reports/<cadence> -xzf <archive>`. Restore a JSONL segment
+  with `zcat <archive>`.
+- The archive tree is local only. The S3 uploader still sends only the newest
+  recovery bundle. Off-host copies of archives need a separately approved
+  uploader scope.
+
 ### CPU-Only PyTorch In The Runtime Venv
 
 The host has no GPU, so torch is pinned to the `+cpu` build from
