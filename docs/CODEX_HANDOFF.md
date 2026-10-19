@@ -1,6 +1,30 @@
 # Current handoff
 
-## October 18 late night: momentum trial registered, logs reset, fee draft, prune (start here)
+## October 19 deploy of `db1725a11` — complete (start here)
+
+Deployed Mon 00:56 UTC (Sun 20:56 ET), closed and flat, after CI, CodeQL, SBOM
+and Workflow Lint passed on `db1725a11` (the run on `3d058ec66` was cancelled
+by the newer push; this run covers both commits: momentum trial registration,
+fee-schedule draft, slippage CSV schema fix). Prior spec saved as
+`runtime/release_spec.68792e2ca.bak.json`; the new spec changes only the SHA.
+Pre- and post-migration identity reports pass, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC` (0 positions, 0 open orders,
+fresh), 0 warnings, 0 errors, 0 restarts, RSS 572 MB at ~100 s, `/healthz`
+0.28–0.39 s, still 503 `required_model_stale` by design. The header-only live
+`slippage.csv` was rewritten to the new seven-column header during the window,
+so Monday's first fill rows land under the right header. Nothing in this
+deploy changes trading decisions; the fee schedule stays disabled and the
+momentum trial is registered only.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 68792e2ca`,
+restore that spec, restart.
+
+Monday watch list (unchanged): burn-in cycles accumulating with no reset;
+closing sells as `order_role: exit`; first real EOD recap in Slack after the
+close; the prune timer's first archive rotation of `decision_records.jsonl`;
+cycle times; dispatcher minute-runs staying `health_ok`; first
+`slippage.csv` rows having seven columns.
+
+## October 18 late night: momentum trial registered, logs reset, fee draft, prune
 
 On the owner's instruction, four items, none deployed and no restart:
 
