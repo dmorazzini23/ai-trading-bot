@@ -28,7 +28,7 @@ be supplied; copy the non-backstop values from the ``observed`` section of
     from alpaca.trading.enums import DTBPCheck, PDTCheck, TradeConfirmationEmail
     from alpaca.trading.models import AccountConfiguration
 
-    client = TradingClient(API_KEY, SECRET_KEY, paper=True)
+    client = TradingClient(api_key=API_KEY, secret_key=SECRET_KEY, paper=True)
     client.set_account_configurations(
         AccountConfiguration(
             no_shorting=True,
