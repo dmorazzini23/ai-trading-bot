@@ -1125,6 +1125,25 @@ def _manual_override_snapshot() -> dict[str, Any]:
     }
 
 
+def _broker_account_configuration_snapshot() -> dict[str, Any]:
+    """Return the cached read-only broker account-configuration check."""
+
+    unavailable: dict[str, Any] = {
+        "ok": None,
+        "available": False,
+        "reason": "snapshot_failed",
+        "mismatches": [],
+        "unreported_fields": [],
+        "fetched_at": None,
+    }
+    try:
+        from ai_trading.broker.account_configuration import health_section
+    except ImportError:
+        return unavailable
+    section: dict[str, Any] = _safe_observe(health_section, unavailable)
+    return section
+
+
 def build_alpaca_health_payload(
     context: Mapping[str, Any] | None = None,
     *,
@@ -1687,6 +1706,13 @@ def build_runtime_health_payload(
         attention_flags = _dedupe_flags(
             [*attention_flags, day_sleeve_model_reason]
         )
+    broker_account_configuration = _broker_account_configuration_snapshot()
+    if broker_account_configuration.get("available") and broker_account_configuration.get(
+        "mismatches"
+    ):
+        attention_flags = _dedupe_flags(
+            [*attention_flags, "broker_account_configuration_drift"]
+        )
 
     failed_checks_raw = replay_live_parity_gate.get("failed_checks")
     failed_checks = (
@@ -1781,6 +1807,7 @@ def build_runtime_health_payload(
         "entry_control": entry_control,
         "launch_profile": launch_profile_status,
         "provider_authority": provider_authority | {"ok": provider_authority_ok},
+        "broker_account_configuration": broker_account_configuration,
     }
     if readiness_failures:
         payload["reason"] = readiness_failures[0]
