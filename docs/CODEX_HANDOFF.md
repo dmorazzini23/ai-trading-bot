@@ -17,12 +17,14 @@ restarts, RSS 608 MB at ~150 s, `/healthz` 0.38–0.45 s, still 503
 `required_model_stale`.
 
 New subsystems on first start:
-- `BROKER_ACCOUNT_CONFIGURATION_DRIFT` (the one WARNING, by design): paper
-  account has `no_shorting=false` and `max_margin_multiplier=4`; health flag
-  `broker_account_configuration_drift` is set and stays until the owner changes
-  the paper account (dashboard, or the `set_account_configurations` call in the
-  module docstring), then re-run
-  `./venv/bin/python -m ai_trading.tools.broker_account_configuration --check`.
+- `BROKER_ACCOUNT_CONFIGURATION_DRIFT` on the first start (paper account had
+  `no_shorting=false`, `max_margin_multiplier=4`). The owner changed the paper
+  account in the Alpaca dashboard at ~04:45 UTC; `--check` then returned
+  `match` (exit 0) and a restart at 04:47 UTC (closed, flat; identity pass, 0
+  warnings, stream reconnected on attempt 1) logged
+  `BROKER_ACCOUNT_CONFIGURATION_OK` and cleared the health flag. The startup
+  check runs once per start, so a future drift shows only after a restart or
+  via `./venv/bin/python -m ai_trading.tools.broker_account_configuration --check`.
   `dtbp_check`/`pdt_check` are `unreported_fields` (Alpaca stopped returning
   them; raw-GET fallback in use).
 - `TRADE_UPDATES_STREAM_CONNECTED` on attempt 1, paper, shadow only; health
