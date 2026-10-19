@@ -238,5 +238,5 @@ def test_script_caps_match_python_retention_planner() -> None:
     )
     script_rules = {m["name"]: (int(m["max"]), int(m["keep"])) for m in pattern.finditer(text)}
     planner_rules = {rule.filename: (rule.max_bytes, rule.keep_lines) for rule in _DEFAULT_RULES}
-    assert len(script_rules) == 12
+    assert len(script_rules) == 13
     assert script_rules == planner_rules

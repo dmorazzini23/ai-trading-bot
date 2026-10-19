@@ -1,14 +1,16 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
+import asyncio
 import datetime as dt
 from datetime import timezone
 import json
+import random
 import time
 import uuid
 import inspect
 import types
 from dataclasses import dataclass
-from typing import Any, Optional, TYPE_CHECKING, Type, cast
+from typing import Any, Callable, Optional, TYPE_CHECKING, Type, cast
 from threading import RLock
 
 _ALPACA_PY_REQUIRED = (
@@ -1783,8 +1785,232 @@ async def handle_trade_update(event: Any) -> None:
         return
 
 
-def start_trade_updates_stream(*_a, **_k):
-    return None
+def _stream_should_run(running: Any) -> bool:
+    if running is None:
+        return True
+    is_set = getattr(running, "is_set", None)
+    if not callable(is_set):
+        return True
+    try:
+        return bool(is_set())
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return False
+
+
+def _stream_float_env(key: str, default: float) -> float:
+    from ai_trading.config.management import get_env
+
+    try:
+        return float(get_env(key, default, cast=float))
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return default
+
+
+def _stream_backoff_delay(attempt: int, *, base: float, cap: float) -> float:
+    """Capped exponential backoff with jitter in [50%, 100%] of the step."""
+
+    step = min(cap, base * float(2 ** min(max(0, attempt), 32)))
+    return float(step * random.uniform(0.5, 1.0))
+
+
+async def _stream_sleep_while_running(delay: float, running: Any) -> None:
+    # Count slept slices rather than reading the clock so a stop request is
+    # seen within 0.5s and the wait cannot stall on a non-advancing clock.
+    remaining = max(0.0, delay)
+    while remaining > 0 and _stream_should_run(running):
+        step = min(0.5, remaining)
+        await asyncio.sleep(step)
+        remaining -= step
+
+
+def _default_trade_updates_stream(api_key: str, secret_key: str, *, paper: bool) -> Any:
+    from alpaca.trading.stream import TradingStream
+
+    # raw_data=True hands the handler the exact broker message for the
+    # shadow artifact and avoids model-parse failures killing the consumer.
+    return TradingStream(api_key, secret_key, paper=paper, raw_data=True)
+
+
+def _stream_connection_errors() -> tuple[type[Exception], ...]:
+    from websockets.exceptions import WebSocketException
+
+    return AI_TRADING_FALLBACK_EXCEPTIONS + (WebSocketException,)
+
+
+async def _refresh_trade_updates_parity_loop(running: Any, interval: float) -> None:
+    from ai_trading.tools.trade_updates_parity import refresh_parity_latest
+
+    while _stream_should_run(running):
+        await _stream_sleep_while_running(interval, running)
+        if not _stream_should_run(running):
+            return
+        try:
+            await asyncio.to_thread(refresh_parity_latest)
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            _log.warning(
+                "TRADE_UPDATES_PARITY_REFRESH_FAILED",
+                extra={"error_type": exc.__class__.__name__, "detail": str(exc)},
+            )
+
+
+async def start_trade_updates_stream(
+    api_key: str | None = None,
+    secret_key: str | None = None,
+    trading_client: Any = None,
+    state: Any = None,
+    *,
+    paper: bool | None = None,
+    running: Any = None,
+    stream_factory: Callable[..., Any] | None = None,
+    recorder: Any = None,
+    max_connect_attempts: int | None = None,
+    backoff_base_seconds: float | None = None,
+    backoff_max_seconds: float | None = None,
+    parity_interval_seconds: float | None = None,
+) -> None:
+    """Run the Alpaca trade-updates stream in shadow mode until ``running`` clears.
+
+    Every update is appended to ``runtime/trade_updates_stream.jsonl`` and
+    nothing else: no OMS event, fill record or trading decision is touched.
+    Disconnects reconnect with capped exponential backoff and jitter; errors
+    are logged and never propagate out of the stream thread.
+    """
+
+    from ai_trading.config.management import get_env
+    from ai_trading.telemetry import trade_updates_stream as tus
+
+    _ = (trading_client, state)
+    if not tus.trade_updates_stream_enabled():
+        tus.mark_stream_started(enabled=False, paper=paper)
+        _log.info("TRADE_UPDATES_STREAM_DISABLED", extra={"env": tus.ENABLED_ENV})
+        return
+    resolved_paper = tus.trade_updates_stream_paper() if paper is None else bool(paper)
+    tus.mark_stream_started(enabled=True, paper=resolved_paper)
+    key = str(api_key or get_env("ALPACA_API_KEY", "", cast=str) or "").strip()
+    secret = str(secret_key or get_env("ALPACA_SECRET_KEY", "", cast=str) or "").strip()
+    if not key or not secret:
+        tus.mark_stream_disconnected("credentials_missing")
+        _log.warning("TRADE_UPDATES_STREAM_DISCONNECTED", extra={"reason": "credentials_missing"})
+        return
+
+    shadow_recorder = recorder if recorder is not None else tus.TradeUpdatesShadowRecorder()
+    factory = stream_factory or _default_trade_updates_stream
+    base = (
+        backoff_base_seconds
+        if backoff_base_seconds is not None
+        else _stream_float_env("AI_TRADING_TRADE_UPDATES_STREAM_BACKOFF_BASE_SEC", 1.0)
+    )
+    cap = (
+        backoff_max_seconds
+        if backoff_max_seconds is not None
+        else _stream_float_env("AI_TRADING_TRADE_UPDATES_STREAM_BACKOFF_MAX_SEC", 60.0)
+    )
+    parity_interval = (
+        parity_interval_seconds
+        if parity_interval_seconds is not None
+        else _stream_float_env("AI_TRADING_TRADE_UPDATES_PARITY_INTERVAL_SEC", 300.0)
+    )
+    errors = _stream_connection_errors()
+
+    async def _on_trade_update(message: Any) -> None:
+        try:
+            record = shadow_recorder.record(message)
+        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+            _log.warning(
+                "TRADE_UPDATES_STREAM_HANDLER_FAILED",
+                extra={"error_type": exc.__class__.__name__, "detail": str(exc)},
+            )
+            return
+        if record is None:
+            return
+        _log.info(
+            "TRADE_UPDATES_STREAM_EVENT",
+            extra={
+                "event": record.get("event"),
+                "order_id": record.get("order_id"),
+                "client_order_id": record.get("client_order_id"),
+                "symbol": record.get("symbol"),
+                "filled_qty": record.get("filled_qty"),
+                "shadow_only": True,
+            },
+        )
+
+    parity_task: asyncio.Task[None] | None = None
+    if parity_interval > 0:
+        parity_task = asyncio.create_task(
+            _refresh_trade_updates_parity_loop(running, parity_interval)
+        )
+    attempt = 0
+    attempts_made = 0
+    try:
+        while _stream_should_run(running):
+            if max_connect_attempts is not None and attempts_made >= max_connect_attempts:
+                break
+            attempts_made += 1
+            stream: Any = None
+            consume_task: asyncio.Task[Any] | None = None
+            connected_at: float | None = None
+            reason = "consume_returned"
+            try:
+                stream = factory(key, secret, paper=resolved_paper)
+                stream.subscribe_trade_updates(_on_trade_update)
+                # alpaca-py 0.42.1: _start_ws connects, authenticates and sends
+                # the listen frame; _consume reads until stop_ws or socket error.
+                # Driving these here (not run()) gives backoff on auth failures.
+                await stream._start_ws()
+                connected_at = time.monotonic()
+                tus.mark_stream_connected()
+                _log.info(
+                    "TRADE_UPDATES_STREAM_CONNECTED",
+                    extra={"paper": resolved_paper, "attempt": attempts_made, "shadow_only": True},
+                )
+                consume_task = asyncio.create_task(stream._consume())
+                while not consume_task.done():
+                    if not _stream_should_run(running):
+                        reason = "stop_requested"
+                        await stream.stop_ws()
+                        break
+                    await asyncio.wait({consume_task}, timeout=0.5)
+                await consume_task
+            except errors as exc:
+                reason = f"{exc.__class__.__name__}: {exc}"
+            finally:
+                if consume_task is not None and not consume_task.done():
+                    consume_task.cancel()
+                    await asyncio.gather(consume_task, return_exceptions=True)
+                if stream is not None:
+                    try:
+                        await stream.close()
+                    except errors as exc:
+                        _log.debug(
+                            "TRADE_UPDATES_STREAM_CLOSE_FAILED",
+                            extra={"error_type": exc.__class__.__name__},
+                        )
+            tus.mark_stream_disconnected(reason)
+            _log.warning(
+                "TRADE_UPDATES_STREAM_DISCONNECTED",
+                extra={"reason": reason, "was_connected": connected_at is not None},
+            )
+            if not _stream_should_run(running):
+                break
+            if max_connect_attempts is not None and attempts_made >= max_connect_attempts:
+                break
+            if connected_at is not None and time.monotonic() - connected_at >= 30.0:
+                attempt = 0
+            delay = _stream_backoff_delay(attempt, base=base, cap=cap)
+            attempt += 1
+            tus.mark_stream_reconnecting()
+            _log.info(
+                "TRADE_UPDATES_STREAM_RECONNECTING",
+                extra={"delay_seconds": round(delay, 3), "attempt": attempt},
+            )
+            await _stream_sleep_while_running(delay, running)
+    finally:
+        if parity_task is not None:
+            parity_task.cancel()
+            await asyncio.gather(parity_task, return_exceptions=True)
+        tus.mark_stream_stopped()
+        _log.info("TRADE_UPDATES_STREAM_STOPPED", extra={"attempts": attempts_made})
 
 
 __all__ = [
