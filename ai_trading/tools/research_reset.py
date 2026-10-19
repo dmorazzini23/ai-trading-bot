@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from ai_trading.analytics import portfolio_history
 from ai_trading.analytics.fee_schedule import fee_provenance_class
 from ai_trading.config.research_policy import reset_policy
 
@@ -234,7 +235,27 @@ def durable_decisions(database: Path, now: datetime) -> tuple[list[dict[str, Any
     return rows, {"path": str(database), "status": "unavailable" if unavailable else "read", "read_only": True, "sessions": dict(statuses), "rows_in_window": len(rows), "usage": "fallback_for_fills_without_file_decision"}
 
 
-def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None, oms_database: Path | None = None) -> dict[str, Any]:
+def _window_edge_partial(instant: datetime) -> bool:
+    """True when ``instant`` falls inside a New York trading day's 04:00-20:00 span."""
+    local = instant.astimezone(NEW_YORK)
+    return local.weekday() < 5 and 4 <= local.hour < 20
+
+
+def broker_portfolio_crosscheck(history: dict[str, Any] | None, fills: list[dict[str, Any]], fills_source: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Broker-reported daily equity next to internal same-day-fill P&L; reported only, never a blocker."""
+    start = now - timedelta(days=7)
+    partial = [instant.astimezone(NEW_YORK).date().isoformat() for instant in (start, now) if _window_edge_partial(instant)]
+    return portfolio_history.weekly_crosscheck(
+        history if history is not None else {"available": False, "reason": "not_requested"},
+        portfolio_history.internal_same_day_fill_pnl_by_session(fills),
+        start_date=start.astimezone(NEW_YORK).date(),
+        end_date=now.astimezone(NEW_YORK).date(),
+        partial_sessions=partial,
+        internal_available=fills_source.get("status") == "read",
+    )
+
+
+def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None, oms_database: Path | None = None, broker_portfolio_history: dict[str, Any] | None = None) -> dict[str, Any]:
     inputs, sources = {}, {}
     for name, filename in (("decisions", "decision_records.jsonl"), ("orders", "order_events.jsonl"), ("fills", "fill_events.jsonl")):
         inputs[name], sources[name] = read_window(runtime_dir / filename, now)
@@ -263,7 +284,7 @@ def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, 
     if sources["paper_review"]["status"] != "fresh" or paper.get("completion_gaps"):
         blockers.append("paper_session_evidence_pending")
     blockers.append("untouched_evaluation_not_performed")
-    return {"artifact_type": "research_reset_scorecard", "generated_at": now.isoformat(), "status": "evidence_pending", "window": {"start": (now - timedelta(days=7)).isoformat(), "end": now.isoformat()}, "highest_value_blocker": blockers[0], "blockers": blockers, "sampling_support": {k: sampling.get(k) for k in ("status", "possible_common_periods", "candidate_periods", "maximum_possible_selections", "minimum_required", "trial_claimed")}, "execution_chain": chain, "quotes": quotes, "experiments": experiment_counts, "trials": trials, "accounting": {k: accounting.get(k) for k in ("status", "activity_count", "fee_coverage", "order_quantity_counts", "net_fee_validation", "daily_account_fee_totals", "document_evidence", "fee_record_coverage")}, "paper_session": {k: paper.get(k) for k in ("session_date", "completion_gaps", "session_audit", "execution_cost_comparison")}, "untouched_net_performance": {"status": "unavailable", "reason": "reserved_holdout_not_evaluated"}, "sources": sources, "limitations": ["Weekly snapshots are observations, not additional experiments.", "No fills means unavailable execution coverage, not 100 percent coverage.", "Quote spreads and fixed cost scenarios do not certify total costs.", "Development results are not untouched performance.", "No missing fees are imputed as zero; no account-level charges are allocated to guessed fills."], "promotion_authority": False, "orders_sent": 0}
+    return {"artifact_type": "research_reset_scorecard", "generated_at": now.isoformat(), "status": "evidence_pending", "window": {"start": (now - timedelta(days=7)).isoformat(), "end": now.isoformat()}, "highest_value_blocker": blockers[0], "blockers": blockers, "sampling_support": {k: sampling.get(k) for k in ("status", "possible_common_periods", "candidate_periods", "maximum_possible_selections", "minimum_required", "trial_claimed")}, "execution_chain": chain, "quotes": quotes, "experiments": experiment_counts, "trials": trials, "accounting": {k: accounting.get(k) for k in ("status", "activity_count", "fee_coverage", "order_quantity_counts", "net_fee_validation", "daily_account_fee_totals", "document_evidence", "fee_record_coverage")}, "paper_session": {k: paper.get(k) for k in ("session_date", "completion_gaps", "session_audit", "execution_cost_comparison")}, "broker_portfolio": broker_portfolio_crosscheck(broker_portfolio_history, inputs["fills"], sources["fills"], now), "untouched_net_performance": {"status": "unavailable", "reason": "reserved_holdout_not_evaluated"}, "sources": sources, "limitations": ["Weekly snapshots are observations, not additional experiments.", "No fills means unavailable execution coverage, not 100 percent coverage.", "Quote spreads and fixed cost scenarios do not certify total costs.", "Development results are not untouched performance.", "No missing fees are imputed as zero; no account-level charges are allocated to guessed fills.", "Broker-reported portfolio history is a reported-only cross-check on internal P&L; it feeds no blocker, gate or decision."], "promotion_authority": False, "orders_sent": 0}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -275,9 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sampling-support", type=Path, default=ROOT / "artifacts/research_reset/sampling_support.json")
     parser.add_argument("--oms-database", type=Path, default=None, help="Read-only OMS SQLite; defaults to the configured store")
+    parser.add_argument("--skip-broker-portfolio-history", action="store_true", help="Do not fetch the reported-only broker portfolio history")
     args = parser.parse_args(argv)
     oms_database = args.oms_database or configured_sqlite_path()
-    report = build_scorecard(args.runtime_dir, args.accounting_report, args.paper_report, args.campaign_state, datetime.now(UTC), args.sampling_support, oms_database)
+    broker_history = None if args.skip_broker_portfolio_history else portfolio_history.fetch_portfolio_history()
+    report = build_scorecard(args.runtime_dir, args.accounting_report, args.paper_report, args.campaign_state, datetime.now(UTC), args.sampling_support, oms_database, broker_history)
     atomic_write_text(args.output, json.dumps(report, indent=2, allow_nan=False) + "\n")
     get_logger(__name__).info("RESEARCH_RESET_SCORECARD_COMPLETE", extra={"status": report["status"], "blocker": report["highest_value_blocker"]})
     return 0

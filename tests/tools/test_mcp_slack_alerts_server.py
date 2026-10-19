@@ -2679,8 +2679,11 @@ def test_eod_payload_reads_top_down_and_lists_open_flags() -> None:
         "*Slippage · edge capture*\n8.4 bps · 0.32",
         "*Biggest losers*\nMETA -$122.94, QQQ -$75.18, AMD -$35.53 (+1 more)",
     ]
-    assert blocks[3]["text"]["text"] == "*Data & broker*"
-    flags = blocks[4]["text"]["text"].splitlines()
+    assert blocks[3]["text"]["text"] == (
+        "*Broker cross-check* (reported only): broker history unavailable (not collected)"
+    )
+    assert blocks[4]["text"]["text"] == "*Data & broker*"
+    flags = blocks[5]["text"]["text"].splitlines()
     assert flags == [
         "*Open flags*",
         "• Go/no-go failed: win rate",

@@ -16,6 +16,7 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
+from ai_trading.analytics import portfolio_history
 from ai_trading.monitoring import slack_format as slack_fmt
 from ai_trading.runtime.atomic_io import atomic_write_text
 
@@ -842,31 +843,12 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
 
     events: list[tuple[datetime, int, dict[str, Any]]] = []
     for index, row in enumerate(rows):
-        ts = _parse_iso_ts(row.get("ts") or row.get("entry_time") or row.get("timestamp"))
+        parsed = portfolio_history.fill_event_from_row(row)
         # Report dates are exchange sessions, so the day boundary is Eastern time,
         # not UTC: a 20:30 ET fill on the report date is 00:30 UTC the next day.
-        if ts is None or ts.astimezone(_REPORT_DATE_TZ).date() != report_day:
+        if parsed is None or parsed[0].astimezone(_REPORT_DATE_TZ).date() != report_day:
             continue
-        side = str(row.get("side") or "").strip().lower()
-        if side not in {"buy", "sell", "sell_short"}:
-            continue
-        qty = _float_or_none(row.get("fill_qty") or row.get("qty") or row.get("quantity"))
-        price = _float_or_none(row.get("fill_price") or row.get("entry_price") or row.get("price"))
-        symbol = str(row.get("symbol") or "").strip().upper()
-        if not symbol or qty is None or price is None or qty <= 0 or price <= 0:
-            continue
-        events.append(
-            (
-                ts,
-                index,
-                {
-                    "symbol": symbol,
-                    "side": "sell" if side == "sell_short" else side,
-                    "qty": float(qty),
-                    "price": float(price),
-                },
-            )
-        )
+        events.append((parsed[0], index, parsed[1]))
     events.sort(key=lambda item: (item[0], item[1]))
     if not events:
         return {
@@ -876,49 +858,13 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
             "fill_rows_seen": int(len(rows)),
         }
 
-    books: dict[str, list[dict[str, float | str]]] = {}
-    pnl_by_symbol: dict[str, float] = {}
-    closed_trades = 0
-    winning_trades = 0
-    gross_profit = 0.0
-    gross_loss = 0.0
-    for _ts, _index, event in events:
-        symbol = str(event["symbol"])
-        side = str(event["side"])
-        remaining = float(event["qty"])
-        price = float(event["price"])
-        book = books.setdefault(symbol, [])
-        while remaining > 0 and book and str(book[0].get("side")) != side:
-            lot = book[0]
-            lot_qty = float(lot.get("qty") or 0.0)
-            lot_price = float(lot.get("price") or 0.0)
-            close_qty = min(remaining, lot_qty)
-            if str(lot.get("side")) == "buy" and side == "sell":
-                pnl = (price - lot_price) * close_qty
-            else:
-                pnl = (lot_price - price) * close_qty
-            pnl_by_symbol[symbol] = pnl_by_symbol.get(symbol, 0.0) + pnl
-            closed_trades += 1
-            if pnl > 0:
-                winning_trades += 1
-                gross_profit += pnl
-            elif pnl < 0:
-                gross_loss += -pnl
-            remaining -= close_qty
-            lot["qty"] = lot_qty - close_qty
-            if float(lot["qty"]) <= 1e-9:
-                book.pop(0)
-        if remaining > 1e-9:
-            book.append({"side": side, "qty": remaining, "price": price})
-
-    open_qty_by_symbol: dict[str, float] = {}
-    for symbol, lots in books.items():
-        net_qty = 0.0
-        for lot in lots:
-            qty = float(lot.get("qty") or 0.0)
-            net_qty += qty if str(lot.get("side")) == "buy" else -qty
-        if abs(net_qty) > 1e-9:
-            open_qty_by_symbol[symbol] = net_qty
+    trips = portfolio_history.same_day_round_trips(event for _ts, _index, event in events)
+    pnl_by_symbol: dict[str, float] = trips["pnl_by_symbol"]
+    closed_trades = int(trips["closed_trades"])
+    winning_trades = int(trips["winning_trades"])
+    gross_profit = float(trips["gross_profit"])
+    gross_loss = float(trips["gross_loss"])
+    open_qty_by_symbol: dict[str, float] = trips["open_qty_by_symbol"]
     top_losses = [
         {"symbol": symbol, "net_pnl": pnl}
         for symbol, pnl in sorted(pnl_by_symbol.items(), key=lambda item: (item[1], item[0]))
@@ -946,6 +892,32 @@ def _same_day_fill_round_trip_summary(args: dict[str, Any], report_date: str) ->
         "open_qty_by_symbol": open_qty_by_symbol,
         "top_loss_symbols": top_losses,
     }
+
+
+def _broker_portfolio_section(
+    args: dict[str, Any], report_date: str, same_day_fill_summary: dict[str, Any]
+) -> dict[str, Any]:
+    """Broker-reported equity change for the report date; reported only, never a gate."""
+
+    ready = str(same_day_fill_summary.get("status") or "") == "ready"
+    internal_pnl = _float_or_none(same_day_fill_summary.get("net_pnl")) if ready else None
+    internal_status = str(same_day_fill_summary.get("status") or "unavailable")
+    if not report_date:
+        history: dict[str, Any] = {"available": False, "reason": "missing_report_date"}
+    else:
+        cache_path = Path(
+            str(
+                args.get("broker_portfolio_cache_path")
+                or _runtime_root(args) / "broker_portfolio_history_cache.json"
+            )
+        ).expanduser()
+        history = portfolio_history.fetch_portfolio_history(cache_path=cache_path)
+    return portfolio_history.daily_crosscheck(
+        history,
+        report_date,
+        internal_pnl=internal_pnl,
+        internal_status=internal_status,
+    )
 
 
 def _collect_learning_snapshot(args: dict[str, Any], health: dict[str, Any]) -> dict[str, Any]:
@@ -1169,6 +1141,9 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "top_loss_basis": top_loss_basis,
         "timestamp": str(health.get("timestamp") or utc_now_iso()),
     }
+    snapshot["broker_portfolio"] = _broker_portfolio_section(
+        args, report_date, same_day_fill_summary
+    )
     snapshot["learning"] = _collect_learning_snapshot(args, health)
     return snapshot
 
@@ -2010,6 +1985,7 @@ def _eod_message_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
             ],
             title="Trading",
         ),
+        slack_fmt.broker_crosscheck_block(_mapping(snapshot.get("broker_portfolio"))),
         slack_fmt.fields_block(
             [
                 ("Data provider", _provider_text(snapshot)),

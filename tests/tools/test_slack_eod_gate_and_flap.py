@@ -367,3 +367,119 @@ def test_trigger_change_confirmations_can_be_disabled(monkeypatch, tmp_path: Pat
     )
 
     assert [result["sent"] for result in results] == [True, True]
+
+
+def _stub_eod_sources(monkeypatch, *, same_day_net_pnl: float = 0.76) -> None:
+    report = {
+        "go_no_go": {"gate_passed": True, "failed_checks": [], "observed": {}},
+        "trade_history": {"daily": [{"date": "2026-10-16", "net_pnl": 0.76, "trades": 4}]},
+    }
+    monkeypatch.setattr(slack_srv, "_runtime_report_payload", lambda: report)
+    monkeypatch.setattr(slack_srv, "_normalized_runtime_report_payload", lambda payload: payload)
+    monkeypatch.setattr(slack_srv, "_extract_report_date", lambda payload: "2026-10-16")
+    monkeypatch.setattr(
+        slack_srv,
+        "_safe_health_payload",
+        lambda **kwargs: {"status": "healthy", "reason": "market_closed", "data_provider": {}, "broker": {}},
+    )
+    monkeypatch.setattr(slack_srv, "_collect_learning_snapshot", lambda args, health: {})
+    monkeypatch.setattr(
+        slack_srv,
+        "_same_day_fill_round_trip_summary",
+        lambda args, report_date: {
+            "status": "ready",
+            "closed_trades": 4,
+            "net_pnl": same_day_net_pnl,
+            "same_day_fill_events": 7,
+            "top_loss_symbols": [],
+        },
+    )
+
+
+_BROKER_HISTORY = {
+    "available": True,
+    "evidence_class": "broker_reported_portfolio_history",
+    "fetched_at": "2026-10-16T20:10:00+00:00",
+    "rows": [
+        {"date": "2026-10-15", "equity": 81665.36, "profit_loss": 5.46, "profit_loss_pct": 0.0001},
+        {
+            "date": "2026-10-16",
+            "broker_timestamp_utc": "2026-10-17T00:00:00+00:00",
+            "equity": 81666.08,
+            "profit_loss": 0.72,
+            "profit_loss_pct": 0.0,
+        },
+    ],
+}
+
+
+def _block_texts(payload: dict[str, Any]) -> list[str]:
+    return [str((block.get("text") or {}).get("text") or "") for block in payload["blocks"]]
+
+
+def test_eod_snapshot_adds_reported_only_broker_portfolio_section(monkeypatch, tmp_path: Path) -> None:
+    _stub_eod_sources(monkeypatch)
+    calls: list[dict[str, Any]] = []
+
+    def _fake_fetch(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return dict(_BROKER_HISTORY)
+
+    monkeypatch.setattr(slack_srv.portfolio_history, "fetch_portfolio_history", _fake_fetch)
+
+    snapshot = slack_srv._collect_eod_summary_snapshot({"runtime_root": str(tmp_path)})
+
+    assert calls == [{"cache_path": tmp_path / "broker_portfolio_history_cache.json"}]
+    section = snapshot["broker_portfolio"]
+    assert section["available"] is True
+    assert section["reported_only"] is True
+    assert section["evidence_class"] == "broker_reported_portfolio_history"
+    assert section["internal_evidence_class"] == "internal_same_day_fill_round_trips"
+    assert section["broker_equity_start"] == 81665.36
+    assert section["broker_equity_end"] == 81666.08
+    assert section["broker_daily_pnl"] == 0.72
+    assert section["internal_same_day_fill_pnl"] == 0.76
+    assert round(section["difference_usd"], 2) == -0.04
+    assert section["basis_note"]
+    # Broker data stays out of the dedupe fingerprint; it is reported only.
+    without = dict(snapshot)
+    without.pop("broker_portfolio")
+    assert slack_srv._eod_fingerprint(snapshot) == slack_srv._eod_fingerprint(without)
+
+    texts = _block_texts(slack_srv._eod_message_payload(snapshot))
+    block = next(text for text in texts if text.startswith("*Broker cross-check*"))
+    assert "Equity $81,665.36 → $81,666.08" in block
+    assert "broker P&L +$0.72 (0.088 bps)" in block
+    assert "Internal fills P&L +$0.76" in block
+    assert "diff -$0.04 (-0.005 bps)" in block
+    assert "unrealised" in block
+    assert "{" not in block
+    assert all(len(line) <= 110 for line in block.splitlines())
+
+
+def test_eod_recap_renders_one_line_when_broker_history_unavailable(monkeypatch, tmp_path: Path) -> None:
+    _stub_eod_sources(monkeypatch)
+    monkeypatch.setattr(
+        slack_srv.portfolio_history,
+        "fetch_portfolio_history",
+        lambda **kwargs: {"available": False, "reason": "broker_fetch_failed", "error": "RuntimeError: x"},
+    )
+
+    snapshot = slack_srv._collect_eod_summary_snapshot({"runtime_root": str(tmp_path)})
+
+    assert snapshot["broker_portfolio"]["available"] is False
+    assert snapshot["broker_portfolio"]["reason"] == "broker_fetch_failed"
+    assert snapshot["net_pnl"] == 0.76
+    payload = slack_srv._eod_message_payload(snapshot)
+    texts = _block_texts(payload)
+    broker_lines = [text for text in texts if text.startswith("*Broker cross-check*")]
+    assert broker_lines == ["*Broker cross-check* (reported only): broker history unavailable (broker fetch failed)"]
+
+    # Everything else in the recap is exactly what it would be without the section.
+    snapshot_without = dict(snapshot)
+    snapshot_without.pop("broker_portfolio")
+    baseline = slack_srv._eod_message_payload(snapshot_without)["blocks"]
+    remaining = [block for block in payload["blocks"] if not _block_texts({"blocks": [block]})[0].startswith("*Broker cross-check*")]
+    baseline_remaining = [block for block in baseline if not _block_texts({"blocks": [block]})[0].startswith("*Broker cross-check*")]
+    assert remaining == baseline_remaining
+    assert payload["text"] == slack_srv._eod_message_payload(snapshot_without)["text"]

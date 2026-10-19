@@ -204,3 +204,57 @@ def test_scorecard_prioritizes_known_sampling_gap_and_exposes_fee_schema(tmp_pat
     sampling.unlink()
     report = reset.build_scorecard(tmp_path, accounting, tmp_path / "paper.json", [], NOW, sampling)
     assert report["highest_value_blocker"] == "sampling_support_audit_missing_or_stale"
+
+
+def test_scorecard_reports_broker_portfolio_history_next_to_internal_fills(tmp_path):
+    from zoneinfo import ZoneInfo
+
+    from ai_trading.analytics import portfolio_history
+
+    now = datetime(2026, 10, 19, 3, tzinfo=UTC)  # Sunday night: no window edge cuts a session
+    fills = [
+        {"ts": "2026-10-15T14:00:00+00:00", "symbol": "AAPL", "side": "buy", "fill_qty": 2, "fill_price": 100.0},
+        {"ts": "2026-10-15T15:00:00+00:00", "symbol": "AAPL", "side": "sell", "fill_qty": 2, "fill_price": 101.5},
+        {"ts": "2026-10-16T15:00:00+00:00", "symbol": "MSFT", "side": "buy", "fill_qty": 1, "fill_price": 50.0},
+        {"ts": "2026-10-16T16:00:00+00:00", "symbol": "MSFT", "side": "sell", "fill_qty": 1, "fill_price": 50.76},
+    ]
+    (tmp_path / "fill_events.jsonl").write_text("".join(json.dumps(row) + "\n" for row in fills))
+    close = lambda day: int(datetime.fromisoformat(f"{day}T20:00:00").replace(tzinfo=ZoneInfo("America/New_York")).timestamp())  # noqa: E731
+    days = ("2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16")
+    history = portfolio_history.normalize_portfolio_history(
+        {"timestamp": [close(day) for day in days], "equity": [81661.54, 81662.82, 81660.62, 81659.90, 81665.36, 81666.08], "profit_loss": [4.24, 1.28, -2.20, -0.72, 5.46, 0.72], "profit_loss_pct": [0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0], "base_value": 81662.2},
+        period="1M", timeframe="1D", fetched_at=now.isoformat(),
+    )
+
+    report = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now, broker_portfolio_history=history)
+
+    broker = report["broker_portfolio"]
+    assert broker["available"] is True
+    assert broker["reported_only"] is True
+    assert broker["evidence_class"] == "broker_reported_portfolio_history"
+    assert broker["internal_evidence_class"] == "internal_same_day_fill_round_trips"
+    assert [row["date"] for row in broker["daily"]] == list(days[1:])  # window opens Sunday the 11th
+    daily = {row["date"]: row for row in broker["daily"]}
+    assert daily["2026-10-15"]["broker_daily_pnl"] == 5.46
+    assert daily["2026-10-15"]["internal_same_day_fill_pnl"] == 3.0
+    assert daily["2026-10-15"]["difference_usd"] == pytest.approx(2.46)
+    assert daily["2026-10-16"]["internal_same_day_fill_pnl"] == pytest.approx(0.76)
+    assert daily["2026-10-12"]["internal_same_day_fill_pnl"] == 0.0
+    assert broker["broker_weekly_equity_change"] == pytest.approx(81666.08 - 81661.54)
+    assert broker["internal_weekly_same_day_fill_pnl"] == pytest.approx(3.76)
+    assert broker["weekly_difference_usd"] == pytest.approx((1.28 - 2.20 - 0.72 + 5.46 + 0.72) - 3.76)
+    # Reported only: the broker series never becomes a blocker.
+    assert not any("broker_portfolio" in blocker for blocker in report["blockers"])
+    without = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now)
+    assert without["blockers"] == report["blockers"]
+    assert without["broker_portfolio"]["available"] is False
+    assert without["broker_portfolio"]["reason"] == "not_requested"
+    json.dumps(report, allow_nan=False)
+
+
+def test_scorecard_marks_window_edge_sessions_partial(tmp_path):
+    now = datetime(2026, 10, 16, 18, tzinfo=UTC)  # Friday 14:00 New York: both edges are mid-session
+    report = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now)
+    assert report["broker_portfolio"]["internal_available"] is False  # no fill file
+    assert reset._window_edge_partial(now) is True
+    assert reset._window_edge_partial(datetime(2026, 10, 19, 3, tzinfo=UTC)) is False

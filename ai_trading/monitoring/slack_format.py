@@ -7,7 +7,7 @@ bullet lists that end with a "…and N more" count, and a grey context line.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -244,6 +244,36 @@ def context_block(*items: str) -> dict[str, Any]:
         {"type": "mrkdwn", "text": truncate(item, CONTEXT_MAX_CHARS)} for item in items if item
     ]
     return {"type": "context", "elements": elements[:MAX_CONTEXT_ELEMENTS]}
+
+
+def broker_crosscheck_block(section: Mapping[str, Any]) -> dict[str, Any]:
+    """One short block: broker-reported equity change next to internal fill P&L."""
+
+    title = "*Broker cross-check* (reported only)"
+    if not section.get("available"):
+        reason = humanize(section.get("reason") or "not_collected")
+        return section_block(f"{title}: broker history unavailable ({reason})")
+    internal = section.get("internal_same_day_fill_pnl")
+    if _number(internal) is None:
+        internal_text = f"Internal fills P&L n/a ({humanize(section.get('internal_status'))})"
+    else:
+        internal_text = (
+            f"Internal fills P&L {fmt_money(internal)}  ·  "
+            f"diff {fmt_money(section.get('difference_usd'))} "
+            f"({fmt_bps(section.get('difference_bps_of_start_equity'), digits=3)})"
+        )
+    lines = [
+        title,
+        (
+            f"Equity {fmt_money(section.get('broker_equity_start'), signed=False)} → "
+            f"{fmt_money(section.get('broker_equity_end'), signed=False)}  ·  "
+            f"broker P&L {fmt_money(section.get('broker_daily_pnl'))} "
+            f"({fmt_bps(section.get('broker_daily_pnl_bps_of_start_equity'), digits=3)})"
+        ),
+        internal_text,
+        "_Broker includes unrealised moves, fees and corporate actions; internal is realised same-day round trips._",
+    ]
+    return section_block("\n".join(lines))
 
 
 def message(text: str, blocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
