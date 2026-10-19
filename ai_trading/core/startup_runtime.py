@@ -59,14 +59,20 @@ def _update_service_status_safe(be: Any, *, status: str, reason: str) -> None:
 
 
 def _run_trade_updates_stream(be: Any, ctx: Any, start_trade_updates_stream: Any) -> None:
+    from ai_trading.telemetry.trade_updates_stream import trade_updates_stream_enabled
+
+    if not trade_updates_stream_enabled():
+        be.logger.info("TRADE_UPDATES_STREAM_DISABLED")
+        return
     try:
+        # paper=None: the stream derives paper vs live from process config.
         asyncio.run(
             start_trade_updates_stream(
                 be.ALPACA_API_KEY,
                 be.ALPACA_SECRET_KEY,
                 be.trading_client,
                 be.state,
-                paper=True,
+                paper=None,
                 running=ctx.stream_event,
             )
         )
@@ -102,6 +108,41 @@ def _run_trade_updates_stream(be: Any, ctx: Any, start_trade_updates_stream: Any
             status="degraded",
             reason="trade_updates_stream_exited",
         )
+
+
+def _run_shadow_trade_updates_stream(running: Any) -> None:
+    from ai_trading.alpaca_api import start_trade_updates_stream
+    from ai_trading.logging import get_logger
+
+    try:
+        asyncio.run(start_trade_updates_stream(running=running))
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        get_logger(__name__).warning(
+            "TRADE_UPDATES_STREAM_FAILED",
+            extra={"error_type": exc.__class__.__name__, "detail": str(exc)},
+        )
+
+
+def start_shadow_trade_updates_stream_thread(running: Any) -> Thread | None:
+    """Start the shadow trade-updates stream in a daemon thread.
+
+    Shadow mode records broker-pushed updates to their own artifact only, so
+    unlike ``_run_trade_updates_stream`` a failure here never changes service
+    status.  Clearing ``running`` (``threading.Event``) stops the stream.
+    """
+
+    from ai_trading.telemetry.trade_updates_stream import trade_updates_stream_enabled
+
+    if not trade_updates_stream_enabled():
+        return None
+    thread = Thread(
+        target=_run_shadow_trade_updates_stream,
+        args=(running,),
+        name="trade-updates-stream",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def schedule_run_all_trades_runtime(runtime: Any) -> None:
@@ -495,5 +536,6 @@ __all__ = [
     "run_main_startup_runtime",
     "schedule_run_all_trades_runtime",
     "schedule_run_all_trades_with_delay_runtime",
+    "start_shadow_trade_updates_stream_thread",
     "_run_trade_updates_stream",
 ]

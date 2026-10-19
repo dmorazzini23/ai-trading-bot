@@ -19,6 +19,7 @@ from ai_trading.config.management import get_env
 from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
+from ai_trading.telemetry.trade_updates_stream import observe_trade_updates_stream_state
 from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
 
 try:
@@ -101,6 +102,7 @@ def _build_runtime_attention_flags(
     include_optional_contract_failures: bool = False,
     observe_oms_invariants: bool = False,
     observe_oms_lifecycle_parity: bool = False,
+    trade_updates_stream: Mapping[str, Any] | None = None,
 ) -> list[str]:
     flags: list[str] = []
     provider_reason_normalized = _normalized_token(provider_state.get("reason"))
@@ -136,7 +138,10 @@ def _build_runtime_attention_flags(
     if service_reason_normalized in {
         "trade_updates_stream_failed",
         "trade_updates_stream_exited",
-    }:
+    } or (
+        isinstance(trade_updates_stream, Mapping)
+        and bool(trade_updates_stream.get("degraded"))
+    ):
         flags.append("trade_updates_stream_degraded")
     if (
         service_reason_normalized == "replay_live_parity_gate_failed"
@@ -707,6 +712,28 @@ def _replay_live_parity_gate_snapshot_cached(
     )
 
 
+_TRADE_UPDATES_STREAM_UNAVAILABLE: dict[str, Any] = {
+    "enabled": False,
+    "connected": False,
+    "degraded": False,
+    "shadow_only": True,
+    "last_event_at": None,
+    "events_today": 0,
+    "reconnects": 0,
+    "parity": None,
+    "reason": "trade_updates_stream_state_unavailable",
+}
+
+
+def _trade_updates_stream_snapshot() -> dict[str, Any]:
+    """Cached in-memory stream state; no I/O on the request path."""
+
+    snapshot = _safe_observe(observe_trade_updates_stream_state, None)
+    if isinstance(snapshot, Mapping):
+        return dict(snapshot)
+    return dict(_TRADE_UPDATES_STREAM_UNAVAILABLE)
+
+
 def _read_json_mapping_artifact(
     *,
     configured_path: str,
@@ -1252,6 +1279,7 @@ def build_runtime_health_payload(
     replay_live_parity_gate = _replay_live_parity_gate_snapshot_cached(
         oms_lifecycle_parity=oms_lifecycle_parity,
     )
+    trade_updates_stream = _trade_updates_stream_snapshot()
     launch_profile = _safe_observe(resolve_launch_profile, None)
     launch_profile_status = (
         launch_profile_payload(launch_profile)
@@ -1682,6 +1710,7 @@ def build_runtime_health_payload(
         require_replay_live_parity_gate=require_replay_live_parity_gate,
         observe_oms_invariants=oms_invariants_failure,
         observe_oms_lifecycle_parity=oms_lifecycle_parity_failure,
+        trade_updates_stream=trade_updates_stream,
     )
     if require_day_sleeve_model and day_sleeve_model_failure:
         attention_flags = _dedupe_flags(
@@ -1775,6 +1804,7 @@ def build_runtime_health_payload(
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
         "replay_live_parity_gate": replay_live_parity_gate,
+        "trade_updates_stream": trade_updates_stream,
         "readiness_gates": readiness_gates,
         "readiness_failures": readiness_failures,
         "attention_flags": attention_flags,
@@ -1927,6 +1957,7 @@ def build_control_plane_snapshot(
         oms_lifecycle_parity=oms_lifecycle_parity,
         replay_live_parity_gate=replay_live_parity_gate,
         include_optional_contract_failures=True,
+        trade_updates_stream=_trade_updates_stream_snapshot(),
     )
 
     return {

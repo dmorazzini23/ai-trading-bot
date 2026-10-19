@@ -514,7 +514,8 @@ cleared intentionally.
 - Caps: `decision_records` 192 MiB; `config_snapshots`, `gate_effectiveness`
   and `ml_shadow_predictions` 256 MiB; `order_events`, `fill_events` and
   `tca_records` 128 MiB; `execution_quality_events` and `oms_events` 64 MiB;
-  `broker_position_boundaries` and `policy_ablation_events` 32 MiB;
+  `broker_position_boundaries`, `policy_ablation_events` and
+  `trade_updates_stream` 32 MiB;
   `memory_samples` 5 MB. Override with `AI_TRADING_<FILE>_MAX_BYTES` and
   `AI_TRADING_<FILE>_KEEP_LINES`. `ai_trading.tools.runtime_artifact_retention`
   uses the same caps for its plan.

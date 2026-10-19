@@ -42,6 +42,7 @@ _DEFAULT_RULES: tuple[RetentionRule, ...] = (
     RetentionRule("tca_records.jsonl", 134_217_728, 150_000),
     RetentionRule("oms_events.jsonl", 67_108_864, 100_000),
     RetentionRule("memory_samples.jsonl", 5_000_000, 20_000),
+    RetentionRule("trade_updates_stream.jsonl", 33_554_432, 100_000),
 )
 
 

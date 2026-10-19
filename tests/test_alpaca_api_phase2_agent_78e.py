@@ -926,7 +926,7 @@ def test_alpaca_get_payload_shapes_and_metrics_failures(monkeypatch: pytest.Monk
 def test_coerce_float_and_trade_update_state() -> None:
     assert api._coerce_float("12.5") == 12.5
     assert api._coerce_float("bad") is None
-    assert api.start_trade_updates_stream() is None
+    assert asyncio.iscoroutinefunction(api.start_trade_updates_stream)
 
     asyncio.run(api.handle_trade_update(None))
     asyncio.run(api.handle_trade_update(types.SimpleNamespace(event="", order=types.SimpleNamespace(id="o-0"))))

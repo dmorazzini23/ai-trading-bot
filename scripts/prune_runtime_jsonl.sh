@@ -350,6 +350,11 @@ rotate_jsonl_file \
   "${AI_TRADING_MEMORY_SAMPLES_MAX_BYTES:-5000000}" \
   "${AI_TRADING_MEMORY_SAMPLES_KEEP_LINES:-20000}"
 
+rotate_jsonl_file \
+  "${RUNTIME_DIR}/trade_updates_stream.jsonl" \
+  "${AI_TRADING_TRADE_UPDATES_STREAM_MAX_BYTES:-33554432}" \
+  "${AI_TRADING_TRADE_UPDATES_STREAM_KEEP_LINES:-100000}"
+
 report_legacy_backups
 archive_research_reports
 log "done mode=$(mode_label)"

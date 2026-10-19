@@ -4405,6 +4405,19 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Runtime defaults resolved", extra={"iterations": iterations, "interval": interval, "seed": seed})
     if bool(interval_autotune_settings.get("enabled", False)):
         logger.info("INTERVAL_AUTOTUNE_ENABLED", extra=dict(interval_autotune_settings))
+    # Shadow-only broker trade-updates stream: records to its own artifact,
+    # never to the OMS or fill record, and never feeds a decision.
+    trade_updates_running = threading.Event()
+    trade_updates_running.set()
+    if not test_mode:
+        try:
+            from ai_trading.core.startup_runtime import (
+                start_shadow_trade_updates_stream_thread,
+            )
+
+            start_shadow_trade_updates_stream_thread(trade_updates_running)
+        except MAIN_FALLBACK_EXC:
+            logger.warning("TRADE_UPDATES_STREAM_START_FAILED", exc_info=True)
     count = 0
     # Track HTTP profile to reduce retries when market is closed
     _http_closed_profile = None  # None=unknown, True=closed, False=open
@@ -4884,6 +4897,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("KeyboardInterrupt received — shutting down gracefully")
         return
     finally:
+        trade_updates_running.clear()
         if should_stop():
             try:
                 logger.info("SERVICE_SHUTDOWN_CLEANUP_START")
