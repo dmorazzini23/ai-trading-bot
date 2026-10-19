@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "schedule_id": "declared_alpaca_us_equity_fees_v1_draft",
+  "evidence_class": "declared_schedule_not_broker_confirmed_per_fill",
+  "promotion_authority": false,
+  "currency": "USD",
+  "provenance": {
+    "source_url": "https://files.alpaca.markets/disclosures/library/BrokFeeSched.pdf",
+    "retrieved_at": "2026-10-18T23:56:03+00:00",
+    "declared_by": "<FILL: owner name>",
+    "declared_at": "<FILL: ISO-8601 timestamp with offset of the declaration>",
+    "document_sha256": "814767d3dbd44d89bfbf5448eb5eac85a894740bf1974db2294aae448a6fed94",
+    "document_version_marker": "PDF title metadata: BrokFeeSched - Template Oct 12, 2026; no effective date printed in the document"
+  },
+  "effective_from": "2026-10-19",
+  "effective_to": null,
+  "rounding": {
+    "mode": "ceil",
+    "scope": "per_fill",
+    "increment_usd": "0.01",
+    "note": "Alpaca Regulatory Fees page (updatedAt 2025-10-03): 'We round up total fees based on the currency's precision to the nearest decimal place' (example: 0.00083 USD rounds up to 0.01). Alpaca rounds daily account totals; a per-fill rule cannot reproduce daily aggregation."
+  },
+  "venues": {
+    "DEFAULT": {
+      "components": [
+        {
+          "name": "commission",
+          "category": "commission",
+          "basis": "per_share",
+          "rate": "0",
+          "sides": ["buy", "sell"]
+        },
+        {
+          "name": "sec_section_31",
+          "category": "regulatory",
+          "basis": "per_notional",
+          "rate": "0.0000206",
+          "sides": ["sell"]
+        },
+        {
+          "name": "finra_taf",
+          "category": "regulatory",
+          "basis": "per_share",
+          "rate": "0",
+          "sides": ["sell"]
+        },
+        {
+          "name": "cat",
+          "category": "regulatory",
+          "basis": "per_share",
+          "rate": "0.000003",
+          "sides": ["buy", "sell"]
+        }
+      ]
+    }
+  },
+  "not_covered": [
+    "borrow fees",
+    "exchange/ECN access fees or rebates",
+    "Elite Smart Router commission tiers (not used by the paper account)",
+    "penny rounding of daily account totals"
+  ]
+}

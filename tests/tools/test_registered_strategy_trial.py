@@ -152,19 +152,30 @@ def test_contract_refuses_holdout_2026_and_mismatched_strategy_before_data():
     trial.check_development_bounds({"SPY": index[:1]}, contract())
 
 
-def test_repository_draft_contract_is_complete_but_refused_until_registered(tmp_path, monkeypatch):
-    draft = json.loads(REPO_CONTRACT.read_text())
-    assert draft["status"] == "draft_not_registered" and draft["promotion_authority"] is False
+def test_repository_contract_is_registered_and_refused_without_original_ledger(tmp_path, monkeypatch):
+    registered = json.loads(REPO_CONTRACT.read_text())
+    assert registered["status"] == "registered" and registered["promotion_authority"] is False
+    assert "RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md" in registered["authorization"]
+    reset = json.loads((REPO_CONTRACT.parents[1] / trial.RESET_CONFIG).read_text())
+    assert registered["campaign_id"] in reset["registered_trials"]
+    assert any(a["campaign_id"] == registered["campaign_id"] for a in reset["amendments"])
     spec = trial.contract_spec(contract())
     assert spec.primary.round_trip_bps == 10 and spec.stress.round_trip_bps == 20
-    measured = next(t for t in draft["cost_tiers"] if t["name"] == "measured_paper_taker_median")
+    measured = next(t for t in registered["cost_tiers"] if t["name"] == "measured_paper_taker_median")
     assert measured["round_trip_bps"] == 2.8 and measured["role"] == "reported_only"
     assert measured["source"] == "docs/PAPER_ROUND_TRIP_COST_EVIDENCE_20261018.md"
     strategy = CrossSectionalMomentumStrategy()
     assert (strategy.lookback, strategy.top_quantile, strategy.min_universe) == (63, 0.2, 6)
     (tmp_path / "config").mkdir()
-    (tmp_path / "config/draft.json").write_text(json.dumps(draft))
+    (tmp_path / "config/contract.json").write_text(json.dumps(registered))
+    (tmp_path / trial.RESET_CONFIG).write_text(json.dumps(reset))
     monkeypatch.setattr(trial, "load_governed_development_timestamps", lambda *a: pytest.fail("data read"))
+    # A different repository root must not create a budget: the original ledger is required.
+    with pytest.raises(ValueError, match="original campaign registration is required"):
+        trial.run(tmp_path, fit=False, contract_path=Path("config/contract.json"))
+    assert not (tmp_path / "artifacts").exists()
+    # A draft copy is still refused before any data is read.
+    (tmp_path / "config/draft.json").write_text(json.dumps(dict(registered, status="draft_not_registered")))
     with pytest.raises(ValueError, match="not registered"):
         trial.run(tmp_path, fit=False, contract_path=Path("config/draft.json"))
     assert not (tmp_path / "artifacts").exists()

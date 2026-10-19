@@ -1,6 +1,54 @@
 # Current handoff
 
-## October 18 night deploy of `68792e2ca` — complete (start here)
+## October 18 late night: momentum trial registered, logs reset, fee draft, prune (start here)
+
+On the owner's instruction, four items, none deployed and no restart:
+
+- **Momentum trial registered, not claimed.** `cross_sectional_momentum_trial_20261018`
+  is now `registered` in `config/cross_sectional_momentum_trial_campaign.json`,
+  cited in `config/research_reset.json` `registered_trials` and `amendments`,
+  with record `docs/RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md`. The owner
+  adopted the `open_and_close_minutes` DIA completeness rule as written. Ledger
+  `artifacts/cross_sectional_momentum_trial_20261018/campaign_state.json`
+  (runtime checkout, gitignored) registered 2026-10-18T23:56:26Z, contract hash
+  `5f694a82e5b07900ad2767d6947c29b33795b49c1c98c2e0298c6033e66e0a3e`, zero
+  trials. Neither the support audit nor `--preflight` has run. Next, only on the
+  owner's word: `./venv/bin/python -m ai_trading.tools.registered_strategy_trial
+  --repository-root /home/aiuser/ai-trading-bot --contract
+  config/cross_sectional_momentum_trial_campaign.json --preflight` (never
+  claims), then `--fit` once from a closed window.
+- **Slippage log reset.** `/var/log/ai-trading-bot/slippage.csv` held 693
+  AAPL/MSFT fixture rows from March; archived as
+  `runtime/recovery_backups/legacy_bak_preserved_20261018/slippage.csv.fixture_polluted.20261018T235540Z.gz`
+  and recreated with the header the code writes. `reward_log.csv` was already
+  header-only and is untouched. **Pre-existing bug, not fixed:** the header
+  writers (`bot_engine.py` and `production_engine.py`) write five columns
+  (`timestamp,symbol,expected,actual,slippage_cents`) while
+  `execution/slippage_log.record_fill` appends seven
+  (`ts,symbol,side,qty,expected,fill,bps`); any CSV reader of this file gets
+  misaligned columns.
+- **Fee schedule draft for the owner's declaration.**
+  `config/fee_schedule.paper_alpaca.draft.json`, filled from the Alpaca
+  Brokerage Fee Schedule PDF (sha256 `814767d3…`, title metadata "Template Oct
+  12, 2026", retrieved 2026-10-18T23:56:03Z): commission 0 (retail
+  commission-free per the Commissions Disclosure), SEC Section 31 sells
+  0.0000206 × trade value, FINRA TAF sells $0 per share, CAT buys and sells
+  $0.000003 per executed equivalent share; rounding ceil to $0.01 per fill from
+  the Regulatory Fees page. `effective_from` set to 2026-10-19 because the PDF
+  prints no effective date; the owner should confirm it. Validation fails only
+  on the two unfilled fields `declared_by` and `declared_at`; with placeholders
+  it passes (hash `18cdf297…`, which will change once declared). Still
+  disabled (`AI_TRADING_FEE_SCHEDULE_SOURCE` unset). Enabling needs a reset
+  amendment, the two declaration fields, a rename to
+  `config/fee_schedule.paper_alpaca.json`, the two `.env` lines and a restart
+  (`docs/FEE_SCHEDULE_DECISION_20261018.md`).
+- **Pruned.** Ten merged branches (`claude/affectionate-lehmann-4c08b7`,
+  `modest-shtern-ae9515`, `practical-cray-ffebdc`, `slack-readability`, six
+  `worktree-agent-*`) deleted with their worktrees. Left in place because their
+  idle sessions still own them: `claude/eloquent-elbakyan-2b19ec` and
+  `claude/upbeat-carson-2abade` (both merged).
+
+## October 18 night deploy of `68792e2ca` — complete
 
 Deployed Sun 23:26 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
 Lint passed on `68792e2ca` (merge of `claude/modest-shtern-ae9515`, the

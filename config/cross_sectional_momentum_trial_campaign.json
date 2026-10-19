@@ -1,7 +1,7 @@
 {
   "campaign_id": "cross_sectional_momentum_trial_20261018",
-  "status": "draft_not_registered",
-  "authorization": "None yet. This is a draft. It takes effect only if the owner adopts a research-reset amendment naming this campaign_id, adds it to config/research_reset.json registered_trials, sets status to registered and registers it with ai_trading.tools.experiment_ledger.register_campaign before any preflight. Proposal: docs/MULTI_DAY_STRATEGY_TRIAL_PROPOSAL_20261018.md.",
+  "status": "registered",
+  "authorization": "Owner adopted the research-reset amendment of 2026-10-18 (docs/RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md) authorizing this one registered development trial with the open_and_close_minutes session-completeness rule as written; the October 14, 2026 review otherwise stands. Scheduled training remains paused. Proposal: docs/MULTI_DAY_STRATEGY_TRIAL_PROPOSAL_20261018.md.",
   "max_trials": 1,
   "hypotheses": ["cross_sectional_momentum_63_session_top_quintile_long_only_5_session_hold_v1"],
   "hypothesis": "The unmodified CrossSectionalMomentumStrategy (63-session lookback, top quantile 0.2, min_universe 6), scored on its buy signals only, earns positive net returns after a fixed 10 bps round-trip cost and beats an equal-weight always-long basket of the same universe on identical dates, when it rebalances every 5 sessions with non-overlapping holds.",
