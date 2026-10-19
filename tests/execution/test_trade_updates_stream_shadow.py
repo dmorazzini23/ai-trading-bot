@@ -459,3 +459,51 @@ def test_stream_run_writes_only_shadow_artifact(
     after = {path.name for path in data_dir.glob("*")}
     assert after - before <= {"trade_updates_stream.jsonl"}
     assert not (data_dir / "fill_events.jsonl").exists()
+
+
+def test_degraded_grace_runs_from_last_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_trading import health_payload
+
+    monkeypatch.setenv(tus.GRACE_ENV, "120")
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(tus.time, "monotonic", lambda: clock["now"])
+
+    tus.mark_stream_started(enabled=True, paper=True)
+    tus.mark_stream_connected()
+    clock["now"] += 10_000  # long past the startup grace period, still connected
+    assert health_payload._trade_updates_stream_snapshot()["degraded"] is False
+
+    tus.mark_stream_disconnected("websocket_closed")
+    section = health_payload._trade_updates_stream_snapshot()
+    assert section["connected"] is False
+    assert section["degraded"] is False  # a fresh grace period starts at the disconnect
+
+    clock["now"] += 119
+    assert health_payload._trade_updates_stream_snapshot()["degraded"] is False
+    clock["now"] += 2
+    assert health_payload._trade_updates_stream_snapshot()["degraded"] is True
+
+    tus.mark_stream_connected()
+    assert health_payload._trade_updates_stream_snapshot()["degraded"] is False
+
+
+def test_missing_credentials_marks_stream_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_trading import health_payload
+
+    monkeypatch.setenv(tus.ENABLED_ENV, "1")
+    monkeypatch.setenv(tus.GRACE_ENV, "0")
+    monkeypatch.setenv("ALPACA_API_KEY", "")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "")
+
+    asyncio.run(api.start_trade_updates_stream(api_key="", secret_key="", paper=True))
+
+    section = health_payload._trade_updates_stream_snapshot()
+    assert section["enabled"] is True
+    assert section["started"] is False
+    assert section["connected"] is False
+    assert section["last_disconnect_reason"] == "credentials_missing"
+    assert section["degraded"] is False
+    flags = health_payload._build_runtime_attention_flags(
+        provider_state={}, broker_state={}, service_state={}, trade_updates_stream=section
+    )
+    assert "trade_updates_stream_degraded" not in flags

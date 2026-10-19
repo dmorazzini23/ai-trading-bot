@@ -1890,6 +1890,7 @@ async def start_trade_updates_stream(
     secret = str(secret_key or get_env("ALPACA_SECRET_KEY", "", cast=str) or "").strip()
     if not key or not secret:
         tus.mark_stream_disconnected("credentials_missing")
+        tus.mark_stream_stopped()
         _log.warning("TRADE_UPDATES_STREAM_DISCONNECTED", extra={"reason": "credentials_missing"})
         return
 

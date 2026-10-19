@@ -239,6 +239,7 @@ class _StreamState:
         self.paper: bool | None = None
         self.connected = False
         self.started_monotonic: float | None = None
+        self.disconnected_monotonic: float | None = None
         self.started_at: str | None = None
         self.last_connected_at: str | None = None
         self.last_disconnected_at: str | None = None
@@ -268,6 +269,7 @@ def mark_stream_started(*, enabled: bool, paper: bool | None) -> None:
         _STATE.paper = paper
         _STATE.connected = False
         _STATE.started_monotonic = time.monotonic()
+        _STATE.disconnected_monotonic = None
         _STATE.started_at = _utc_now_iso()
 
 
@@ -280,6 +282,7 @@ def mark_stream_connected() -> None:
 def mark_stream_disconnected(reason: str) -> None:
     with _STATE.lock:
         _STATE.connected = False
+        _STATE.disconnected_monotonic = time.monotonic()
         _STATE.last_disconnected_at = _utc_now_iso()
         _STATE.last_disconnect_reason = str(reason)
 
@@ -343,8 +346,10 @@ def observe_trade_updates_stream_state() -> dict[str, Any]:
     with _STATE.lock:
         degraded = False
         if _STATE.enabled and _STATE.started and not _STATE.connected:
-            started = _STATE.started_monotonic
-            if started is not None and time.monotonic() - started >= _grace_seconds():
+            # The grace period runs from the later of stream start and the last
+            # disconnect, so a reconnect after startup gets the same allowance.
+            marks = [m for m in (_STATE.started_monotonic, _STATE.disconnected_monotonic) if m is not None]
+            if marks and time.monotonic() - max(marks) >= _grace_seconds():
                 degraded = True
         today = datetime.now(UTC).astimezone(SESSION_TZ).date().isoformat()
         events_today = _STATE.events_today if _STATE.events_session == today else 0
