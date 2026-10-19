@@ -1,6 +1,63 @@
 # Current handoff
 
-## October 19 deploy of `db1725a11` — complete (start here)
+## October 19: three Alpaca-surface threads merged to main, not deployed (start here)
+
+Merged `4cb6a129f`, `aa763ad76`, `45f2611e8` (branches
+`claude/broker-account-config-check-07605f`, `claude/portfolio-history-crosscheck-0f880b`,
+`claude/trade-updates-stream-shadow-bbd273`; Opus 5.5 sessions, each validator-clean).
+No conflicts. Combined-tree checks: ruff, mypy and compile on the 22 changed
+Python files; 429 tests across tests/broker, tests/analytics, the stream, parity,
+Slack, research_reset, prune, health, app, startup_runtime and main suites; the
+merged entrypoint imports and builds the canonical health payload in 0.35 s warm
+with both new sections rendering their unavailable state. Live service still on
+`db1725a11`. SIP purchase declined by the owner for now.
+
+- **Broker account configuration, read-only** (`ai_trading/broker/account_configuration.py`,
+  `ai_trading/tools/broker_account_configuration.py --check`, health section
+  `broker_account_configuration`, flag `broker_account_configuration_drift`,
+  `docs/BROKER_ACCOUNT_CONFIGURATION.md`). Startup runs it once after BROKER_SYNC
+  and logs `BROKER_ACCOUNT_CONFIGURATION_OK|DRIFT`; never blocks trading. The live
+  paper account currently drifts: `no_shorting=false` and `max_margin_multiplier=4`
+  against the long-only 1x launch profile, so the flag will show after deploy
+  until the owner changes the paper account in the Alpaca dashboard (the exact
+  `set_account_configurations` call is in the module docstring). Alpaca no longer
+  returns `dtbp_check`/`pdt_check`, which breaks alpaca-py 0.42.1's typed call;
+  the check falls back to a raw GET on the same client and lists them under
+  `unreported_fields`.
+- **Portfolio-history cross-check, reported only** (`ai_trading/analytics/portfolio_history.py`;
+  EOD recap `broker_portfolio` section and `broker_crosscheck_block` in
+  `slack_format.py`; weekly scorecard columns in `tools/research_reset.py`
+  `build_scorecard`, `--skip-broker-portfolio-history` to skip). 5-minute cache in
+  memory and at `<runtime_root>/broker_portfolio_history_cache.json` because the
+  dispatcher is a fresh process each minute; failures not cached; kept out of the
+  recap dedupe fingerprint. Same-day round-trip P&L now computed in one shared
+  place. Live non-sending check for Oct 16: broker +$0.72 vs internal +$0.76; the
+  week shows broker $0.03–0.05 below internal every day (likely per-sell
+  regulatory fees; inference, not verified).
+- **Trade-updates stream, shadow only** (`ai_trading/alpaca_api.py`
+  `start_trade_updates_stream` real implementation; `ai_trading/telemetry/trade_updates_stream.py`;
+  `ai_trading/tools/trade_updates_parity.py --session YYYY-MM-DD [--output]`;
+  health section `trade_updates_stream`; `docs/TRADE_UPDATES_STREAM.md`). Records
+  every broker trade update to `runtime/trade_updates_stream.jsonl` (dedupe set of
+  20k keys; retention 32 MiB / 100k lines registered in both prune tools) and
+  refreshes `runtime/trade_updates_parity_latest.json` every 300 s from a
+  background thread; it never writes the OMS store or `fill_events.jsonl`. Finding:
+  the old stream thread was never started because `python -m ai_trading` never
+  called `configure_main_runtime_jobs`; `ai_trading/main.py` now starts it
+  (daemon, honours `AI_TRADING_TRADE_UPDATES_STREAM_ENABLED`, default 1, skipped
+  in test mode). Paper/live from `ALPACA_TRADING_BASE_URL` then `EXECUTION_MODE`.
+  Drives the websocket through alpaca-py private methods (`_start_ws`, `_consume`,
+  `stop_ws`) because the SDK loop retries without backoff; safe only while 0.42.1
+  stays pinned. Opens a second websocket on the paper account once deployed.
+  Authority bar: three consecutive clean sessions (zero stream_only/polled_only/
+  qty mismatches, price-delta p95 < 1 bps, no write failures).
+
+Next on the owner's word: deploy in a closed, flat window; then fix the paper
+account's shorting and margin settings and re-run `--check`; watch the first
+trading session for `TRADE_UPDATES_STREAM_CONNECTED`, rows in
+`trade_updates_stream.jsonl`, and the parity summary.
+
+## October 19 deploy of `db1725a11` — complete
 
 Deployed Mon 00:56 UTC (Sun 20:56 ET), closed and flat, after CI, CodeQL, SBOM
 and Workflow Lint passed on `db1725a11` (the run on `3d058ec66` was cancelled
