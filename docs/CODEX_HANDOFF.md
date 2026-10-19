@@ -1,6 +1,48 @@
 # Current handoff
 
-## October 19: three Alpaca-surface threads merged to main, not deployed (start here)
+## October 19 deploy of `4b013aa16` — complete (start here)
+
+Deployed Mon 04:36 UTC (00:36 ET), closed and flat, after CI, CodeQL, SBOM and
+Workflow Lint passed on `4b013aa16`. That commit is the three merged Alpaca
+threads plus two follow-ups: `83b483e28` (stream degraded flag now timed from
+the later of start and last disconnect; missing-credentials path marks the
+stream stopped) and `4b013aa16` (docstring-only: the env-contract test
+`tests/test_env_contract_py.py::test_all_python_has_explicit_alpaca_creds`
+rejects `TradingClient(` without `api_key=` even inside docstrings; it was the
+single CI failure on `83b483e28` out of 7,639 tests). Prior spec saved as
+`runtime/release_spec.db1725a11.bak.json`; the new spec changes only the SHA.
+Pre- and post-migration identity pass, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC` (0/0, fresh), 0 errors, 0
+restarts, RSS 608 MB at ~150 s, `/healthz` 0.38–0.45 s, still 503
+`required_model_stale`.
+
+New subsystems on first start:
+- `BROKER_ACCOUNT_CONFIGURATION_DRIFT` (the one WARNING, by design): paper
+  account has `no_shorting=false` and `max_margin_multiplier=4`; health flag
+  `broker_account_configuration_drift` is set and stays until the owner changes
+  the paper account (dashboard, or the `set_account_configurations` call in the
+  module docstring), then re-run
+  `./venv/bin/python -m ai_trading.tools.broker_account_configuration --check`.
+  `dtbp_check`/`pdt_check` are `unreported_fields` (Alpaca stopped returning
+  them; raw-GET fallback in use).
+- `TRADE_UPDATES_STREAM_CONNECTED` on attempt 1, paper, shadow only; health
+  section shows connected, not degraded, 0 events (market closed). The shadow
+  artifact `runtime/trade_updates_stream.jsonl` and
+  `trade_updates_parity_latest.json` do not exist yet; they appear on the first
+  event and the first 300 s parity refresh.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach db1725a11`,
+restore that spec, restart. Stream kill switch without rollback:
+`AI_TRADING_TRADE_UPDATES_STREAM_ENABLED=0` in `.env`, restart.
+
+Monday watch list: everything from the `db1725a11` entry, plus: stream stays
+connected through the open and records fills (`events_today` > 0, rows in
+`trade_updates_stream.jsonl`); parity summary after the first fills
+(`python -m ai_trading.tools.trade_updates_parity --session 2026-10-19
+--output <file>`); EOD recap renders the broker cross-check block; the
+dispatcher's broker-portfolio cache file appears under the runtime root;
+`/healthz` latency with the second websocket open.
+
+## October 19: three Alpaca-surface threads merged to main, not deployed
 
 Merged `4cb6a129f`, `aa763ad76`, `45f2611e8` (branches
 `claude/broker-account-config-check-07605f`, `claude/portfolio-history-crosscheck-0f880b`,
