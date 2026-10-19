@@ -248,6 +248,20 @@ def _should_emit_info_log(key: str, *, ttl_seconds: float) -> bool:
     return False
 
 
+def _check_broker_account_configuration(*candidates: Any) -> None:
+    """Run the read-only broker account-configuration check; never raises."""
+
+    client = next((item for item in candidates if item is not None), None)
+    try:
+        from ai_trading.broker.account_configuration import (
+            run_startup_account_configuration_check,
+        )
+
+        run_startup_account_configuration_check(client)
+    except MAIN_FALLBACK_EXC:
+        logger.warning("BROKER_ACCOUNT_CONFIGURATION_CHECK_FAILED", exc_info=True)
+
+
 def _invoke_market_close_training() -> None:
     """Invoke the market-close training hook from the core engine."""
 
@@ -2212,6 +2226,10 @@ def run_cycle() -> None:
                                         ),
                                     },
                                 )
+                                _check_broker_account_configuration(
+                                    getattr(engine_obj, "trading_client", None),
+                                    getattr(runtime_obj, "api", None),
+                                )
                         except MAIN_FALLBACK_EXC:
                             if _should_emit_info_log(
                                 "MARKET_CLOSED_BROKER_SYNC_FAILED",
@@ -2571,6 +2589,7 @@ def run_cycle() -> None:
                             extra=extra,
                         )
             _STARTUP_PENDING_RECONCILED = True
+            _check_broker_account_configuration(api)
         finally:
             _set_execution_phase(
                 ("warmup" if warmup_mode else "active") if _STARTUP_PENDING_RECONCILED else "reconcile",
