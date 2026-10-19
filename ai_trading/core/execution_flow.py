@@ -16,8 +16,30 @@ from alpaca.common.exceptions import APIError
 from ai_trading.config.management import get_env
 from ai_trading.data.feed_roles import get_execution_feed
 from ai_trading.logging import get_logger
+from ai_trading.slippage.recorder import ensure_slippage_log_header, side_normalized_slippage_bps
 
 logger = get_logger(__name__)
+
+
+def vwap_slippage_row(
+    timestamp: str,
+    symbol: str,
+    side: str,
+    quantity: float | int | str | None,
+    expected_price: float,
+    fill_price: float,
+) -> list[object]:
+    """Build one slippage-log row in :data:`~ai_trading.slippage.recorder.SLIPPAGE_LOG_COLUMNS` order.
+
+    VWAP slices log their fills next to :func:`ai_trading.execution.slippage_log.record_fill`
+    rows, so the shape and the side-normalised bps convention must match.
+    """
+    try:
+        qty = int(float(quantity)) if quantity not in (None, "") else 0
+    except (TypeError, ValueError):
+        qty = 0
+    bps = side_normalized_slippage_bps(float(expected_price), float(fill_price), side)
+    return [timestamp, symbol, str(side).lower(), qty, float(expected_price), float(fill_price), f"{bps:.4f}"]
 
 
 def _latest_quote_request(symbol: str, *, feed: str | None = None) -> Any:
@@ -298,9 +320,17 @@ def vwap_pegged_submit(
                     _slippage_log.append((symbol, vwap_price, fill_price, datetime.now(UTC)))
                     with slippage_lock:  # type: ignore[arg-type]
                         try:
+                            ensure_slippage_log_header(SLIPPAGE_LOG_FILE)
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
-                                    [utc_now_iso(), symbol, vwap_price, fill_price, slip]
+                                    vwap_slippage_row(
+                                        utc_now_iso(),
+                                        symbol,
+                                        side,
+                                        getattr(order, "filled_qty", slice_qty),
+                                        vwap_price,
+                                        fill_price,
+                                    )
                                 )
                         except AI_TRADING_FALLBACK_EXCEPTIONS:
                             logger.debug("VWAP_SLIPPAGE_LOG_APPEND_FAILED", exc_info=True)

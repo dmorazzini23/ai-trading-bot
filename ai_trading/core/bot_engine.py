@@ -13604,11 +13604,9 @@ def ensure_slippage_log_file() -> None:
     if os.path.exists(SLIPPAGE_LOG_FILE):
         return
     try:
-        os.makedirs(os.path.dirname(SLIPPAGE_LOG_FILE) or ".", exist_ok=True)
-        with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
-            csv.writer(f).writerow(
-                ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
-            )
+        from ai_trading.slippage.recorder import ensure_slippage_log_header
+
+        ensure_slippage_log_header(SLIPPAGE_LOG_FILE)
     except (
         FileNotFoundError,
         PermissionError,

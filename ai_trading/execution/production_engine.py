@@ -25,8 +25,8 @@ from ..risk import DynamicPositionSizer, RiskManager, TradingHaltManager
 from .engine import ExecutionAlgorithm, Order, OrderStatus
 from .classes import ExecutionResult, OrderRequest
 from ai_trading.paths import LOG_DIR
+from ai_trading.slippage.recorder import ensure_slippage_log_header
 import os
-import csv
 
 RESEARCH_ONLY = True
 LIVE_EXECUTION_AUTHORITY = "canonical_oms_pretrade"
@@ -72,11 +72,7 @@ class ProductionExecutionCoordinator:
         self.current_positions: dict[str, dict[str, Any]] = {}
         # Ensure slippage log exists for monitoring/tests
         try:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            sl_path = os.path.join(LOG_DIR, 'slippage.csv')
-            if not os.path.exists(sl_path):
-                with open(sl_path, 'w', newline='') as f:
-                    csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
+            ensure_slippage_log_header(os.path.join(LOG_DIR, 'slippage.csv'))
         except AI_TRADING_FALLBACK_EXCEPTIONS:
             logger.debug("PRODUCTION_SLIPPAGE_LOG_INIT_FAILED", exc_info=True)
         logger.warning(

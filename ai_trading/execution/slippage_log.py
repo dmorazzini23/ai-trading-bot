@@ -14,6 +14,7 @@ from typing import Optional
 
 from ai_trading.paths import SLIPPAGE_LOG_PATH
 from ai_trading.logging import get_logger
+from ai_trading.slippage.recorder import ensure_slippage_log_header
 
 logger = get_logger(__name__)
 
@@ -68,9 +69,10 @@ def record_fill(
 ) -> None:
     """Append a slippage observation and update EWMA in memory.
 
-    Writes a compact CSV row to :data:`SLIPPAGE_LOG_PATH` and updates the in‑memory
-    EWMA used for cost estimation. Failures are swallowed to avoid affecting
-    trading paths.
+    Writes one :data:`~ai_trading.slippage.recorder.SLIPPAGE_LOG_COLUMNS` row to
+    :data:`SLIPPAGE_LOG_PATH` (creating the header first) and updates the
+    in-memory EWMA used for cost estimation. Failures are swallowed to avoid
+    affecting trading paths.
     """
     ts = (timestamp or datetime.now(UTC)).isoformat()
     try:
@@ -80,7 +82,7 @@ def record_fill(
         _update_ewma(symbol, abs(bps))
         # Best-effort append; file may be on read-only FS in some environments
         try:
-            SLIPPAGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ensure_slippage_log_header(SLIPPAGE_LOG_PATH)
             with SLIPPAGE_LOG_PATH.open("a", newline="") as f:
                 w = csv.writer(f)
                 w.writerow([ts, symbol, side, int(qty or 0), f"{expected_price}", f"{fill_price}", f"{bps:.4f}"])

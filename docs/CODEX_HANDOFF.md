@@ -20,13 +20,22 @@ On the owner's instruction, four items, none deployed and no restart:
 - **Slippage log reset.** `/var/log/ai-trading-bot/slippage.csv` held 693
   AAPL/MSFT fixture rows from March; archived as
   `runtime/recovery_backups/legacy_bak_preserved_20261018/slippage.csv.fixture_polluted.20261018T235540Z.gz`
-  and recreated with the header the code writes. `reward_log.csv` was already
-  header-only and is untouched. **Pre-existing bug, not fixed:** the header
-  writers (`bot_engine.py` and `production_engine.py`) write five columns
+  and recreated with the header the code wrote at the time. `reward_log.csv`
+  was already header-only and is untouched. **Header mismatch fixed on main,
+  not deployed:** the header writers in `bot_engine.py` and
+  `production_engine.py` wrote five columns
   (`timestamp,symbol,expected,actual,slippage_cents`) while
-  `execution/slippage_log.record_fill` appends seven
-  (`ts,symbol,side,qty,expected,fill,bps`); any CSV reader of this file gets
-  misaligned columns.
+  `execution/slippage_log.record_fill` appended seven, and the VWAP slice path
+  in `core/execution_flow.py` appended a different five. All writers now use
+  `ai_trading.slippage.recorder.SLIPPAGE_LOG_COLUMNS`
+  (`timestamp,symbol,side,quantity,expected_price,actual_price,slippage_bps`)
+  via `ensure_slippage_log_header`; `record_fill` writes the header before its
+  first row; the VWAP row carries side, filled qty and side-normalised bps.
+  `tca.rollups.load_slippage_records` already accepted both shapes and still
+  loads legacy five-column rows. Test: `tests/test_slippage_log_schema.py`.
+  The live file still carries the old five-column header until the next
+  deploy; rewrite that one header line when deploying, or leave it (readers
+  skip the header by name).
 - **Fee schedule draft for the owner's declaration.**
   `config/fee_schedule.paper_alpaca.draft.json`, filled from the Alpaca
   Brokerage Fee Schedule PDF (sha256 `814767d3…`, title metadata "Template Oct
