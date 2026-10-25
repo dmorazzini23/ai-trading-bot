@@ -360,3 +360,60 @@ def test_research_completion_notify_hydrates_managed_webhook(
     assert rc == 0
     assert calls
     assert calls[0][0] == "https://hooks.slack.test/managed"
+
+
+def test_weekly_completion_payload_includes_spy_benchmark(tmp_path: Path) -> None:
+    root = tmp_path / "reports"
+    scorecard_path = root / "weekly" / "run" / "research_reset_scorecard.json"
+    _write_json(
+        root / "latest" / "weekly_research_automation_latest.json",
+        {
+            "status": "complete",
+            "steps": [{"name": "research_reset_scorecard", "output_path": str(scorecard_path)}],
+            "step_results": [{"name": "research_reset_scorecard", "status": "passed"}],
+        },
+    )
+    _write_json(
+        scorecard_path,
+        {
+            "spy_benchmark": {
+                "available": True,
+                "trades_vs_spy": {
+                    "closed_round_trips": 13,
+                    "priced_round_trips": 13,
+                    "winning_round_trips": 3,
+                    "bot_pnl_usd": -6.49,
+                    "spy_equivalent_pnl_usd": 1.25,
+                    "bot_minus_spy_usd": -7.74,
+                },
+                "account_vs_spy": {
+                    "available": True,
+                    "account_return_bps": -0.8,
+                    "spy_return_bps": 120.5,
+                    "account_pnl_usd": -6.67,
+                    "spy_equivalent_pnl_usd": 984.07,
+                    "sessions": {"count": 5},
+                },
+            }
+        },
+    )
+
+    payload = research_completion_notify.build_research_completion_payload(
+        cadence="weekly", workflow="weekly", exit_code=0, report_root=root, channel="#all-beatwallstreet"
+    )
+
+    text = _all_text(payload)
+    assert "*Versus SPY (reported only)*" in text
+    assert "Trades: bot -$6.49 vs SPY +$1.25 held over the same 13 round trips (bot minus SPY -$7.74; 3/13 winners)" in text
+    assert "Account: -0.8 bps vs SPY +120.5 bps over 5 sessions (-$6.67 vs +$984.07 fully in SPY)" in text
+
+
+def test_weekly_completion_payload_omits_unavailable_spy_benchmark(tmp_path: Path) -> None:
+    root = tmp_path / "reports"
+    _write_json(root / "latest" / "weekly_research_automation_latest.json", {"status": "complete"})
+
+    payload = research_completion_notify.build_research_completion_payload(
+        cadence="weekly", workflow="weekly", exit_code=0, report_root=root, channel="#all-beatwallstreet"
+    )
+
+    assert "Versus SPY" not in _all_text(payload)

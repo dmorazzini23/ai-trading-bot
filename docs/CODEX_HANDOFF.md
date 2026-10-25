@@ -1,5 +1,30 @@
 # Current handoff
 
+## October 25: Dec 9 review plan and weekly SPY benchmark (on main, not deployed)
+
+- **Dec 9 plan:** `docs/RESEARCH_RESET_REVIEW_20261209_PLAN.md` (linked from
+  `docs/RESEARCH_RESET.md`) fixes the review's decision rules before any
+  outcome: momentum trial branch (one untouched consistency check on the
+  holdout only after a pass), retire the stale day-sleeve model if no qualified
+  candidate exists, and the real-money gate (8 weekly scorecards, 30 closed
+  positions, positive after measured costs, at least even with
+  exposure-matched SPY, `live_canary_allowed`, owner approval).
+  `config/research_reset.json` unchanged. Momentum trial still unclaimed;
+  support audit, `--preflight` and `--fit` each need the owner's word.
+- **SPY benchmark:** new `ai_trading/analytics/spy_benchmark.py`; the research
+  reset scorecard gains reported-only `spy_benchmark` (account vs SPY
+  close-to-close; trades vs SPY held over the same entry/exit minutes with the
+  same notional; IEX bars; `--skip-spy-benchmark`). The weekly Slack
+  completion message adds a "Versus SPY" section. Never a blocker.
+- Real-data dry run (Oct 18–25 window, nothing sent): 14 round trips, bot
+  −$6.49 vs SPY +$2.06 on the same trades (−$8.55, −15.1 bps of $5,664
+  notional); account −0.8 bps vs SPY −45.9 bps (cash).
+- Validation: `agent_validate_changed.sh` passed (ruff, mypy, 40 targeted
+  tests, health smoke, incident snapshot) and `--full` passed
+  (7,652 passed, 3 skipped; ruff, mypy, strict typecheck, py_compile).
+- Deploy: needs the live checkout moved to the new commit before the
+  Sat Oct 31 weekly run; no bot behavior changes.
+
 ## October 19 deploy of `4b013aa16` — complete (start here)
 
 Deployed Mon 04:36 UTC (00:36 ET), closed and flat, after CI, CodeQL, SBOM and

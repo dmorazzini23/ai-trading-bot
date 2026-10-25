@@ -258,3 +258,30 @@ def test_scorecard_marks_window_edge_sessions_partial(tmp_path):
     assert report["broker_portfolio"]["internal_available"] is False  # no fill file
     assert reset._window_edge_partial(now) is True
     assert reset._window_edge_partial(datetime(2026, 10, 19, 3, tzinfo=UTC)) is False
+
+
+def test_scorecard_reports_spy_benchmark_without_blocking(tmp_path):
+    now = datetime(2026, 10, 19, 3, tzinfo=UTC)  # Sunday night
+    fills = [
+        {"ts": "2026-10-15T14:00:30+00:00", "symbol": "AAPL", "side": "buy", "fill_qty": 1, "fill_price": 100.0},
+        {"ts": "2026-10-15T15:00:30+00:00", "symbol": "AAPL", "side": "sell", "fill_qty": 1, "fill_price": 99.0},
+    ]
+    (tmp_path / "fill_events.jsonl").write_text("".join(json.dumps(row) + "\n" for row in fills))
+    bars = {
+        "available": True,
+        "feed": "iex",
+        "daily": [{"date": "2026-10-14", "close": 400.0}, {"date": "2026-10-15", "close": 404.0}],
+        "minute": [{"ts": "2026-10-15T13:59:00+00:00", "close": 400.0}, {"ts": "2026-10-15T14:59:00+00:00", "close": 404.0}],
+    }
+
+    report = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now, spy_bars=bars)
+
+    benchmark = report["spy_benchmark"]
+    assert benchmark["reported_only"] is True
+    assert benchmark["trades_vs_spy"]["bot_pnl_usd"] == pytest.approx(-1.0)
+    assert benchmark["trades_vs_spy"]["spy_equivalent_pnl_usd"] == pytest.approx(1.0)
+    assert benchmark["account_vs_spy"]["available"] is False  # no broker history requested
+    without = reset.build_scorecard(tmp_path, tmp_path / "a.json", tmp_path / "p.json", [], now)
+    assert without["blockers"] == report["blockers"]
+    assert without["spy_benchmark"]["reason"] == "not_requested"
+    json.dumps(report, allow_nan=False)

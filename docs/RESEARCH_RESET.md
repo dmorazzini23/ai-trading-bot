@@ -14,7 +14,9 @@ remain governed by their existing checks. Missing or malformed reset policy bloc
 automation; the October 8 review date does not automatically restart broad search.
 Resuming requires an explicit review and a deliberate policy change.
 The [October 14 review](RESEARCH_RESET_REVIEW_20261014.md) kept the pause through
-the holdout; the next explicit review is December 9, 2026.
+the holdout; the next explicit review is December 9, 2026. Its decision rules
+were fixed in advance on October 25 in the
+[December 9 review plan](RESEARCH_RESET_REVIEW_20261209_PLAN.md).
 
 Discretionary features, new models, and unregistered parameter searches are paused.
 Correctness fixes and work that resolves a named evidence blocker remain in scope.

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ai_trading.analytics import portfolio_history
+from ai_trading.analytics import portfolio_history, spy_benchmark
 from ai_trading.analytics.fee_schedule import fee_provenance_class
 from ai_trading.config.research_policy import reset_policy
 
@@ -255,7 +255,7 @@ def broker_portfolio_crosscheck(history: dict[str, Any] | None, fills: list[dict
     )
 
 
-def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None, oms_database: Path | None = None, broker_portfolio_history: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None, oms_database: Path | None = None, broker_portfolio_history: dict[str, Any] | None = None, spy_bars: dict[str, Any] | None = None) -> dict[str, Any]:
     inputs, sources = {}, {}
     for name, filename in (("decisions", "decision_records.jsonl"), ("orders", "order_events.jsonl"), ("fills", "fill_events.jsonl")):
         inputs[name], sources[name] = read_window(runtime_dir / filename, now)
@@ -284,7 +284,9 @@ def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, 
     if sources["paper_review"]["status"] != "fresh" or paper.get("completion_gaps"):
         blockers.append("paper_session_evidence_pending")
     blockers.append("untouched_evaluation_not_performed")
-    return {"artifact_type": "research_reset_scorecard", "generated_at": now.isoformat(), "status": "evidence_pending", "window": {"start": (now - timedelta(days=7)).isoformat(), "end": now.isoformat()}, "highest_value_blocker": blockers[0], "blockers": blockers, "sampling_support": {k: sampling.get(k) for k in ("status", "possible_common_periods", "candidate_periods", "maximum_possible_selections", "minimum_required", "trial_claimed")}, "execution_chain": chain, "quotes": quotes, "experiments": experiment_counts, "trials": trials, "accounting": {k: accounting.get(k) for k in ("status", "activity_count", "fee_coverage", "order_quantity_counts", "net_fee_validation", "daily_account_fee_totals", "document_evidence", "fee_record_coverage")}, "paper_session": {k: paper.get(k) for k in ("session_date", "completion_gaps", "session_audit", "execution_cost_comparison")}, "broker_portfolio": broker_portfolio_crosscheck(broker_portfolio_history, inputs["fills"], sources["fills"], now), "untouched_net_performance": {"status": "unavailable", "reason": "reserved_holdout_not_evaluated"}, "sources": sources, "limitations": ["Weekly snapshots are observations, not additional experiments.", "No fills means unavailable execution coverage, not 100 percent coverage.", "Quote spreads and fixed cost scenarios do not certify total costs.", "Development results are not untouched performance.", "No missing fees are imputed as zero; no account-level charges are allocated to guessed fills.", "Broker-reported portfolio history is a reported-only cross-check on internal P&L; it feeds no blocker, gate or decision."], "promotion_authority": False, "orders_sent": 0}
+    broker = broker_portfolio_crosscheck(broker_portfolio_history, inputs["fills"], sources["fills"], now)
+    benchmark = spy_benchmark.weekly_benchmark(broker, inputs["fills"], spy_bars if spy_bars is not None else {"available": False, "reason": "not_requested"})
+    return {"artifact_type": "research_reset_scorecard", "generated_at": now.isoformat(), "status": "evidence_pending", "window": {"start": (now - timedelta(days=7)).isoformat(), "end": now.isoformat()}, "highest_value_blocker": blockers[0], "blockers": blockers, "sampling_support": {k: sampling.get(k) for k in ("status", "possible_common_periods", "candidate_periods", "maximum_possible_selections", "minimum_required", "trial_claimed")}, "execution_chain": chain, "quotes": quotes, "experiments": experiment_counts, "trials": trials, "accounting": {k: accounting.get(k) for k in ("status", "activity_count", "fee_coverage", "order_quantity_counts", "net_fee_validation", "daily_account_fee_totals", "document_evidence", "fee_record_coverage")}, "paper_session": {k: paper.get(k) for k in ("session_date", "completion_gaps", "session_audit", "execution_cost_comparison")}, "broker_portfolio": broker, "spy_benchmark": benchmark, "untouched_net_performance": {"status": "unavailable", "reason": "reserved_holdout_not_evaluated"}, "sources": sources, "limitations": ["Weekly snapshots are observations, not additional experiments.", "No fills means unavailable execution coverage, not 100 percent coverage.", "Quote spreads and fixed cost scenarios do not certify total costs.", "Development results are not untouched performance.", "No missing fees are imputed as zero; no account-level charges are allocated to guessed fills.", "Broker-reported portfolio history is a reported-only cross-check on internal P&L; it feeds no blocker, gate or decision.", "The SPY benchmark is reported only; one week of one-share trades is not evidence of edge either way."], "promotion_authority": False, "orders_sent": 0}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -297,10 +299,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sampling-support", type=Path, default=ROOT / "artifacts/research_reset/sampling_support.json")
     parser.add_argument("--oms-database", type=Path, default=None, help="Read-only OMS SQLite; defaults to the configured store")
     parser.add_argument("--skip-broker-portfolio-history", action="store_true", help="Do not fetch the reported-only broker portfolio history")
+    parser.add_argument("--skip-spy-benchmark", action="store_true", help="Do not fetch the reported-only SPY benchmark bars")
     args = parser.parse_args(argv)
     oms_database = args.oms_database or configured_sqlite_path()
     broker_history = None if args.skip_broker_portfolio_history else portfolio_history.fetch_portfolio_history()
-    report = build_scorecard(args.runtime_dir, args.accounting_report, args.paper_report, args.campaign_state, datetime.now(UTC), args.sampling_support, oms_database, broker_history)
+    now = datetime.now(UTC)
+    spy_bars = None if args.skip_spy_benchmark else spy_benchmark.fetch_spy_bars(now - timedelta(days=7), now)
+    report = build_scorecard(args.runtime_dir, args.accounting_report, args.paper_report, args.campaign_state, now, args.sampling_support, oms_database, broker_history, spy_bars)
     atomic_write_text(args.output, json.dumps(report, indent=2, allow_nan=False) + "\n")
     get_logger(__name__).info("RESEARCH_RESET_SCORECARD_COMPLETE", extra={"status": report["status"], "blocker": report["highest_value_blocker"]})
     return 0

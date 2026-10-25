@@ -112,6 +112,38 @@ def _report_checks_text(health_summary: Mapping[str, Any]) -> str:
     return f"{heading}; needs attention:\n{fmt.bullets(attention)}"
 
 
+def _usd(value: Any) -> str:
+    amount = float(value)
+    return f"{'-' if amount < 0 else '+'}${abs(amount):,.2f}"
+
+
+def _spy_benchmark_text(scorecard: Mapping[str, Any]) -> str:
+    """Weekly "versus SPY" lines from the research reset scorecard; empty when unavailable."""
+
+    benchmark = scorecard.get("spy_benchmark")
+    if not isinstance(benchmark, Mapping) or not benchmark.get("available"):
+        return ""
+    lines: list[str] = []
+    trades = benchmark.get("trades_vs_spy")
+    if isinstance(trades, Mapping) and trades.get("priced_round_trips"):
+        lines.append(
+            f"Trades: bot {_usd(trades['bot_pnl_usd'])} vs SPY {_usd(trades['spy_equivalent_pnl_usd'])} "
+            f"held over the same {trades['priced_round_trips']} round trips "
+            f"(bot minus SPY {_usd(trades['bot_minus_spy_usd'])}; "
+            f"{trades.get('winning_round_trips', 0)}/{trades.get('closed_round_trips', 0)} winners)"
+        )
+    account = benchmark.get("account_vs_spy")
+    if isinstance(account, Mapping) and account.get("available"):
+        lines.append(
+            f"Account: {float(account['account_return_bps']):+.1f} bps vs SPY "
+            f"{float(account['spy_return_bps']):+.1f} bps over {account['sessions']['count']} sessions "
+            f"({_usd(account['account_pnl_usd'])} vs {_usd(account['spy_equivalent_pnl_usd'])} fully in SPY)"
+        )
+    if not lines:
+        return ""
+    return f"*Versus SPY (reported only)*\n{fmt.bullets(lines)}"
+
+
 def build_research_completion_payload(
     *,
     cadence: str,
@@ -241,6 +273,10 @@ def build_research_completion_payload(
         )
     if signal_fields:
         blocks.append(fmt.fields_block(signal_fields))
+    if cadence == "weekly" and not suppress_stale:
+        spy_text = _spy_benchmark_text(_read_json(_step_output(report, "research_reset_scorecard")))
+        if spy_text:
+            blocks.append(fmt.section_block(spy_text))
     steps = [
         f"{label} ({len(names)}): {fmt.inline_list((fmt.humanize(name) for name in names), limit=3)}"
         for label, names in (("Failed", failed), ("Blocked", blocked_steps), ("Skipped", skipped))
