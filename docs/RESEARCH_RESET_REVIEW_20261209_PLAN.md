@@ -148,3 +148,8 @@ only (they never become blockers or gates):
   turnover criteria passed
   ([result](RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md#result-october-25-2026-retired)).
   The holdout stays reserved. The review proceeds under B and C.
+- **2026-10-25 — review agenda item (no rule change).** The owner asked for a
+  concrete operations alternative to decide on at the review:
+  [portfolio manager mode proposal](PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md).
+  It claims no edge, so it would need an operational gate adopted by amendment
+  at the review; the strategy real-money gate above is unchanged.

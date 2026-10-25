@@ -1,6 +1,16 @@
 # Current handoff
 
-## October 25: volatility-target trial claimed once — retired (start here)
+## October 25: portfolio manager mode proposal drafted (for Dec 9; nothing built) (start here)
+
+`docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md`, linked from the Dec 9 plan's
+amendment record. Fixed owner-chosen ETF mix, band/calendar rebalancing,
+cash-flow first, EOD flatten off, daily loss cap replaced by drawdown alerts,
+kill switch halts orders without liquidating, manual approval per live
+rebalance, plan-benchmark + SPY reporting, phased rollout behind an
+operational gate (8 paper scorecards, then small live ≥ 3 months). Owner
+decisions listed in section 6. No code or config changed.
+
+## October 25: volatility-target trial claimed once — retired
 
 On the owner's instruction `--fit` ran at 15:52 UTC (closed) on `8023d7642`:
 `retired`. Only the Sharpe lower bound failed: +0.068 (0.936 vs 0.868), CI
