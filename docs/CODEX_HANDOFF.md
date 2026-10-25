@@ -1,6 +1,17 @@
 # Current handoff
 
-## October 25: momentum trial audit and preflight passed (not claimed) (start here)
+## October 25: momentum trial claimed once — retired (start here)
+
+On the owner's instruction `--fit` ran at 04:03 UTC (closed): status
+`retired`, ledger `trials` has one finished entry. Net −21.4 bps/period at
+10 bps (CI −76.7..+31.1), paired vs always-long −37.0 bps (CI −70.1..−5.2),
+−31.4 bps at 20 bps, 3/7 profitable quarters; always-long +15.6 bps. Every
+acceptance criterion failed. Holdout not evaluated, 0 models, 0 orders.
+Recorded in `docs/RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md` (Result) and
+the Dec 9 plan's amendment record: branch A ends, review proceeds under B/C.
+No tuning of this hypothesis is authorized.
+
+## October 25: momentum trial audit and preflight passed (claimed later, above)
 
 On the owner's word, from the live checkout (`3911dfa6e`, closed, nothing
 deployed or restarted):

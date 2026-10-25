@@ -133,3 +133,11 @@ only (they never become blockers or gates):
 - Added this plan and linked it from `docs/RESEARCH_RESET.md`.
 - `config/research_reset.json` is unchanged; `review_date` stays `2026-12-09`.
 - Rollback: revert the commit. No runtime state depends on this document.
+
+## Amendment record
+
+- **2026-10-25 — momentum trial outcome (no rule change).** The trial was
+  claimed once and ended `retired` on all four acceptance criteria
+  ([result](RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md#result-october-25-2026-retired)).
+  Branch A ends; A1 does not run and the holdout stays reserved. The review
+  proceeds under B and C.

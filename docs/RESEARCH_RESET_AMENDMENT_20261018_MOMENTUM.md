@@ -86,3 +86,23 @@ instruction. Registration alone (this record) claims nothing.
   been run under this registration.
 - Rollback: revert the two config edits and this record. Keep the ledger as
   evidence; a registered campaign is never silently unregistered.
+
+## Result (October 25, 2026): retired
+
+Claimed once on the owner's instruction at 2026-10-25T04:03:29Z (closed
+window), after the support audit (87 periods, 7 supported quarters) and the
+non-claiming preflight passed. Ledger status `retired`; report sha256
+`64827b8e…30fa`, periods sha256 `5e9c7c70…b8b8`, signature `c9611baa…`.
+The holdout was not evaluated; no model was fitted; no orders were sent.
+
+| Criterion (contract) | Result | Met |
+| --- | --- | --- |
+| Adequate support | 87 periods, 7 quarters | yes |
+| Net vs cash at 10 bps, 95% lower bound > 0 | mean −21.4 bps/period, CI [−76.7, +31.1] | no |
+| Paired vs equal-weight always-long, lower bound > 0 | mean −37.0 bps/period, CI [−70.1, −5.2] | no |
+| Aggregate net at 20 bps > 0 | −31.4 bps/period | no |
+| At least 5 of 7 profitable quarters | 3 of 7 (2024Q4, 2025Q2, 2025Q3) | no |
+
+Equal-weight always-long earned +15.6 bps/period net at 10 bps on the same
+dates. The hypothesis is retired; per the stop rule, no lookback, quantile,
+hold, universe, cost or completeness tuning is authorized.
