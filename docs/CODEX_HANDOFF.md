@@ -1,6 +1,30 @@
 # Current handoff
 
-## October 25: volatility-target core trial drafted (not registered) (start here)
+## October 25: volatility-target trial registered, data acquired, preflight passed (not claimed) (start here)
+
+Owner approved the contract as drafted. `8023d7642` (amendment
+`docs/RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md`, reset config
+entry, contract `registered` with three clarification keys, runner
+`ai_trading/tools/volatility_target_trial.py` + 17 tests). Full validation
+7,669 passed; CI, CodeQL, SBOM, Workflow Lint green.
+- **Deployed** Sun 05:16 UTC, closed and flat. Spec backup
+  `runtime/release_spec.3911dfa6e.bak.json` (SHA only). Both identity reports
+  pass, `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC`, stream connected,
+  account config OK, 0 errors, NRestarts=0. Rollback: checkout `3911dfa6e`,
+  restore that spec, restart.
+- **Ledger** `artifacts/volatility_target_core_trial_20261025/campaign_state.json`
+  registered 05:18:16Z, contract hash `b0b8b925…f5b9`, trials `[]`.
+- **Acquisition** `data/acquisition.json`: SPY and BIL SIP daily
+  `adjustment=all`, 2,514 rows each 2016-01-04..2025-12-31; SPY sha
+  `626ff4e2…`, BIL sha `cf72c0cb…`.
+- **Support audit** (timestamp-only): 498 periods (400 needed), 10 supported
+  years (8 needed), 46–51 per year. **Preflight**: `preflight_passed`, 0 price
+  rejections, signature `430b6305…`, `trial_claimed: false`.
+- Next, only on the owner's explicit word:
+  `./venv/bin/python -m ai_trading.tools.volatility_target_trial --repository-root . --contract config/volatility_target_core_trial_campaign.json --fit`
+  (claims once, no retry).
+
+## October 25: volatility-target core trial drafted (registered later, above)
 
 Owner asked for the next hypothesis after the momentum trial retired. Checked
 the September trend contract: a price-direction ETF filter (60 sessions), so a
