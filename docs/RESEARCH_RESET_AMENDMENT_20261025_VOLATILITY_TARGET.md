@@ -66,3 +66,29 @@ authority (`promotion_authority: false`, `runtime_authority: false`).
   `experiment_ledger.register_campaign` once this commit is deployed.
 - Rollback: revert the config edits and this record. Keep the ledger as
   evidence; a registered campaign is never silently unregistered.
+
+## Result (October 25, 2026): retired
+
+Claimed once on the owner's instruction at 2026-10-25T15:52:15Z (market
+closed), after the acquisition, support audit (498 periods, 10 years) and
+non-claiming preflight passed. Ledger status `retired`. The holdout was not
+evaluated; no model was fitted; no orders were sent.
+
+| Criterion (contract) | Result | Met |
+| --- | --- | --- |
+| Adequate support | 498 periods, 10 of 10 years | yes |
+| Sharpe difference vs buy-and-hold at 10 bps, 95% lower bound > 0 | +0.068 (0.936 vs 0.868); CI [−0.138, +0.256] | **no** |
+| Max drawdown ≤ 0.85 × same-exposure static mix | 0.705 (19.0% vs 26.9%) | yes |
+| Sharpe difference at 20 bps > 0 | +0.058 | yes |
+| Annual turnover ≤ 4 | 1.15 | yes |
+
+Reported only, at 10 bps: CAGR 13.3% vs 15.7% buy-and-hold and 14.2% static
+mix; annual volatility 12.0% vs 15.9%; max drawdown 19.0% vs 29.9%
+buy-and-hold; average SPY weight 0.89. The strategy trailed buy-and-hold in
+8 of 10 calendar years and led in 2022 (−13.6% vs −18.5%); 2017 was equal.
+
+The contract requires all criteria, so the hypothesis is retired. The
+drawdown result does not rescue it: the pre-registered question was whether
+risk-adjusted return improved with confidence, and ten years could not
+distinguish the gain from zero. Per the stop rule, no tuning of target,
+lookback, band, rebalance interval, cap, assets or cost is authorized.

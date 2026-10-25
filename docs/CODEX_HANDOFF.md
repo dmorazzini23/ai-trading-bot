@@ -1,6 +1,16 @@
 # Current handoff
 
-## October 25: volatility-target trial registered, data acquired, preflight passed (not claimed) (start here)
+## October 25: volatility-target trial claimed once — retired (start here)
+
+On the owner's instruction `--fit` ran at 15:52 UTC (closed) on `8023d7642`:
+`retired`. Only the Sharpe lower bound failed: +0.068 (0.936 vs 0.868), CI
+−0.138..+0.256. Passed: drawdown ratio 0.705 vs same-exposure static mix
+(19.0% vs 26.9%), +0.058 at 20 bps, turnover 1.15, support 498/10 years.
+Reported only: CAGR 13.3% vs 15.7%, vol 12.0% vs 15.9%, avg SPY weight 0.89.
+Recorded in the amendment (Result) and the Dec 9 plan amendment record. No
+tuning authorized. Holdout not evaluated, 0 orders.
+
+## October 25: volatility-target trial registered, data acquired, preflight passed (claimed later, above)
 
 Owner approved the contract as drafted. `8023d7642` (amendment
 `docs/RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md`, reset config

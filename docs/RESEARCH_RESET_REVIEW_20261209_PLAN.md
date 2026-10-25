@@ -141,3 +141,10 @@ only (they never become blockers or gates):
   ([result](RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md#result-october-25-2026-retired)).
   Branch A ends; A1 does not run and the holdout stays reserved. The review
   proceeds under B and C.
+- **2026-10-25 — volatility-target trial outcome (no rule change).**
+  `volatility_target_core_trial_20261025` was registered, acquired, preflighted
+  and claimed once; it ended `retired` because the Sharpe-difference lower
+  bound was not positive (CI −0.14..+0.26). The drawdown, stress-cost and
+  turnover criteria passed
+  ([result](RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md#result-october-25-2026-retired)).
+  The holdout stays reserved. The review proceeds under B and C.
