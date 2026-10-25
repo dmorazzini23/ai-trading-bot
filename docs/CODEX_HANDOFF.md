@@ -1,6 +1,21 @@
 # Current handoff
 
-## October 25: momentum trial claimed once — retired (start here)
+## October 25: volatility-target core trial drafted (not registered) (start here)
+
+Owner asked for the next hypothesis after the momentum trial retired. Checked
+the September trend contract: a price-direction ETF filter (60 sessions), so a
+long-horizon trend filter is a consumed-hypothesis variant and was excluded.
+Drafted `config/volatility_target_core_trial_campaign.json`
+(`draft_not_registered`) and `docs/VOLATILITY_TARGET_CORE_TRIAL_PROPOSAL_20261025.md`:
+SPY weight min(1, 15% / 21-session vol), rest BIL, 5-session rebalance, 0.10
+band, 2016–2025 SIP daily `adjustment=all`. Sharpe vs buy-and-hold (bootstrap
+lower bound > 0) and drawdown ≤ 0.85× a same-average-exposure static mix.
+Timestamp-only check: SPY/BIL 2,514 bars each 2016-01-04..2025-12-31. Next, on
+the owner's word: amendment + registration, then an offline weight-trial
+runner and daily acquisition (registered_strategy_trial scores buy signals
+only), support audit, preflight, single `--fit`.
+
+## October 25: momentum trial claimed once — retired
 
 On the owner's instruction `--fit` ran at 04:03 UTC (closed): status
 `retired`, ledger `trials` has one finished entry. Net −21.4 bps/period at
