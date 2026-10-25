@@ -10,7 +10,7 @@
   "holdout_end": "2026-12-08",
   "allowed_work": ["evidence_reconciliation", "correctness_fixes", "weekly_scorecard", "registered_development_trial"],
   "paused_work": ["unregistered_search", "scheduled_training", "new_models", "discretionary_features"],
-  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018"],
+  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025"],
   "amendments": [
     {
       "date": "2026-10-18",
@@ -27,6 +27,14 @@
       "contract": "config/cross_sectional_momentum_trial_campaign.json",
       "ledger": "artifacts/cross_sectional_momentum_trial_20261018/campaign_state.json",
       "scope": "one registered development trial of the unmodified cross-sectional momentum strategy on the six-ETF universe; pause, holdout, gates and review date unchanged"
+    },
+    {
+      "date": "2026-10-25",
+      "record": "docs/RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md",
+      "campaign_id": "volatility_target_core_trial_20261025",
+      "contract": "config/volatility_target_core_trial_campaign.json",
+      "ledger": "artifacts/volatility_target_core_trial_20261025/campaign_state.json",
+      "scope": "one registered development trial of a volatility-targeted SPY/BIL core on 2016-2025 daily data; pause, holdout, gates and review date unchanged"
     }
   ],
   "promotion_authority": false

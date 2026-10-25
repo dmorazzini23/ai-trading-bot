@@ -1,9 +1,11 @@
 {
   "campaign_id": "volatility_target_core_trial_20261025",
-  "status": "draft_not_registered",
-  "authorization": "none; draft for owner review (docs/VOLATILITY_TARGET_CORE_TRIAL_PROPOSAL_20261025.md)",
+  "status": "registered",
+  "authorization": "docs/RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md (owner approval 2026-10-25)",
   "max_trials": 1,
-  "hypotheses": ["spy_bil_volatility_target_15pct_21_session_5_session_rebalance_v1"],
+  "hypotheses": [
+    "spy_bil_volatility_target_15pct_21_session_5_session_rebalance_v1"
+  ],
   "hypothesis": "Holding SPY with a weight of min(1, 15 percent / trailing 21-session realized volatility), the remainder in BIL, rebalanced every 5 sessions with a 0.10 weight no-trade band, has a higher Sharpe ratio than buy-and-hold SPY after a fixed 10 bps round-trip cost on traded weight, and a smaller maximum drawdown than a static SPY/BIL mix holding the same average SPY weight, on identical dates.",
   "economic_motivation": "Volatility clusters while expected returns do not rise proportionally, so reducing exposure when realized volatility is high has historically improved risk-adjusted returns of equity indices (Moreira and Muir 2017, 'Volatility-Managed Portfolios'). The rule never uses price direction, trades a few times a quarter, and caps exposure at 100 percent (no leverage).",
   "distinct_from_consumed": "research_reset_trend_20260908 tested a binary price-direction filter (close vs 60 sessions ago) on six ETFs and explicitly excluded volatility targeting. This contract uses no price-direction signal, a continuous weight, and SPY/BIL only. A long-horizon price-trend filter was considered and excluded as a variant of the consumed trend hypothesis.",
@@ -11,24 +13,50 @@
   "development_end": "2025-12-31",
   "holdout_start": "2026-09-09",
   "holdout_end": "2026-12-08",
-  "symbols": {"risk_asset": "SPY", "cash_asset": "BIL"},
+  "symbols": {
+    "risk_asset": "SPY",
+    "cash_asset": "BIL"
+  },
   "feed": "sip",
   "adjustment": "all",
   "acquisition": "Daily SIP bars for SPY and BIL, 2016-01-04 through 2025-12-31, adjustment=all, acquired once into a hash-manifested artifact before registration; any row dated in 2026 is refused before prices are read.",
+  "acquisition_manifest": "artifacts/volatility_target_core_trial_20261025/data/acquisition.json",
   "availability_check": "2026-10-25 timestamp-only request: SPY and BIL each return 2514 daily bars from 2016-01-04 to 2025-12-31; no price was printed or analysed.",
-  "volatility": {"returns": "daily log returns of adjusted close", "lookback_sessions": 21, "annualization": 252, "estimator": "sample standard deviation"},
+  "volatility": {
+    "returns": "daily log returns of adjusted close",
+    "lookback_sessions": 21,
+    "annualization": 252,
+    "estimator": "sample standard deviation"
+  },
   "target_volatility_annual": 0.15,
   "max_risk_weight": 1.0,
-  "rebalance_grid": {"every_sessions": 5, "first_decision_index": 21, "no_trade_band": 0.10},
+  "rebalance_grid": {
+    "every_sessions": 5,
+    "first_decision_index": 21,
+    "no_trade_band": 0.1
+  },
   "decision": "After the close of session t, using closes through t only.",
   "entry": "Regular-session open of session t+1.",
   "exit": "Regular-session open of session t+6 (next rebalance); periods never overlap.",
   "allocation": "SPY weight w as defined; BIL weight 1 - w. No leverage, no shorts, no other assets.",
+  "weight_accounting": "Within a period the SPY weight is held at its period-start value (drift is not modelled); costs are charged only when the weight changes. The same convention applies to the static mix and buy-and-hold.",
   "primary_round_trip_cost_bps": 10,
   "cost_tiers": [
-    {"name": "primary", "round_trip_bps": 10, "role": "decision"},
-    {"name": "stress_high", "round_trip_bps": 20, "role": "required_positive_sharpe_difference"},
-    {"name": "stress_low", "round_trip_bps": 6, "role": "reported_only"}
+    {
+      "name": "primary",
+      "round_trip_bps": 10,
+      "role": "decision"
+    },
+    {
+      "name": "stress_high",
+      "round_trip_bps": 20,
+      "role": "required_positive_sharpe_difference"
+    },
+    {
+      "name": "stress_low",
+      "round_trip_bps": 6,
+      "role": "reported_only"
+    }
   ],
   "cost_accounting": "Each rebalance charges round_trip_bps / 2 on the absolute weight traded in each leg (|dw_SPY| + |dw_BIL| = 2|dw|), i.e. round_trip_bps x |dw| of portfolio value. Buy-and-hold is charged one initial entry only.",
   "cost_status": "fixed_unverified_scenarios_not_calibrated_execution_costs",
@@ -38,7 +66,11 @@
   },
   "sharpe": "Annualized mean / standard deviation of per-period returns in excess of BIL over the same period, x sqrt(252 / 5).",
   "folds": "calendar_year_of_entry_session",
-  "support_thresholds": {"minimum_periods": 400, "minimum_supported_years": 8, "minimum_periods_per_year": 40},
+  "support_thresholds": {
+    "minimum_periods": 400,
+    "minimum_supported_years": 8,
+    "minimum_periods_per_year": 40
+  },
   "support_rationale": "2514 sessions less the 21-session warmup give about 498 non-overlapping 5-session periods, about 50 per calendar year.",
   "acceptance": {
     "positive_sharpe_difference_lower_bound_at_primary": true,
@@ -47,7 +79,12 @@
     "max_annual_turnover": 4.0,
     "summary": "All of: adequate support; positive 95 percent circular-block-bootstrap lower bound of Sharpe(strategy) - Sharpe(buy-and-hold) at 10 bps; strategy maximum drawdown at most 0.85 x the static mix's at 10 bps; positive Sharpe difference point estimate at 20 bps; average annual one-way turnover of SPY weight at most 4.0. CAGR, volatility, worst year, per-year Sharpe difference and the 6 bps tier are reported only."
   },
-  "bootstrap": {"unit": "circular_blocks_of_periods", "block_periods": 13, "replicates": 10000, "seed": 20261025},
+  "bootstrap": {
+    "unit": "circular_blocks_of_periods",
+    "block_periods": 13,
+    "replicates": 10000,
+    "seed": 20261025
+  },
   "decisions": {
     "all_criteria_met": "eligible_for_untouched_test_planning",
     "adequate_support_any_criterion_failed": "retired",
@@ -70,5 +107,6 @@
     "Volatility targeting is published and widely known; the test checks whether it held on this data after costs, not whether it is novel.",
     "adjustment=all approximates total return; BIL approximates the cash return.",
     "2024-2025 ETF data was viewed in earlier research; the development window is not untouched."
-  ]
+  ],
+  "runner": "ai_trading/tools/volatility_target_trial.py"
 }

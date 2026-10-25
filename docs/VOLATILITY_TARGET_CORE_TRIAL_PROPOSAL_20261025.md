@@ -1,13 +1,13 @@
-# Proposal: volatility-targeted market core (registered trial draft)
+# Proposal: volatility-targeted market core (registered trial)
 
 **Date:** 2026-10-25
-**Status:** draft for the owner. Nothing is registered, claimed or fitted. No
-price has been read or analysed; one timestamp-only availability request was
-made (below). The holdout (2026-09-09 to 2026-12-08) and all 2026 data stay
-closed.
+**Status:** approved by the owner and registered on 2026-10-25
+([amendment](RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md)). The
+rules below are unchanged from the draft. The holdout (2026-09-09 to
+2026-12-08) and all 2026 data stay closed.
 
-Contract draft: `config/volatility_target_core_trial_campaign.json`
-(`"status": "draft_not_registered"`).
+Contract: `config/volatility_target_core_trial_campaign.json` (`registered`).
+Runner: `ai_trading/tools/volatility_target_trial.py` (`--acquire`, `--preflight`, `--fit`).
 
 ## 1. Why change direction
 
