@@ -1,6 +1,22 @@
 # Current handoff
 
-## October 25: Dec 9 review plan and weekly SPY benchmark — deployed `3911dfa6e` (start here)
+## October 25: momentum trial audit and preflight passed (not claimed) (start here)
+
+On the owner's word, from the live checkout (`3911dfa6e`, closed, nothing
+deployed or restarted):
+- Timestamp-only support audit
+  (`artifacts/cross_sectional_momentum_trial_20261018/support_audit.json`):
+  `support_possible_not_strategy_eligible`, 87 possible periods/selections
+  (60 required), 7 supported quarters (6 required), 502 development sessions,
+  protocol hash `5f694a82…a3e`, no prices read.
+- `--preflight` (`preflight.json`): `preflight_passed`, 87 periods,
+  `trial_claimed: false`, `holdout_evaluated: false`, signature `c9611baa…`.
+  Ledger `trials` still `[]`.
+- Next, only on the owner's explicit word: `--fit` (claims the single trial,
+  no retry). Decision rules: `docs/RESEARCH_RESET_REVIEW_20261209_PLAN.md`.
+- Rollback venv `venv.sys-bak` and wheelhouse `~/venv-rebuild` are gone; disk 38%.
+
+## October 25: Dec 9 review plan and weekly SPY benchmark — deployed `3911dfa6e`
 
 - **Dec 9 plan:** `docs/RESEARCH_RESET_REVIEW_20261209_PLAN.md` (linked from
   `docs/RESEARCH_RESET.md`) fixes the review's decision rules before any
