@@ -1,6 +1,6 @@
 # Current handoff
 
-## October 25: Dec 9 review plan and weekly SPY benchmark (on main, not deployed)
+## October 25: Dec 9 review plan and weekly SPY benchmark — deployed `3911dfa6e` (start here)
 
 - **Dec 9 plan:** `docs/RESEARCH_RESET_REVIEW_20261209_PLAN.md` (linked from
   `docs/RESEARCH_RESET.md`) fixes the review's decision rules before any
@@ -22,8 +22,16 @@
 - Validation: `agent_validate_changed.sh` passed (ruff, mypy, 40 targeted
   tests, health smoke, incident snapshot) and `--full` passed
   (7,652 passed, 3 skipped; ruff, mypy, strict typecheck, py_compile).
-- Deploy: needs the live checkout moved to the new commit before the
-  Sat Oct 31 weekly run; no bot behavior changes.
+- **Deployed** Sun Oct 25 03:46 UTC (Sat 23:46 ET), closed and flat, after
+  CI, CodeQL, SBOM and Workflow Lint passed on `3911dfa6e`. Prior spec saved as
+  `runtime/release_spec.4b013aa16.bak.json`; the new spec changes only the SHA.
+  Both identity reports pass, `IMPORT_PREFLIGHT_OK`, `ExecutionEngine
+  initialized`, `BROKER_SYNC`, trade-updates stream connected,
+  `BROKER_ACCOUNT_CONFIGURATION_OK`, 0 errors/warnings, NRestarts=0, RSS 614 MB,
+  `/healthz` 0.26 s (still 503 `required_model_stale`). No bot behavior
+  changed. First live SPY section: weekly run Sat Oct 31. Rollback:
+  `git -C /home/aiuser/ai-trading-bot checkout --detach 4b013aa16`, restore
+  that spec, restart.
 
 ## October 19 deploy of `4b013aa16` — complete (start here)
 
