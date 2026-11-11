@@ -31,6 +31,11 @@ def test_trade_persistence_updates_canonical_history(
     monkeypatch.setattr(persistence, "_PANDAS_MISSING_LOGGED", False)
     monkeypatch.setenv("AI_TRADING_ESTIMATED_FEE_BPS", "10")
 
+    import ai_trading.execution.slippage_log as slippage_log
+
+    # The fill below records slippage; keep that EWMA state out of later tests.
+    monkeypatch.setattr(slippage_log, "_EWMA_BPS", {})
+
     import ai_trading.core.bot_engine as bot_engine
 
     monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(trade_log_path), raising=False)

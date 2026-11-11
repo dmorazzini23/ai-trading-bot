@@ -5448,6 +5448,7 @@ def test_resolve_midpoint_offset_bps_honors_annotation_and_clamp(monkeypatch):
     monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MAX_OFFSET_BPS", "12")
     monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MIN_OFFSET_BPS", "2")
     monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_HARD_CAP_BPS", "20")
+    monkeypatch.setenv("AI_TRADING_ADAPTIVE_LIMIT_OFFSET_ENABLED", "0")
 
     resolved = engine._resolve_midpoint_offset_bps(
         symbol="AAPL",

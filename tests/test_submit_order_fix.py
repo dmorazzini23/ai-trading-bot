@@ -214,8 +214,12 @@ def test_submit_order_stub_engine_accepts_price(monkeypatch):
 
     from unittest.mock import Mock
 
-    # Keep references so we can restore the real modules after exercising the stub.
-    real_execution_module = importlib.import_module("ai_trading.execution")
+    # Keep the exact module objects so the stub never leaks into later tests:
+    # reloading would create new module objects that other test files' imports
+    # and monkeypatches no longer point at.
+    real_bot_engine = importlib.import_module("ai_trading.core.bot_engine")
+    core_package = importlib.import_module("ai_trading.core")
+    saved_modules = dict(sys.modules)
 
     # Replace the execution package with a minimal stub that lacks ExecutionEngine
     # to trigger the fallback branch inside bot_engine during import.
@@ -244,10 +248,12 @@ def test_submit_order_stub_engine_accepts_price(monkeypatch):
         assert hasattr(result, "id")
         assert result.price == 123.45
     finally:
-        # Restore the real execution module and reload bot_engine for subsequent tests.
-        sys.modules["ai_trading.execution"] = real_execution_module
-        importlib.reload(real_execution_module)
-        importlib.reload(importlib.import_module("ai_trading.core.bot_engine"))
+        # Drop modules imported against the stub, then restore the originals.
+        for key in list(sys.modules):
+            if key.startswith("ai_trading") and key not in saved_modules:
+                sys.modules.pop(key)
+        sys.modules.update(saved_modules)
+        setattr(core_package, "bot_engine", real_bot_engine)
 
 
 def test_submit_order_blocks_on_liquidity_precheck_failure_in_paper_mode(monkeypatch):
