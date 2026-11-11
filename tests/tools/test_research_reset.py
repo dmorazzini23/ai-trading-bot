@@ -285,3 +285,30 @@ def test_scorecard_reports_spy_benchmark_without_blocking(tmp_path):
     assert without["blockers"] == report["blockers"]
     assert without["spy_benchmark"]["reason"] == "not_requested"
     json.dumps(report, allow_nan=False)
+
+
+def test_scorecard_reports_described_fee_allocation_for_the_week_without_verifying_fees(tmp_path):
+    now = datetime(2026, 11, 8, 15, tzinfo=UTC)
+    accounting = tmp_path / "accounting.json"
+    allocation = {
+        "status": "allocated",
+        "counts_toward_verified_fees": False,
+        "allocated_total_usd": "0.07",
+        "by_trade_date": [
+            {"trade_date": "2026-10-20", "allocated_fee_usd": "0.03", "fee_rows": 2, "fills": 2},
+            {"trade_date": "2026-11-03", "allocated_fee_usd": "0.02", "fee_rows": 2, "fills": 2},
+            {"trade_date": "2026-11-06", "allocated_fee_usd": "0.02", "fee_rows": 2, "fills": 4},
+        ],
+        "fills": [{"activity_id": "s1", "allocated_fee_usd": "0.01"}],
+    }
+    accounting.write_text(json.dumps({"generated_at": now.isoformat(), "net_fee_validation": "unavailable_without_complete_per_fill_totals", "described_fee_allocation": allocation}))
+    report = reset.build_scorecard(tmp_path, accounting, tmp_path / "paper.json", [], now)
+    summary = report["accounting"]["described_fee_allocation"]
+    assert summary["window_allocated_fee_usd"] == "0.04"
+    assert [day["trade_date"] for day in summary["window_by_trade_date"]] == ["2026-11-03", "2026-11-06"]
+    assert "fills" not in summary and "by_trade_date" not in summary
+    assert summary["counts_toward_verified_fees"] is False
+    assert "verified_total_execution_costs_unavailable" in report["blockers"]
+    assert any("QUOTE_STALENESS_DIAGNOSIS_20261014" in item for item in report["limitations"])
+    missing = reset.build_scorecard(tmp_path, tmp_path / "absent.json", tmp_path / "paper.json", [], now)
+    assert missing["accounting"]["described_fee_allocation"]["status"] == "unavailable"

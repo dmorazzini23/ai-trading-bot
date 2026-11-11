@@ -406,3 +406,56 @@ def test_fee_schema_audit_does_not_allocate_account_charges():
     snapshot["activities"][1]["order_id"] = "order"
     assert fee_record_coverage(snapshot)["status"] == "references_present_completeness_unverified"
     assert fee_record_coverage({})["fill_rows_with_fee_amount"] == 0
+
+
+def _fee_snapshot(activities):
+    return {"account_id": "paper", "trading_mode": "paper", "pagination_complete": True, "after": "2026-11-01", "activities": activities}
+
+
+def _described_fee_activities():
+    return [
+        {"id": "b1", "activity_type": "FILL", "order_id": "o1", "side": "buy", "qty": "1", "price": "343.24", "symbol": "AAPL", "transaction_time": "2026-11-06T15:36:06Z"},
+        {"id": "s1", "activity_type": "FILL", "order_id": "o2", "side": "sell", "qty": "1", "price": "344.08", "symbol": "AAPL", "transaction_time": "2026-11-06T16:51:18Z"},
+        {"id": "b2", "activity_type": "FILL", "order_id": "o3", "side": "buy", "qty": "1", "price": "262.99", "symbol": "AMZN", "transaction_time": "2026-11-06T18:41:31Z"},
+        {"id": "s2", "activity_type": "FILL", "order_id": "o4", "side": "sell", "qty": "3", "price": "87.28", "symbol": "AMZN", "transaction_time": "2026-11-06T19:35:21Z"},
+        {"id": "reg", "activity_type": "FEE", "activity_sub_type": "REG", "currency": "USD", "date": "2026-11-06", "net_amount": "-0.02", "description": "REG fee for proceed of $605.92 on 2026-11-06 by PA1"},
+        {"id": "cat", "activity_type": "FEE", "activity_sub_type": "CAT", "currency": "USD", "date": "2026-11-06", "net_amount": "-0.01", "description": "CAT fee for proceed of 4 trades on 2026-11-06 by PA1"},
+        {"id": "taf", "activity_type": "FEE", "activity_sub_type": "TAF", "currency": "USD", "date": "2026-11-06", "net_amount": "-0.01", "description": "TAF fee for proceed of 4 shares (2 trades) on 2026-11-06 by PA1"},
+    ]
+
+
+def test_described_fees_are_allocated_to_the_fills_they_name_and_stay_reported_only():
+    from decimal import Decimal
+
+    activities = _described_fee_activities()
+    result = reconcile(_fee_snapshot(activities), [])
+    allocation = result["described_fee_allocation"]
+    assert allocation["status"] == "allocated"
+    assert allocation["counts_toward_verified_fees"] is False
+    assert allocation["reconciled_fee_rows"] == 3
+    assert allocation["allocated_total_usd"] == "0.04"
+    by_fill = {row["activity_id"]: row for row in allocation["fills"]}
+    # REG splits by sell proceeds (344.08 vs 261.84), TAF by sold shares (1 vs 3),
+    # CAT evenly over all four fills; buys never carry REG or TAF.
+    assert set(by_fill["b1"]["components"]) == {"CAT"}
+    assert Decimal(by_fill["s1"]["components"]["TAF"]) == Decimal("0.0025")
+    assert Decimal(by_fill["s2"]["components"]["TAF"]) == Decimal("0.0075")
+    assert Decimal(by_fill["s1"]["components"]["REG"]) + Decimal(by_fill["s2"]["components"]["REG"]) == Decimal("0.02")
+    assert sum(Decimal(row["allocated_fee_usd"]) for row in allocation["fills"]) == Decimal("0.04")
+    assert allocation["by_trade_date"] == [{"trade_date": "2026-11-06", "allocated_fee_usd": "0.04", "fee_rows": 3, "fills": 4}]
+    # The allocation never touches the verified-fee contract.
+    assert result["net_fee_validation"] == "unavailable_without_complete_per_fill_totals"
+    assert all(row["allocation_status"].startswith("unallocated") for row in result["fee_activities"])
+
+
+def test_described_fees_that_do_not_match_broker_fills_stay_unallocated():
+    activities = _described_fee_activities()
+    activities[4]["description"] = "REG fee for proceed of $600.00 on 2026-11-06 by PA1"
+    activities[5]["description"] = "CAT fee for proceed of 5 trades on 2026-11-06 by PA1"
+    activities[6]["description"] = "TAF fee for proceed of 4 shares (2 trades) on 2026-11-05 by PA1"
+    activities.append({"id": "other", "activity_type": "FEE", "activity_sub_type": "ORF", "currency": "USD", "net_amount": "-0.01", "description": "Unknown fee"})
+    allocation = reconcile(_fee_snapshot(activities), [])["described_fee_allocation"]
+    assert allocation["status"] == "not_allocated"
+    assert allocation["fills"] == []
+    assert allocation["unreconciled_fee_rows"] == {"described_basis_does_not_match_broker_fills": 3, "description_basis_not_recognized": 1}
+    assert allocation["unallocated_total_usd"] == "0.05"

@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -255,6 +256,17 @@ def broker_portfolio_crosscheck(history: dict[str, Any] | None, fills: list[dict
     )
 
 
+def described_fee_allocation_summary(allocation: Any, now: datetime) -> dict[str, Any]:
+    """Weekly view of the reported-only fee allocation; per-fill rows stay in the accounting artifact."""
+    if not isinstance(allocation, dict):
+        return {"status": "unavailable", "reason": "accounting_artifact_has_no_described_fee_allocation", "counts_toward_verified_fees": False}
+    start, end = (now - timedelta(days=7)).date().isoformat(), now.date().isoformat()
+    window = [day for day in allocation.get("by_trade_date", []) if isinstance(day, dict) and start <= str(day.get("trade_date")) <= end]
+    total = sum((_number(day.get("allocated_fee_usd")) or Decimal(0) for day in window), Decimal(0))
+    summary = {k: v for k, v in allocation.items() if k not in {"fills", "by_trade_date"}}
+    return summary | {"counts_toward_verified_fees": False, "window_by_trade_date": window, "window_allocated_fee_usd": str(total)}
+
+
 def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, campaigns: list[Path], now: datetime, sampling_path: Path | None = None, oms_database: Path | None = None, broker_portfolio_history: dict[str, Any] | None = None, spy_bars: dict[str, Any] | None = None) -> dict[str, Any]:
     inputs, sources = {}, {}
     for name, filename in (("decisions", "decision_records.jsonl"), ("orders", "order_events.jsonl"), ("fills", "fill_events.jsonl")):
@@ -286,7 +298,8 @@ def build_scorecard(runtime_dir: Path, accounting_path: Path, paper_path: Path, 
     blockers.append("untouched_evaluation_not_performed")
     broker = broker_portfolio_crosscheck(broker_portfolio_history, inputs["fills"], sources["fills"], now)
     benchmark = spy_benchmark.weekly_benchmark(broker, inputs["fills"], spy_bars if spy_bars is not None else {"available": False, "reason": "not_requested"})
-    return {"artifact_type": "research_reset_scorecard", "generated_at": now.isoformat(), "status": "evidence_pending", "window": {"start": (now - timedelta(days=7)).isoformat(), "end": now.isoformat()}, "highest_value_blocker": blockers[0], "blockers": blockers, "sampling_support": {k: sampling.get(k) for k in ("status", "possible_common_periods", "candidate_periods", "maximum_possible_selections", "minimum_required", "trial_claimed")}, "execution_chain": chain, "quotes": quotes, "experiments": experiment_counts, "trials": trials, "accounting": {k: accounting.get(k) for k in ("status", "activity_count", "fee_coverage", "order_quantity_counts", "net_fee_validation", "daily_account_fee_totals", "document_evidence", "fee_record_coverage")}, "paper_session": {k: paper.get(k) for k in ("session_date", "completion_gaps", "session_audit", "execution_cost_comparison")}, "broker_portfolio": broker, "spy_benchmark": benchmark, "untouched_net_performance": {"status": "unavailable", "reason": "reserved_holdout_not_evaluated"}, "sources": sources, "limitations": ["Weekly snapshots are observations, not additional experiments.", "No fills means unavailable execution coverage, not 100 percent coverage.", "Quote spreads and fixed cost scenarios do not certify total costs.", "Development results are not untouched performance.", "No missing fees are imputed as zero; no account-level charges are allocated to guessed fills.", "Broker-reported portfolio history is a reported-only cross-check on internal P&L; it feeds no blocker, gate or decision.", "The SPY benchmark is reported only; one week of one-share trades is not evidence of edge either way."], "promotion_authority": False, "orders_sent": 0}
+    fee_allocation = described_fee_allocation_summary(accounting.get("described_fee_allocation"), now)
+    return {"artifact_type": "research_reset_scorecard", "generated_at": now.isoformat(), "status": "evidence_pending", "window": {"start": (now - timedelta(days=7)).isoformat(), "end": now.isoformat()}, "highest_value_blocker": blockers[0], "blockers": blockers, "sampling_support": {k: sampling.get(k) for k in ("status", "possible_common_periods", "candidate_periods", "maximum_possible_selections", "minimum_required", "trial_claimed")}, "execution_chain": chain, "quotes": quotes, "experiments": experiment_counts, "trials": trials, "accounting": {k: accounting.get(k) for k in ("status", "activity_count", "fee_coverage", "order_quantity_counts", "net_fee_validation", "daily_account_fee_totals", "document_evidence", "fee_record_coverage")} | {"described_fee_allocation": fee_allocation}, "paper_session": {k: paper.get(k) for k in ("session_date", "completion_gaps", "session_audit", "execution_cost_comparison")}, "broker_portfolio": broker, "spy_benchmark": benchmark, "untouched_net_performance": {"status": "unavailable", "reason": "reserved_holdout_not_evaluated"}, "sources": sources, "limitations": ["Weekly snapshots are observations, not additional experiments.", "No fills means unavailable execution coverage, not 100 percent coverage.", "Quote spreads and fixed cost scenarios do not certify total costs.", "Development results are not untouched performance.", "No missing fees are imputed as zero; no account-level charges are allocated to guessed fills.", "Daily regulatory fees are allocated to fills only where the fee's own description matches that day's broker fills exactly; the allocation is reported only and never completes a fee chain or validates net fees.", "Quote spread rows are aged to record capture by design (docs/QUOTE_STALENESS_DIAGNOSIS_20261014.md): filter-blocked rows reuse an earlier prerank quote and submitted rows are written after the broker call, so most rows are excluded. This is known, not a new fault.","Broker-reported portfolio history is a reported-only cross-check on internal P&L; it feeds no blocker, gate or decision.", "The SPY benchmark is reported only; one week of one-share trades is not evidence of edge either way."], "promotion_authority": False, "orders_sent": 0}
 
 
 def main(argv: list[str] | None = None) -> int:

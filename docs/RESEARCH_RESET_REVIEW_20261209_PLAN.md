@@ -153,3 +153,19 @@ only (they never become blockers or gates):
   [portfolio manager mode proposal](PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md).
   It claims no edge, so it would need an operational gate adopted by amendment
   at the review; the strategy real-money gate above is unchanged.
+- **2026-11-08 — two evidence-gap questions added (no rule change).** For
+  input 3, the review also decides:
+  1. *Stale decision quotes.* Whether the quote audit should age
+     explicit-decision rows to `decision_ts` instead of `recorded_at`. Since
+     the October 14 fix those rows carry the arrival quote the order used, but
+     they are written after the broker call. Nov 1–8: 64 of 233 explicit rows
+     (all 12 submitted orders) were rejected only by that rule; 45 stay
+     rejected either way. Filter-blocked rows (2,185) stay out under both
+     rules: they reuse the prerank quote ~5 s before the filters, which read
+     bar ranges, not quotes.
+  2. *Per-fill total fees.* Whether the scorecard's new reported-only
+     `described_fee_allocation` closes this gap. Alpaca REG, CAT and TAF rows
+     name their own base and trade date; all 97 rows from Aug 10 to Nov 6
+     matched that day's broker fills exactly (REG by sell proceeds, TAF by
+     sold shares and sells, CAT by fill count). Until the review decides,
+     allocations never complete a chain or validate net fees.

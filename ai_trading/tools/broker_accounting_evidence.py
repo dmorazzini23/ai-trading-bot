@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
 from decimal import Decimal
 from datetime import UTC, datetime, time, timedelta
@@ -45,6 +46,113 @@ def daily_fee_totals(fees: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             group["credits"] += amount
     return [{**group, "charges": str(group["charges"]), "credits": str(group["credits"]), "net_charges": str(group["charges"] - group["credits"]), "scope": "reported_accounting_date_not_certified_trade_session", "per_fill_allocation": False} for _, group in sorted(groups.items())]
+
+
+# Alpaca regulatory fee rows name their own base and trade date. A row is
+# allocated only when that base reconciles exactly to the day's broker fills.
+_DESCRIBED_FEE_BASES: dict[str, re.Pattern[str]] = {
+    "REG": re.compile(r"^REG fee for proceed of \$([\d,]+\.\d+) on (\d{4}-\d{2}-\d{2})\b"),
+    "CAT": re.compile(r"^CAT fee for proceed of (\d+) trades? on (\d{4}-\d{2}-\d{2})\b"),
+    "TAF": re.compile(r"^TAF fee for proceed of ([\d.]+) shares? \((\d+) trades?\) on (\d{4}-\d{2}-\d{2})\b"),
+}
+_ALLOCATION_QUANTUM = Decimal("0.000001")
+_SESSION_TZ = ZoneInfo("America/New_York")
+
+
+def _fill_trade_date(row: dict[str, Any]) -> str | None:
+    ts = pd.to_datetime(row.get("transaction_time"), utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return str(ts.tz_convert(_SESSION_TZ).date().isoformat())
+
+
+def _split(amount: Decimal, weights: list[Decimal]) -> list[Decimal]:
+    """Split ``amount`` by ``weights``; the last share absorbs rounding so the parts sum exactly."""
+    total = sum(weights, Decimal(0))
+    parts = [(amount * weight / total).quantize(_ALLOCATION_QUANTUM) for weight in weights[:-1]]
+    return [*parts, amount - sum(parts, Decimal(0))]
+
+
+def allocate_described_fees(activities: list[dict[str, Any]]) -> dict[str, Any]:
+    """Allocate daily regulatory fees to the broker fills their descriptions name.
+
+    REG is split by sell proceeds, TAF by sold shares and CAT evenly per fill.
+    The result is reported only: it never sets a fill's fee fields, completes a
+    fee chain or validates net fees.
+    """
+    fills_by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in activities:
+        if row.get("activity_type") == "FILL":
+            trade_date = _fill_trade_date(row)
+            if trade_date is not None:
+                fills_by_date[trade_date].append(row)
+    unreconciled: Counter[str] = Counter()
+    allocated_total = Decimal(0)
+    unallocated_total = Decimal(0)
+    per_fill: dict[str, dict[str, Any]] = {}
+    by_date: dict[str, dict[str, Any]] = {}
+    fee_rows = 0
+    for row in activities:
+        if row.get("activity_type") not in {"FEE", "CFEE", "PTC", "PTR"}:
+            continue
+        fee_rows += 1
+        amount = _number(row.get("net_amount"))
+        charge = -amount if amount is not None else None
+        sub_type = str(row.get("activity_sub_type") or "")
+        pattern = _DESCRIBED_FEE_BASES.get(sub_type) if row.get("activity_type") == "FEE" else None
+        match = pattern.match(str(row.get("description") or "")) if pattern else None
+        reason: str | None = None
+        if charge is None or charge <= 0 or row.get("currency", "USD") != "USD":
+            reason = "amount_not_a_usd_charge"
+        elif match is None:
+            reason = "description_basis_not_recognized"
+        if reason is None and match is not None and charge is not None:
+            trade_date = match.groups()[-1]
+            fills = fills_by_date.get(trade_date, [])
+            sells = [fill for fill in fills if fill.get("side") == "sell"]
+            weights: list[Decimal] = []
+            targets: list[dict[str, Any]] = []
+            if sub_type == "REG":
+                proceeds = [(_number(fill.get("price")) or Decimal(0)) * (_number(fill.get("qty")) or Decimal(0)) for fill in sells]
+                described = Decimal(match[1].replace(",", ""))
+                if sells and abs(sum(proceeds, Decimal(0)) - described) <= Decimal("0.01") and all(value > 0 for value in proceeds):
+                    targets, weights = sells, proceeds
+            elif sub_type == "TAF":
+                shares = [_number(fill.get("qty")) or Decimal(0) for fill in sells]
+                if sells and sum(shares, Decimal(0)) == Decimal(match[1]) and len(sells) == int(match[2]) and all(value > 0 for value in shares):
+                    targets, weights = sells, shares
+            elif fills and len(fills) == int(match[1]):
+                targets, weights = fills, [Decimal(1)] * len(fills)
+            if not targets:
+                reason = "described_basis_does_not_match_broker_fills"
+            else:
+                for fill, share in zip(targets, _split(charge, weights)):
+                    entry = per_fill.setdefault(str(fill.get("id")), {"activity_id": fill.get("id"), "order_id": fill.get("order_id"), "symbol": fill.get("symbol"), "side": fill.get("side"), "trade_date": trade_date, "components": {}, "allocated_fee_usd": Decimal(0)})
+                    entry["components"][sub_type] = str(Decimal(entry["components"].get(sub_type, "0")) + share)
+                    entry["allocated_fee_usd"] += share
+                allocated_total += charge
+                day = by_date.setdefault(trade_date, {"trade_date": trade_date, "allocated_fee_usd": Decimal(0), "fee_rows": 0, "fills": len(fills)})
+                day["allocated_fee_usd"] += charge
+                day["fee_rows"] += 1
+        if reason is not None:
+            unreconciled[reason] += 1
+            if charge is not None and charge > 0:
+                unallocated_total += charge
+    reconciled = fee_rows - sum(unreconciled.values())
+    return {
+        "status": "unavailable" if not fee_rows else "allocated" if not unreconciled else "partially_allocated" if reconciled else "not_allocated",
+        "evidence_class": "broker_fee_description_allocation_reported_only",
+        "counts_toward_verified_fees": False,
+        "basis": {"REG": "sell_proceeds", "TAF": "sold_shares", "CAT": "per_fill"},
+        "fee_rows": fee_rows,
+        "reconciled_fee_rows": reconciled,
+        "unreconciled_fee_rows": dict(unreconciled),
+        "allocated_total_usd": str(allocated_total),
+        "unallocated_total_usd": str(unallocated_total),
+        "by_trade_date": [{**day, "allocated_fee_usd": str(day["allocated_fee_usd"])} for _, day in sorted(by_date.items())],
+        "fills": [{**entry, "allocated_fee_usd": str(entry["allocated_fee_usd"])} for _, entry in sorted(per_fill.items(), key=lambda item: (item[1]["trade_date"], str(item[0])))],
+        "interpretation": "Each allocated fee row's own description names a base that matched that trade date's broker fills exactly. Allocations are reported only; they never set fill fee fields, complete a fee chain or validate net fees.",
+    }
 
 
 def capture(client: Any, *, after: str, max_pages: int = 100) -> dict[str, Any]:
@@ -406,7 +514,7 @@ def reconcile(snapshot: dict[str, Any], fills: list[dict[str, Any]]) -> dict[str
         }
         for key in sorted(set(broker) | set(observed))
     ]
-    return {"status": "accounting_compared" if snapshot.get("pagination_complete") and snapshot.get("trading_mode") == "paper" and account else "accounting_incomplete", "activity_count": len(unique), "activity_types": dict(Counter(row.get("activity_type") for row in unique.values())), "recovered_order_account_links": recovered_order_links, "fee_coverage": dict(fee_coverage), "fee_activities": fees, "order_quantity_comparison": orders, "order_quantity_counts": dict(Counter(row["status"] for row in orders)), "execution_count_counts": dict(Counter(row["execution_count_status"] for row in orders)), "rejection_counts": dict(rejected), "net_fee_validation": "unavailable_without_complete_per_fill_totals", "limitations": ["Matching order quantities or execution counts do not establish individual fill identity or fee completeness.", "No fee activity does not establish zero execution fees.", "Unallocated charges and rebates are never distributed across fills."], "promotion_authority": False, "orders_sent": 0}
+    return {"status": "accounting_compared" if snapshot.get("pagination_complete") and snapshot.get("trading_mode") == "paper" and account else "accounting_incomplete", "activity_count": len(unique), "activity_types": dict(Counter(row.get("activity_type") for row in unique.values())), "recovered_order_account_links": recovered_order_links, "fee_coverage": dict(fee_coverage), "fee_activities": fees, "described_fee_allocation": allocate_described_fees([row for key, row in unique.items() if key not in conflicts]), "order_quantity_comparison": orders, "order_quantity_counts": dict(Counter(row["status"] for row in orders)), "execution_count_counts": dict(Counter(row["execution_count_status"] for row in orders)), "rejection_counts": dict(rejected), "net_fee_validation": "unavailable_without_complete_per_fill_totals", "limitations": ["Matching order quantities or execution counts do not establish individual fill identity or fee completeness.", "No fee activity does not establish zero execution fees.", "Charges and rebates are never distributed across fills unless the fee's own description names a base that matches that day's broker fills exactly; such allocations are reported only."], "promotion_authority": False, "orders_sent": 0}
 
 
 def rebuild_quantity_ledger(snapshot: dict[str, Any], opening: dict[str, Any], closing: dict[str, Any]) -> dict[str, Any]:
