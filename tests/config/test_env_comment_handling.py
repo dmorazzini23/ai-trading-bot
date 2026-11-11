@@ -49,7 +49,6 @@ def test_inline_comments_ignored_for_all_numeric_fields(monkeypatch):
         "AI_TRADING_SIGNAL_HOLD_EPS": "0.02  # comment",
         "MAX_SYMBOLS_PER_CYCLE": "250  # comment",
         "HEALTH_TICK_SECONDS": "240  # comment",
-        "HARD_STOP_COOLDOWN_MIN": "25  # comment",
         "SLIPPAGE_LIMIT_TOLERANCE_BPS": "15.5  # comment",
         "SENTIMENT_BACKOFF_BASE": "7.5  # comment",
         "SENTIMENT_MAX_RETRIES": "8  # comment",
@@ -97,7 +96,6 @@ def test_inline_comments_ignored_for_all_numeric_fields(monkeypatch):
         "host_concurrency_limit": 4,
         "max_empty_retries": 5,
         "max_symbols_per_cycle": 250,
-        "hard_stop_cooldown_min": 25,
         "sentiment_retry_max": 8,
     }
 

@@ -21,12 +21,6 @@ def test_check_max_drawdown_ok():
     assert not risk_engine.check_max_drawdown(state)
 
 
-def test_hard_stop_blocks_trading():
-    eng = risk_engine.RiskEngine()
-    eng.hard_stop = True
-    assert not risk_engine.can_trade(eng)
-
-
 def test_can_trade_limits():
     eng = risk_engine.RiskEngine()
     eng.max_trades = 2

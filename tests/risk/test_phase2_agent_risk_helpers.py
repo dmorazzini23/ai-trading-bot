@@ -28,7 +28,6 @@ def _bare_risk_engine(**config_updates: Any) -> risk_engine.RiskEngine:
     engine.exposure = {}
     engine.strategy_exposure = {}
     engine._returns = []
-    engine._drawdowns = []
     engine.asset_limits = {}
     engine.strategy_limits = {}
     engine._invalid_min_size_logged = False

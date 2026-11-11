@@ -219,21 +219,6 @@ def test_update_exposure_requires_context_and_swallows_refresh_errors(
     assert any("Failed to update exposure" in rec.message for rec in caplog.records)
 
 
-def test_hard_stop_waits_for_recovered_metrics_after_cooldown() -> None:
-    engine = _engine()
-    engine.hard_stop = True
-    engine._hard_stop_until = 0.0
-
-    engine._maybe_lift_hard_stop()
-
-    assert engine.hard_stop is True
-
-    engine._check_drawdown_and_update_stop(0.01)
-
-    assert engine.hard_stop is False
-    assert engine._hard_stop_until is None
-
-
 @pytest.mark.parametrize(
     ("cash", "price"),
     [
@@ -250,7 +235,6 @@ def test_position_size_rejects_invalid_cash_or_price(cash: float, price: float) 
 def test_position_size_falls_back_when_account_equity_invalid(caplog: pytest.LogCaptureFixture) -> None:
     engine = _engine()
     setattr(cast(Any, engine), "_get_atr_data", lambda _symbol: None)
-    setattr(cast(Any, engine), "check_max_drawdown", lambda _api: True)
     api = types.SimpleNamespace(get_account=lambda: types.SimpleNamespace(equity="bad"))
 
     with caplog.at_level(logging.WARNING):

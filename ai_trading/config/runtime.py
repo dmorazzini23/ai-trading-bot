@@ -1443,14 +1443,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=30.0,
     ),
     ConfigSpec(
-        field="hard_stop_cooldown_min",
-        env=("HARD_STOP_COOLDOWN_MIN",),
-        cast="int",
-        default=15,
-        description="Cooldown window (minutes) enforced after a hard stop triggers.",
-        min_value=0,
-    ),
-    ConfigSpec(
         field="force_continue_on_exposure",
         env=("FORCE_CONTINUE_ON_EXPOSURE",),
         cast="bool",

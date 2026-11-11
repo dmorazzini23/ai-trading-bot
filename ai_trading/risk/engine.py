@@ -302,7 +302,6 @@ logger = get_logger(__name__)
 
 if not hasattr(np, "NaN"):
     setattr(np, "NaN", np.nan)
-MAX_DRAWDOWN = 0.05
 
 _OPENING_EXPOSURE_SIDES = {
     "buy",
@@ -339,7 +338,6 @@ class RiskEngine:
         logger.info("Risk engine initialized")
         self.config = cfg if cfg is not None else get_trading_config()
         self._lock = threading.Lock()
-        self.hard_stop = False
         self.max_trades = 10
         self.current_trades = 0
         settings = get_settings()
@@ -406,7 +404,6 @@ class RiskEngine:
         except (APIError, TypeError, AttributeError, OSError, ImportError) as e:
             logger.warning("Could not initialize data client: %s", e)
         self._returns: list[float] = []
-        self._drawdowns: list[float] = []
         self._last_portfolio_cap: float | None = None
         self._last_equity_cap: float | None = None
         from threading import Event
@@ -414,28 +411,6 @@ class RiskEngine:
         self._update_event = Event()
         self._last_update = 0.0
         self._invalid_min_size_logged = False
-        try:
-            max_drawdown = get_env("MAX_DRAWDOWN_THRESHOLD", "0.15", cast=float)
-            if not 0 < max_drawdown <= 1.0:
-                logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15", max_drawdown)
-                max_drawdown = 0.15
-            self.max_drawdown_threshold = float(max_drawdown)
-            self.hard_stop_recovery_threshold = self.max_drawdown_threshold * 0.8
-        except (RuntimeError, ValueError, TypeError) as e:
-            logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15", e)
-            self.max_drawdown_threshold = 0.15
-            self.hard_stop_recovery_threshold = self.max_drawdown_threshold * 0.8
-        try:
-            cooldown = get_env("HARD_STOP_COOLDOWN_MIN", "10", cast=float)
-            if cooldown < 0:
-                logger.warning("Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10", cooldown)
-                cooldown = 10.0
-            self.hard_stop_cooldown = float(cooldown)
-        except (RuntimeError, ValueError, TypeError) as e:
-            logger.error("Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10", e)
-            self.hard_stop_cooldown = 10.0
-        self._hard_stop_until: float | None = None
-        self._hard_stop_requires_manual_reset = False
 
     def _init_data_client(self):
         """Return an initialized data client if available."""
@@ -1006,14 +981,11 @@ class RiskEngine:
         available = max(0.0, effective_cap - total_exposure)
         return float(available)
 
-    def update_portfolio_metrics(self, returns: list[float] | None = None, drawdown: float | None = None) -> None:
+    def update_portfolio_metrics(self, returns: list[float] | None = None) -> None:
         if not self.enable_portfolio_features:
             return
         if returns:
             self._returns.extend(list(returns))
-        if drawdown is not None:
-            self._drawdowns.append(float(drawdown))
-            self._check_drawdown_and_update_stop(float(drawdown))
 
     def refresh_positions(self, api) -> None:
         """Synchronize exposure with live positions."""
@@ -1067,22 +1039,9 @@ class RiskEngine:
         volatility: float | None = None,
         cash_ratio: float | None = None,
         returns: list[float] | None = None,
-        drawdowns: list[float] | None = None,
     ) -> bool:
         if returns:
             self._returns.extend(list(returns))
-        if drawdowns:
-            self._drawdowns.extend(list(drawdowns))
-            try:
-                current_dd = float(drawdowns[-1])
-            except (ValueError, TypeError, IndexError):
-                logger.warning("Invalid drawdown metric for hard stop evaluation: %s", drawdowns[-1] if drawdowns else None)
-            else:
-                self._check_drawdown_and_update_stop(current_dd)
-        self._maybe_lift_hard_stop()
-        if self.hard_stop:
-            logger.error("TRADING_HALTED_RISK_LIMIT")
-            return False
         if not isinstance(signal, TradeSignal):
             logger.error("can_trade called with invalid signal type")
             return False
@@ -1208,53 +1167,6 @@ class RiskEngine:
         self._returns.append(daily_return)
         self._returns = self._returns[-90:]
 
-    def _check_drawdown_and_update_stop(self, current_drawdown: float) -> None:
-        """
-        Evaluate the latest drawdown and update the hard stop flag if the
-        drawdown exceeds the threshold.  When triggered, trading is
-        disabled until a cooldown period has elapsed.
-
-        Parameters
-        ----------
-        current_drawdown : float
-            The most recent drawdown measurement (0–1).
-        """
-        if current_drawdown >= self.max_drawdown_threshold and (not self.hard_stop):
-            self.hard_stop = True
-            self._hard_stop_requires_manual_reset = False
-            import time
-
-            self._hard_stop_until = time.time() + self.hard_stop_cooldown * 60
-            logger.error(
-                "HARD_STOP_TRIGGERED", extra={"drawdown": current_drawdown, "threshold": self.max_drawdown_threshold}
-            )
-        elif self.hard_stop and (not getattr(self, "_hard_stop_requires_manual_reset", False)):
-            recovery_threshold = getattr(
-                self,
-                "hard_stop_recovery_threshold",
-                self.max_drawdown_threshold * 0.8,
-            )
-            import time
-
-            cooldown_elapsed = self._hard_stop_until is None or time.time() >= self._hard_stop_until
-            if current_drawdown <= recovery_threshold and cooldown_elapsed:
-                self.hard_stop = False
-                self._hard_stop_until = None
-                logger.info(
-                    "HARD_STOP_CLEARED",
-                    extra={"drawdown": current_drawdown, "recovery_threshold": recovery_threshold},
-                )
-
-    def _maybe_lift_hard_stop(self) -> None:
-        """
-        Keep the hard stop latched until fresh metrics or a manual reset clear it.
-        """
-        import time
-
-        if self.hard_stop and self._hard_stop_until is not None:
-            if time.time() >= self._hard_stop_until:
-                logger.info("HARD_STOP_COOLDOWN_ELAPSED_AWAITING_METRICS")
-
     def acquire_trade_slot(self) -> bool:
         """Thread-safe check & increment of current_trades against max_trades."""
         if self._lock is None:
@@ -1272,30 +1184,6 @@ class RiskEngine:
         with self._lock:
             if self.current_trades > 0:
                 self.current_trades -= 1
-
-    def trigger_hard_stop(self) -> None:
-        self.hard_stop = True
-        self._hard_stop_requires_manual_reset = True
-
-    def reset_hard_stop(self, current_drawdown: float | None = None) -> bool:
-        """Manually clear a hard stop, optionally requiring recovered metrics."""
-        if current_drawdown is not None:
-            recovery_threshold = getattr(
-                self,
-                "hard_stop_recovery_threshold",
-                self.max_drawdown_threshold * 0.8,
-            )
-            if current_drawdown > recovery_threshold:
-                logger.warning(
-                    "HARD_STOP_RESET_REJECTED",
-                    extra={"drawdown": current_drawdown, "recovery_threshold": recovery_threshold},
-                )
-                return False
-        self.hard_stop = False
-        self._hard_stop_until = None
-        self._hard_stop_requires_manual_reset = False
-        logger.info("HARD_STOP_MANUAL_RESET")
-        return True
 
     def wait_for_exposure_update(self, timeout: float = 0.5) -> None:
         """Block until an exposure update occurs or ``timeout`` elapses."""
@@ -1352,19 +1240,6 @@ class RiskEngine:
             logger.error("Risk scaling failed: %s", exc)
             return signal
 
-    def check_max_drawdown(self, api) -> bool:
-        try:
-            account = api.get_account()
-            pnl = float(account.equity) - float(account.last_equity)
-            if pnl < -MAX_DRAWDOWN * float(account.last_equity):
-                logger.error("HARD_STOP_MAX_DRAWDOWN", extra={"pnl": pnl})
-                self.hard_stop = True
-                return False
-            return True
-        except (RuntimeError, AttributeError, ValueError) as exc:
-            logger.error("check_max_drawdown failed: %s", exc)
-            return False
-
     def position_size(self, signal: Any, cash: float, price: float, api=None) -> int:
         """
         Calculate optimal position size using Kelly criterion and risk management.
@@ -1375,11 +1250,7 @@ class RiskEngine:
         - Maximum position limits
         - Account equity validation
         """
-        if self.hard_stop:
-            return 0
         if not self.can_trade(signal):
-            return 0
-        if api and (not self.check_max_drawdown(api)):
             return 0
         if price <= 0:
             logger.warning("Invalid price %s for %s", price, getattr(signal, "symbol", "UNKNOWN"))
@@ -1872,7 +1743,7 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
 
 def can_trade(engine: RiskEngine) -> bool:
     """Return True if trading should proceed based on engine state."""
-    return not engine.hard_stop and engine.current_trades < engine.max_trades
+    return engine.current_trades < engine.max_trades
 
 
 def register_trade(engine: RiskEngine, size: int) -> dict | None:

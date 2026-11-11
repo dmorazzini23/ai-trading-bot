@@ -37,7 +37,6 @@ def _bare_engine(**config_updates: Any) -> risk_engine.RiskEngine:
     engine.strategy_exposure = {}
     engine._positions = {}
     engine._returns = []
-    engine._drawdowns = []
     engine._atr_cache = {}
     engine._volatility_cache = {}
     engine._volatility_alerted = False
@@ -49,12 +48,6 @@ def _bare_engine(**config_updates: Any) -> risk_engine.RiskEngine:
     engine._last_update = 0.0
     engine.current_trades = 0
     engine.max_trades = 2
-    engine.hard_stop = False
-    engine.max_drawdown_threshold = 0.15
-    engine.hard_stop_recovery_threshold = 0.12
-    engine.hard_stop_cooldown = 10.0
-    engine._hard_stop_until = None
-    engine._hard_stop_requires_manual_reset = False
     engine.enable_portfolio_features = True
     engine.data_client = None
     return cast(risk_engine.RiskEngine, engine)
@@ -73,24 +66,15 @@ def _signal(**updates: Any) -> risk_engine.TradeSignal:
     return risk_engine.TradeSignal(**values)
 
 
-def test_engine_init_validates_invalid_config_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_get_env(name: str, default: Any = None, *, cast: Any = None) -> Any:
-        if name == "MAX_DRAWDOWN_THRESHOLD":
-            return 2.0
-        if name == "HARD_STOP_COOLDOWN_MIN":
-            return -1.0
-        return default
-
+def test_engine_init_validates_invalid_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(risk_engine.RiskEngine, "_validate_env", lambda self: None)
     monkeypatch.setattr(risk_engine, "get_settings", lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True))
     monkeypatch.setattr(risk_engine, "_resolve_alpaca_env", lambda: (None, None, None))
-    monkeypatch.setattr(risk_engine, "get_env", fake_get_env)
+    monkeypatch.setattr(risk_engine, "get_env", lambda _name, default=None, *, cast=None: default)
 
     engine = risk_engine.RiskEngine(SimpleNamespace(exposure_cap_aggressive="bad"))
 
     assert engine.global_limit == pytest.approx(0.8)
-    assert engine.max_drawdown_threshold == pytest.approx(0.15)
-    assert engine.hard_stop_cooldown == pytest.approx(10.0)
 
 
 def test_engine_init_raises_on_partial_alpaca_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,32 +120,21 @@ def test_is_finite_number_uses_float_fallback(monkeypatch: pytest.MonkeyPatch) -
     assert risk_engine._is_finite_number(Floatable()) is True
 
 
-def test_engine_init_env_parse_exceptions_and_config_attribute_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_engine_init_config_attribute_error(monkeypatch: pytest.MonkeyPatch) -> None:
     class BadConfig:
         def __getattribute__(self, name: str) -> Any:
             if name == "exposure_cap_aggressive":
                 raise TypeError("bad exposure")
             return super().__getattribute__(name)
 
-    calls: list[str] = []
-
-    def fake_get_env(name: str, default: Any = None, *, cast: Any = None) -> Any:
-        calls.append(name)
-        if name in {"MAX_DRAWDOWN_THRESHOLD", "HARD_STOP_COOLDOWN_MIN"}:
-            raise RuntimeError(f"{name} bad")
-        return default
-
     monkeypatch.setattr(risk_engine.RiskEngine, "_validate_env", lambda self: None)
     monkeypatch.setattr(risk_engine, "get_settings", lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True))
     monkeypatch.setattr(risk_engine, "_resolve_alpaca_env", lambda: (None, None, None))
-    monkeypatch.setattr(risk_engine, "get_env", fake_get_env)
+    monkeypatch.setattr(risk_engine, "get_env", lambda _name, default=None, *, cast=None: default)
 
     engine = risk_engine.RiskEngine(BadConfig())
 
     assert engine.global_limit == pytest.approx(0.8)
-    assert engine.max_drawdown_threshold == pytest.approx(0.15)
-    assert engine.hard_stop_cooldown == pytest.approx(10.0)
-    assert "MAX_DRAWDOWN_THRESHOLD" in calls
 
 
 def test_current_volatility_fallbacks_and_alert_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,14 +331,12 @@ def test_adaptive_caps_available_exposure_and_portfolio_metrics(monkeypatch: pyt
     assert engine.available_exposure(cap="bad") == pytest.approx(0.3)
 
     engine = _bare_engine()
-    engine.max_drawdown_threshold = 0.1
     engine.enable_portfolio_features = False
-    engine.update_portfolio_metrics([0.01], 0.2)
+    engine.update_portfolio_metrics([0.01])
     assert engine._returns == []
     engine.enable_portfolio_features = True
-    engine.update_portfolio_metrics([0.01], 0.2)
+    engine.update_portfolio_metrics([0.01])
     assert engine._returns == [0.01]
-    assert engine.hard_stop is True
 
 
 def test_refresh_position_lookup_and_update_exposure_error_paths() -> None:
@@ -431,20 +402,11 @@ def test_can_trade_rejects_limits_and_ignores_force_override(monkeypatch: pytest
     assert engine.can_trade(_signal(weight="bad")) is True
 
 
-def test_can_trade_keeps_expired_hard_stop_until_fresh_recovered_drawdown() -> None:
+def test_can_trade_records_returns() -> None:
     engine = _bare_engine()
-    engine.hard_stop = True
-    engine._hard_stop_until = 0.0
 
-    assert engine.can_trade(_signal(), returns=[0.01], drawdowns=["bad"]) is False
-    assert engine.hard_stop is True
+    assert engine.can_trade(_signal(), returns=[0.01]) is True
     assert engine._returns[-1] == 0.01
-
-    assert engine.can_trade(_signal(), drawdowns=[0.13]) is False
-    assert engine.hard_stop is True
-
-    assert engine.can_trade(_signal(), drawdowns=[0.11]) is True
-    assert engine.hard_stop is False
 
 
 def test_register_fill_and_trade_slot_state_updates() -> None:
@@ -472,7 +434,7 @@ def test_register_fill_and_trade_slot_state_updates() -> None:
     assert engine._returns[0] == 5.0
 
 
-def test_trade_slots_and_explicit_hard_stop_with_missing_lock() -> None:
+def test_trade_slots_with_missing_lock() -> None:
     engine = _bare_engine()
     engine._lock = None
     assert engine.acquire_trade_slot() is True
@@ -482,14 +444,6 @@ def test_trade_slots_and_explicit_hard_stop_with_missing_lock() -> None:
     engine.release_trade_slot()
     engine.release_trade_slot()
     assert engine.current_trades == 0
-    engine.trigger_hard_stop()
-    assert engine.hard_stop is True
-    engine._maybe_lift_hard_stop()
-    assert engine.hard_stop is True
-    assert engine.reset_hard_stop(current_drawdown=0.20) is False
-    assert engine.hard_stop is True
-    assert engine.reset_hard_stop(current_drawdown=0.05) is True
-    assert engine.hard_stop is False
 
 
 def test_apply_risk_scaling_uses_volatility_and_cvar(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -506,11 +460,7 @@ def test_apply_risk_scaling_uses_volatility_and_cvar(monkeypatch: pytest.MonkeyP
     assert engine.apply_risk_scaling(bad).weight == "bad"
 
 
-def test_check_max_drawdown_and_position_size_guards(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = _bare_engine()
-    assert engine.check_max_drawdown(SimpleNamespace(get_account=lambda: SimpleNamespace(equity="90", last_equity="100"))) is False
-    assert engine.hard_stop is True
-
+def test_position_size_guards(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _bare_engine()
     monkeypatch.setattr(engine, "can_trade", lambda _signal: False)
     assert engine.position_size(_signal(), 1_000.0, 100.0) == 0
@@ -573,13 +523,7 @@ def test_position_size_uses_account_fallback_and_rejects_bad_equity(monkeypatch:
     monkeypatch.setattr(engine, "_apply_weight_limits", lambda _signal: 0.10)
 
     class AccountFallbackAPI:
-        def __init__(self) -> None:
-            self.calls = 0
-
         def get_account(self):
-            self.calls += 1
-            if self.calls == 1:
-                return SimpleNamespace(equity="1000", last_equity="1000")
             raise ValueError("account bad")
 
     api_error = AccountFallbackAPI()
@@ -587,9 +531,6 @@ def test_position_size_uses_account_fallback_and_rejects_bad_equity(monkeypatch:
 
     api_zero = SimpleNamespace(get_account=lambda: SimpleNamespace(equity="0"))
     assert engine.position_size(_signal(), 1_000.0, 100.0, api=api_zero) == 0
-
-    api_drawdown = SimpleNamespace(get_account=lambda: SimpleNamespace(equity="100", last_equity="200"))
-    assert engine.position_size(_signal(), 1_000.0, 100.0, api=api_drawdown) == 0
 
 
 def test_apply_weight_limits_and_compute_volatility_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -675,8 +616,8 @@ def test_module_position_sizing_and_drawdown_helpers(monkeypatch: pytest.MonkeyP
 def test_standalone_risk_helpers_and_trailing_stop(monkeypatch: pytest.MonkeyPatch) -> None:
     assert risk_engine.dynamic_position_size(0, 0.2, 0.0) == 0.0
     assert risk_engine.dynamic_position_size(1_000, 0.2, 0.2) == pytest.approx(500.0)
-    assert risk_engine.can_trade(SimpleNamespace(hard_stop=False, current_trades=1, max_trades=2)) is True
-    assert risk_engine.can_trade(SimpleNamespace(hard_stop=True, current_trades=0, max_trades=2)) is False
+    assert risk_engine.can_trade(SimpleNamespace(current_trades=1, max_trades=2)) is True
+    assert risk_engine.can_trade(SimpleNamespace(current_trades=2, max_trades=2)) is False
     assert risk_engine.register_trade(SimpleNamespace(acquire_trade_slot=lambda: True), 10) == {"size": 10}
     assert risk_engine.register_trade(SimpleNamespace(acquire_trade_slot=lambda: False), 10) is None
     assert risk_engine.register_trade(SimpleNamespace(acquire_trade_slot=lambda: True), 0) is None

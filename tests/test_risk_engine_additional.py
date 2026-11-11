@@ -22,15 +22,6 @@ def test_register_fill_invalid(caplog):
     assert "invalid signal" in caplog.text
 
 
-def test_check_max_drawdown_exception(monkeypatch):
-    """API errors lead to False return."""
-    class API:
-        def get_account(self):
-            raise RuntimeError('oops')
-    eng = risk_engine.RiskEngine()
-    assert not eng.check_max_drawdown(API())
-
-
 def test_position_size_invalid_signal():
     """Invalid signal results in zero position."""
     eng = risk_engine.RiskEngine()

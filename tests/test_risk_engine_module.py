@@ -9,15 +9,6 @@ np = pytest.importorskip("numpy")
 from ai_trading.risk.engine import RiskEngine, TradeSignal  # AI-AGENT-REF: normalized import
 
 
-class DummyAPI:
-    def __init__(self, equity=100, last=100):
-        self._eq = equity
-        self._last = last
-
-    def get_account(self):
-        return types.SimpleNamespace(equity=str(self._eq), last_equity=str(self._last))
-
-
 def make_signal():
     return TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s", weight=0.0, asset_class="equity")
 
@@ -29,7 +20,6 @@ def test_risk_engine_instantiates_with_default_config(monkeypatch):
         atr_multiplier=1.0,
         pytest_running=True,
         max_drawdown_threshold=0.15,
-        hard_stop_cooldown_min=10.0,
         alpaca_oauth_token=None,
     )
     calls: list[None] = []
@@ -57,14 +47,6 @@ def test_can_trade_limits():
     eng.exposure["equity"] = 0.1
     sig.weight = 0.3
     assert eng.can_trade(sig)
-
-
-def test_can_trade_drawdown_triggers_stop():
-    eng = RiskEngine()
-    sig = make_signal()
-    eng.max_drawdown_threshold = 0.05
-    assert not eng.can_trade(sig, drawdowns=[0.1])
-    assert eng.hard_stop
 
 
 def test_register_and_position_size(monkeypatch):
@@ -195,30 +177,9 @@ def test_position_size_invalid_min_usd_falls_back_once(caplog):
     assert len(invalid_logs) == 1
 
 
-def test_check_max_drawdown():
-    eng = RiskEngine()
-    api = DummyAPI(equity=90, last=100)
-    ok = eng.check_max_drawdown(api)
-    assert not ok and eng.hard_stop
-
-
 def test_compute_volatility():
     eng = RiskEngine()
     arr = np.array([1.0, 2.0, 3.0])
     res = eng.compute_volatility(arr)
     assert "volatility" in res and res["volatility"] > 0
     assert eng.compute_volatility(np.array([]))["volatility"] == 0.0
-
-
-def test_hard_stop_blocks_trading():
-    eng = RiskEngine()
-    eng.hard_stop = True
-    sig = make_signal()
-    assert not eng.can_trade(sig)
-    assert eng.position_size(sig, 100, 10) == 0
-
-
-def test_check_max_drawdown_ok():
-    eng = RiskEngine()
-    api = DummyAPI(equity=105, last=100)
-    assert eng.check_max_drawdown(api)
