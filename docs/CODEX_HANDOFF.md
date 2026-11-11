@@ -1,6 +1,31 @@
 # Current handoff
 
-## November 11: fee allocation and test isolation deployed (`621a72c3b`) (start here)
+## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed (not deployed) (start here)
+
+Owner-approved cleanup of the two audit items left in place on `829b5f5e2`,
+following a read-only Fable 5.2 plan. Branch `claude/dead-code-removal`; no
+trading decision changes.
+- **Risk engine:** `RiskEngine.hard_stop`, its cooldown/recovery logic,
+  `check_max_drawdown(api)`, the `drawdowns`/`drawdown` arguments of
+  `can_trade`/`update_portfolio_metrics`, and the `hard_stop_cooldown_min`
+  config entry are gone. The service only called `position_size(sig, cash,
+  price)` without an API, so the stop could never trigger. Drawdown
+  protection remains DrawdownCircuitBreaker, `check_daily_loss` and the
+  pretrade intraday-drawdown gate. `MAX_DRAWDOWN_THRESHOLD` stays (other
+  modules read it). Unreferenced `scripts/risk_engine_cli.py` (stale engine
+  copy) and `scripts/backtest_framework.py` were deleted.
+- **alpaca_api:** `submit_order`, `_sdk_submit`, `_http_submit` (already
+  uncalled), their helpers and `AlpacaOrderNetworkError` are removed;
+  `SUPPORTED_TRADING_PATH.md` updated. A test asserts they stay gone. The
+  validator maps `alpaca_api.py` to a missing `tests/alpaca_api.py`, so its
+  tests must be run by name.
+- `tests/test_daily_cache.py::test_daily_fetcher_uses_cache` fails only when
+  run after the alpaca/submit test set, identically on unchanged `main`
+  (pre-existing ordering issue, not fixed here).
+- Full validation not run yet (owner deferred). Deploy needs the usual
+  `release_spec.json` SHA bump and restart.
+
+## November 11: fee allocation and test isolation deployed (`621a72c3b`)
 
 Two commits on top of `829b5f5e2`; neither changes trading decisions.
 - `1420b7687`: the scorecard reports Alpaca REG/CAT/TAF fees allocated to

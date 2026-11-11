@@ -18,8 +18,8 @@ def test_bot_main_normal(monkeypatch):
     config.reload_env()
     monkeypatch.setattr(sys, "argv", ["bot.py"])
     with patch("ai_trading.data.fetch.get_minute_df", return_value=MagicMock()), patch(
-        "ai_trading.alpaca_api.submit_order", return_value={"status": "mocked"}
-    ), patch("ai_trading.signals.generate", return_value=1), patch("ai_trading.risk.engine.calculate_position_size", return_value=10), patch(
+        "ai_trading.signals.generate", return_value=1
+    ), patch("ai_trading.risk.engine.calculate_position_size", return_value=10), patch(
         "ai_trading.data.fetch.get_daily_df",
         return_value=pd.DataFrame(
             {

@@ -46,36 +46,6 @@ def test_get_http_session_caches_lazy_session_and_raises_when_missing(monkeypatc
         api._get_http_session()
 
 
-def test_http_submit_requires_native_session_post(monkeypatch):
-    api = _alpaca_api_module()
-
-    class MinimalSession:
-        def request(self, method, url, *args, timeout=None, **kwargs):
-            raise AssertionError("request fallback should not be used")
-
-    monkeypatch.setattr(api, "_get_http_session", lambda: MinimalSession())
-    cfg = api._AlpacaConfig(
-        base_url="https://paper-api.alpaca.markets",
-        key_id="key",
-        secret_key="secret",
-        shadow=False,
-    )
-
-    with pytest.raises(AttributeError, match="post"):
-        api._http_submit(
-            cfg,
-            symbol="AAPL",
-            qty=1,
-            side="buy",
-            type="market",
-            time_in_force="day",
-            limit_price=None,
-            stop_price=None,
-            idempotency_key=None,
-            timeout=3,
-        )
-
-
 def test_managed_env_delegates_to_config_get_env(monkeypatch):
     api = _alpaca_api_module()
     from ai_trading.config import management as config_management
@@ -172,6 +142,13 @@ def test_trading_client_adapter_is_not_exported():
 def test_http_shim_is_not_exported():
     assert not hasattr(alpaca_api, "_HTTPShim")
     assert not hasattr(alpaca_api, "_HTTP")
+
+
+def test_direct_order_submit_path_is_removed():
+    # Orders go through ExecutionEngine; alpaca_api has no submit path of its own.
+    for name in ("submit_order", "_sdk_submit", "_http_submit", "AlpacaOrderNetworkError"):
+        assert not hasattr(alpaca_api, name), name
+    assert "submit_order" not in alpaca_api.__all__
 
 
 def test_native_trading_client_methods_are_used_directly():

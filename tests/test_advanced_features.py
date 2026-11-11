@@ -13,10 +13,6 @@ setattr(cast(Any, req_mod), "post", lambda *a, **k: None)
 sys.modules.setdefault("requests", req_mod)
 
 try:
-    from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
-except (ValueError, TypeError):
-    pytest.skip("alpaca_api not available", allow_module_level=True)
-try:
     from ai_trading import rebalancer
 except (ValueError, TypeError):
     pytest.skip("alpaca not available", allow_module_level=True)
@@ -25,17 +21,6 @@ try:
 except (ValueError, TypeError):  # pragma: no cover - module optional
     slippage = None
 
-
-
-def test_submit_order_shadow(monkeypatch):
-    """submit_order returns a shadow status when SHADOW_MODE is enabled."""
-    class DummyAPI:
-        def submit_order(self, order_data=None):
-            raise AssertionError("should not call in shadow")
-
-    monkeypatch.setenv("SHADOW_MODE", "1")
-    resp = alpaca_api.submit_order("AAPL", "buy", qty=1, client=DummyAPI(), shadow=True)
-    assert resp["status"] == "accepted"
 
 
 def test_monitor_slippage_alert(monkeypatch):

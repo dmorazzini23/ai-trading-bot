@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import threading
-import types
-from datetime import UTC, datetime
 
 
 def test_order_idempotency_duplicate_prevented():
@@ -100,59 +98,3 @@ def test_order_manager_logs_submit_skipped_for_validation_failure(caplog):
     skipped = [record for record in caplog.records if record.msg == "ORDER_SUBMIT_SKIPPED"]
     assert skipped
     assert any(getattr(record, "reason", None) == "validation_failed" for record in skipped)
-
-
-def test_http_submit_retries_once_then_succeeds(monkeypatch):
-    """Simulate transient network error on first call, success on second.
-
-    Verifies retry wrapper in HTTP submit path without real network.
-    """
-    from ai_trading.alpaca_api import _http_submit, _AlpacaConfig
-    from ai_trading.exc import RequestException
-
-    calls = {"n": 0}
-
-    def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RequestException("transient error")
-
-        class Resp:
-            status_code = 200
-
-            def json(self):
-                return {
-                    "id": "test-oid",
-                    "client_order_id": "idem-1",
-                    "symbol": json.get("symbol"),  # type: ignore[union-attr]
-                    "qty": json.get("qty"),
-                    "side": json.get("side"),
-                    "type": json.get("type"),
-                    "time_in_force": json.get("time_in_force"),
-                    "status": "accepted",
-                    "submitted_at": datetime.now(UTC).isoformat(),
-                    "filled_qty": "0",
-                }
-
-        return Resp()
-
-    monkeypatch.setattr(
-        "ai_trading.alpaca_api._get_http_session",
-        lambda: types.SimpleNamespace(post=fake_post),
-    )
-
-    cfg = _AlpacaConfig(base_url="https://paper-api.alpaca.markets", key_id="k", secret_key="s", shadow=False)
-    result = _http_submit(
-        cfg,
-        symbol="MSFT",
-        qty=10,
-        side="buy",
-        type="market",
-        time_in_force="day",
-        limit_price=None,
-        stop_price=None,
-        idempotency_key="idem-1",
-        timeout=2,
-    )
-    assert result["symbol"] == "MSFT"
-    assert calls["n"] == 2, "should have retried once"

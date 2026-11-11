@@ -31,9 +31,12 @@ approve a live profile or claim that all runtime-only settings are captured.
 
 The canonical engine's market, limit, replacement and cover submissions now
 check the live OMS owner immediately before reaching the Alpaca SDK. The
-standalone `alpaca_api.submit_order`, `bot_engine.safe_submit_order`, and
+standalone `bot_engine.safe_submit_order` and
 `ExecutionEngine.safe_submit_order` helpers reject live mode; they remain
-available for their supported paper/test use. A live opposite-side cover now
+available for their supported paper/test use. `ai_trading.alpaca_api` has no
+order-submit function; the former `alpaca_api.submit_order` path was removed
+on November 11, 2026 because nothing outside its own tests used it. A live
+opposite-side cover now
 requires fresh broker positions and open orders, an account identity, and a
 durably claimed OMS intent before submission. An ambiguous broker response
 leaves that intent unresolved for identity-based reconciliation. The lower-level
