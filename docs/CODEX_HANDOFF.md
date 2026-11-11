@@ -1,10 +1,10 @@
 # Current handoff
 
-## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed (not deployed) (start here)
+## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed, deployed (`9242f77e9`) (start here)
 
 Owner-approved cleanup of the two audit items left in place on `829b5f5e2`,
-following a read-only Fable 5.2 plan. Branch `claude/dead-code-removal`; no
-trading decision changes.
+following a read-only Fable 5.2 plan. Commits `21d41deb6` and `9242f77e9`,
+fast-forwarded onto `main`; no trading decision changes.
 - **Risk engine:** `RiskEngine.hard_stop`, its cooldown/recovery logic,
   `check_max_drawdown(api)`, the `drawdowns`/`drawdown` arguments of
   `can_trade`/`update_portfolio_metrics`, and the `hard_stop_cooldown_min`
@@ -22,8 +22,26 @@ trading decision changes.
 - `tests/test_daily_cache.py::test_daily_fetcher_uses_cache` fails only when
   run after the alpaca/submit test set, identically on unchanged `main`
   (pre-existing ordering issue, not fixed here).
-- Full validation not run yet (owner deferred). Deploy needs the usual
-  `release_spec.json` SHA bump and restart.
+- Full validation not run yet (owner deferred).
+- **Deployed** Wed 16:13 UTC (market open, flat). The first restart at 16:06
+  failed: removing the `hard_stop_cooldown_min` ConfigSpec changes
+  `resolved_config_hash` (it digests every declared spec, set or not), so
+  pre-migration identity blocked on `config_hash` alone. `.env` never set it;
+  old code gives `cc88fa08…`, new code `b46e8e82…` with the same env. With
+  owner approval, `resolved_config_hash` was updated alongside
+  `tested_commit_sha`. Five failed starts hit the systemd start limit (5 per
+  300 s); `reset-failed` needs a password, so the service was started after
+  the window passed. About 7 minutes down. Spec backup
+  `runtime/release_spec.621a72c3b.bak.json` (old SHA and old config hash).
+  Identity (pre-migration and preflight) `pass`, `IMPORT_PREFLIGHT_OK`,
+  engine init, `BROKER_SYNC` (0 positions, 0 open orders, fresh), NRestarts=0;
+  only error is the known `MODEL_REGISTRY_STALE`. `/healthz` 503 `degraded`
+  with only the two preserved flags below. Rollback: checkout `621a72c3b`,
+  restore that spec, restart.
+- **For future deploys:** any ConfigSpec addition or removal needs a new
+  `resolved_config_hash` in `release_spec.json` before restarting. Compute
+  it with the live env and `PYTHONPATH=<checkout>` (the venv's editable
+  install otherwise imports the live checkout).
 
 ## November 11: fee allocation and test isolation deployed (`621a72c3b`)
 
