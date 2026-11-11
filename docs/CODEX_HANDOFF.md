@@ -1,6 +1,29 @@
 # Current handoff
 
-## November 11: code-audit fixes deployed (`829b5f5e2`) (start here)
+## November 11: fee allocation and test isolation deployed (`621a72c3b`) (start here)
+
+Two commits on top of `829b5f5e2`; neither changes trading decisions.
+- `1420b7687`: the scorecard reports Alpaca REG/CAT/TAF fees allocated to
+  that trade date's fills as `described_fee_allocation` (reported only; never
+  completes a chain or validates net fees). The Dec 9 agenda adds the stale
+  decision-quote and per-fill-fee questions. Validation: lint, mypy, 47 tests.
+- `621a72c3b`: test isolation only. `test_submit_order_fix.py` restores the
+  exact `ai_trading.execution` modules instead of reloading them (that reload
+  broke four `test_pretrade_short_checks.py` tests).
+  `test_meta_learn_persistence.py` uses a fresh slippage EWMA map, and the
+  midpoint-offset clamp test turns off the adaptive blend. The previously
+  failing 87-file selection now passes (995 tests); validator 310 passed.
+- **Deployed** Wed 04:55 UTC (closed, flat). Spec backup
+  `runtime/release_spec.829b5f5e2.bak.json` (SHA only). Identity `pass`,
+  `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` (0 positions, 0 open
+  orders), 0 errors, NRestarts=0. Rollback: checkout `829b5f5e2`, restore that
+  spec, restart.
+- `/healthz` is still `degraded`, with only the preserved
+  `required_model_stale` (model trained Jul 17, 14-day limit; retraining
+  waits for the reset) and `replay_live_parity_gate_failed` (counterfactual
+  −6.05 bps, 166/250 samples) blocks.
+
+## November 11: code-audit fixes deployed (`829b5f5e2`)
 
 A read-only audit found 12 issues; 10 were fixed in `829b5f5e2`, each with a
 regression test. July 3 half-day close now comes from the exchange calendar.
@@ -26,8 +49,7 @@ gates and calendar only, no signal change.
   this change touches neither.
 - Opening orders are now blocked at a $150 / 5% daily loss or a 6% drop from
   the intraday peak (`.env`).
-- Branch `claude/scorecard-fee-allocation` (reported-only fee allocation) is
-  still uncommitted and awaits the owner.
+- The reported-only fee allocation then landed as `1420b7687` (above).
 
 ## October 25: portfolio manager mode proposal drafted (for Dec 9; nothing built)
 
