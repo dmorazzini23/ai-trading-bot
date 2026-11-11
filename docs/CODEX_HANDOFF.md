@@ -1,6 +1,35 @@
 # Current handoff
 
-## October 25: portfolio manager mode proposal drafted (for Dec 9; nothing built) (start here)
+## November 11: code-audit fixes deployed (`829b5f5e2`) (start here)
+
+A read-only audit found 12 issues; 10 were fixed in `829b5f5e2`, each with a
+regression test. July 3 half-day close now comes from the exchange calendar.
+The day after a ≥5% loss gets a 3% daily-loss limit. Pretrade daily-loss
+pct/abs and intraday-drawdown gates now receive account metrics (opening
+orders only; unavailable metrics are logged). Live profiles can only tighten
+promotion/approval gates. Missing equity skips the drawdown check instead of
+halting. Holiday checks use the New York date. A data-layer calendar
+fallback is logged. The fabricated test ack and the bulk-cancel fallback are
+removed. An empty successful positions read clears the tracker. Not changed:
+the uncalled `RiskEngine` drawdown stop (a large cleanup with no runtime
+effect) and `alpaca_api.submit_order`, kept for paper/test per
+`docs/SUPPORTED_TRADING_PATH.md`.
+`agent_validate_changed.sh` passed (577 mapped tests). Replay deferred: risk
+gates and calendar only, no signal change.
+- **Deployed** Wed 04:03 UTC (closed, flat). Spec backup
+  `runtime/release_spec.8023d7642.bak.json` (SHA only). Identity `pass`,
+  `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` fresh, 0 errors,
+  NRestarts=0. Rollback: checkout `8023d7642`, restore that spec, restart.
+- `/healthz` is `degraded` because of `replay_live_parity_gate_failed` (the
+  gate has logged `REPLAY_LIVE_PARITY_GATE_BLOCKED` since Oct 25) and
+  `required_model_stale`. Both showed on `8023d7642` right after a restart, and
+  this change touches neither.
+- Opening orders are now blocked at a $150 / 5% daily loss or a 6% drop from
+  the intraday peak (`.env`).
+- Branch `claude/scorecard-fee-allocation` (reported-only fee allocation) is
+  still uncommitted and awaits the owner.
+
+## October 25: portfolio manager mode proposal drafted (for Dec 9; nothing built)
 
 `docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md`, linked from the Dec 9 plan's
 amendment record. Fixed owner-chosen ETF mix, band/calendar rebalancing,
