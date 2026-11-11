@@ -448,9 +448,6 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             return False
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
-        if check_time.month == 7 and check_time.day == 3:
-            july4 = date(check_time.year, 7, 4)
-            market_close = dt_time(13, 0) if july4.weekday() >= 5 else MARKET_CLOSE_TIME
         _log_market_hours(
             "Detected Market Hours today: OPEN from {} to {}".format(
                 market_open.strftime("%H:%M"), market_close.strftime("%H:%M")

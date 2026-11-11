@@ -232,6 +232,11 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
         _bool_env("TRADING__ALLOW_SHORTS", base.shorts_allowed),
     )
     allowed_symbols = _csv_symbols(allowed_raw)
+    promotion_required = _bool_env(f"{prefix}_PROMOTION_REQUIRED", base.promotion_required)
+    manual_approval_required = _bool_env(
+        f"{prefix}_MANUAL_APPROVAL_REQUIRED",
+        base.manual_approval_required,
+    )
     if live_profile:
         max_gross_exposure = _tighten_float(base.max_gross_exposure, max_gross_exposure)
         max_symbol_exposure = _tighten_float(base.max_symbol_exposure, max_symbol_exposure)
@@ -245,6 +250,8 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
         max_order_count = min(max_order_count, base.max_order_count)
         shorts_allowed = bool(base.shorts_allowed and shorts_allowed)
         allowed_symbols = _tighten_symbols(base.allowed_symbols, allowed_symbols)
+        promotion_required = bool(base.promotion_required or promotion_required)
+        manual_approval_required = bool(base.manual_approval_required or manual_approval_required)
     return LaunchProfile(
         name=base.name,
         max_gross_exposure=_coalesce_float(max_gross_exposure, base.max_gross_exposure),
@@ -254,7 +261,7 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
         max_notional_per_order=max_notional_per_order,
         shorts_allowed=shorts_allowed,
         allowed_symbols=allowed_symbols or base.allowed_symbols,
-        promotion_required=_bool_env(f"{prefix}_PROMOTION_REQUIRED", base.promotion_required),
+        promotion_required=promotion_required,
         provider_policy=_text_env(
             "AI_TRADING_PROVIDER_AUTHORITY_POLICY",
             _text_env(f"{prefix}_PROVIDER_POLICY", base.provider_policy),
@@ -268,10 +275,7 @@ def resolve_launch_profile(name: str | None = None) -> LaunchProfile:
             _text_env(f"{prefix}_BACKUP_PROVIDER_LIVE_POLICY", base.backup_provider_live_policy),
         ),
         decay_behavior=_text_env(f"{prefix}_DECAY_BEHAVIOR", base.decay_behavior),
-        manual_approval_required=_bool_env(
-            f"{prefix}_MANUAL_APPROVAL_REQUIRED",
-            base.manual_approval_required,
-        ),
+        manual_approval_required=manual_approval_required,
         max_quote_age_ms=max_quote_age_ms,
         max_spread_bps=max_spread_bps,
     )

@@ -25088,8 +25088,7 @@ class ExecutionEngine:
                 "pre_cash": pre_cash_balance,
                 "post_cash": post_cash_balance,
             }
-            if positions_list:
-                self._update_position_tracker_snapshot(positions_list)
+            self._sync_position_tracker_after_broker_read(positions_list)
             try:
                 self._update_broker_snapshot(open_orders_list, positions_list)
             except LIVE_TRADING_FALLBACK_EXC:
@@ -26057,6 +26056,15 @@ class ExecutionEngine:
                 "reason": reason,
             },
         )
+
+    def _sync_position_tracker_after_broker_read(self, positions: list[Any]) -> None:
+        """Refresh the tracker from a broker positions read.
+
+        A successful read of zero positions is authoritative and clears the
+        tracker; an empty list from a failed or unsupported read leaves it alone.
+        """
+        if positions or bool(getattr(self, "_broker_positions_read", False)):
+            self._update_position_tracker_snapshot(positions)
 
     def _update_position_tracker_snapshot(self, positions: list[Any]) -> None:
         """Refresh the cached position tracker with broker supplied snapshot."""
@@ -35078,17 +35086,6 @@ class ExecutionEngine:
                     else:
                         raise
                 resp = self.trading_client.submit_order(order_data=req)
-                if resp is None and _runtime_env("PYTEST_RUNNING"):
-                    mock_id = f"alpaca-pending-{int(time.time() * 1000)}"
-                    resp = {
-                        "id": mock_id,
-                        "status": "accepted",
-                        "symbol": order_data.get("symbol"),
-                        "side": order_data.get("side"),
-                        "qty": order_data.get("quantity"),
-                        "limit_price": order_data.get("limit_price"),
-                        "client_order_id": mock_id,
-                    }
             if resp is None:
                 recovered = self._lookup_order_by_client_order_id(
                     client_order_id_text,
@@ -35201,7 +35198,7 @@ class ExecutionEngine:
                 self._record_client_order_id_submission(
                     str(ack_client_id or client_order_id_text or "").strip()
                 )
-            return resp
+            return cast(dict[str, Any], resp)
         except BROKER_SUBMIT_EXC as e:
             if isinstance(e, _AlpacaAPIError) and _is_duplicate_client_order_id_error(e):
                 recovered = self._lookup_order_by_client_order_id(
@@ -36861,6 +36858,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         client = getattr(self, "trading_client", None)
         self._broker_open_orders_unknown = False
         self._broker_positions_unknown = False
+        self._broker_positions_read = False
         self._broker_open_orders_error = None
         self._broker_positions_error = None
         if client is None:
@@ -36912,6 +36910,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             )
             if positions_ok:
                 positions_list = list(positions_resp or ())
+                self._broker_positions_read = True
             else:
                 self._broker_positions_unknown = True
                 self._broker_positions_error = str(

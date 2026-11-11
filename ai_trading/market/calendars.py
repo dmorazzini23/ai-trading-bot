@@ -273,7 +273,8 @@ class CalendarRegistry:
         session = self.get_session(symbol)
         if session.name in {'CRYPTO_24_7', 'FOREX_EXTENDED'}:
             return session.is_trading_day(dt)
-        check_date = dt.date() if isinstance(dt, datetime) else dt
+        # Holidays are session dates, so look them up in the market timezone.
+        check_date = session._to_session_time(dt).date() if isinstance(dt, datetime) else dt
         self._ensure_market_holidays(check_date.year)
         if check_date in self._holidays:
             return False

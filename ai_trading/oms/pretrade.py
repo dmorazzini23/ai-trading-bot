@@ -13,8 +13,12 @@ from typing import Any, Mapping, cast
 from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
+from ai_trading.logging import get_logger
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.utils.market_calendar import is_trading_day, session_info
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -49,6 +53,9 @@ class OrderIntent:
     event_type: str | None = None
     execution_drift_bps: float | None = None
     reject_rate_pct: float | None = None
+    daily_loss_pct: float | None = None
+    daily_loss_abs: float | None = None
+    intraday_drawdown: float | None = None
     session_regime: str | None = None
     opening_trade: bool | None = None
     require_realtime_nbbo: bool | None = None
@@ -1650,6 +1657,23 @@ def _ledger_metric_value(ledger: Any, metric: str) -> float | None:
     return None
 
 
+_UNAVAILABLE_RISK_METRICS_LOGGED: set[str] = set()
+
+
+def _risk_metric_value(intent_value: float | None, ledger: Any, metric: str) -> float | None:
+    """Prefer the account-derived value on the intent, then the ledger."""
+    if intent_value is not None:
+        return float(intent_value)
+    value = _ledger_metric_value(ledger, metric)
+    if value is None and metric not in _UNAVAILABLE_RISK_METRICS_LOGGED:
+        _UNAVAILABLE_RISK_METRICS_LOGGED.add(metric)
+        logger.warning(
+            "PRETRADE_RISK_METRIC_UNAVAILABLE",
+            extra={"metric": metric, "effect": "gate_not_enforced_for_order"},
+        )
+    return value
+
+
 def validate_pretrade(
     intent: OrderIntent,
     *,
@@ -1969,8 +1993,11 @@ def validate_pretrade(
                 },
             )
 
-    if intraday_var_limit > 0:
-        current_var = _ledger_metric_value(ledger, "var")
+    # Loss and risk budgets stop new risk; they never block a closing order.
+    risk_budget_applies = intent.opening_trade is not False
+
+    if risk_budget_applies and intraday_var_limit > 0:
+        current_var = _risk_metric_value(None, ledger, "var")
         if current_var is not None and current_var > intraday_var_limit:
             return (
                 False,
@@ -1978,8 +2005,8 @@ def validate_pretrade(
                 {"intraday_var": current_var, "max_intraday_var": intraday_var_limit},
             )
 
-    if intraday_cvar_limit > 0:
-        current_cvar = _ledger_metric_value(ledger, "cvar")
+    if risk_budget_applies and intraday_cvar_limit > 0:
+        current_cvar = _risk_metric_value(None, ledger, "cvar")
         if current_cvar is not None and current_cvar > intraday_cvar_limit:
             return (
                 False,
@@ -1987,8 +2014,8 @@ def validate_pretrade(
                 {"intraday_cvar": current_cvar, "max_intraday_cvar": intraday_cvar_limit},
             )
 
-    if intraday_drawdown_limit > 0:
-        current_drawdown = _ledger_metric_value(ledger, "drawdown")
+    if risk_budget_applies and intraday_drawdown_limit > 0:
+        current_drawdown = _risk_metric_value(intent.intraday_drawdown, ledger, "drawdown")
         if current_drawdown is not None and current_drawdown > intraday_drawdown_limit:
             return (
                 False,
@@ -2028,8 +2055,8 @@ def validate_pretrade(
             cast=float,
         )
     )
-    if daily_risk_budget_enabled and daily_loss_limit_pct > 0:
-        current_daily_loss_pct = _ledger_metric_value(ledger, "daily_loss_pct")
+    if risk_budget_applies and daily_risk_budget_enabled and daily_loss_limit_pct > 0:
+        current_daily_loss_pct = _risk_metric_value(intent.daily_loss_pct, ledger, "daily_loss_pct")
         if current_daily_loss_pct is not None and current_daily_loss_pct >= daily_loss_limit_pct:
             return (
                 False,
@@ -2039,8 +2066,8 @@ def validate_pretrade(
                     "max_daily_loss_pct": daily_loss_limit_pct,
                 },
             )
-    if daily_risk_budget_enabled and daily_loss_limit_abs > 0:
-        current_daily_loss_abs = _ledger_metric_value(ledger, "daily_loss_abs")
+    if risk_budget_applies and daily_risk_budget_enabled and daily_loss_limit_abs > 0:
+        current_daily_loss_abs = _risk_metric_value(intent.daily_loss_abs, ledger, "daily_loss_abs")
         if current_daily_loss_abs is not None and current_daily_loss_abs >= daily_loss_limit_abs:
             return (
                 False,

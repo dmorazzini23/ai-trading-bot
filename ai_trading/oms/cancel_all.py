@@ -60,11 +60,9 @@ def _cancel_order(api: Any, order: Any) -> None:
     if callable(cancel_by_id):
         cancel_by_id(order_id)
         return
-    cancel_orders = getattr(api, "cancel_orders", None)
-    if callable(cancel_orders):
-        cancel_orders()
-        return
-    raise RuntimeError("Broker API missing cancel capability")
+    # Never fall back to the broker's bulk cancel here: it would cancel every
+    # open order once per listed order instead of this one.
+    raise RuntimeError("Broker API missing per-order cancel capability")
 
 
 def cancel_all_open_orders(ctx: Any) -> CancelAllResult:

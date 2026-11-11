@@ -115,15 +115,13 @@ def _make_engine(monkeypatch, response):
     return engine
 
 
-def test_submit_limit_order_handles_empty_response(monkeypatch):
+def test_submit_limit_order_never_fabricates_an_ack_for_empty_response(monkeypatch):
     engine = _make_engine(monkeypatch, response=None)
     result = engine.submit_limit_order("AAPL", "buy", 5, limit_price=123.45)
 
-    assert result["symbol"] == "AAPL"
-    assert result["qty"] == 5
-    assert result["status"] == "accepted"
-    assert result["id"] == result["client_order_id"]
-    assert result["id"].startswith("alpaca-") or result["id"].startswith("order_")
+    # No broker response and no order recoverable by client_order_id: the
+    # outcome is unknown, so nothing may be reported as accepted.
+    assert result is None
 
 
 def test_execute_order_uses_fallback_identifier(monkeypatch):

@@ -310,3 +310,69 @@ def test_pretrade_quote_age_from_timestamp_blocks_stale_quote() -> None:
     assert allowed is False
     assert reason == "STALE_QUOTE_BLOCK"
     assert details["quote_ts"] == quote_ts.isoformat()
+
+
+@pytest.mark.parametrize(
+    ("intent_updates", "cfg_updates", "reason", "detail_key"),
+    [
+        ({"daily_loss_abs": 160.0}, {"daily_loss_limit_abs": 150.0}, "DAILY_RISK_BUDGET_BLOCK", "daily_loss_abs"),
+        ({"daily_loss_pct": 0.05}, {"daily_loss_limit_pct": 0.05}, "DAILY_RISK_BUDGET_BLOCK", "daily_loss_pct"),
+        ({"intraday_drawdown": 0.07}, {"intraday_drawdown_limit": 0.06}, "INTRADAY_DRAWDOWN_BLOCK", "intraday_drawdown"),
+    ],
+)
+def test_account_risk_on_intent_enforces_budgets_without_ledger_metrics(
+    intent_updates: dict[str, Any],
+    cfg_updates: dict[str, Any],
+    reason: str,
+    detail_key: str,
+) -> None:
+    allowed, actual_reason, details = validate_pretrade(
+        _intent(opening_trade=True, **intent_updates),
+        cfg=_cfg(**cfg_updates),
+        ledger=None,
+        rate_limiter=_limiter(),
+    )
+
+    assert allowed is False
+    assert actual_reason == reason
+    assert detail_key in details
+
+
+def test_risk_budgets_never_block_closing_orders() -> None:
+    allowed, reason, _ = validate_pretrade(
+        _intent(
+            side="sell",
+            opening_trade=False,
+            daily_loss_abs=500.0,
+            daily_loss_pct=0.10,
+            intraday_drawdown=0.12,
+        ),
+        cfg=_cfg(daily_loss_limit_abs=150.0, daily_loss_limit_pct=0.05, intraday_drawdown_limit=0.06),
+        ledger=None,
+        rate_limiter=_limiter(),
+    )
+
+    assert allowed is True
+    assert reason == "OK"
+
+
+def test_missing_risk_metric_is_reported(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    from ai_trading.oms import pretrade
+
+    monkeypatch.setattr(pretrade, "_UNAVAILABLE_RISK_METRICS_LOGGED", set())
+    with caplog.at_level("WARNING"):
+        for _ in range(2):
+            allowed, _, _ = validate_pretrade(
+                _intent(opening_trade=True),
+                cfg=_cfg(daily_loss_limit_abs=150.0),
+                ledger=None,
+                rate_limiter=_limiter(),
+            )
+            assert allowed is True
+
+    unavailable = [
+        getattr(r, "metric", None)
+        for r in caplog.records
+        if r.getMessage() == "PRETRADE_RISK_METRIC_UNAVAILABLE"
+    ]
+    assert unavailable.count("daily_loss_abs") == 1

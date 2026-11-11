@@ -935,3 +935,44 @@ def test_order_manager_reconcile_treats_broker_error_as_rejected(
     refreshed = store.get_intent(intent.intent_id)
     assert refreshed is not None
     assert refreshed.status == "REJECTED"
+
+
+def test_successful_empty_positions_read_clears_position_tracker(monkeypatch) -> None:
+    _disable_broker_read_delay(monkeypatch, attempts=1)
+
+    class _FlatClient:
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_all_positions(self):
+            return []
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = _FlatClient()
+    engine._position_tracker = {"AMD": 2}
+
+    _, positions = engine._fetch_broker_state()
+    engine._sync_position_tracker_after_broker_read(positions)
+
+    assert engine._position_tracker == {}
+
+
+def test_failed_positions_read_keeps_position_tracker(monkeypatch) -> None:
+    _disable_broker_read_delay(monkeypatch, attempts=1)
+
+    class _PositionsDownClient:
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_all_positions(self):
+            raise _native_alpaca_error(504)
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = _PositionsDownClient()
+    engine._position_tracker = {"AMD": 2}
+
+    _, positions = engine._fetch_broker_state()
+    engine._sync_position_tracker_after_broker_read(positions)
+
+    assert engine._broker_positions_unknown is True
+    assert engine._position_tracker == {"AMD": 2}

@@ -134,6 +134,28 @@ def test_live_profile_overrides_cannot_loosen_hard_caps(monkeypatch):
     assert profile.allowed_symbols == ("AAPL",)
 
 
+def test_live_profile_overrides_cannot_disable_approval_gates(monkeypatch):
+    for name in ("live_canary", "live_restricted", "live_normal"):
+        prefix = f"AI_TRADING_LAUNCH_PROFILE_{name.upper()}"
+        monkeypatch.setenv(f"{prefix}_PROMOTION_REQUIRED", "0")
+        monkeypatch.setenv(f"{prefix}_MANUAL_APPROVAL_REQUIRED", "false")
+
+        profile = resolve_launch_profile(name)
+
+        assert profile.name == name
+        assert profile.promotion_required is True
+        assert profile.manual_approval_required is True
+
+
+def test_paper_profile_may_opt_into_approval_gates(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_PAPER_TRADE_PROMOTION_REQUIRED", "1")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_PAPER_TRADE_MANUAL_APPROVAL_REQUIRED", "1")
+
+    profile = resolve_launch_profile("paper_trade")
+
+    assert profile.promotion_required is True
+    assert profile.manual_approval_required is True
+
 def test_live_profile_honors_zero_exposure_overrides(monkeypatch):
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE_LIVE_CANARY_MAX_GROSS_EXPOSURE", "0.0")

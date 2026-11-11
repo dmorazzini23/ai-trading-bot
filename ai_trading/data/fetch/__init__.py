@@ -5152,13 +5152,29 @@ _VALID_ADJUSTMENTS = {"raw", "split", "dividend", "all"}
 _VALID_TIMEFRAMES = {"1Min", "5Min", "15Min", "1Hour", "1Day"}
 
 
+_MARKET_CALENDAR_FALLBACK_LOGGED = False
+
+
+def _log_market_calendar_fallback(exc: BaseException) -> None:
+    """Report, once per process, that data paths are assuming the market is open."""
+    global _MARKET_CALENDAR_FALLBACK_LOGGED
+    if _MARKET_CALENDAR_FALLBACK_LOGGED:
+        return
+    _MARKET_CALENDAR_FALLBACK_LOGGED = True
+    logger.warning(
+        "DATA_MARKET_CALENDAR_UNAVAILABLE_ASSUMING_OPEN",
+        extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+    )
+
+
 def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
     """Return True if both ``start`` and ``end`` fall outside market hours."""
     try:
         from ai_trading.utils.base import is_market_open as _is_open
 
         return not (_is_open(start) or _is_open(end))
-    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - fallback to retrying
+    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - fallback to retrying
+        _log_market_calendar_fallback(exc)
         return False
 
 
@@ -15124,13 +15140,17 @@ def fetch_minute_yfinance(symbol: str, start_dt: _dt.datetime, end_dt: _dt.datet
 def is_market_open() -> bool:
     """Return True if the market is currently open.
 
-    Falls back to ``True`` when the detailed calendar check is unavailable.
+    Data paths only use this to classify empty responses and choose retries, so
+    an unavailable calendar falls back to ``True``: empty bars then escalate as
+    a data problem instead of being dismissed as an off-hours gap. Order gating
+    uses ``ai_trading.utils.base.is_market_open`` directly, never this helper.
     """
     try:
         from ai_trading.utils.base import is_market_open as _is_open
 
         return bool(_is_open())
-    except FETCH_FALLBACK_EXCEPTIONS:
+    except FETCH_FALLBACK_EXCEPTIONS as exc:
+        _log_market_calendar_fallback(exc)
         return True
 
 

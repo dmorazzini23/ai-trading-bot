@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.core import bot_engine
 from ai_trading.core import submit_runtime
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
@@ -716,3 +718,41 @@ def test_submit_order_defaults_opening_nbbo_requirement_when_cfg_missing(monkeyp
     assert engine.calls == []
     assert engine.skips
     assert engine.skips[-1]["reason"] == "NBBO_REQUIRED_OPENING_SKIP"
+
+
+def test_account_risk_metrics_measure_loss_from_prior_close_and_intraday_peak():
+    from datetime import UTC, datetime
+
+    from ai_trading.core.submit_runtime import _account_risk_metrics
+
+    account = SimpleNamespace(equity="10100", last_equity="10000")
+    be = SimpleNamespace(
+        state=SimpleNamespace(),
+        safe_alpaca_get_account=lambda _ctx: account,
+        logger=SimpleNamespace(warning=lambda *a, **k: None),
+    )
+    ctx = SimpleNamespace(api=SimpleNamespace(get_account=lambda: account))
+    now = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+
+    first = _account_risk_metrics(be, ctx, now=now)
+    assert first["daily_loss_abs"] == 0.0
+    assert first["intraday_drawdown"] == 0.0
+
+    account.equity = "9595"
+    later = _account_risk_metrics(be, ctx, now=now)
+    assert later["daily_loss_abs"] == pytest.approx(405.0)
+    assert later["daily_loss_pct"] == pytest.approx(0.0405)
+    assert later["intraday_drawdown"] == pytest.approx(505.0 / 10100.0)
+
+
+def test_account_risk_metrics_are_empty_when_account_unavailable():
+    from datetime import UTC, datetime
+
+    from ai_trading.core.submit_runtime import _account_risk_metrics
+
+    be = SimpleNamespace(state=SimpleNamespace(), safe_alpaca_get_account=lambda _ctx: None)
+    ctx = SimpleNamespace(api=SimpleNamespace(get_account=lambda: None))
+
+    metrics = _account_risk_metrics(be, ctx, now=datetime(2026, 11, 9, 15, 0, tzinfo=UTC))
+
+    assert metrics == {"daily_loss_pct": None, "daily_loss_abs": None, "intraday_drawdown": None}

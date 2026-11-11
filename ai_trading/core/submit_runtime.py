@@ -9,6 +9,7 @@ import types
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 from ai_trading.core.execution_guards import build_pretrade_validation_cfg
 from ai_trading.core.execution_intent import (
@@ -45,6 +46,50 @@ def _safe_float(value: Any) -> float | None:
     if not math.isfinite(parsed):
         return None
     return float(parsed)
+
+
+_SESSION_TZ = ZoneInfo("America/New_York")
+
+
+def _account_risk_metrics(be: Any, ctx: Any, *, now: datetime) -> dict[str, float | None]:
+    """Return the account's daily loss and intraday drawdown for pre-trade budgets.
+
+    Daily loss is measured against the broker's prior-close equity. The intraday
+    peak starts at that close and rises with each equity reading taken here, so
+    the drawdown is never smaller than the daily loss.
+    """
+    metrics: dict[str, float | None] = {
+        "daily_loss_pct": None,
+        "daily_loss_abs": None,
+        "intraday_drawdown": None,
+    }
+    api = getattr(ctx, "api", None)
+    if not callable(getattr(api, "get_account", None)):
+        return metrics
+    try:
+        account = be.safe_alpaca_get_account(ctx)
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        be.logger.warning(
+            "PRETRADE_ACCOUNT_RISK_UNAVAILABLE",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+        )
+        return metrics
+    equity = _safe_float(getattr(account, "equity", None))
+    if equity is None or equity <= 0.0:
+        return metrics
+    last_equity = _safe_float(getattr(account, "last_equity", None))
+    if last_equity is not None and last_equity > 0.0:
+        loss = max(last_equity - equity, 0.0)
+        metrics["daily_loss_abs"] = loss
+        metrics["daily_loss_pct"] = loss / last_equity
+    session_day = now.astimezone(_SESSION_TZ).date()
+    peak_day, peak = getattr(be.state, "_pretrade_equity_peak", None) or (None, 0.0)
+    if peak_day != session_day:
+        peak = last_equity if last_equity is not None and last_equity > 0.0 else equity
+    peak = max(float(peak), equity)
+    setattr(be.state, "_pretrade_equity_peak", (session_day, peak))
+    metrics["intraday_drawdown"] = (peak - equity) / peak
+    return metrics
 
 
 def _canonical_intent_side(side: str) -> str | None:
@@ -825,8 +870,14 @@ def submit_order_runtime(
     ledger = _resolve_order_ledger(be, cfg)
     rate_limiter = be._pretrade_rate_limiter(be.state)
     pretrade_cfg, _, _ = build_pretrade_validation_cfg(cfg, thin_liquidity=False)
+    account_risk = _account_risk_metrics(be, ctx, now=datetime.now(UTC))
     allowed, pretrade_reason, pretrade_details = safe_validate_pretrade(
-        intent_context.pretrade_intent,
+        replace(
+            intent_context.pretrade_intent,
+            daily_loss_pct=account_risk["daily_loss_pct"],
+            daily_loss_abs=account_risk["daily_loss_abs"],
+            intraday_drawdown=account_risk["intraday_drawdown"],
+        ),
         cfg=pretrade_cfg,
         ledger=ledger,
         rate_limiter=rate_limiter,

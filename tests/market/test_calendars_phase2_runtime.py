@@ -112,3 +112,12 @@ def test_equal_start_end_session_bounds_are_explicit_24h_sessions() -> None:
     assert start == datetime(2025, 1, 1, 0, 0, tzinfo=UTC)
     assert end == datetime(2025, 1, 2, 0, 0, tzinfo=UTC)
     assert registry.is_market_open("BTCUSD", datetime(2025, 1, 1, 23, 59, 59, tzinfo=UTC)) is True
+
+
+def test_holiday_lookup_uses_the_session_date_not_the_utc_date() -> None:
+    registry = CalendarRegistry()
+
+    # 20:00 ET on Thanksgiving 2026 is already Nov 27 in UTC.
+    assert registry.is_trading_day("AAPL", datetime(2026, 11, 27, 1, 0, tzinfo=UTC)) is False
+    # 20:00 ET the evening before is already the holiday's date in UTC.
+    assert registry.is_trading_day("AAPL", datetime(2026, 11, 26, 1, 0, tzinfo=UTC)) is True

@@ -186,6 +186,57 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
     return gate
 
 
+def _drawdown_guard_halts_cycle(*, be: Any, runtime: Any, dbc: Any, account_snapshot: Any) -> bool:
+    """Score account equity on the drawdown breaker; True when the cycle must stop."""
+    snapshot_equity = getattr(account_snapshot, "equity", None)
+    if snapshot_equity is None:
+        # A missing account snapshot is not a zero-equity reading; scoring it
+        # would register a 100% drawdown and halt the cycle.
+        be.logger.warning(
+            "DRAWDOWN_CHECK_SKIPPED",
+            extra={"reason": "account_equity_unavailable"},
+        )
+        return False
+    try:
+        current_equity = float(snapshot_equity)
+        trading_allowed = dbc.update_equity(current_equity)
+        status = dbc.get_status()
+        if not trading_allowed:
+            be.logger.critical(
+                "TRADING_HALTED_DRAWDOWN_PROTECTION",
+                extra={
+                    "current_drawdown": status["current_drawdown"],
+                    "max_drawdown": status["max_drawdown"],
+                    "peak_equity": status["peak_equity"],
+                    "current_equity": current_equity,
+                },
+            )
+            try:
+                portfolio = _list_broker_positions(runtime.api)
+                for pos in portfolio:
+                    be.manage_position_risk(runtime, pos)
+            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
+                be.logger.warning(
+                    "HALT_MANAGE_FAIL",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
+            return True
+        be.logger.debug(
+            "DRAWDOWN_STATUS_OK",
+            extra={
+                "current_drawdown": status["current_drawdown"],
+                "max_drawdown": status["max_drawdown"],
+                "trading_allowed": status["trading_allowed"],
+            },
+        )
+    except (be.APIError, TimeoutError, ConnectionError, TypeError, ValueError) as e:
+        be.logger.error(
+            "DRAWDOWN_CHECK_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+    return False
+
+
 def execute_run_all_trades_cycle(
     *,
     state: Any,
@@ -471,45 +522,10 @@ def execute_run_all_trades_cycle(
             be.safe_alpaca_get_account(runtime) if can_fetch_account else None
         )
         dbc = getattr(runtime, "drawdown_circuit_breaker", None)
-        if dbc and can_fetch_account:
-            try:
-                acct = account_snapshot
-                current_equity = float(getattr(acct, "equity", 0.0)) if acct else 0.0
-                trading_allowed = dbc.update_equity(current_equity)
-                status = dbc.get_status()
-                if not trading_allowed:
-                    be.logger.critical(
-                        "TRADING_HALTED_DRAWDOWN_PROTECTION",
-                        extra={
-                            "current_drawdown": status["current_drawdown"],
-                            "max_drawdown": status["max_drawdown"],
-                            "peak_equity": status["peak_equity"],
-                            "current_equity": current_equity,
-                        },
-                    )
-                    try:
-                        portfolio = _list_broker_positions(runtime.api)
-                        for pos in portfolio:
-                            be.manage_position_risk(runtime, pos)
-                    except AI_TRADING_FALLBACK_EXCEPTIONS as e:
-                        be.logger.warning(
-                            "HALT_MANAGE_FAIL",
-                            extra={"cause": e.__class__.__name__, "detail": str(e)},
-                        )
-                    return
-                be.logger.debug(
-                    "DRAWDOWN_STATUS_OK",
-                    extra={
-                        "current_drawdown": status["current_drawdown"],
-                        "max_drawdown": status["max_drawdown"],
-                        "trading_allowed": status["trading_allowed"],
-                    },
-                )
-            except (be.APIError, TimeoutError, ConnectionError) as e:
-                be.logger.error(
-                    "DRAWDOWN_CHECK_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
+        if dbc and can_fetch_account and _drawdown_guard_halts_cycle(
+            be=be, runtime=runtime, dbc=dbc, account_snapshot=account_snapshot
+        ):
+            return
 
         if be.check_halt_flag(runtime):
             be._log_health_diagnostics(runtime, "halt_flag_loop")

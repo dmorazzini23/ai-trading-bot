@@ -20203,8 +20203,6 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
         limit = float(DAILY_LOSS_LIMIT)
 
     if state.day_start_equity is None or state.day_start_equity[0] != today_date:
-        if state.last_drawdown >= 0.05:
-            limit = 0.03
         state.last_drawdown = (
             (state.day_start_equity[1] - equity) / state.day_start_equity[1]
             if state.day_start_equity
@@ -20214,6 +20212,9 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
         daily_drawdown.set(0.0)
         return False
 
+    # A day that lost 5% or more tightens the following day's limit to 3%.
+    if state.last_drawdown >= 0.05:
+        limit = min(limit, 0.03)
     loss = (state.day_start_equity[1] - equity) / state.day_start_equity[1]
     daily_drawdown.set(loss)
     if loss > 0.05:
