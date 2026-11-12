@@ -1,6 +1,6 @@
 # Current handoff
 
-## November 12: second unreachable-module batch removed (not deployed) (start here)
+## November 12: second unreachable-module batch removed; deployed (`6a81aedb5`) (start here)
 
 Follow-on to `192123ebc`, same branch `claude/unreachable-module-cleanup`.
 124 files, about 12,100 lines removed; no trading decision or `CONFIG_SPECS`
@@ -36,7 +36,14 @@ change.
   (about 4,000 lines), the two allocators and the legacy branch in
   `bot_engine.py` cannot run live. Removing them touches the trading path and
   the registered-trial tooling; not started.
-- Deploy needs the usual `release_spec.json` SHA bump and restart.
+- **Deployed** Thu 05:30 UTC (closed, flat), owner-approved. Identity
+  pre-check from the new commit passed both phases. Spec backup
+  `runtime/release_spec.192123ebc.bak.json` (SHA only). First start
+  succeeded: `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` x3 (0
+  positions, 0 open orders), 0 errors, 0 warnings, NRestarts=0 after four
+  minutes. `/healthz` 503 with only the two preserved flags. Rollback:
+  checkout `192123ebc`, restore that spec, restart.
+- Not yet observed: a market-hours session on either cleanup commit.
 
 ## November 12: unreachable modules, archival scripts and dead root files removed; deployed (`192123ebc`)
 
