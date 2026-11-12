@@ -13,7 +13,6 @@ def test_package_import_has_no_cli_side_effects(monkeypatch):
         "ai_trading.__main__",
         "ai_trading.app",
         "ai_trading.main",
-        "ai_trading.core.run_all_trades",
     }
     assert heavy_modules.isdisjoint(sys.modules)
 

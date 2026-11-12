@@ -8,7 +8,6 @@ analysis, and tax-aware rebalancing functionality.
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
-from typing import Any
 
 
 # Test adaptive position sizing
@@ -99,112 +98,6 @@ class TestAdaptivePositionSizing(unittest.TestCase):
         self.assertIn("market_adjustments", result)
         self.assertEqual(result["symbol"], symbol)
         self.assertGreaterEqual(result["recommended_size"], 0)
-
-
-class TestMarketMicrostructure(unittest.TestCase):
-    """Test market microstructure feature engineering."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        try:
-            from ai_trading.execution.microstructure import (
-                BidAskSpreadAnalyzer,
-                MarketMicrostructureEngine,
-                MarketRegimeFeature,
-                OrderFlowAnalyzer,
-            )
-
-            self.MarketMicrostructureEngine = MarketMicrostructureEngine
-            self.BidAskSpreadAnalyzer = BidAskSpreadAnalyzer
-            self.OrderFlowAnalyzer = OrderFlowAnalyzer
-            self.MarketRegimeFeature = MarketRegimeFeature
-            self.imports_available = True
-        except ImportError:
-            self.imports_available = False
-            self.skipTest("Market microstructure modules not available")
-
-    def test_spread_analyzer_initialization(self):
-        """Test bid-ask spread analyzer initialization."""
-        if not self.imports_available:
-            self.skipTest("Dependencies not available")
-
-        analyzer = self.BidAskSpreadAnalyzer()
-        self.assertEqual(analyzer.lookback_periods, 100)
-        self.assertEqual(analyzer.min_spread_bps, 1.0)
-
-    def test_spread_feature_analysis(self):
-        """Test spread feature analysis."""
-        if not self.imports_available:
-            self.skipTest("Dependencies not available")
-
-        analyzer = self.BidAskSpreadAnalyzer()
-
-        market_data = {
-            "bid_price": 99.95,
-            "ask_price": 100.05,
-            "last_price": 100.00,
-            "bid_size": 1000,
-            "ask_size": 1200
-        }
-
-        trade_history = [
-            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
-            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
-        ]
-
-        features = analyzer.analyze_spread_features(market_data, trade_history)
-
-        self.assertIn("bid_ask_spread", features)
-        self.assertIn("spread_bps", features)
-        self.assertGreater(features["bid_ask_spread"], 0)
-
-    def test_order_flow_analyzer(self):
-        """Test order flow analysis."""
-        if not self.imports_available:
-            self.skipTest("Dependencies not available")
-
-        analyzer = self.OrderFlowAnalyzer()
-
-        trade_data = [
-            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
-            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
-        ]
-
-        quote_data = [
-            {"bid_price": 99.98, "ask_price": 100.02, "bid_size": 500, "ask_size": 600},
-            {"bid_price": 99.99, "ask_price": 100.03, "bid_size": 400, "ask_size": 700},
-        ]
-
-        features = analyzer.analyze_order_flow(trade_data, quote_data)
-
-        self.assertIn("trade_intensity", features)
-        self.assertIn("order_imbalance", features)
-
-    def test_microstructure_engine(self):
-        """Test comprehensive microstructure analysis."""
-        if not self.imports_available:
-            self.skipTest("Dependencies not available")
-
-        engine = self.MarketMicrostructureEngine()
-
-        market_data = {
-            "bid_price": 99.95,
-            "ask_price": 100.05,
-            "last_price": 100.00,
-            "bid_size": 1000,
-            "ask_size": 1200,
-            "volume": 50000
-        }
-
-        trade_history: list[dict[str, Any]] = []
-        quote_history: list[dict[str, Any]] = []
-
-        result = engine.analyze_market_microstructure(
-            "AAPL", market_data, trade_history, quote_history
-        )
-
-        self.assertEqual(result.symbol, "AAPL")
-        self.assertGreaterEqual(result.bid_ask_spread, 0)
 
 
 class TestTaxAwareRebalancing(unittest.TestCase):

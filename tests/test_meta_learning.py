@@ -10,7 +10,6 @@ np.random.seed(0)
 from ai_trading import meta_learning
 from ai_trading.meta_learning import MetaLearning
 from ai_trading.meta_learning import core as meta_learning_core
-from ai_trading.meta import checkpoint
 from ai_trading.models.artifacts import write_artifact_manifest
 
 
@@ -146,13 +145,6 @@ def test_update_signal_weights_normal():
     assert round(res["b"], 2) == 0.75
 
 
-def test_save_and_load_checkpoint(tmp_path):
-    path = tmp_path / "x.json"
-    data = {"x": 1}
-    saved = checkpoint.save_checkpoint(data, str(path))
-    assert saved == data
-    loaded = checkpoint.load_checkpoint(str(path))
-    assert loaded == data
 
 
 def test_optimize_signals(monkeypatch):

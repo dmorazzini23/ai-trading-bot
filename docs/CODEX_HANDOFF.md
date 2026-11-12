@@ -1,6 +1,44 @@
 # Current handoff
 
-## November 12: unreachable modules, archival scripts and dead root files removed; deployed (`192123ebc`) (start here)
+## November 12: second unreachable-module batch removed (not deployed) (start here)
+
+Follow-on to `192123ebc`, same branch `claude/unreachable-module-cleanup`.
+124 files, about 12,100 lines removed; no trading decision or `CONFIG_SPECS`
+change.
+- **Package modules (53 files):** `training/{train_ml,stacking}`,
+  `evaluation/`, `strategies/{backtest,signals,imports}`,
+  `execution/{microstructure,slippage}`, `features/pipeline`, `data/labels`,
+  `data/yfinance`, `data/fetch/{backoff,http,heartbeat}`,
+  `rl_trading/inference`, `rl/`, `core/{context,run_all_trades,
+  config_autofix}`, `runner`, `talib/`, `price_snapshot/`, `regime/`, `ml/`,
+  `prediction/`, `meta/`, `startup/`, `plotting/`, `shadow_mode/`,
+  `institutional/`, `sentiment/`, `metrics/registry`, `models/registry`,
+  `utils/{benchmark,safe_pickle}`, `portfolio/correlation`,
+  `analytics/peak_equity`, `runtime/{params,max_position_size}`,
+  `risk/parameters`. `ai_trading.runtime` no longer lazily exports
+  `build_runtime`/`get_max_position_size` (the used one is
+  `ai_trading.core.runtime.build_runtime`).
+- **Docs:** `docs/ALPHA_UPGRADE.md`, `docs/TECHNICAL_ANALYSIS.md` and
+  `docs/slippage.md` described only deleted code and are gone.
+- **Tests:** 41 test files deleted, 18 trimmed.
+- **Kept on purpose:** `ai_trading.simple_models` (the live env sets
+  `AI_TRADING_ML_SHADOW_MODEL_MODULE=ai_trading.simple_models`; module names
+  in env vars are invisible to import tracing, so check the live process
+  environment before deleting), `replay/replay_engine` (in
+  `ci/scripts/institutional_gates.sh` and acceptance matrix AC-13),
+  `ai_trading/health.py` (its tests cover the canonical health app),
+  `research/focused_cycle`, `runtime/equity_risk`, `scripts/self_check`.
+- **Validation:** full `pytest` 7209 passed, 2 skipped; `ruff check`, `mypy`,
+  `typecheck_strict.sh` clean; every module imports and every `__all__`/lazy
+  export resolves, with the editable-install fallback disabled.
+- **Open for owner:** netting is on live (`AI_TRADING_NETTING_ENABLED=1`) and
+  non-netting live execution is blocked, so `ai_trading/strategies/*`
+  (about 4,000 lines), the two allocators and the legacy branch in
+  `bot_engine.py` cannot run live. Removing them touches the trading path and
+  the registered-trial tooling; not started.
+- Deploy needs the usual `release_spec.json` SHA bump and restart.
+
+## November 12: unreachable modules, archival scripts and dead root files removed; deployed (`192123ebc`)
 
 Owner-requested audit ("delete over simplify"). Branch
 `claude/unreachable-module-cleanup` (worktree

@@ -42,7 +42,6 @@ fi
   ai_trading/health.py \
   ai_trading/logging/emit_once.py \
   ai_trading/strategy_allocator.py \
-  ai_trading/rl/module.py \
   scripts/health_check.py \
   scripts/production_monitoring.py
 

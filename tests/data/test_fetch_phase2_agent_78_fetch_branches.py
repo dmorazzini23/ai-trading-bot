@@ -9,26 +9,11 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 from ai_trading.data import fetch
-from ai_trading.data.fetch import backoff, empty_handling
+from ai_trading.data.fetch import empty_handling
 from ai_trading.data.fetch import fallback_order
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
 
 
-@pytest.fixture(autouse=True)
-def _reset_fetch_branch_state() -> None:
-    fetch._OVERRIDE_MAP.clear()
-    fetch._cycle_feed_override.clear()
-    fetch._override_set_ts.clear()
-    fetch._FEED_SWITCH_CACHE.clear()
-    fetch._CYCLE_FALLBACK_FEED.clear()
-    fetch._BACKUP_USAGE_LOGGED.clear()
-    fetch._YF_WARNING_CACHE.clear()
-    fetch._BOOTSTRAP_BACKUP_REASON = None
-    backoff._PROVIDER_COOLDOWNS.clear()
-    backoff._EMPTY_BAR_COUNTS.clear()
-    backoff._SKIPPED_SYMBOLS.clear()
-    empty_handling._RETRY_COUNTS.clear()
-    fallback_order.reset()
 
 
 def _frame(ts: datetime | None = None, close: float = 101.0) -> pd.DataFrame:
@@ -165,28 +150,6 @@ def test_backup_get_bars_splits_long_yahoo_one_minute_ranges_and_dedupes(
     assert result.attrs["data_provider"] == "yahoo"
 
 
-def test_backoff_fetch_feed_uses_http_fallback_while_primary_on_cooldown(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    key = ("AAPL", "1Min")
-    start = datetime(2026, 4, 24, 14, 30, tzinfo=UTC)
-    end = start + timedelta(minutes=5)
-    fallback_frame = _frame()
-
-    backoff._PROVIDER_COOLDOWNS[key] = 200.0
-    monkeypatch.setattr(backoff, "monotonic_time", lambda: 100.0)
-    monkeypatch.setattr(backoff, "max_data_fallbacks", lambda: 1)
-    monkeypatch.setattr(backoff, "_provider_decision_window", lambda: 30.0)
-    monkeypatch.setattr(backoff, "_disable_primary_provider", lambda: None)
-    monkeypatch.setattr(backoff, "_fetch_bars", lambda *_args, **_kwargs: pytest.fail("primary should be skipped"))
-    monkeypatch.setattr(backoff, "_http_fallback", lambda *_args, **_kwargs: fallback_frame)
-
-    result = backoff._fetch_feed("AAPL", start, end, "1Min", feed="iex")
-
-    assert result is fallback_frame
-    assert key not in backoff._EMPTY_BAR_COUNTS
-    assert key not in backoff._SKIPPED_SYMBOLS
-    assert backoff._PROVIDER_COOLDOWNS[key] == 200.0
 
 
 def test_empty_handling_retries_then_clears_counts_on_success(

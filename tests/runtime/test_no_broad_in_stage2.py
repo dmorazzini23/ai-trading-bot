@@ -9,7 +9,6 @@ PATHS = [
     "ai_trading/strategies/mean_reversion.py",
     "ai_trading/execution/liquidity.py",
     "ai_trading/portfolio/optimizer.py",
-    "ai_trading/strategies/signals.py",
     "ai_trading/position/correlation_analyzer.py",
     "ai_trading/position/profit_taking.py",
     "ai_trading/data/bars.py",

@@ -202,9 +202,6 @@ pytest tests/ -v --cov=ai_trading
 
 # Import validation
 python -c "import ai_trading; import ai_trading.main"
-
-# Backtest smoke test with cost enforcement
-python -m ai_trading.strategies.backtest --smoke --enforce-costs
 ```
 
 ## Best Practices

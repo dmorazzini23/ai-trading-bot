@@ -6,7 +6,6 @@
 
 # Critical runtime flow
 /ai_trading/core/bot_engine.py          @OWNER_HANDLE @REVIEW_TEAM
-/ai_trading/runner.py                   @OWNER_HANDLE @REVIEW_TEAM
 /ai_trading/rebalancer.py               @OWNER_HANDLE @REVIEW_TEAM
 
 # Risk, monitoring, and execution layers

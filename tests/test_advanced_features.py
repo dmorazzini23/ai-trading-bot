@@ -16,22 +16,7 @@ try:
     from ai_trading import rebalancer
 except (ValueError, TypeError):
     pytest.skip("alpaca not available", allow_module_level=True)
-try:
-    from ai_trading.execution import slippage  # AI-AGENT-REF: use prod slippage module
-except (ValueError, TypeError):  # pragma: no cover - module optional
-    slippage = None
 
-
-
-def test_monitor_slippage_alert(monkeypatch):
-    """An alert is sent when slippage exceeds the threshold."""
-    if not slippage or not hasattr(slippage, "monitor_slippage"):
-        pytest.skip("slippage monitoring not available")
-    called = []
-    monkeypatch.setattr(slippage, "SLIPPAGE_THRESHOLD", 0.001)
-    monkeypatch.setattr(slippage.logger, "warning", lambda m: called.append(m))
-    slippage.monitor_slippage(100.0, 102.0, "AAPL")
-    assert called
 
 
 def test_maybe_rebalance(monkeypatch):

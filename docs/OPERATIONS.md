@@ -105,7 +105,7 @@ Live mode now requires one authoritative durability path:
 - Pretrade pacing persists by default at `runtime/pretrade_rate_limiter.db`; point
   `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` at a shared durable runtime volume if
   you run supervised active/passive processes on the same host.
-- The legacy SQLAlchemy database manager is retired outside tests; do not use
+- The legacy SQLAlchemy database manager has been removed; do not use
   the old `trades` / `portfolio` / `risk_metrics` / `performance_metrics`
   schema for runtime durability.
 

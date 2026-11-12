@@ -6,37 +6,12 @@ slippage calculations, and RL reward penalties.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Callable, cast
-from unittest.mock import Mock
+from typing import Any, cast
 
 import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
 # Test data labeling and splits
-def test_fixed_horizon_return():
-    """Test fixed horizon return calculation."""
-    try:
-        from ai_trading.data.labels import fixed_horizon_return
-
-        # Create test price series
-        prices = pd.Series([100, 102, 105, 103, 107])
-
-        # Test with 1-period horizon
-        returns = fixed_horizon_return(prices, horizon_bars=1, fee_bps=0)
-
-        # Check that returns are calculated correctly
-        expected = np.log(102/100)  # First return
-        assert abs(returns.iloc[0] - expected) < 1e-6, "Fixed horizon return calculation failed"
-
-        # Check with fees
-        returns_with_fees = fixed_horizon_return(prices, horizon_bars=1, fee_bps=10)
-        assert returns_with_fees.iloc[0] < returns.iloc[0], "Fee adjustment not applied"
-
-
-    except ImportError:
-        pass
-    except (ValueError, TypeError):
-        pass
 
 
 def test_no_leakage_validation():
@@ -65,35 +40,6 @@ def test_no_leakage_validation():
         pass
 
 
-def test_slippage_calculation():
-    """Test slippage calculation."""
-    try:
-        import ai_trading.execution.microstructure as microstructure
-        calculate_slippage_any = getattr(microstructure, "calculate_slippage", None)
-        if calculate_slippage_any is None:
-            return
-        calculate_slippage = cast(Callable[[float, float, float], float], calculate_slippage_any)
-
-        # Test basic slippage calculation
-        volatility = 0.02  # 2% volatility
-        trade_size = 1000
-        liquidity = 10000
-
-        slippage = calculate_slippage(volatility, trade_size, liquidity)
-
-        # Should be positive and reasonable
-        assert slippage > 0, "Slippage should be positive"
-        assert slippage < 0.1, "Slippage should be reasonable (< 10%)"
-
-        # Test that larger trades have higher slippage
-        large_trade_slippage = calculate_slippage(volatility, trade_size * 10, liquidity)
-        assert large_trade_slippage > slippage, "Larger trades should have higher slippage"
-
-
-    except ImportError:
-        pass
-    except (ValueError, TypeError):
-        pass
 
 
 def test_rl_reward_penalties():
@@ -232,62 +178,8 @@ def test_walk_forward_monotone_timeline():
         pass
 
 
-def test_feature_pipeline_no_leakage():
-    """Test feature pipeline doesn't leak information."""
-    try:
-        from ai_trading.features.pipeline import (
-            create_feature_pipeline,
-            validate_pipeline_no_leakage,
-        )
-
-        # Create synthetic data
-        np.random.seed(42)
-        dates = pd.date_range('2020-01-01', periods=200, freq='D')
-
-        # Create train/test data with different statistics
-        X_train = pd.DataFrame({
-            'close': 100 + np.cumsum(np.random.randn(100) * 0.5),
-            'volume': np.random.exponential(1000, 100),
-            'high': 100 + np.cumsum(np.random.randn(100) * 0.5) + np.random.exponential(1, 100),
-            'low': 100 + np.cumsum(np.random.randn(100) * 0.5) - np.random.exponential(1, 100)
-        }, index=dates[:100])
-
-        X_test = pd.DataFrame({
-            'close': 110 + np.cumsum(np.random.randn(100) * 0.8),  # Different mean and vol
-            'volume': np.random.exponential(1500, 100),
-            'high': 110 + np.cumsum(np.random.randn(100) * 0.8) + np.random.exponential(1.2, 100),
-            'low': 110 + np.cumsum(np.random.randn(100) * 0.8) - np.random.exponential(1.2, 100)
-        }, index=dates[100:])
-
-        # Create pipeline
-        pipeline = create_feature_pipeline(scaler_type="standard")
-
-        # Validate no leakage
-        try:
-            validate_pipeline_no_leakage(pipeline, X_train, X_test)
-            # The test should pass (no obvious leakage)
-        except (ValueError, TypeError):
-            # If validation fails due to missing dependencies, that's OK
-            pass
-
-    except ImportError:
-        pass
-    except (ValueError, TypeError):
-        pass
-
-
-def run_all_tests():
-    """Run all alpha quality tests."""
-
-    test_fixed_horizon_return()
-    test_no_leakage_validation()
-    test_slippage_calculation()
-    test_rl_reward_penalties()
-    test_model_registry()
-    test_walk_forward_monotone_timeline()
-    test_feature_pipeline_no_leakage()
 
 
 
-if __name__ == "__main__":
-    run_all_tests()
+
+

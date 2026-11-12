@@ -76,7 +76,6 @@ python3 -m ai_trading.tools.offline_replay \
 
 - [Entry and Exit Signals](ENTRY_EXIT_SIGNALS.md)
 - [Risk Engine](risk_engine.md)
-- [Slippage](slippage.md)
 - [Precision and Costs](precision_and_costs.md)
 
 ## Institutional Rollout
