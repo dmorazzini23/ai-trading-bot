@@ -1,6 +1,6 @@
 # Current handoff
 
-## November 12: unreachable modules, archival scripts and dead root files removed (not deployed) (start here)
+## November 12: unreachable modules, archival scripts and dead root files removed; deployed (`192123ebc`) (start here)
 
 Owner-requested audit ("delete over simplify"). Branch
 `claude/unreachable-module-cleanup` (worktree
@@ -47,7 +47,16 @@ files, about 25,500 lines removed; no trading decision changes and no
   `rl_trading/inference`, `features/pipeline`, `strategies/signals`,
   `data/labels`, `data/fetch/backoff`, `research/focused_cycle`,
   `runtime/equity_risk`, `runner`, `simple_models`.
-- Deploy needs the usual `release_spec.json` SHA bump and restart.
+- **Deployed** Thu 04:48 UTC (closed, flat), owner-approved. Pre-check: the
+  service's `release_identity` run from the new commit with the live env
+  against a scratch spec passed both phases (config hash unchanged). Spec
+  backup `runtime/release_spec.9242f77e9.bak.json` (SHA only). First start
+  succeeded: identity `pass`, `IMPORT_PREFLIGHT_OK`, engine init,
+  `BROKER_SYNC` x3 (0 positions, 0 open orders), 0 errors, NRestarts=0 after
+  four minutes. `/healthz` still 503 with only the preserved
+  `required_model_stale` and `replay_live_parity_gate_failed` flags.
+  Rollback: checkout `9242f77e9`, restore that spec, restart.
+- Not yet observed: a market-hours session on this commit.
 
 ## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed (not deployed)
 
