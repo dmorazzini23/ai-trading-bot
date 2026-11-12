@@ -116,7 +116,7 @@ Behavior:
 
 ### `GET /diag`
 
-Environment and Alpaca diagnostics from `ai_trading.diagnostics.http_diag`.
+Environment and Alpaca diagnostics from `ai_trading.diagnostics.env_diag`.
 
 Example:
 

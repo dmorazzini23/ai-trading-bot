@@ -1,6 +1,55 @@
 # Current handoff
 
-## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed (not deployed) (start here)
+## November 12: unreachable modules, archival scripts and dead root files removed (not deployed) (start here)
+
+Owner-requested audit ("delete over simplify"). Branch
+`claude/unreachable-module-cleanup` (worktree
+`.claude/worktrees/unreachable-module-cleanup`), on top of `9242f77e9`. 191
+files, about 25,500 lines removed; no trading decision changes and no
+`CONFIG_SPECS` change (config hash unaffected).
+- **Method:** import reachability from real entry points (`ai_trading.main`,
+  `__main__`, `app`, every `ai_trading.tools.*` CLI, systemd units, referenced
+  scripts, string/dynamic imports). Only modules reachable from tests alone
+  were deleted.
+- **Package modules (46 files):** the unwired "production system" cluster
+  (`production_system`, `production/`, `execution/production_engine`,
+  `monitoring/alerting`, `monitoring/performance_dashboard`,
+  `monitoring/dashboard`, `strategies/multi_timeframe`,
+  `strategies/regime_detection`, `risk/pre_trade_validation`,
+  `shutdown_handler`, `safety/`, `security`, `algorithm_optimizer`,
+  `core/parameter_validator`, `execution/simulator`), the retired
+  `database/` SQLAlchemy manager, `integrations/rate_limit`,
+  `data/{daily_cache,fallback_cache,retry_handler,rate_limiter}`,
+  `data/fetch/core`, `diagnostics/http_diag`, `monitoring/drift`,
+  `portfolio/{risk_controls,short_close}`, `utils/{determinism,performance,
+  pickle_safe,ids}`, `core/hyperparams_schema`, `config/scaling`,
+  `scheduler/`, `backtesting/`, `pipeline/basic`,
+  `meta_learning/conversion`, `execution/order_slicer`, `main_extended`,
+  `main_trade_log_path`.
+- **Scripts/tools/root:** 39 archival demo/validate scripts and
+  `scripts/legacy_guard.py` (with the tests that only quarantined them), 24
+  unreferenced one-shot `tools/` codemods, and root `deploy.sh` (ssh as root,
+  `git reset --hard`, wrong unit name, bypassed the release spec), `run.py`,
+  `run_checks`, `run_checks.sh`, `cleanup_pycache.sh`,
+  `cache_config_example.env`, `DEPLOYMENT.md`.
+- **Tests:** 44 test files deleted, 18 trimmed. `tests/public_api/
+  test_exports.py` asserts the production-system files stay gone.
+- **Validation:** full `pytest` 7400 passed, 4 skipped (26 min); `ruff check`,
+  `mypy`, `typecheck_strict.sh`, `py_compile` clean; every remaining
+  `ai_trading` module imports.
+- **Worktree trap:** the venv is an editable install of the live checkout, so
+  in a worktree a deleted module silently resolves from
+  `/home/aiuser/ai-trading-bot`. Validation here removed `_EditableFinder`
+  from `sys.meta_path` first.
+- **Left for owner decision (still unreachable, about 10,900 lines):**
+  `strategies/backtest` + `execution/microstructure`, `evaluation/walkforward`
+  + `training/{train_ml,stacking}`, `replay/replay_engine`, `rl/module` +
+  `rl_trading/inference`, `features/pipeline`, `strategies/signals`,
+  `data/labels`, `data/fetch/backoff`, `research/focused_cycle`,
+  `runtime/equity_risk`, `runner`, `simple_models`.
+- Deploy needs the usual `release_spec.json` SHA bump and restart.
+
+## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed (not deployed)
 
 Owner-approved cleanup of the two audit items left in place on `829b5f5e2`,
 following a read-only Fable 5.2 plan. Branch `claude/dead-code-removal`; no

@@ -1,7 +1,7 @@
 # ATR Stop Max Factor
 
 The ATR-based stop helper scales take-profit targets using a maximum
-factor. The default is `2.0` as defined in `ai_trading.config.scaling`.
+factor. The default comes from the active trading mode's defaults.
 Deployments may override this by setting the `TAKE_PROFIT_FACTOR`
 environment variable:
 

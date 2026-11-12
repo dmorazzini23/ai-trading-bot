@@ -1,125 +1,8 @@
-# Rate Limits and SLOs Documentation
+# SLO Monitoring Documentation
 
 ## Overview
 
-This document describes the rate limiting and Service Level Objective (SLO) monitoring systems designed to prevent API throttling and ensure system performance meets defined standards.
-
-## Central Rate Limiter
-
-### Purpose
-Orchestrate API calls across the entire trading system to prevent 429 errors and API throttling while providing configurable limits per route with burst capacity.
-
-### Architecture
-- **Token Bucket Algorithm** - Allows burst capacity with controlled refill
-- **Per-Route Limits** - Different limits for orders, market data, account info
-- **Global Rate Limiting** - System-wide capacity management
-- **Async-Safe Interface** - Thread-safe for concurrent operations
-- **Jittered Refill** - Prevents thundering herd effects
-
-### Rate Limit Configuration
-
-Default route configurations:
-
-| Route | Burst Capacity | Refill Rate | Use Case |
-|-------|----------------|-------------|----------|
-| orders | 50 | 10/sec | Order submission/modification |
-| bars | 200 | 50/sec | Historical data requests |
-| quotes | 100 | 20/sec | Real-time quote requests |
-| positions | 20 | 5/sec | Position/portfolio queries |
-| account | 10 | 2/sec | Account information |
-
-### Usage Examples
-
-#### Async Rate Limiting
-```python
-from ai_trading.integrations.rate_limit import get_rate_limiter
-
-# Get global rate limiter
-limiter = get_rate_limiter()
-
-# Async usage
-async def submit_order():
-    # Acquire tokens before API call
-    acquired = await limiter.acquire('orders', tokens=1, timeout=30.0)
-    if not acquired:
-        raise Exception("Rate limit exceeded")
-    
-    # Make API call
-    response = await api_client.submit_order(...)
-    return response
-
-# Context manager usage
-async def get_quotes():
-    async with limiter.limit('quotes', tokens=1):
-        quotes = await api_client.get_quotes(...)
-        return quotes
-```
-
-#### Synchronous Rate Limiting
-```python
-from ai_trading.integrations.rate_limit import rate_limit_sync
-
-# Synchronous usage
-def fetch_historical_data():
-    acquired = rate_limit_sync('bars', tokens=5, timeout=10.0)
-    if not acquired:
-        logger.warning("Rate limit exceeded for historical data")
-        return None
-    
-    return api_client.get_historical_bars(...)
-```
-
-#### Custom Route Configuration
-```python
-from ai_trading.integrations.rate_limit import RateLimitConfig
-
-# Define custom rate limits
-custom_config = RateLimitConfig(
-    capacity=30,        # 30 burst capacity
-    refill_rate=5.0,    # 5 tokens per second
-    queue_timeout=60.0, # 60 second max wait
-    enabled=True
-)
-
-limiter.configure_route('custom_api', custom_config)
-```
-
-### Rate Limiter Status
-```python
-# Check rate limiter status
-status = limiter.get_status()
-print(f"Global available tokens: {status['global']['available_tokens']}")
-
-# Check specific route
-orders_status = limiter.get_status('orders')
-print(f"Orders available: {orders_status['available_tokens']}")
-print(f"Orders capacity: {orders_status['capacity']}")
-
-# Get metrics
-print(f"Orders metrics: {orders_status['metrics']}")
-```
-
-### Integration with API Clients
-```python
-class AlpacaClientWithRateLimit:
-    def __init__(self):
-        self.limiter = get_rate_limiter()
-        self.client = AlpacaAPI()
-    
-    async def submit_order(self, order_data):
-        # Rate limit order submissions
-        async with self.limiter.limit('orders'):
-            return await self.client.submit_order(order_data)
-    
-    async def get_bars(self, symbols, timeframe):
-        # Rate limit market data requests
-        tokens_needed = len(symbols)  # One token per symbol
-        acquired = await self.limiter.acquire('bars', tokens=tokens_needed)
-        if not acquired:
-            raise RateLimitExceeded("Market data rate limit exceeded")
-        
-        return await self.client.get_bars(symbols, timeframe)
-```
+This document describes the Service Level Objective (SLO) monitoring system. The former central rate limiter (`ai_trading.integrations.rate_limit`) was removed as unused; order pacing lives in the OMS pretrade rate limiter.
 
 ## SLO Monitoring
 
@@ -253,40 +136,6 @@ monitor.record_metric('strategy_alpha', 0.05)  # 5bps alpha
 
 ## Integration Patterns
 
-### API Client Integration
-```python
-class RateLimitedAPIClient:
-    def __init__(self, api_client):
-        self.client = api_client
-        self.limiter = get_rate_limiter()
-        self.monitor = get_slo_monitor()
-    
-    async def api_call_with_monitoring(self, route: str, operation: str, *args, **kwargs):
-        # Rate limiting
-        start_time = time.time()
-        acquired = await self.limiter.acquire(route, timeout=30.0)
-        if not acquired:
-            self.monitor.record_metric('error_rate_pct', 100.0)
-            raise RateLimitExceeded(f"Rate limit exceeded for {route}")
-        
-        try:
-            # Make API call
-            result = await getattr(self.client, operation)(*args, **kwargs)
-            
-            # Record successful latency
-            latency_ms = (time.time() - start_time) * 1000
-            self.monitor.record_metric(f'{operation}_latency_ms', latency_ms)
-            self.monitor.record_metric('error_rate_pct', 0.0)
-            
-            return result
-            
-        except Exception as e:
-            # Record error
-            self.monitor.record_metric('error_rate_pct', 100.0)
-            logger.error(f"API call failed: {operation} - {e}")
-            raise
-```
-
 ### Trading Engine Integration
 ```python
 class TradingEngineWithSLO:
@@ -321,30 +170,6 @@ class TradingEngineWithSLO:
 
 ## Configuration Files
 
-### Rate Limit Configuration
-```json
-{
-  "global": {
-    "capacity": 1000,
-    "refill_rate": 100.0
-  },
-  "routes": {
-    "orders": {
-      "capacity": 50,
-      "refill_rate": 10.0,
-      "queue_timeout": 30.0,
-      "enabled": true
-    },
-    "market_data": {
-      "capacity": 200,
-      "refill_rate": 50.0,
-      "queue_timeout": 10.0,
-      "enabled": true
-    }
-  }
-}
-```
-
 ### SLO Configuration
 ```json
 {
@@ -373,28 +198,6 @@ class TradingEngineWithSLO:
 
 ## Monitoring and Alerting
 
-### Health Check Endpoint
-```python
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.route('/health')
-def health_check():
-    monitor = get_slo_monitor()
-    limiter = get_rate_limiter()
-    
-    health_summary = monitor.get_health_summary()
-    rate_limit_status = limiter.get_status()
-    
-    return jsonify({
-        'status': health_summary['overall_health'],
-        'slo_summary': health_summary,
-        'rate_limits': rate_limit_status,
-        'timestamp': datetime.now(timezone.utc).isoformat()
-    })
-```
-
 ### Metrics Export
 ```python
 def export_metrics_to_prometheus():
@@ -410,13 +213,6 @@ def export_metrics_to_prometheus():
 ```
 
 ## Best Practices
-
-### Rate Limiting
-1. **Configure appropriate burst capacity** for API patterns
-2. **Use timeouts** to prevent indefinite blocking
-3. **Monitor rate limit metrics** to optimize settings
-4. **Implement graceful degradation** when limits are hit
-5. **Use jittered delays** to prevent thundering herd
 
 ### SLO Monitoring
 1. **Set realistic thresholds** based on historical performance

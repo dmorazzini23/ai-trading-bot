@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -14,7 +13,6 @@ from ai_trading.governance.promotion import (
     PromotionMetrics,
 )
 from ai_trading.model_registry import ModelRegistry
-from ai_trading.safety import monitoring
 
 
 def _register_test_model(
@@ -399,129 +397,9 @@ def test_live_kpi_rollout_clears_prior_window_when_state_recovers(
     assert state["strategies"]["rollout_recovered"]["observation_hashes"]
 
 
-def test_safety_threshold_boundaries_and_degraded_health_state() -> None:
-    monitor = monitoring.SafetyMonitor()
-    alerts: list[dict[str, Any]] = []
-    monitor.add_alert_callback(alerts.append)
-
-    monitor.stop_monitoring()
-    monitor.pause_trading("operator review")
-    monitor.metrics.update(
-        daily_pnl=-5_000.0,
-        total_portfolio_value=100_000.0,
-        current_drawdown=0.10,
-        available_cash=1_000.0,
-        orders_this_minute=50,
-        failed_orders_count=10,
-    )
-
-    assert monitor.check_safety_thresholds() == []
-    assert monitor.get_system_health()["status"] == "paused"
-
-    monitor.metrics.update(
-        daily_pnl=-5_001.0,
-        current_drawdown=0.1001,
-        available_cash=999.99,
-        orders_this_minute=51,
-        failed_orders_count=11,
-    )
-    violations = monitor.check_safety_thresholds()
-
-    assert [(item["type"], item["severity"], item["action"]) for item in violations] == [
-        ("daily_loss_limit", monitoring.AlertSeverity.CRITICAL, "emergency_stop"),
-        ("max_drawdown", monitoring.AlertSeverity.CRITICAL, "pause_trading"),
-        ("low_cash", monitoring.AlertSeverity.WARNING, "alert_only"),
-        ("order_rate_limit", monitoring.AlertSeverity.WARNING, "pause_trading"),
-        ("failed_orders", monitoring.AlertSeverity.CRITICAL, "emergency_stop"),
-    ]
-    assert alerts[-1]["severity"] == "warning"
 
 
-def test_safety_monitoring_loop_classifies_pause_and_emergency_actions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monitor = monitoring.SafetyMonitor()
-    alerts: list[dict[str, Any]] = []
-    sleeps: list[float] = []
-    monitor.add_alert_callback(alerts.append)
-    monitor.metrics.update(
-        total_portfolio_value=100_000.0,
-        available_cash=10_000.0,
-        current_drawdown=0.20,
-        failed_orders_count=20,
-    )
-
-    def sleep_once(seconds: float) -> None:
-        sleeps.append(seconds)
-        monitor.is_monitoring = False
-
-    monkeypatch.setattr(monitoring.time, "sleep", sleep_once)
-    monitor.is_monitoring = True
-
-    monitor._monitoring_loop()
-
-    assert sleeps == [1]
-    assert monitor.emergency_stop_triggered is True
-    assert monitor.state is monitoring.TradingState.EMERGENCY_STOP
-    assert [alert["severity"] for alert in alerts].count("critical") >= 2
 
 
-def test_kill_switch_monitor_handles_auto_kill_and_degraded_polling(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monitor = monitoring.SafetyMonitor()
-    kill_switch = monitoring.KillSwitch(monitor)
-    kill_switch.auto_kill_time = datetime(2026, 4, 27, tzinfo=UTC)
-    kill_switch.is_monitoring = True
-    reasons: list[str] = []
-    sleeps: list[float] = []
-
-    monkeypatch.setattr(
-        monitoring,
-        "safe_utcnow",
-        lambda: datetime(2026, 4, 27, 0, 0, 1, tzinfo=UTC),
-    )
-    monkeypatch.setattr(kill_switch, "_check_kill_file", lambda: False)
-    monkeypatch.setattr(kill_switch, "trigger_kill_switch", reasons.append)
-
-    def sleep_once(seconds: float) -> None:
-        sleeps.append(seconds)
-        kill_switch.is_monitoring = False
-
-    monkeypatch.setattr(monitoring.time, "sleep", sleep_once)
-
-    kill_switch._kill_switch_monitor()
-
-    assert reasons == ["Auto-kill time reached"]
-    assert kill_switch.auto_kill_time is None
-    assert sleeps == [1]
-
-    kill_switch.is_monitoring = True
-    sleeps.clear()
-    monkeypatch.setattr(
-        kill_switch,
-        "_check_kill_file",
-        lambda: (_ for _ in ()).throw(TypeError("poll degraded")),
-    )
-
-    kill_switch._kill_switch_monitor()
-
-    assert sleeps == [5]
 
 
-def test_kill_switch_file_removal_failure_still_classifies_as_triggered(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monitor = monitoring.SafetyMonitor()
-    kill_switch = monitoring.KillSwitch(monitor)
-    kill_switch.kill_file_path = str(tmp_path / "KILL_SWITCH.flag")
-    Path(kill_switch.kill_file_path).write_text("halt", encoding="utf-8")
-    monkeypatch.setattr(
-        os,
-        "remove",
-        lambda _path: (_ for _ in ()).throw(TypeError("remove degraded")),
-    )
-
-    assert kill_switch._check_kill_file() is True
-    assert Path(kill_switch.kill_file_path).exists()

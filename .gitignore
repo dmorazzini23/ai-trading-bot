@@ -133,7 +133,6 @@ sitecustomize.py
 
 # Tracked source and governance fixtures intentionally kept despite broad local ignores.
 !.env.example
-!cache_config_example.env
 !ai_trading/data/tickers.csv
 !ai_trading/startup/config.py
 !tools/ci/*.csv

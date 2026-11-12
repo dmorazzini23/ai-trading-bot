@@ -53,7 +53,7 @@ execution, persistence, and operator recovery.
 ### Idempotency, reconciliation, and OMS persistence
 
 - Stable order identity support exists:
-  - [ai_trading/utils/ids.py](../ai_trading/utils/ids.py)
+  - [ai_trading/core/order_ids.py](../ai_trading/core/order_ids.py)
 - Durable OMS / restart reconciliation infrastructure exists:
   - [docs/runbooks/restart_reconciliation.md](runbooks/restart_reconciliation.md)
   - [docs/persistence/sprint1_adr.md](persistence/sprint1_adr.md)

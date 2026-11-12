@@ -1,5 +1,7 @@
 import importlib
 from importlib import import_module
+from pathlib import Path
+
 import pytest
 
 EXPECTED = {
@@ -148,11 +150,9 @@ def test_legacy_production_surfaces_are_not_package_exports():
     assert "ProductionExecutionCoordinator" not in execution_mod.__all__
     assert not hasattr(ai_trading, "production_system")
     assert not hasattr(execution_mod, "ProductionExecutionCoordinator")
-    production_system = import_module("ai_trading.production_system")
-    production_engine = import_module("ai_trading.execution.production_engine")
-    assert production_system.RESEARCH_ONLY is True
-    assert production_engine.RESEARCH_ONLY is True
-    assert production_engine.LIVE_EXECUTION_AUTHORITY == "canonical_oms_pretrade"
+    package_dir = Path(ai_trading.__file__).resolve().parent
+    assert not (package_dir / "production_system.py").exists()
+    assert not (package_dir / "execution" / "production_engine.py").exists()
 
 
 def test_root_execution_engine_export_uses_runtime_selector(monkeypatch):

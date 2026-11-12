@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 from ai_trading import health_monitor as hm
-from ai_trading import shutdown_handler as sh
 
 
-def _shutdown_handler(monkeypatch):
-    monkeypatch.setattr(sh.signal, "signal", lambda sig, handler: f"old-{sig}")
-    return sh.ShutdownHandler()
 
 
 def test_health_monitor_psutil_resource_branches(monkeypatch):
@@ -90,85 +85,5 @@ def test_health_monitor_resource_fallbacks_and_global_wrappers(monkeypatch):
     assert hm.run_health_check() == []
 
 
-def test_shutdown_forced_positions_and_failure_paths(monkeypatch):
-    handler = _shutdown_handler(monkeypatch)
-    events: list[str] = []
-    handler.config["force_close_positions"] = True
-    handler.config["save_state_on_shutdown"] = False
-    handler.register_order_handler(lambda: [])
-    handler.register_position_handler(lambda: [{"symbol": "AAPL"}])
-
-    async def close_position(position):
-        events.append(f"close:{position['symbol']}")
-
-    handler._close_single_position = close_position
-    assert asyncio.run(handler.shutdown(sh.ShutdownReason.USER_REQUEST)) is True
-    assert events == ["close:AAPL"]
-    assert handler.get_shutdown_status().positions_closed == 1
-
-    failed = _shutdown_handler(monkeypatch)
-
-    async def fail_gracefully():
-        raise OSError("stop failed")
-
-    failed._graceful_shutdown = fail_gracefully
-    assert asyncio.run(failed.shutdown(sh.ShutdownReason.SYSTEM_ERROR)) is False
-    assert failed.get_shutdown_status().phase is sh.ShutdownPhase.FAILED
-    assert failed.get_shutdown_status().errors == ["stop failed"]
-
-    emergency = _shutdown_handler(monkeypatch)
-
-    async def fail_emergency():
-        raise TimeoutError("too slow")
-
-    emergency._emergency_shutdown = fail_emergency
-    assert asyncio.run(emergency.shutdown(sh.ShutdownReason.EMERGENCY_STOP, emergency=True)) is False
-    assert emergency.get_shutdown_status().phase is sh.ShutdownPhase.FAILED
 
 
-def test_shutdown_hooks_state_files_and_module_wrappers(tmp_path, monkeypatch):
-    handler = _shutdown_handler(monkeypatch)
-    monkeypatch.chdir(tmp_path)
-    handler._status.reason = sh.ShutdownReason.USER_REQUEST
-    handler._status.phase = sh.ShutdownPhase.SAVING_STATE
-    handler.update_system_state({"mode": "paper"})
-    handler.set_active_positions([{"symbol": "AAPL"}])
-    handler.set_pending_orders([{"id": "order-1"}])
-
-    asyncio.run(handler._save_system_state())
-    asyncio.run(handler._save_critical_state())
-    saved = sorted((tmp_path / "logs").glob("*.json"))
-    assert [path.name.split("_state_")[0] for path in saved] == ["emergency", "shutdown"]
-    payloads = [json.loads(path.read_text()) for path in saved]
-    assert any(payload.get("system_state") == {"mode": "paper"} for payload in payloads)
-    assert any(payload.get("emergency_shutdown") is True for payload in payloads)
-
-    async def async_error():
-        raise OSError("async hook failed")
-
-    def sync_error():
-        raise OSError("sync hook failed")
-
-    handler.register_pre_shutdown_hook(async_error)
-    handler.register_cleanup_hook(sync_error)
-    handler.register_post_shutdown_hook(sync_error)
-    asyncio.run(handler._run_pre_shutdown_hooks())
-    asyncio.run(handler._run_cleanup_hooks())
-    asyncio.run(handler._run_post_shutdown_hooks())
-    assert any("Pre-shutdown hook error" in err for err in handler.get_shutdown_status().errors)
-    assert any("Cleanup hook error" in err for err in handler.get_shutdown_status().errors)
-
-    asyncio.run(handler._cancel_single_order({"id": "order-1"}))
-    asyncio.run(handler._close_single_position({"symbol": "AAPL"}))
-
-    monkeypatch.setattr(sh, "_shutdown_handler", handler)
-    called: list[tuple[str, bool]] = []
-
-    async def fake_shutdown(reason=sh.ShutdownReason.USER_REQUEST, emergency=False):
-        called.append((reason.value, emergency))
-        return True
-
-    handler.shutdown = fake_shutdown
-    assert asyncio.run(sh.initiate_shutdown(sh.ShutdownReason.SCHEDULED_MAINTENANCE)) is True
-    assert asyncio.run(sh.emergency_shutdown()) is True
-    assert called == [("scheduled_maintenance", False), ("emergency_stop", True)]

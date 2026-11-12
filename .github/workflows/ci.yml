@@ -230,7 +230,7 @@ jobs:
       - name: Legacy scan
         run: make legacy-scan
       - name: Dead code scan
-        run: vulture ai_trading scripts run.py --min-confidence 80
+        run: vulture ai_trading scripts --min-confidence 80
       - name: Tests
         run: |
           pytest -q -n auto --junitxml=.ci/pytest-results.xml \
@@ -298,8 +298,7 @@ jobs:
             tests/integration/test_replay_seed_matrix_env.py \
             tests/integration/test_replay_async_order_events.py \
             tests/integration/test_parity_invariants.py \
-            tests/unit/test_simulated_broker_reproducible.py \
-            tests/unit/test_no_unseeded_global_random_simulator_usage.py
+            tests/unit/test_simulated_broker_reproducible.py
 
   nightly-full-deps:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_nightly_full_deps)

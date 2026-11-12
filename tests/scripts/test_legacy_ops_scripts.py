@@ -110,21 +110,6 @@ def test_ab_pacing_arm_apply_writes_env_stamp_and_restarts(monkeypatch, tmp_path
     assert list(tmp_path.glob(".env.bak.*"))
 
 
-def test_guarded_legacy_scripts_seed_only_canonical_env_names() -> None:
-    for relative_path in (
-        "scripts/demo_enhanced_debugging.py",
-        "scripts/final_validation.py",
-        "scripts/validate_critical_fix.py",
-        "scripts/validate_standalone.py",
-    ):
-        text = (_repo_root() / relative_path).read_text(encoding="utf-8")
-
-        assert "ALPACA_BASE_URL" not in text
-        assert "FLASK_PORT" not in text
-        assert "ALPACA_TRADING_BASE_URL" in text
-        assert "API_PORT" in text
-
-
 def test_runtime_prune_script_covers_retention_planner_artifacts() -> None:
     script = Path("scripts/prune_runtime_jsonl.sh").read_text(encoding="utf-8")
 

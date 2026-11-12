@@ -5,7 +5,6 @@ and other critical fixes for production readiness.
 """
 
 import os
-import threading
 from unittest.mock import Mock, patch
 
 import pytest
@@ -55,38 +54,6 @@ def test_metrics_division_by_zero_protection():
     assert all(atr_result.notna())  # Should not have NaN values
 
 
-def test_algorithm_optimizer_thread_safety():
-    """Test algorithm optimizer thread safety."""
-    from ai_trading.algorithm_optimizer import AlgorithmOptimizer
-
-    optimizer = AlgorithmOptimizer()
-
-    # Test concurrent access to kelly fraction calculation
-    results = []
-    errors = []
-
-    def calculate_concurrently():
-        try:
-            # Simulate multiple threads accessing Kelly calculation
-            for i in range(100):
-                result = optimizer._calculate_kelly_fraction("TEST")
-                results.append(result)
-        except RuntimeError as e:
-            errors.append(e)
-
-    # Run multiple threads
-    threads = []
-    for _ in range(5):
-        thread = threading.Thread(target=calculate_concurrently)
-        threads.append(thread)
-        thread.start()
-
-    for thread in threads:
-        thread.join()
-
-    # Should have results from all threads without errors
-    assert len(errors) == 0, f"Thread safety errors: {errors}"
-    assert len(results) == 500  # 5 threads * 100 calculations each
 
 
 def test_sentiment_cache_memory_leak_prevention():
@@ -216,23 +183,6 @@ def test_market_data_validation():
     assert result.severity in [ValidationSeverity.ERROR, ValidationSeverity.CRITICAL]
 
 
-def test_security_manager():
-    """Test security manager functionality."""
-    from ai_trading.security import mask_sensitive_data
-
-    # Test data masking
-    sensitive_data = {
-        'ALPACA_API_KEY': 'FAKE_TEST_API_KEY_NOT_REAL_12345',
-        'username': 'testuser',
-        'password': 'secretpassword123',
-        'normal_field': 'normal_value'
-    }
-
-    masked = mask_sensitive_data(sensitive_data)
-
-    # API key should be masked
-    assert 'FAKE_TEST_API_KEY_NOT_REAL_12345' not in str(masked)
-    assert 'normal_value' in str(masked)  # Normal fields unchanged
 
 
 def test_configuration_validation():
@@ -290,25 +240,3 @@ def test_performance_optimizations():
     assert getattr(ema, "is_initialized", False)
 
 
-if __name__ == "__main__":
-    # Run tests
-
-    test_metrics_division_by_zero_protection()
-
-    test_algorithm_optimizer_thread_safety()
-
-    test_sentiment_cache_memory_leak_prevention()
-
-    test_circular_buffer_memory_efficiency()
-
-    test_incremental_indicators()
-
-    test_market_data_validation()
-
-    test_security_manager()
-
-    test_configuration_validation()
-
-    test_dependency_injection()
-
-    test_performance_optimizations()

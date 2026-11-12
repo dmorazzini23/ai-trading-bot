@@ -8,7 +8,6 @@ def test_direct_deserialization_calls_are_limited_to_approved_files() -> None:
     allowed = {
         Path("ai_trading/models/artifacts.py"),
         Path("ai_trading/tools/migrate_pickle_artifacts.py"),
-        Path("ai_trading/utils/pickle_safe.py"),
     }
     patterns = ("joblib.load(", "pickle.load(", "_pickle.load(")
     offenders: list[str] = []

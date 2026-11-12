@@ -4,7 +4,6 @@ Tests for peak performance hardening modules.
 """
 
 from datetime import UTC, datetime
-import sys
 
 import numpy as np
 import pytest
@@ -44,7 +43,6 @@ def test_order_idempotency():
 
 def test_position_reconciliation():
     """Test position reconciliation logic."""
-    from datetime import datetime
 
     from ai_trading.core.interfaces import Position
     from ai_trading.execution.reconcile import PositionReconciler
@@ -101,28 +99,6 @@ def test_position_reconciliation():
     assert aapl_drift.drift_qty == -2.0  # local - broker
 
 
-def test_aligned_clock():
-    """Test exchange-aligned clock functionality."""
-    from ai_trading.scheduler.aligned_clock import AlignedClock
-
-    clock = AlignedClock(max_skew_ms=250.0)
-
-    # Test skew checking
-    skew = clock.check_skew()
-    assert isinstance(skew, float)
-    assert abs(skew) < 5000  # Should be reasonable
-
-    # Test bar validation
-    validation = clock.ensure_final_bar("TEST", "1m", tzinfo=UTC)
-    assert hasattr(validation, "is_final")
-    assert hasattr(validation, "skew_ms")
-    assert validation.current_time.tzinfo == UTC
-    assert validation.bar_close_time.tzinfo == UTC
-
-    # Test market hours (basic check)
-    test_time = datetime(2023, 6, 15, 14, 30, tzinfo=UTC)  # Weekday 2:30 PM UTC
-    is_open = clock.is_market_open("AAPL", test_time)
-    assert isinstance(is_open, bool)
 
 
 def test_symbol_costs():
@@ -167,155 +143,12 @@ def test_symbol_costs():
     assert impact["cost_dollars"] > 0
 
 
-def test_adaptive_risk_controls():
-    """Test adaptive risk control system."""
-    from ai_trading.portfolio.risk_controls import AdaptiveRiskController
-
-    pd = pytest.importorskip("pandas")
-
-    # Create test data
-    np.random.seed(42)
-    dates = pd.date_range("2023-01-01", periods=100, freq="D")
-    symbols = ["AAPL", "GOOGL", "MSFT"]
-
-    returns_data = pd.DataFrame(np.random.normal(0, 0.02, (100, 3)), index=dates, columns=symbols)
-
-    controller = AdaptiveRiskController()
-
-    # Test volatility calculation
-    vols = controller.calculate_volatilities(returns_data)
-    assert len(vols) == 3
-    for symbol in symbols:
-        assert symbol in vols
-        assert vols[symbol] > 0
-
-    # Test correlation clustering (skip if scipy not available)
-    try:
-        clusters = controller.calculate_correlation_clusters(returns_data)
-        assert len(clusters) == 3
-        assert all(isinstance(cluster_id, int) for cluster_id in clusters.values())
-    except ImportError:
-        pass  # Skip if clustering dependencies not available
-
-    # Test Kelly calculation
-    expected_returns = {symbol: 0.01 for symbol in symbols}  # 1% expected return
-    kelly_fractions = controller.calculate_kelly_fractions(expected_returns, vols)
-
-    assert len(kelly_fractions) == 3
-    for symbol in symbols:
-        assert kelly_fractions[symbol] >= 0  # Kelly fractions should be non-negative
 
 
-def test_determinism(monkeypatch):
-    """Test deterministic training setup."""
-    pd = pytest.importorskip("pandas")
-    monkeypatch.setitem(
-        sys.modules,
-        "lightgbm",
-        type("_LGBMStub", (), {"reset_parameter": staticmethod(lambda *_a, **_k: None)})(),
-    )
-    from ai_trading.utils.determinism import hash_data, set_random_seeds
-
-    # Test seed setting
-    set_random_seeds(42)
-
-    # Generate some random numbers to verify determinism
-    np_random1 = np.random.random(5)
-
-    # Reset and generate again
-    set_random_seeds(42)
-    np_random2 = np.random.random(5)
-
-    np.testing.assert_array_equal(np_random1, np_random2)
-
-    # Test data hashing
-    test_data = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
-    hash1 = hash_data(test_data)
-    hash2 = hash_data(test_data)
-
-    assert hash1 == hash2
-    assert len(hash1) == 16  # Should be 16-char hash
-
-    # Test different data produces different hash
-    test_data2 = pd.DataFrame({"A": [1, 2, 4], "B": [4, 5, 6]})  # Changed one value
-    hash3 = hash_data(test_data2)
-
-    assert hash1 != hash3
 
 
-def test_drift_monitoring():
-    """Test drift monitoring functionality."""
-    from ai_trading.monitoring.drift import DriftMonitor
-
-    pd = pytest.importorskip("pandas")
-
-    monitor = DriftMonitor()
-
-    # Create baseline and current features
-    np.random.seed(42)
-    baseline_features = pd.DataFrame(
-        {"feature1": np.random.normal(0, 1, 1000), "feature2": np.random.normal(0, 1, 1000)}
-    )
-
-    # Update baseline
-    monitor.update_baseline(baseline_features)
-
-    # Create current features with slight drift
-    current_features = pd.DataFrame(
-        {
-            "feature1": np.random.normal(0.1, 1, 500),  # Small mean shift
-            "feature2": np.random.normal(0, 1.2, 500),  # Increased variance
-        }
-    )
-
-    # Monitor drift
-    drift_metrics = monitor.monitor_feature_drift(current_features)
-
-    assert len(drift_metrics) == 2
-    for metric in drift_metrics:
-        assert metric.psi_score >= 0
-        assert metric.drift_level in ["low", "medium", "high"]
-        assert metric.sample_size == 500
 
 
-def test_performance_optimizations():
-    """Test performance optimization utilities."""
-    from ai_trading.utils.performance import (
-        PerformanceCache,
-        VectorizedOperations,
-        benchmark_operation,
-    )
-
-    pd = pytest.importorskip("pandas")
-
-    # Test caching
-    cache = PerformanceCache(max_size=10, ttl_seconds=60)
-
-    cache.set("test_key", "test_value")
-    assert cache.get("test_key") == "test_value"
-    assert cache.get("nonexistent") is None
-
-    # Test vectorized operations
-    np.random.seed(42)
-    prices = pd.Series(np.random.random(100).cumsum() + 100)
-
-    # Test fast returns
-    returns = VectorizedOperations.fast_returns(prices, periods=1)
-    assert len(returns) == len(prices)
-    assert np.isnan(returns.iloc[0])  # First value should be NaN
-
-    # Test rolling z-score
-    zscore = VectorizedOperations.rolling_zscore(prices, window=20)
-    assert len(zscore) == len(prices)
-
-    # Test benchmark function
-    def dummy_operation(data):
-        return data.sum()
-
-    result = benchmark_operation("test_sum", dummy_operation, prices)
-    assert result.operation == "test_sum"
-    # Allow very small durations; just ensure the measurement isn't negative
-    assert result.duration_ms >= 0
 
 
 def test_smart_order_routing():
