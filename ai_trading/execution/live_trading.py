@@ -1766,42 +1766,6 @@ _MARKET_ONLY_ERROR_TOKENS = (
 )
 
 
-def _should_retry_limit_as_market(
-    metadata: dict[str, Any], *, using_fallback_price: bool
-) -> bool:
-    """Return True when a limit rejection should be retried as a market order."""
-
-    if not using_fallback_price:
-        return False
-
-    detail = str(metadata.get("detail") or metadata.get("error") or "").strip().lower()
-    if not detail:
-        detail = ""
-
-    code_raw = metadata.get("code")
-    code_str = str(code_raw).strip() if code_raw is not None else ""
-
-    if detail:
-        for token in _MARKET_ONLY_ERROR_TOKENS:
-            if token in detail:
-                return True
-        if "price" in detail and any(marker in detail for marker in ("band", "nbbo", "quote")):
-            return True
-
-    if code_str:
-        if code_str in {"40010001", "40010003", "42210000", "42210001", "40610000"}:
-            return True
-    status_code = metadata.get("status_code")
-    try:
-        status_int = int(status_code) if status_code is not None else None
-    except (TypeError, ValueError):  # pragma: no cover - defensive conversion
-        status_int = None
-    if status_int in {400, 422} and detail:
-        if any(token in detail for token in ("price", "nbbo", "quote")):
-            return True
-    return False
-
-
 def _config_int(name: str, default: int | None) -> int | None:
     """Fetch integer configuration via get_env with os fallback."""
 

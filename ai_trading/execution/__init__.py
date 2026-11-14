@@ -140,11 +140,6 @@ def _missing_creds() -> list[str]:
     return missing
 
 
-def _creds_ok() -> bool:
-    has_key, has_secret = alpaca_credential_status()
-    return has_key and has_secret
-
-
 def _select_execution_engine() -> type[_SimExecutionEngine]:
     """Return the execution engine class based on runtime configuration."""
 
@@ -259,12 +254,6 @@ PnLSource: Any
 PositionDiscrepancy: Any
 SwingTradingMode: Any
 
-# Optional submodule: algorithms
-try:  # pragma: no cover - optional dependency
-    from . import algorithms
-except _OPTIONAL_IMPORT_EXCEPTIONS:
-    algorithms = None
-
 # Optional utilities guarded against missing dependencies
 try:  # pragma: no cover - optional dependency
     from .debug_tracker import (
@@ -354,7 +343,6 @@ __all__ = [
     "select_execution_engine",
     "ExecutionResult",
     "OrderRequest",
-    "algorithms",
     "LiquidityAnalyzer",
     "LiquidityManager",
     "LiquidityLevel",

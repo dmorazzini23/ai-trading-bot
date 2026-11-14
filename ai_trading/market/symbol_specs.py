@@ -93,49 +93,6 @@ def get_lot_size(symbol: str) -> int:
     return get_symbol_spec(symbol).lot
 
 
-def add_symbol_spec(
-    symbol: str,
-    tick: Decimal,
-    lot: int,
-    multiplier: int = 1,
-    trading_hours: str = "09:30-16:00",
-    currency: str = "USD",
-) -> None:
-    """Add or update symbol specification."""
-
-    symbol = symbol.upper().strip()
-    DEFAULT_SYMBOL_SPECS[symbol] = SymbolSpec(
-        tick=tick,
-        lot=lot,
-        multiplier=multiplier,
-        trading_hours=trading_hours,
-        currency=currency,
-    )
-    TICK_BY_SYMBOL[symbol] = tick
-    LOT_BY_SYMBOL[symbol] = lot
-    logger.info(
-        "Added/updated spec for %s: tick=%s, lot=%s, multiplier=%s, trading_hours=%s, currency=%s",
-        symbol,
-        tick,
-        lot,
-        multiplier,
-        trading_hours,
-        currency,
-    )
-
-
-def update_specs_from_config(specs_config: dict[str, dict]) -> None:
-    """Update symbol specifications from configuration."""
-
-    for symbol, spec_dict in specs_config.items():
-        tick = Decimal(str(spec_dict["tick"]))
-        lot = int(spec_dict["lot"])
-        multiplier = int(spec_dict.get("multiplier", 1))
-        trading_hours = str(spec_dict.get("trading_hours", "09:30-16:00"))
-        currency = str(spec_dict.get("currency", "USD"))
-        add_symbol_spec(symbol, tick, lot, multiplier, trading_hours, currency)
-
-
 def get_tick_by_symbol() -> dict[str, Decimal]:
     """Get dictionary mapping symbol to tick size."""
 

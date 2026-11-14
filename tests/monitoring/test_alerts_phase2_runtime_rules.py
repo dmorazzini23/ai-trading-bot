@@ -173,52 +173,8 @@ def test_alert_cleanup_start_stop_and_error_path(monkeypatch) -> None:
     assert sleeps == [300]
 
 
-def test_risk_alert_engine_emits_threshold_breaches_and_honors_cooldown() -> None:
-    manager = alerts.AlertManager()
-    engine = alerts.RiskAlertEngine(manager)
-
-    engine.check_portfolio_risk(
-        {
-            "max_drawdown": engine.thresholds["MAX_DRAWDOWN"] + 0.01,
-            "sharpe_ratio": engine.thresholds["MIN_SHARPE_RATIO"] - 0.1,
-            "var_95": engine.thresholds["MAX_VAR_95"] + 0.01,
-        }
-    )
-    engine.check_position_risk(
-        "SPY",
-        {
-            "position_percentage": engine.risk_params["MAX_POSITION_SIZE"] + 0.01,
-            "unrealized_pnl_pct": -0.2,
-        },
-    )
-    engine.check_execution_risk(
-        {
-            "fill_rate": 0.5,
-            "average_slippage_bps": engine.risk_params.get("MAX_SLIPPAGE_BPS", 20) + 5,
-        }
-    )
-    first_count = len(manager.alerts)
-    engine.check_execution_risk({"fill_rate": 0.5})
-
-    assert first_count == 7
-    assert len(manager.alerts) == first_count
-    assert {alert.alert_type for alert in manager.alerts} == {alerts.AlertType.RISK_LIMIT}
 
 
-def test_risk_alert_engine_logs_bad_metric_payloads_and_create_failures() -> None:
-    manager = alerts.AlertManager()
-    engine = alerts.RiskAlertEngine(manager)
-
-    engine.check_portfolio_risk({"max_drawdown": "bad"})
-    engine.check_position_risk("SPY", {"position_percentage": "bad"})
-    engine.check_execution_risk({"fill_rate": "bad"})
-
-    class FailingManager:
-        def create_alert(self, *_args, **_kwargs) -> None:
-            raise ValueError("alert backend down")
-
-    failing_engine = alerts.RiskAlertEngine(FailingManager())
-    failing_engine._create_risk_alert("key", alerts.AlertSeverity.WARNING, "message")
 
 
 def test_emit_runtime_alert_sets_state_and_thresholds(monkeypatch) -> None:

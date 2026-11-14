@@ -176,18 +176,6 @@ def record_gap_statistics(symbol: str, metadata: Mapping[str, Any]) -> None:
     )
 
 
-def get_gap_statistics(symbol: str | None = None) -> dict[str, dict[str, Any]]:
-    """Return captured gap statistics, optionally scoped to ``symbol``."""
-
-    if symbol is not None:
-        symbol_norm = _normalise_symbol(symbol)
-        if not symbol_norm:
-            return {}
-        stats = _GAP_STATS.get(symbol_norm)
-        return {symbol_norm: stats.as_dict()} if stats else {}
-    return {key: value.as_dict() for key, value in _GAP_STATS.items()}
-
-
 def reset_gap_statistics() -> None:
     """Clear captured gap statistics (used by regression tests)."""
 
@@ -202,6 +190,5 @@ __all__ = [
     "validate_feed",
     "validate_adjustment",
     "record_gap_statistics",
-    "get_gap_statistics",
     "reset_gap_statistics",
 ]

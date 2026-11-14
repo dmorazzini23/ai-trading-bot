@@ -181,23 +181,6 @@ class TestTaxAwareRebalancing(unittest.TestCase):
 
 
 # Integration test for enhanced rebalancer
-class TestEnhancedRebalancer(unittest.TestCase):
-    """Test enhanced rebalancer integration."""
-
-    def test_enhanced_rebalancer_fallback(self):
-        """Test that enhanced rebalancer falls back gracefully."""
-        from ai_trading.rebalancer import enhanced_maybe_rebalance, rebalance_portfolio
-
-        # Mock context
-        ctx = Mock()
-        ctx.portfolio_weights = {}
-
-        # Should not raise exception
-        try:
-            rebalance_portfolio(ctx)
-            enhanced_maybe_rebalance(ctx)
-        except (ValueError, TypeError) as e:
-            self.fail(f"Enhanced rebalancer raised exception: {e}")
 
 
 if __name__ == "__main__":

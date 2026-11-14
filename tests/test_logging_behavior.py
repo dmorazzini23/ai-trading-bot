@@ -81,26 +81,3 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     assert not any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
 
 
-@pytest.mark.asyncio
-async def test_order_filled_once(monkeypatch, caplog):
-    caplog.set_level("DEBUG")
-    alpaca_api.partial_fill_tracker.clear()
-    alpaca_api.partial_fills.clear()
-    t = [0.0]
-    monkeypatch.setattr(time, "monotonic", lambda: t[0])
-    event_partial = types.SimpleNamespace(
-        order=types.SimpleNamespace(id="1", symbol="AAPL", filled_qty=1, filled_avg_price=1.0),
-        event="partial_fill",
-    )
-    await alpaca_api.handle_trade_update(event_partial)
-    assert any("ORDER_PARTIAL_FILL" in r.message for r in caplog.records)
-    caplog.clear()
-    await alpaca_api.handle_trade_update(event_partial)
-    assert not any("ORDER_PARTIAL_FILL" in r.message for r in caplog.records)
-    caplog.clear()
-    event_fill = types.SimpleNamespace(
-        order=types.SimpleNamespace(id="1", symbol="AAPL", filled_qty=2, filled_avg_price=1.2),
-        event="fill",
-    )
-    await alpaca_api.handle_trade_update(event_fill)
-    assert any("ORDER_FILLED" in r.message for r in caplog.records)

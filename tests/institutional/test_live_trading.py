@@ -117,30 +117,6 @@ class TestLiveTradingBot:
         else:
             pytest.skip("No execution engine available for testing")
 
-    def test_mock_market_data_provider(self):
-        """Test mock market data provider functionality."""
-        provider = MockMarketDataProvider()
-
-        # Test current prices
-        aapl_price = provider.get_current_price("AAPL")
-        assert aapl_price is not None, "AAPL price should be available"
-        assert aapl_price > 0, "AAPL price should be positive"
-
-        # Test price history
-        history = provider.get_price_history("AAPL")
-        assert len(history) > 0, "Price history should not be empty"
-
-        # Test market scenarios
-        initial_price = provider.get_current_price("AAPL")
-        provider.create_market_scenario("bull_market")
-        bull_price = provider.get_current_price("AAPL")
-
-        assert bull_price > initial_price, "Bull market should increase prices"
-
-        provider.create_market_scenario("bear_market")
-        bear_price = provider.get_current_price("AAPL")
-
-        assert bear_price < bull_price, "Bear market should decrease prices"
 
     @pytest.mark.asyncio
     async def test_order_execution_scenarios(self, execution_engine):

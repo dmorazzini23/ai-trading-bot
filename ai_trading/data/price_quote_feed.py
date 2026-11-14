@@ -151,14 +151,6 @@ def cache(
     return resolved
 
 
-def get_cached(symbol: str, *, role: FeedRole | str = "execution") -> str | None:
-    """Return the cached feed for *symbol* if present."""
-
-    normalized_role = _normalize_role(role)
-    role_cache = _FEED_CACHE_BY_ROLE[normalized_role]
-    return _normalize_feed(role_cache.get(symbol), role=normalized_role)
-
-
 def clear(symbol: str | None = None, *, role: FeedRole | str | None = None) -> None:
     """Clear feed caches for a role and symbol, or all caches when omitted."""
 
@@ -192,22 +184,9 @@ def _sip_unauthorized() -> bool:
     return unauthorized_state
 
 
-def _apply_sip_guard(feed: str) -> str | None:
-    if feed != "sip":
-        return feed
-    if _sip_unauthorized() or _sip_disabled_env(_pytest_mode()):
-        return "iex"
-    return "sip"
-
-
-def _fallback_feed() -> str:
-    return "iex" if (_sip_unauthorized() or _sip_disabled_env(_pytest_mode())) else "sip"
-
-
 __all__ = [
     "cache",
     "clear",
     "ensure_entitled_feed",
-    "get_cached",
     "resolve",
 ]

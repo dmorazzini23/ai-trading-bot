@@ -8,7 +8,7 @@ pd = pytest.importorskip("pandas")
 from ai_trading.alpaca_api import AlpacaAuthenticationError
 from ai_trading.core import bot_engine
 
-from ai_trading.core.bot_engine import BotEngine, prepare_indicators
+from ai_trading.core.bot_engine import prepare_indicators
 
 np.random.seed(0)
 
@@ -104,60 +104,6 @@ def test_prepare_indicators_insufficient_data():
     assert result.empty
 
 
-@pytest.mark.parametrize("attr", ["trading_client", "data_client"])
-@pytest.mark.parametrize(
-    "missing_key",
-    ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL"],
-)
-def test_bot_engine_missing_env(monkeypatch, caplog, attr, missing_key):
-    """BotEngine properties should raise informative errors when env vars are missing."""
-
-    monkeypatch.setenv("ALPACA_API_KEY", "key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://example.com")
-    monkeypatch.delenv(missing_key, raising=False)
-    class DummyClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine.get_data_client_cls",
-        lambda: DummyClient,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine.get_trading_client_cls",
-        lambda: DummyClient,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine._ensure_alpaca_env_or_raise",
-        lambda: ("key", "secret", "https://example.com"),
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine._initialize_alpaca_clients",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine.ensure_data_fetcher",
-        lambda runtime=None: None,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine._load_required_model",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine.data_fetcher_module.build_fetcher",
-        lambda config=None: None,
-    )
-
-    engine = BotEngine()
-    caplog.set_level("ERROR")
-
-    with pytest.raises(RuntimeError) as exc:
-        getattr(engine, attr)
-
-    masked = f"{missing_key[:8]}***"
-    assert masked in str(exc.value)
-    assert any(masked in rec.getMessage() for rec in caplog.records)
 
 
 def test_prepare_indicators_all_nan_columns():

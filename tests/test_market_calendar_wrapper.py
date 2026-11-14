@@ -6,24 +6,11 @@ from datetime import date
 import pytest
 from tests.optdeps import require
 import ai_trading.utils.market_calendar as cw
-from ai_trading.utils.market_calendar import (
-    is_trading_day,
-    rth_session_utc,
-    rth_dst_summer_standard_times,
-)
+from ai_trading.utils.market_calendar import is_trading_day, rth_session_utc
 
 pmc = require("pandas_market_calendars")
 
 
-def test_rth_dst_summer_standard_times() -> None:
-    (s, e), (s2, e2) = rth_dst_summer_standard_times()
-    # Summer (DST): 09:30 ET -> 13:30 UTC
-    assert s.hour == 13 and s.minute == 30
-    assert e.hour == 20 and e.minute == 0
-
-    # Winter (standard): 09:30 ET -> 14:30 UTC
-    assert s2.hour == 14 and s2.minute == 30
-    assert e2.hour == 21 and e2.minute == 0
 
 
 @pytest.mark.parametrize(

@@ -159,19 +159,6 @@ def test_compute_volatility_returns_stable_metrics_for_finite_returns() -> None:
     assert result["garch_vol"] >= 0
 
 
-def test_dynamic_stop_price_picks_tightest_stop_by_direction() -> None:
-    assert risk_engine.dynamic_stop_price(
-        100.0,
-        atr=2.0,
-        percent=0.04,
-        direction="long",
-    ) == pytest.approx(97.0)
-    assert risk_engine.dynamic_stop_price(
-        100.0,
-        atr=2.0,
-        percent=0.04,
-        direction="short",
-    ) == pytest.approx(103.0)
 
 
 

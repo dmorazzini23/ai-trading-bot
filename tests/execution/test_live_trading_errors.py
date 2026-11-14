@@ -118,15 +118,6 @@ def test_classify_rejection_reason_common_broker_details(detail, expected):
     assert live_trading._classify_rejection_reason(detail) == expected
 
 
-def test_market_retry_requires_fallback_price_and_price_like_metadata():
-    metadata = {"detail": "limit price outside NBBO", "status_code": "422"}
-
-    assert live_trading._should_retry_limit_as_market(metadata, using_fallback_price=True)
-    assert not live_trading._should_retry_limit_as_market(metadata, using_fallback_price=False)
-    assert live_trading._should_retry_limit_as_market(
-        {"code": "40010003"},
-        using_fallback_price=True,
-    )
 
 
 def test_submit_no_result_error_fingerprint_normalizes_details():

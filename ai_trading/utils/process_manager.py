@@ -69,11 +69,5 @@ def file_lock(name: str, timeout: float=2.0):
         if ok:
             release_lock(name)
 
-def start_process(name: str) -> dict[str, str]:
-    return {'status': 'started', 'name': name}
 
-def stop_process(name: str) -> dict[str, str]:
-    return {'status': 'stopped', 'name': name}
-
-
-__all__ = ['acquire_lock', 'release_lock', 'file_lock', 'start_process', 'stop_process']
+__all__ = ['acquire_lock', 'release_lock', 'file_lock']

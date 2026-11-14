@@ -171,70 +171,10 @@ def test_get_latest_price_http_error_falls_back(monkeypatch):
     assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
 
 
-def test_get_current_price_uses_configured_feed(monkeypatch):
-    symbol = "TSLA"
-    monkeypatch.delenv("ALPACA_EXECUTION_FEED", raising=False)
-    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
-    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
-    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
-
-    captured: dict[str, object] = {}
-
-    def fake_alpaca_get(url, *, params=None, **_):
-        captured["url"] = url
-        captured["params"] = params
-        return {"ap": 222.5}
-
-    monkeypatch.setattr(utils_base, "alpaca_get", fake_alpaca_get)
-
-    price = utils_base.get_current_price(symbol)
-
-    assert price == pytest.approx(222.5)
-    assert (
-        captured["url"]
-        == f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest"
-    )
-    assert captured["params"] == {"feed": "sip"}
 
 
-def test_get_current_price_prefers_execution_feed_over_legacy(monkeypatch):
-    symbol = "TSLA"
-    monkeypatch.setenv("ALPACA_EXECUTION_FEED", "sip")
-    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
-    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
-    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
-    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "0")
-
-    captured: dict[str, object] = {}
-
-    def fake_alpaca_get(url, *, params=None, **_):
-        captured["url"] = url
-        captured["params"] = params
-        return {"ap": 101.25}
-
-    monkeypatch.setattr(utils_base, "alpaca_get", fake_alpaca_get)
-
-    price = utils_base.get_current_price(symbol)
-
-    assert price == pytest.approx(101.25)
-    assert captured["params"] == {"feed": "sip"}
 
 
-def test_get_current_price_http_error_uses_fallback(monkeypatch):
-    symbol = "NVDA"
-
-    def fake_alpaca_get(*_, **__):
-        raise AlpacaOrderHTTPError(422, "bad request")
-
-    monkeypatch.setattr(utils_base, "alpaca_get", fake_alpaca_get)
-    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *a, **k: object())
-    monkeypatch.setattr(utils_base, "get_latest_close", lambda df: 33.0)
-
-    price = utils_base.get_current_price(symbol)
-
-    assert price == pytest.approx(33.0)
 
 
 def test_get_latest_price_invalid_feed_skips_alpaca(monkeypatch, caplog):

@@ -36,26 +36,6 @@ def _non_netting_live_execution_allowed() -> bool:
     )
 
 
-def _market_order_request(symbol: str, qty: int, side: str) -> Any:
-    from types import SimpleNamespace
-
-    from ai_trading.alpaca_api import MarketOrderRequest
-
-    if MarketOrderRequest is None:
-        return SimpleNamespace(
-            symbol=str(symbol),
-            qty=str(qty),
-            side=str(side),
-            time_in_force="day",
-        )
-    return MarketOrderRequest(
-        symbol=str(symbol),
-        qty=str(qty),
-        side=str(side),
-        time_in_force="day",
-    )
-
-
 class ExecutionService:
     """Canonical execution service facade for operator/runtime callers."""
 

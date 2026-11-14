@@ -262,20 +262,6 @@ def is_early_close(d: date) -> bool:
     return session_info(d).is_early_close
 
 
-def rth_dst_summer_standard_times() -> tuple[tuple[datetime, datetime], tuple[datetime, datetime]]:
-    """Return representative DST and standard-time RTH windows in UTC."""
-
-    summer = date(2025, 3, 10)
-    winter = date(2025, 11, 3)
-    return rth_session_utc(summer), rth_session_utc(winter)
-
-
-def get_rth_session(d: date) -> tuple[datetime, datetime]:
-    """Return the RTH session open/close in UTC."""
-
-    return rth_session_utc(d)
-
-
 def previous_trading_session(d: date) -> date:
     """Return the previous trading day for *d*."""
     cal = _get_calendar()
@@ -317,8 +303,6 @@ __all__ = [
     "Session",
     "is_trading_day",
     "rth_session_utc",
-    "rth_dst_summer_standard_times",
-    "get_rth_session",
     "session_info",
     "is_early_close",
     "previous_trading_session",

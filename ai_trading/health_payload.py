@@ -2352,34 +2352,6 @@ def sanitize_health_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_health_json_response(
-    payload: Mapping[str, Any],
-    status: int,
-    *,
-    jsonify_fn: Callable[[Mapping[str, Any]], Any],
-) -> Any:
-    """Build a robust Flask-compatible JSON response for health handlers."""
-
-    safe_payload = sanitize_health_payload(payload)
-    try:
-        response = jsonify_fn(dict(safe_payload))
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        return dict(safe_payload) if status == 200 else (dict(safe_payload), status)
-    if response is None or isinstance(response, Mapping):
-        return dict(safe_payload) if status == 200 else (dict(safe_payload), status)
-    if not (
-        callable(getattr(response, "get_data", None))
-        or callable(getattr(response, "get_json", None))
-        or hasattr(response, "status_code")
-    ):
-        return dict(safe_payload) if status == 200 else (dict(safe_payload), status)
-    try:
-        response.status_code = status
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        pass
-    return response
-
-
 def register_health_routes(
     app: Any,
     *,
@@ -2435,31 +2407,6 @@ def register_health_routes(
         decorator(_health_handler)
 
 
-def register_healthz_routes(
-    app: Any,
-    *,
-    payload_builder: Callable[[], Mapping[str, Any]],
-    response_builder: Callable[[dict[str, Any], int], Any],
-    service_name: str = "ai-trading",
-    routes: tuple[str, ...] = ("/healthz",),
-    methods: tuple[str, ...] = ("GET",),
-    logger: Any | None = None,
-    error_event: str = "HEALTH_CHECK_FAILED",
-) -> None:
-    """Register canonical ``/healthz`` routes on ``app``."""
-
-    register_health_routes(
-        app,
-        payload_builder=payload_builder,
-        response_builder=response_builder,
-        service_name=service_name,
-        routes=routes,
-        methods=methods,
-        logger=logger,
-        error_event=error_event,
-    )
-
-
 __all__ = [
     "build_runtime_health_payload",
     "build_control_plane_snapshot",
@@ -2468,8 +2415,6 @@ __all__ = [
     "build_api_health_payload",
     "build_canonical_healthz_payload",
     "build_health_exception_payload",
-    "build_health_json_response",
     "sanitize_health_payload",
     "register_health_routes",
-    "register_healthz_routes",
 ]

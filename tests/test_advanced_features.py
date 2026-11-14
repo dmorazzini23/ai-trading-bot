@@ -29,22 +29,7 @@ def test_maybe_rebalance(monkeypatch):
     assert calls == ["ctx"]
 
 
-def test_atr_stop_adjusts():
-    from ai_trading.risk.engine import (
-        calculate_atr_stop,  # AI-AGENT-REF: normalized import
-    )
-    stop1 = calculate_atr_stop(100, 2, 1.5)
-    stop2 = calculate_atr_stop(100, 5, 1.5)
-    assert stop1 > stop2
 
 
-def test_pyramiding_adds():
-    from ai_trading.trade_logic import pyramiding_logic
-    new_pos = pyramiding_logic(1, profit_in_atr=1.2, base_size=1)
-    assert new_pos > 1
 
 
-def test_volatility_filter():
-    from ai_trading.meta_learning import volatility_regime_filter
-    assert volatility_regime_filter(6, 100) == "high_vol"
-    assert volatility_regime_filter(2, 100) == "low_vol"

@@ -146,12 +146,6 @@ def ensure_python_dotenv_is_real_package() -> None:
     globals()["PYTHON_DOTENV_RESOLVED"] = True
 
 
-def guard_python_dotenv_import() -> None:
-    """Import ``dotenv`` and ensure it does not resolve to a shadowed module."""
-
-    ensure_python_dotenv_is_real_package()
-
-
 def assert_dotenv_not_shadowed() -> None:
     global _ASSERT_GUARD_DISABLED, _ASSERT_GUARD_DISABLED_FOR
 
@@ -167,22 +161,6 @@ def assert_dotenv_not_shadowed() -> None:
 
 
 _CANONICAL_ASSERT_GUARD = assert_dotenv_not_shadowed
-
-
-def disable_dotenv_guard() -> None:
-    """Disable the import shadow guard until explicitly re-enabled."""
-
-    global _ASSERT_GUARD_DISABLED, _ASSERT_GUARD_DISABLED_FOR
-    _ASSERT_GUARD_DISABLED = True
-    _ASSERT_GUARD_DISABLED_FOR = _managed_env_value("PYTEST_CURRENT_TEST")
-
-
-def enable_dotenv_guard() -> None:
-    """Re-enable the import shadow guard."""
-
-    global _ASSERT_GUARD_DISABLED, _ASSERT_GUARD_DISABLED_FOR
-    _ASSERT_GUARD_DISABLED = False
-    _ASSERT_GUARD_DISABLED_FOR = None
 
 
 class _EnvCheckModule(types.ModuleType):
@@ -217,7 +195,4 @@ if _module is not None and not isinstance(_module, _EnvCheckModule):
 __all__ = [
     "PYTHON_DOTENV_RESOLVED",
     "assert_dotenv_not_shadowed",
-    "disable_dotenv_guard",
-    "enable_dotenv_guard",
-    "guard_python_dotenv_import",
 ]

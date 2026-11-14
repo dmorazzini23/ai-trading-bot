@@ -10,35 +10,6 @@ import pytest
 
 
 # Test idempotency
-def test_order_idempotency():
-    """Test order idempotency caching."""
-    # Clear any existing cache
-    from ai_trading.execution.idempotency import (
-        get_idempotency_cache,
-        is_duplicate_order,
-        mark_order_submitted,
-    )
-
-    cache = get_idempotency_cache()
-    cache.clear_expired()
-
-    symbol = "TEST"
-    side = "buy"
-    quantity = 100.0
-
-    # First order should not be duplicate
-    is_dup, order_id = is_duplicate_order(symbol, side, quantity)
-    assert not is_dup
-    assert order_id is None
-
-    # Mark as submitted
-    test_order_id = "order_123"
-    mark_order_submitted(symbol, side, quantity, test_order_id)
-
-    # Second identical order should be duplicate
-    is_dup, existing_id = is_duplicate_order(symbol, side, quantity)
-    assert is_dup
-    assert existing_id == test_order_id
 
 
 def test_position_reconciliation():

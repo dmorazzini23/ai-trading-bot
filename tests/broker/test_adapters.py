@@ -11,7 +11,6 @@ from ai_trading.broker.adapters import (
     TradierBrokerAdapter,
     build_broker_adapter,
 )
-from ai_trading.oms.orders import build_bracket, build_oco, build_oto
 
 
 class _DummyClient:
@@ -166,25 +165,6 @@ def test_alpaca_adapter_translates_legacy_order_family_legs() -> None:
     assert request.stop_loss.stop_price == 120.0
 
 
-def test_oms_order_family_builders_are_alpaca_adapter_compatible() -> None:
-    bracket = build_bracket(
-        symbol="AAPL",
-        side="buy",
-        qty=1,
-        entry_limit=100,
-        take_profit=110,
-        stop_loss=95,
-    )
-    oco = build_oco(symbol="AAPL", side="sell", qty=1, take_profit=110, stop_loss=95)
-    oto = build_oto(symbol="AAPL", side="buy", qty=1, entry_limit=100, stop_loss=95)
-
-    for payload, order_class in ((bracket, "bracket"), (oco, "oco"), (oto, "oto")):
-        client = _DummyClient()
-        AlpacaBrokerAdapter(client=client).submit_order(payload)
-        request = client.submitted_request
-        assert request.type.value == "limit"
-        assert request.order_class.value == order_class
-        assert request.stop_loss.stop_price == 95.0
 
 
 def test_alpaca_adapter_preserves_short_position_intent() -> None:

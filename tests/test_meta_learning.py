@@ -124,18 +124,8 @@ def test_meta_learning_instantiation():
     assert isinstance(ml, MetaLearning)
 
 
-def test_load_weights_creates_default(tmp_path):
-    p = tmp_path / "w.csv"
-    arr = meta_learning.load_weights(str(p), default=np.array([1.0]))
-    assert p.exists()
-    assert np.allclose(arr, [1.0])
 
 
-def test_update_weights_no_change(tmp_path):
-    p = tmp_path / "w.csv"
-    np.savetxt(p, np.array([0.1, 0.2]), delimiter=",")
-    ok = meta_learning.update_weights(str(p), np.array([0.1, 0.2]), {"m": 1})
-    assert ok is False
 
 
 def test_update_signal_weights_normal():
@@ -241,27 +231,10 @@ def test_retrain_meta_rejects_unknown_side(monkeypatch, tmp_path, caplog):
     assert any(rec.message == "META_LEARNING_INVALID_SIDE_VALUES" for rec in caplog.records)
 
 
-def test_update_weights_history_error(tmp_path):
-    w = tmp_path / "w.csv"
-    h = tmp_path / "hist.json"
-    np.savetxt(w, np.array([0.1]), delimiter=",")
-    h.write_text("{bad")
-    assert meta_learning.update_weights(str(w), np.array([0.2]), {"m": 1}, str(h))
 
 
-def test_load_weights_corrupted(tmp_path):
-    p = tmp_path / "w.csv"
-    p.write_text("bad,data")
-    arr = meta_learning.load_weights(str(p), default=np.array([0.5]))
-    assert arr.tolist() == [0.5]
 
 
-def test_update_weights_success(tmp_path):
-    p = tmp_path / "w.csv"
-    np.savetxt(p, np.array([0.1]), delimiter=",")
-    h = tmp_path / "hist.json"
-    res = meta_learning.update_weights(str(p), np.array([0.2]), {"m": 1}, str(h))
-    assert res
 
 
 def test_load_model_checkpoint_missing(tmp_path):
@@ -294,11 +267,6 @@ def test_update_signal_weights_zero(caplog):
     assert "Total performance sum is zero" in caplog.text
 
 
-def test_load_weights_existing(tmp_path):
-    p = tmp_path / "w.csv"
-    np.savetxt(p, np.array([0.5, 0.6]), delimiter=",")
-    arr = meta_learning.load_weights(str(p), default=np.array([1.0]))
-    assert np.allclose(arr, [0.5, 0.6])
 
 
 def test_optimize_signals_failure():
@@ -311,22 +279,8 @@ def test_optimize_signals_failure():
     assert res == [1]
 
 
-def test_load_weights_default_zero(tmp_path):
-    arr = meta_learning.load_weights(str(tmp_path / "none.csv"))
-    assert arr.size == 0
 
 
-def test_update_weights_failure(monkeypatch, tmp_path):
-    p = tmp_path / "w.csv"
-    monkeypatch.setattr(
-        np,
-        "savetxt",
-        lambda *a, **k: (_ for _ in ()).throw(OSError("bad")),
-    )
-    ok = meta_learning.update_weights(
-        str(p), np.array([1.0]), {}, str(tmp_path / "h.json")
-    )
-    assert not ok
 
 
 def test_update_signal_weights_empty(caplog):
@@ -352,21 +306,3 @@ def test_portfolio_rl_trigger(monkeypatch):
     assert np.isclose(weights.sum(), 1.0, atol=0.1)
 
 
-def test_regime_rl_rebalance_is_research_only_without_runtime_evidence(monkeypatch):
-    calls = []
-
-    class _Learner:
-        def rebalance_portfolio(self, _state):
-            calls.append("rebalance")
-
-    monkeypatch.setattr(
-        meta_learning_core,
-        "get_settings",
-        lambda: types.SimpleNamespace(enable_reinforcement_learning=True),
-    )
-    monkeypatch.setattr(meta_learning_core, "PortfolioReinforcementLearner", _Learner)
-    monkeypatch.delenv("AI_TRADING_RL_RUNTIME_REBALANCE_ENABLED", raising=False)
-
-    meta_learning_core.trigger_rebalance_on_regime([])
-
-    assert calls == []

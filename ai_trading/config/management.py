@@ -622,10 +622,6 @@ def validate_alpaca_credentials() -> None:
         raise
 
 
-def get_config_schema() -> str:
-    return str(generate_config_schema())
-
-
 def from_env_relaxed(env_overrides: Mapping[str, Any] | None = None) -> TradingConfig:
     """Build TradingConfig tolerating missing drawdown thresholds.
 
@@ -647,22 +643,6 @@ def from_env_relaxed(env_overrides: Mapping[str, Any] | None = None) -> TradingC
         # Ensure the canonical key receives the default.
         relaxed_overrides.setdefault("MAX_DRAWDOWN_THRESHOLD", default_drawdown)
         return TradingConfig.from_env(relaxed_overrides)
-
-
-def derive_cap_from_settings(
-    settings: Settings | None = None,
-    *,
-    equity: float | None = None,
-    fallback: float = 8000.0,
-    capital_cap: float | None = None,
-) -> float:
-    """Calculate maximum capital allocation based on equity and capital cap."""
-
-    s = settings or get_settings()
-    cap = capital_cap if capital_cap is not None else float(getattr(s, "capital_cap", 0.25))
-    if equity and equity > 0:
-        return float(equity) * cap
-    return float(fallback)
 
 
 def enforce_alpaca_feed_policy() -> dict[str, str] | None:
@@ -756,12 +736,10 @@ __all__ = [
     "validate_alpaca_credentials",
     "enforce_alpaca_feed_policy",
     "_resolve_alpaca_env",
-    "get_config_schema",
     "from_env_relaxed",
     "SEED",
     "MAX_EMPTY_RETRIES",
     "Settings",
-    "derive_cap_from_settings",
     "config_snapshot_hash",
     "set_runtime_env_override",
     "clear_runtime_env_override",

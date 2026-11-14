@@ -1,6 +1,5 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from enum import Enum
 from typing import Protocol
 
 
@@ -76,8 +75,6 @@ class IndicatorManager:
     def update(self, price: float) -> dict[str, float]:
         return {k: v.update(price) for k, v in self._ind.items()}
 
-class IndicatorType(str, Enum):
-    SMA = 'SMA'
 
 class CircularBuffer:
 
@@ -152,4 +149,4 @@ class IncrementalRSI:
         self.last_value = 100.0 - 100.0 / (1.0 + rs)
         self.is_initialized = True
         return self.last_value
-__all__ = ['StreamingSMA', 'StreamingEMA', 'StreamingRSI', 'IndicatorSpec', 'IndicatorManager', 'IndicatorType', 'CircularBuffer', 'IncrementalSMA', 'IncrementalEMA', 'IncrementalRSI']
+__all__ = ['StreamingSMA', 'StreamingEMA', 'StreamingRSI', 'IndicatorSpec', 'IndicatorManager', 'CircularBuffer', 'IncrementalSMA', 'IncrementalEMA', 'IncrementalRSI']

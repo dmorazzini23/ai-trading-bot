@@ -9,11 +9,6 @@ import logging
 _logger_paths: list[str] | None = None
 
 
-def get_logger_paths() -> list[str]:
-    """Return a copy of the log file paths registered so far."""
-    return list(_logger_paths or [])
-
-
 def _apply_library_filters() -> None:
     """Set log levels for noisy third-party libraries.
 

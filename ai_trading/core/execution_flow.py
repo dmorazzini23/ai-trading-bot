@@ -176,32 +176,6 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) 
         )
 
 
-def twap_submit(
-    ctx: Any,
-    symbol: str,
-    total_qty: int,
-    side: str,
-    window_secs: int = 600,
-    n_slices: int = 10,
-) -> None:
-    """Submit TWAP slices over the specified window."""
-    from ai_trading.core.bot_engine import APIError
-    from ai_trading.services.execution import submit_order
-
-    slice_qty = max(1, int(total_qty // max(1, n_slices)))
-    wait_secs = float(window_secs) / max(1, n_slices)
-    for _ in range(max(1, n_slices)):
-        try:
-            submit_order(ctx, symbol, slice_qty, side)
-        except (APIError, TimeoutError, ConnectionError) as e:  # type: ignore[name-defined]
-            logger.error(
-                "BROKER_OP_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-            raise
-        pytime.sleep(wait_secs)
-
-
 def vwap_pegged_submit(
     ctx: Any, symbol: str, total_qty: int, side: str, duration: int = 300
 ) -> None:
@@ -356,8 +330,6 @@ def vwap_pegged_submit(
 
 __all__ = [
     "poll_order_fill_status",
-    "execute_exit",
-    "twap_submit",
     "vwap_pegged_submit",
 ]
 
@@ -885,34 +857,6 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         ctx.take_profit_targets[symbol] = take
 
 
-def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
-    from ai_trading.core.bot_engine import (
-        fetch_minute_df_safe,
-        DataFetchError,
-        get_latest_close,
-        send_exit_order,
-        targets_lock,
-    )
-    import numpy as np
-    if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.warning(f"Skipping {symbol}: computed qty <= 0")
-        return
-    try:
-        raw = fetch_minute_df_safe(symbol)
-    except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
-        raw = None
-    exit_price = get_latest_close(raw) if raw is not None else 1.0
-    send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
-    try:
-        ctx.trade_logger.log_exit(state, symbol, exit_price)
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("TRADE_LOG_EXIT_RECORD_FAILED", extra={"symbol": symbol}, exc_info=True)
-    with targets_lock:
-        ctx.take_profit_targets.pop(symbol, None)
-        ctx.stop_targets.pop(symbol, None)
-
-
 def _eod_conflicting_open_orders(api: Any, symbols: list[str]) -> dict[str, list[Any]] | None:
     """Return non-EOD active broker orders by symbol, or None if unavailable.
 
@@ -1061,10 +1005,6 @@ def exit_all_positions(ctx: Any) -> None:
                     raw_positions=raw_positions,
                 )
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
-
-
-def _liquidate_all_positions(runtime: Any) -> None:
-    exit_all_positions(runtime)
 
 
 def _should_trigger_eod_flatten(now_et: datetime | None = None) -> tuple[bool, dict[str, Any]]:

@@ -73,15 +73,6 @@ def _rebuild_semaphore(new_limit: int) -> None:
     _fallback_limit_value = adjusted_limit
 
 
-def reload_fallback_limit() -> int:
-    """Refresh the concurrency limit from environment settings."""
-
-    limit = _resolve_limit_from_env()
-    with _counter_lock:
-        _rebuild_semaphore(limit)
-    return int(_fallback_limit_value or limit)
-
-
 def _acquire_slot() -> threading.BoundedSemaphore:
     semaphore = _ensure_semaphore()
     semaphore.acquire()
@@ -120,27 +111,6 @@ def fallback_slot() -> Iterator[None]:
         _release_slot(semaphore)
 
 
-def get_peak_concurrency() -> int:
-    """Return the highest number of concurrent fallback slots observed."""
-
-    with _counter_lock:
-        return _fallback_peak
-
-
-def get_active_slots() -> int:
-    """Return the number of in-flight fallback operations."""
-
-    with _counter_lock:
-        return _fallback_inflight
-
-
-def get_configured_host_limit() -> int:
-    """Return the currently configured fallback concurrency limit."""
-
-    _ensure_semaphore()
-    return int(_fallback_limit_value or _DEFAULT_LIMIT)
-
-
 def reset_fallback_counters(reset_limit: bool = False) -> None:
     """Reset inflight counters and optionally rebuild the semaphore."""
 
@@ -157,9 +127,5 @@ def reset_fallback_counters(reset_limit: bool = False) -> None:
 
 __all__ = [
     "fallback_slot",
-    "reload_fallback_limit",
     "reset_fallback_counters",
-    "get_peak_concurrency",
-    "get_active_slots",
-    "get_configured_host_limit",
 ]

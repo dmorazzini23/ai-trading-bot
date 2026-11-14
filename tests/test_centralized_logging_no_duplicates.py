@@ -11,7 +11,6 @@ try:
         _LOGGING_LOCK,
         get_logger,
         setup_logging,
-        validate_logging_setup,
     )
     CENTRALIZED_LOGGING_AVAILABLE = True
 except ImportError:
@@ -60,9 +59,6 @@ def test_centralized_logging_prevents_duplicates():
             assert handlers_after_second == handlers_after_third, "Handler count changed on third setup"
             assert logger1 is logger2 is logger3, "Different logger instances returned"
 
-            # Validate logging setup
-            validation_result = validate_logging_setup()
-            assert validation_result['validation_passed'], f"Validation failed: {validation_result['issues']}"
 
     finally:
         # Restore original handlers

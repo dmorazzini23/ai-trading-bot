@@ -164,11 +164,6 @@ def schedule_run_all_trades_runtime(runtime: Any) -> None:
     thread.start()
 
 
-def schedule_run_all_trades_with_delay_runtime(runtime: Any) -> None:
-    time.sleep(30.0)
-    schedule_run_all_trades_runtime(runtime)
-
-
 def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
     """Initial portfolio rebalancing."""
 
@@ -535,7 +530,6 @@ __all__ = [
     "initial_rebalance_runtime",
     "run_main_startup_runtime",
     "schedule_run_all_trades_runtime",
-    "schedule_run_all_trades_with_delay_runtime",
     "start_shadow_trade_updates_stream_thread",
     "_run_trade_updates_stream",
 ]

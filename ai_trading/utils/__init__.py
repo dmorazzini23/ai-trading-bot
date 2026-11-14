@@ -46,7 +46,6 @@ __all__ = tuple(sorted({
     "device",
     "paths",
     "datetime",
-    "capital_scaling",
 }))
 
 _LAZY_MAP = {
@@ -57,7 +56,6 @@ _LAZY_MAP = {
     "device": ("ai_trading.utils.device", None),
     "paths": ("ai_trading.utils.paths", None),
     "datetime": ("ai_trading.utils.datetime", None),
-    "capital_scaling": ("ai_trading.utils.capital_scaling", None),
 
     # light helpers that live in base.py; expose them lazily
     "EASTERN_TZ": ("ai_trading.utils.base", "EASTERN_TZ"),

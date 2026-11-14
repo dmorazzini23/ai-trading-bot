@@ -4,7 +4,6 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -1191,8 +1190,3 @@ class EventStore:
             except AI_TRADING_FALLBACK_EXCEPTIONS:
                 logger.debug("EVENT_STORE_CLOSE_FAILED", exc_info=True)
 
-
-def decision_event_to_payload(event: DecisionEvent) -> dict[str, Any]:
-    """Serialize decision event dataclass to plain mapping."""
-
-    return asdict(event.normalized())

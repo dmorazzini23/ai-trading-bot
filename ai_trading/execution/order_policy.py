@@ -566,25 +566,3 @@ def get_smart_router() -> SmartOrderRouter:
         _global_router = SmartOrderRouter()
     return _global_router
 
-def create_smart_order(symbol: str, side: str, quantity: float, bid: float, ask: float, volume_ratio: float=1.0, urgency: str='medium') -> dict:
-    """
-    Convenience function to create smart order.
-
-    Args:
-        symbol: Trading symbol
-        side: Order side
-        quantity: Order quantity
-        bid: Current bid price
-        ask: Current ask price
-        volume_ratio: Volume ratio
-        urgency: Order urgency
-
-    Returns:
-        Order request dict
-    """
-    router = get_smart_router()
-    mid = (bid + ask) / 2
-    spread_bps = (ask - bid) / mid * 10000 if mid > 0 else 0
-    market_data = MarketData(symbol=symbol, bid=bid, ask=ask, mid=mid, spread_bps=spread_bps, volume_ratio=volume_ratio)
-    urgency_enum = OrderUrgency(urgency.lower())
-    return router.create_order_request(symbol=symbol, side=side, quantity=quantity, market_data=market_data, urgency=urgency_enum)

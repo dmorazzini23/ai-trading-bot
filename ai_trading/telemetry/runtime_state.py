@@ -23,7 +23,6 @@ __all__ = [
     "reset_broker_status",
     "update_service_status",
     "observe_service_status",
-    "reset_service_status",
     "reset_all_states",
 ]
 
@@ -344,14 +343,6 @@ def update_service_status(
 def observe_service_status() -> dict[str, Any]:
     with _LOCK:
         return _clone_state(_service_status)
-
-
-def reset_service_status() -> None:
-    """Reset service telemetry to defaults."""
-
-    with _LOCK:
-        global _service_status
-        _service_status = _fresh_service_status()
 
 
 def update_quote_status(

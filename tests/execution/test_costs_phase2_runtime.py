@@ -180,20 +180,3 @@ def test_short_availability_and_holding_cost_adjustments(tmp_path: Path) -> None
     assert signed_holding["borrow_cost_dollars"] > 0.0
 
 
-def test_snapshot_statistics_and_global_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    model = costs_mod.SymbolCostModel(str(tmp_path))
-    model._costs["AAPL"] = costs_mod.SymbolCosts("AAPL", 1.0, 1.2)
-    model._costs["MSFT"] = costs_mod.SymbolCosts("MSFT", 2.0, 2.2)
-    monkeypatch.setattr(costs_mod, "_global_cost_model", model)
-    monkeypatch.setattr(costs_mod.pd.DataFrame, "to_parquet", lambda self, path, compression=None: Path(path).write_text("ok"))
-
-    stats = model.get_cost_statistics()
-    assert stats["num_symbols"] == 2
-    assert stats["avg_spread_bps"] == pytest.approx(3.0)
-
-    snapshot = model.save_daily_snapshot(date(2026, 4, 20))
-    assert snapshot.endswith("20260420.parquet")
-
-    assert costs_mod.get_cost_model() is model
-    assert costs_mod.get_symbol_costs("AAPL").symbol == "AAPL"
-    assert costs_mod.calculate_execution_cost("AAPL", 1_000.0)["cost_bps"] > 0.0

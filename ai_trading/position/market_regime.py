@@ -162,8 +162,3 @@ class MarketRegimeDetector:
             "trail_aggressiveness": 1.0,
         }
 
-
-def detect_market_regime(*_args: Any, **_kwargs: Any) -> MarketRegime:
-    """Placeholder entry point for compatibility."""
-
-    return MarketRegime.UNKNOWN

@@ -9,7 +9,6 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 from ai_trading.data import fetch
-from ai_trading.data.fetch import empty_handling
 from ai_trading.data.fetch import fallback_order
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
 
@@ -152,45 +151,8 @@ def test_backup_get_bars_splits_long_yahoo_one_minute_ranges_and_dedupes(
 
 
 
-def test_empty_handling_retries_then_clears_counts_on_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    attempts = {"count": 0}
-    sleeps: list[float] = []
-    monkeypatch.setattr(empty_handling, "is_market_open", lambda: True)
-    monkeypatch.setattr(empty_handling.time, "sleep", lambda delay: sleeps.append(delay))
-
-    def fetch_fn() -> pd.DataFrame:
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise fetch.EmptyBarsError("empty")
-        return _frame()
-
-    result = empty_handling.fetch_with_retries("AAPL", "1Min", fetch_fn, [0.25])
-
-    assert not result.empty
-    assert sleeps == [0.25]
-    assert empty_handling._RETRY_COUNTS == {}
 
 
-def test_empty_handling_no_session_reraises_and_clears_retry_count(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(empty_handling, "is_market_open", lambda: True)
-
-    def fetch_fn() -> pd.DataFrame:
-        raise fetch.EmptyBarsError("empty")
-
-    with pytest.raises(fetch.EmptyBarsError):
-        empty_handling.fetch_with_retries(
-            "MSFT",
-            "1Min",
-            fetch_fn,
-            [0.01],
-            window_has_trading_session=lambda: False,
-        )
-
-    assert ("MSFT", "1Min") not in empty_handling._RETRY_COUNTS
 
 
 def test_normalize_ohlcv_df_remaps_provider_suffixes_and_preserves_requested_columns() -> None:

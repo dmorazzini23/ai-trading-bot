@@ -109,22 +109,6 @@ def test_adaptive_sizing_optimization():
         pytest.skip(f"Adaptive sizing test skipped due to import error: {e}")
 
 
-def test_execution_algorithm_optimization():
-    """Test that execution algorithms use optimized parameters."""
-    try:
-        # Test VWAP participation rate
-        from ai_trading.execution.algorithms import VWAPExecutor
-
-        # Mock order manager for testing
-        vwap = VWAPExecutor(cast(Any, MockOrderManager()))
-
-        # Verify optimized participation rate
-        assert vwap.participation_rate == 0.15, f"Expected 0.15, got {vwap.participation_rate}"
-        assert 0.05 <= vwap.participation_rate <= 0.30, "VWAP participation rate outside safe bounds"
-
-    except ImportError as e:
-        # Skip test if dependencies not available
-        pytest.skip(f"Execution algorithm test skipped due to import error: {e}")
 
 
 def test_kelly_fraction_capped_by_max():

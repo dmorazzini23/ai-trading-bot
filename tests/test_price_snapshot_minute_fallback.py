@@ -51,17 +51,6 @@ def test_execution_latest_price_rejects_stale_daily_close(monkeypatch):
     assert portfolio_core.get_execution_latest_price(ctx, "SPY") is None
 
 
-def test_analytics_latest_price_allows_explicit_stale_daily_fallback(monkeypatch):
-    stale_ts = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2)
-    ctx = SimpleNamespace(
-        data_fetcher=SimpleNamespace(
-            get_daily_df=lambda ctx, s: pd.DataFrame({"timestamp": [stale_ts], "close": [321.0]}),
-        ),
-    )
-
-    monkeypatch.setattr(portfolio_core, "fetch_reference_snapshot", lambda *a, **k: {})
-
-    assert portfolio_core.get_analytics_latest_price(ctx, "SPY") == 321.0
 
 
 def test_yahoo_minute_split_long_range(monkeypatch, caplog):

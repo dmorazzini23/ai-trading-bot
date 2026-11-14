@@ -2,7 +2,7 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from ai_trading.config.management import merged_env_snapshot
 
@@ -14,19 +14,6 @@ _DEFAULT_WHITELIST = {
     "LANG",
     "AI_TRADING_OFFLINE_TESTS",
 }
-
-
-def _sanitize_executor_env(
-    env: Mapping[str, str] | None = None,
-    whitelist: Iterable[str] | None = None,
-) -> dict[str, str]:
-    """Return a sanitized copy of *env* preserving only whitelisted variables."""
-
-    source = env or merged_env_snapshot()
-    allowed = set(_DEFAULT_WHITELIST)
-    if whitelist:
-        allowed.update(whitelist)
-    return {k: v for k, v in source.items() if k in allowed}
 
 
 def sanitize_worker_env_value(value: object | None) -> str:

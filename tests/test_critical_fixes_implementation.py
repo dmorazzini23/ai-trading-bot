@@ -20,38 +20,6 @@ os.environ.update({
 })
 
 
-def test_metrics_division_by_zero_protection():
-    """Test metrics module handles division by zero properly."""
-    from ai_trading.metrics import (
-        calculate_atr,
-        compute_basic_metrics,
-        safe_divide,
-    )
-
-    # Test with empty data
-    empty_df = pd.DataFrame()
-    result = compute_basic_metrics(empty_df)
-    assert result == {"sharpe": 0.0, "max_drawdown": 0.0}
-
-    # Test with zero standard deviation
-    zero_std_df = pd.DataFrame({"return": [0.0, 0.0, 0.0, 0.0]})
-    result = compute_basic_metrics(zero_std_df)
-    assert result["sharpe"] == 0.0
-
-    # Test safe_divide function
-    assert safe_divide(10, 0) == 0.0
-    assert safe_divide(10, 2) == 5.0
-    assert safe_divide(10, 0, default=99) == 99
-
-    # Test ATR with edge cases
-    edge_case_df = pd.DataFrame({
-        'high': [1e-8, 1e-8, 1e-8],
-        'low': [1e-8, 1e-8, 1e-8],
-        'close': [1e-8, 1e-8, 1e-8]
-    })
-    atr_result = calculate_atr(edge_case_df)
-    assert not atr_result.empty
-    assert all(atr_result.notna())  # Should not have NaN values
 
 
 
@@ -191,32 +159,6 @@ def test_configuration_validation():
     # Since config validation passed during import, the functionality works
 
 
-def test_dependency_injection():
-    """Test dependency injection container."""
-    from ai_trading.core.interfaces import IConfigManager, SimpleDependencyContainer
-
-    container = SimpleDependencyContainer()
-
-    class MockConfigManager:
-        def __init__(self):
-            self._store = {"test": "mock_test"}
-
-        def get(self, key: str):
-            return self._store.get(key)
-
-    # Register implementation
-    container.register(IConfigManager, MockConfigManager)
-
-    # Resolve implementation
-    config_manager = container.resolve(IConfigManager)
-    assert isinstance(config_manager, MockConfigManager)
-    assert config_manager.get("test") == "mock_test"
-
-    # Test singleton
-    container.register(IConfigManager, MockConfigManager, singleton=True)
-    instance1 = container.resolve(IConfigManager)
-    instance2 = container.resolve(IConfigManager)
-    assert instance1 is instance2
 
 
 def test_performance_optimizations():

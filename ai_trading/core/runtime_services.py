@@ -163,58 +163,6 @@ def pre_trade_health_check_runtime(
     return results
 
 
-def legacy_health_payload_runtime() -> dict[str, Any]:
-    """Build the legacy Flask health payload without leaking runtime exceptions."""
-    be = _bot_engine()
-
-    runtime = be._get_runtime_context_or_none()
-    runtime_not_ready = runtime is None
-    runtime_symbols = []
-    if runtime is not None:
-        tickers = getattr(runtime, "tickers", None)
-        if isinstance(tickers, Sequence) and not isinstance(tickers, (str, bytes)):
-            runtime_symbols = list(tickers)
-
-    try:
-        if runtime is not None:
-            pre_trade_health_check_runtime(runtime, runtime_symbols or be.REGIME_SYMBOLS)
-        else:
-            raise RuntimeError("runtime not ready")
-        payload = be.build_canonical_healthz_payload(
-            service_name="ai-trading",
-            force_ok_for_pytest=False,
-            healthy_status_mode="healthy",
-            ok_mode="connectivity",
-        )
-    except (
-        be.APIError,
-        TimeoutError,
-        ConnectionError,
-        KeyError,
-        ValueError,
-        TypeError,
-        OSError,
-        RuntimeError,
-        AttributeError,
-    ) as exc:
-        payload = be.build_canonical_healthz_payload(
-            service_name="ai-trading",
-            force_ok_for_pytest=False,
-            healthy_status_mode="healthy",
-            ok_mode="connectivity",
-            error=str(exc),
-        )
-        if not runtime_not_ready or str(exc) != "runtime not ready":
-            be.logger.warning(
-                "HEALTH_CHECK_FAILED",
-                extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-            )
-
-    payload["no_signal_events"] = int(getattr(be.state, "no_signal_events", 0))
-    payload["indicator_failures"] = int(getattr(be.state, "indicator_failures", 0))
-    return cast(dict[str, Any], payload)
-
-
 def build_healthcheck_app_runtime() -> Any:
     """Return the canonical standalone healthcheck app."""
     from ai_trading.app import build_standalone_healthcheck_app
@@ -252,7 +200,6 @@ def start_healthcheck_runtime() -> None:
 
 __all__ = [
     "build_healthcheck_app_runtime",
-    "legacy_health_payload_runtime",
     "pre_trade_health_check_runtime",
     "reconcile_positions_runtime",
     "start_healthcheck_runtime",

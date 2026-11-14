@@ -5,7 +5,7 @@ import asyncio
 import importlib
 import sys
 import threading
-from contextlib import AbstractAsyncContextManager, contextmanager
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Final, NamedTuple, cast
@@ -342,12 +342,6 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True, bump_version: bool 
                 _set_pooling_limit_state(limit, _LIMIT_VERSION)
 
 
-def testing_reset_host_semaphores() -> None:
-    """Test helper: clear cached host semaphores without dropping the limit cache."""
-
-    reset_host_semaphores(clear_limit_cache=False)
-
-
 def testing_reset_host_limits() -> None:
     """Test helper: clear cached semaphores and force the limit to recompute."""
 
@@ -537,19 +531,6 @@ def get_host_limit() -> int:
 
     snapshot = reload_host_limit_if_env_changed()
     return snapshot.limit
-
-
-def invalidate_host_limit_cache() -> None:
-    """Invalidate cached host limit values.
-
-    The next access will recompute the limit and refresh semaphore records as needed.
-    """
-
-    global _LIMIT_CACHE
-    _LIMIT_CACHE = None
-    limit, version = _resolve_limit()
-    snapshot = HostLimitSnapshot(limit, version)
-    _refresh_all_host_semaphores(snapshot)
 
 
 def reload_host_limit_if_env_changed(_session: object | None = None) -> HostLimitSnapshot:
@@ -755,69 +736,10 @@ def limit_url(url: str) -> AsyncHostLimiter:
     return AsyncHostLimiter.from_url(url)
 
 
-def host_limiter_async(hostname: str | None = None) -> AsyncHostLimiter:
-    """Return an async host limiter with per-host semaphore enforcement."""
-
-    return AsyncHostLimiter(hostname)
-
-
-@contextmanager
-def host_limiter(hostname: str | None = None):
-    """Synchronously limit host concurrency using the shared semaphore."""
-
-    normalized = _normalize_host(hostname)
-    semaphore = get_host_limiter(normalized)
-    semaphore.acquire()
-    try:
-        yield
-    finally:
-        try:
-            semaphore.release()
-        except ValueError:
-            pass
-
-
 # === TEST-COMPAT DEFAULT HOST LIMITER ===
 _HOST_LIMITERS: dict[str, threading.Semaphore] = {}
 
 _HOST_LOCK = threading.Lock()
-
-
-def _normalize_host_env_key(host: str) -> str:
-    return host.replace("-", "_").replace(".", "_")
-
-
-def _parse_default_host_limit(raw: str | None, default: int = _DEFAULT_LIMIT) -> int:
-    try:
-        return max(1, int(raw)) if raw not in (None, "") else default
-    except (TypeError, ValueError):
-        logger.debug("HOST_LIMIT_ENV_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
-        return default
-
-
-def get_host_limiter(host: str):
-    normalized_host = _normalize_host(host)
-    key = _normalize_host_env_key(normalized_host)
-    with _HOST_LOCK:
-        limiter = _HOST_LIMITERS.get(key)
-        override = _resolve_host_override_limit(normalized_host)
-        default = _parse_default_host_limit(_env_raw("AI_TRADING_HTTP_HOST_LIMIT", "3"))
-        limit_value = override if override is not None else default
-        needs_refresh = False
-        if limiter is None:
-            needs_refresh = True
-        else:
-            current_limit = getattr(limiter, "_ai_trading_host_limit", None)
-            if current_limit != limit_value:
-                needs_refresh = True
-        if needs_refresh:
-            limiter = threading.Semaphore(limit_value)
-            try:
-                setattr(limiter, "_ai_trading_host_limit", limit_value)
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                logger.debug("THREADING_LIMITER_METADATA_SET_FAILED", exc_info=True)
-            _HOST_LIMITERS[key] = limiter
-        return limiter
 
 
 # Ensure fallback concurrency modules observe module reloads and cache resets.
@@ -831,14 +753,12 @@ __all__ = [
     "get_host_limit",
     "get_host_limit_snapshot",
     "get_host_semaphore",
-    "invalidate_host_limit_cache",
     "limit_host",
     "limit_url",
     "reload_host_limit_if_env_changed",
     "refresh_host_semaphore",
     "reset_host_semaphores",
     "testing_reset_host_limits",
-    "testing_reset_host_semaphores",
 ]
 def _purge_closed_loops() -> None:
     for loop in list(_HOST_SEMAPHORES.keys()):

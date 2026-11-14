@@ -309,14 +309,6 @@ def test_async_host_limiter_from_url_acquires_and_releases(monkeypatch):
     assert calls == ["api.alpaca.markets"]
 
 
-def test_public_limiter_factories_normalize_hosts():
-    host_limiter = pooling.limit_host("API.Alpaca.Markets")
-    async_limiter = pooling.host_limiter_async("DATA.Alpaca.Markets")
-
-    assert isinstance(host_limiter, pooling.AsyncHostLimiter)
-    assert isinstance(async_limiter, pooling.AsyncHostLimiter)
-    assert host_limiter._host == "api.alpaca.markets"
-    assert async_limiter._host == "data.alpaca.markets"
 
 
 def test_async_host_limiter_ignores_release_value_error():
@@ -357,48 +349,5 @@ def test_async_host_limiter_cleans_up_failed_acquire(monkeypatch):
     assert limiter._acquired is False
 
 
-def test_sync_host_limiter_releases_even_if_release_raises(monkeypatch):
-    events: list[str] = []
-
-    class Limiter:
-        def acquire(self):
-            events.append("acquire")
-
-        def release(self):
-            events.append("release")
-            raise ValueError("already released")
-
-    monkeypatch.setattr(pooling, "get_host_limiter", lambda host: Limiter())
-
-    with pooling.host_limiter("API.Alpaca.Markets"):
-        events.append("inside")
-
-    assert events == ["acquire", "inside", "release"]
 
 
-def test_threading_host_limiter_refreshes_when_limit_changes(monkeypatch):
-    _reset_pooling_state()
-    default_limit = {"value": "2"}
-    override: dict[str, int | None] = {"value": None}
-    monkeypatch.setattr(
-        pooling,
-        "_env_raw",
-        lambda key, default=None: default_limit["value"]
-        if key == "AI_TRADING_HTTP_HOST_LIMIT"
-        else default,
-    )
-    monkeypatch.setattr(pooling, "_resolve_host_override_limit", lambda _host: override["value"])
-
-    first = pooling.get_host_limiter("API.Alpaca.Markets")
-    assert isinstance(first, threading.Semaphore)
-    assert getattr(first, "_ai_trading_host_limit") == 2
-
-    default_limit["value"] = "4"
-    second = pooling.get_host_limiter("API.Alpaca.Markets")
-    assert second is not first
-    assert getattr(second, "_ai_trading_host_limit") == 4
-
-    override["value"] = 1
-    third = pooling.get_host_limiter("API.Alpaca.Markets")
-    assert third is not second
-    assert getattr(third, "_ai_trading_host_limit") == 1

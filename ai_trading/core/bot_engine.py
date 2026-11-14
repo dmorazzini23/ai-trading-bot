@@ -23,7 +23,7 @@ from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
 from dataclasses import dataclass, field
 from statistics import NormalDist
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
-from functools import cached_property, lru_cache
+from functools import lru_cache
 
 from json import JSONDecodeError
 
@@ -163,11 +163,7 @@ from ai_trading.runtime.paper_sampling import (
     stale_model_diagnostics_allowed,
 )
 from ai_trading.runtime.run_manifest import write_run_manifest
-from ai_trading.models.artifacts import (
-    enforce_artifact_verification,
-    load_verified_joblib_artifact,
-    write_artifact_manifest,
-)
+from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
 from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_BAR_TIMEFRAME,
     DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
@@ -525,20 +521,6 @@ def _expected_minute_bars_window(start_dt: datetime, end_dt: datetime) -> int:
     except COMMON_EXC:
         return 0
     return max(0, int(delta // 60))
-
-
-def _frame_is_sparse(frame: Any | None, expected: int) -> bool:
-    """Return ``True`` when *frame* lacks the expected minute coverage."""
-
-    if frame is None:
-        return True
-    if expected <= 0:
-        return False
-    try:
-        actual = int(len(frame))
-    except COMMON_EXC:
-        return True
-    return actual < expected
 
 
 def _normalize_broker_order_status(value: Any) -> str:
@@ -1077,13 +1059,6 @@ FINNHUB_AVAILABLE = _has_module("finnhub")
 
 
 
-def _rf_class():
-    if not SKLEARN_AVAILABLE:
-        raise RuntimeError("sklearn not available")
-    sklearn_ensemble = importlib.import_module("sklearn.ensemble")
-    return sklearn_ensemble.RandomForestClassifier
-
-
 def _bayesian_ridge():
     if not SKLEARN_AVAILABLE:
         raise RuntimeError("sklearn not available")
@@ -1277,8 +1252,6 @@ __all__ = [
     "get_cycle_budget_context",
     "emit_cycle_budget_summary",
     "clear_cycle_budget_context",
-    "FeatureDataResult",
-    "fetch_feature_data",
     "get_default_feed",
     "set_default_feed",
 ]
@@ -1320,27 +1293,6 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
         raise DataFetchError("data health check failed")
 
 
-def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, pd.DataFrame]:
-    """Fetch daily bars for ``symbols`` and return mapping of symbol to DataFrame.
-
-    Symbols returning empty data or raising :class:`ValueError` are skipped so
-    callers can continue operating with the remaining symbols.  This gracefully
-    degrades when certain feeds (e.g., SIP without authorization) provide no
-    data.
-    """
-
-    results: dict[str, pd.DataFrame] = {}
-    for sym in symbols:
-        try:
-            df = get_bars_df(sym, bars.TimeFrame.Day, feed=feed)
-        except (ValueError, DataFetchError, RequestException, RuntimeError):
-            # Missing network access or unauthorized feeds are skipped so that
-            # the remaining symbols can still be processed.
-            continue
-        if df is None or df.empty:
-            continue
-        results[sym] = df
-    return results
 import asyncio
 import atexit
 import functools
@@ -3473,28 +3425,6 @@ def _resolve_capacity_throttle_adaptive_params(
     )
 
 
-def _current_position_qty(ctx: Any, symbol: str) -> int:
-    """Return current position quantity for *symbol*.
-
-    Deprecated legacy helper retained for compatibility. Falls back to ``0``
-    if the position is missing or an error occurs.
-    """
-
-    api = getattr(ctx, "api", None)
-    if api is None:
-        return 0
-    try:
-        position = api.get_position(symbol)
-    except (RequestException, AttributeError, KeyError, ValueError, RuntimeError):  # pragma: no cover - legacy safety net
-        logger.debug("POSITION_LOOKUP_FAILED", exc_info=True, extra={"symbol": symbol})
-        return 0
-    qty = getattr(position, "qty", 0) if position is not None else 0
-    try:
-        return int(qty)
-    except (TypeError, ValueError):  # pragma: no cover - legacy safety net
-        return 0
-
-
 def _mask_env_name(name: str) -> str:
     return f"{name[:8]}***"
 
@@ -3506,14 +3436,6 @@ def _get_env_str(key: str) -> str:
     masked = _mask_env_name(key)
     logger.error("Missing required environment variable: %s", masked)
     raise RuntimeError(f"Missing required environment variable: {masked}")
-
-
-def _require_env_keys(*keys: str) -> None:
-    for key in keys:
-        if get_env(key, resolve_aliases=False) in (None, ""):
-            masked = _mask_env_name(key)
-            logger.error("Missing required environment variable: %s", masked)
-            raise RuntimeError(f"Missing required environment variable: {masked}")
 
 
 def _env_flag(key: str, default: bool = False) -> bool:
@@ -3535,135 +3457,9 @@ def _env_flag(key: str, default: bool = False) -> bool:
         return default
 
 
-class BotEngine:
-    """Minimal engine exposing memoized Alpaca clients."""
-
-    def __init__(
-        self,
-        *,
-        trading_client_cls: Any | None = None,
-        data_client_cls: Any | None = None,
-    ) -> None:
-        self.logger = get_logger(__name__)
-        # Expose the lazily-initialized global context through this engine
-        self._ctx = get_ctx()
-        self._trading_client_cls = trading_client_cls or get_trading_client_cls()
-        self._data_client_cls = data_client_cls or _get_data_client_cls_cached()
-        if getattr(APIError, "__module__", "") == __name__ and ALPACA_AVAILABLE:
-            globals()["APIError"] = get_api_error_cls()
-        # Load universe tickers once and store on both engine and runtime
-        self._tickers = load_universe()
-        setattr(self._ctx, "tickers", self._tickers)
-
-        # Eagerly load the configured model so misconfiguration fails fast
-        _load_required_model()
-
-        # Cycle-scoped feed preference cache populated during minute fetches
-        self._cycle_id: int | None = None
-        self._intraday_fallback_feed: str | None = None
-        self._cycle_minute_feed_override: dict[str, str] = {}
-
-    @property
-    def ctx(self):
-        """Return the lazily-initialized bot context."""
-        return self._ctx
-
-    @cached_property
-    def trading_client(self):
-        """Alpaca TradingClient for order/trade ops."""
-        _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL")
-        base_url = _get_env_str("ALPACA_TRADING_BASE_URL")
-        api_key = _get_env_str("ALPACA_API_KEY")
-        secret_key = _get_env_str("ALPACA_SECRET_KEY")
-        cls = self._trading_client_cls
-        if callable(cls):
-            return cls(
-                api_key=api_key,
-                secret_key=secret_key,
-                paper="paper" in base_url.lower(),
-                url_override=base_url,
-            )
-        return cls
-
-    # ------------------------------------------------------------------
-    # Cycle-scoped helpers
-    # ------------------------------------------------------------------
-
-    def _begin_cycle(self) -> None:
-        """Reset per-cycle caches and stamp a fresh cycle id."""
-
-        _reset_cycle_cache()
-        self._cycle_id = _GLOBAL_CYCLE_ID
-        self._intraday_fallback_feed = None
-        self._cycle_minute_feed_override.clear()
-        manager = getattr(self._ctx, "signal_manager", None)
-        if hasattr(manager, "begin_cycle"):
-            manager.begin_cycle()
-
-    def _prefer_feed_this_cycle(self, symbol: str | None = None) -> str | None:
-        """Return cached intraday fallback feed for the current cycle."""
-
-        if symbol:
-            override = self._cycle_minute_feed_override.get(symbol)
-            if override:
-                return override
-        return self._intraday_fallback_feed
-
-    def _cache_cycle_fallback_feed(
-        self, *args: object, **kwargs: object
-    ) -> None:
-        """Remember *feed* for subsequent minute fetches within the cycle."""
-
-        feed, symbol = _unwrap_cycle_cache_args(*args, **kwargs)
-        sanitized, normalized_raw, cached_value = _cycle_fallback_feed_values(feed)
-
-        if symbol:
-            if cached_value:
-                self._cycle_minute_feed_override[symbol] = cached_value
-            else:
-                self._cycle_minute_feed_override.pop(symbol, None)
-
-        if sanitized:
-            self._intraday_fallback_feed = sanitized
-
-        if sanitized:
-            _cache_cycle_fallback_feed_helper(sanitized, symbol=symbol)
-        elif normalized_raw:
-            _cache_cycle_fallback_feed_helper(normalized_raw, symbol=symbol)
-
-    @cached_property
-    def data_client(self):
-        """Alpaca StockHistoricalDataClient for historical/market data."""
-        cls = self._data_client_cls
-        client = None
-        if callable(cls):
-            _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL")
-            _get_env_str("ALPACA_TRADING_BASE_URL")
-            client = cls(
-                api_key=_get_env_str("ALPACA_API_KEY"),
-                secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            )
-        else:
-            client = cls
-        if client is None:
-            return None
-        if isinstance(client, _DataClientAdapter):
-            return client
-        return _DataClientAdapter(client)
-
-    @property
-    def tickers(self) -> list[str]:
-        """Return cached universe tickers."""
-        return self._tickers
-
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
 _finbert_logged = False
 
-def _log_finbert_disabled() -> None:
-    global _finbert_logged
-    if not _finbert_logged:
-        logger.info("FinBERT disabled by config; skipping model load.")
-        _finbert_logged = True
 
 # AI-AGENT-REF: normalize arbitrary inputs into DataFrames
 from ai_trading.utils.lazy_imports import load_pandas
@@ -4404,50 +4200,6 @@ def _normalize_price(raw_value: Any, provider: str, symbol: str) -> float | None
         )
         return None
     return value
-
-
-def _sanitize_provider_price(
-    symbol: str,
-    provider: str,
-    price: float | None,
-    cache: Mapping[str, Any],
-) -> tuple[float | None, str | None]:
-    """Return ``price`` when it is usable else ``(None, reason)``."""
-
-    if price is None:
-        return None, "price_missing"
-    if not math.isfinite(price):
-        return None, "non_finite"
-    if price <= 0:
-        return None, "non_positive"
-
-    normalized_provider = str(provider or "").lower()
-    if normalized_provider.startswith("alpaca") and normalized_provider != "alpaca_trade":
-        trade_price = cache.get("trade_price")
-        if isinstance(trade_price, (int, float)) and trade_price > 0:
-            deviation = abs(price - float(trade_price)) / float(trade_price)
-            if deviation > _MAX_PRICE_DEVIATION:
-                reason = f"price_deviation={deviation:.3f}>limit={_MAX_PRICE_DEVIATION:.3f}"
-                return None, reason
-
-    return float(price), None
-
-
-def _log_skipped_unreliable_price(
-    symbol: str,
-    provider: str,
-    price: float | None,
-    reason: str | None,
-) -> None:
-    try:
-        logger.warning(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | provider=%s price=%s reason=%s",
-            provider,
-            None if price is None else f"{float(price):.6f}",
-            reason or "unspecified",
-        )
-    except COMMON_EXC:  # pragma: no cover - defensive logging guard
-        logger.warning("ORDER_SKIPPED_UNRELIABLE_PRICE", extra={"symbol": symbol})
 
 
 def _normalize_unreliable_reason(reason_label: str | None) -> str:
@@ -5662,12 +5414,6 @@ def _sip_authorized() -> bool:
 
     return False
 
-def _alpaca_diag_info() -> dict[str, object]:
-    """Collect Alpaca env & mode diagnostics for operator visibility."""
-    try:
-        return gather_alpaca_diag()
-    except COMMON_EXC as e:  # pragma: no cover – diag never fatal
-        return {"diag_error": str(e)}  # AI-AGENT-REF: narrowed diag exception
 
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
@@ -6021,13 +5767,6 @@ def _emit_pytest_capture(level: int, message: str) -> None:
 # GOOD: defer until explicitly initialized by runtime code
 
 
-def maybe_init_brokers() -> None:
-    """Initialize clients lazily, only when runtime needs them."""  # AI-AGENT-REF: lazy broker init
-    global trading_client, data_client
-    if trading_client is not None and data_client is not None:
-        return
-    if not ALPACA_AVAILABLE:
-        return
     # actual initialization occurs elsewhere when Alpaca is available
 
 
@@ -6535,14 +6274,6 @@ def _enforce_runtime_model_governance(
 
 def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool:
     return execution_mode == "paper" and bool(allow_paper_train)
-
-
-def _enforce_model_artifact_verification(model_path: str) -> None:
-    configured_manifest = str(get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or "").strip()
-    enforce_artifact_verification(
-        model_path=model_path,
-        manifest_path=configured_manifest or None,
-    )
 
 
 def _model_payload_is_placeholder(model: Any) -> bool:
@@ -7819,67 +7550,6 @@ def _resolve_runtime_trading_mode() -> str:
         return _normalize_runtime_trading_mode(env_mode)
 
 
-def _resolve_orders_threshold(cfg: TradingConfig, key: str, default: float) -> float:
-    """Return float threshold from TradingConfig orders section with fallbacks."""
-
-    candidate: Any | None = None
-    orders_section = getattr(cfg, "orders", None)
-    if isinstance(orders_section, Mapping):
-        candidate = orders_section.get(key)
-    elif orders_section is not None:
-        candidate = getattr(orders_section, key, None)
-    if candidate in (None, ""):
-        candidate = getattr(cfg, f"orders_{key}", None)
-    if candidate in (None, ""):
-        candidate = getattr(cfg, key, None)
-    if candidate in (None, ""):
-        env_key = f"ORDERS_{key.upper()}"
-        raw_env = get_env(env_key)
-        if raw_env not in (None, ""):
-            try:
-                candidate = float(raw_env)
-            except (TypeError, ValueError):
-                candidate = None
-    if candidate in (None, ""):
-        return float(default)
-    try:
-        value = float(candidate)
-    except (TypeError, ValueError):
-        return float(default)
-    return max(0.0, value)
-
-
-def _pending_new_thresholds() -> tuple[float, float]:
-    """Return warn/error thresholds for pending_new order severity."""
-
-    cfg = _get_trading_config()
-    warn_s = _resolve_orders_threshold(cfg, "pending_new_warn_s", 60.0)
-    error_s = _resolve_orders_threshold(cfg, "pending_new_error_s", 180.0)
-    if error_s < warn_s:
-        error_s = warn_s
-    return warn_s, error_s
-
-
-def _order_pending_age_seconds(order: Any, *, now: datetime | None = None) -> float:
-    """Compute pending order age in seconds using created/submitted timestamp."""
-
-    now_dt = now or datetime.now(UTC)
-    timestamp: datetime | None = None
-    for attr in ("created_at", "submitted_at"):
-        raw_value = getattr(order, attr, None)
-        if raw_value in (None, ""):
-            continue
-        try:
-            timestamp = _ensure_utc_dt(raw_value)
-            break
-        except COMMON_EXC:
-            continue
-    if timestamp is None:
-        return 0.0
-    age = (now_dt - timestamp).total_seconds()
-    return float(age) if age > 0 else 0.0
-
-
 def is_runtime_ready() -> bool:
     """Check if runtime context is fully initialized."""
     return _RUNTIME_READY
@@ -8424,24 +8094,6 @@ def _lazy_import_torch() -> bool:
         return False
 
 
-def _lazy_import_hmmlearn() -> bool:
-    try:
-        import hmmlearn  # noqa: F401
-
-        return True
-    except COMMON_EXC:
-        return False
-
-
-def _seed_torch_if_available(seed: int) -> None:
-    try:
-        import torch
-
-        torch.manual_seed(int(seed))
-    except COMMON_EXC:
-        pass
-
-
 def _resolve_rl_model_path(raw_path: str | None = None) -> Path | None:
     candidate = str(raw_path or "").strip()
     if not candidate:
@@ -8723,7 +8375,6 @@ def get_default_feed() -> str:
 if hasattr(np, "nan"):
     setattr(np, "NaN", np.nan)
 
-import pkgutil
 from functools import cache
 
 
@@ -8947,13 +8598,6 @@ def get_market_calendar():
 
 
 _FULL_DATETIME_RANGE = None
-
-
-def get_full_datetime_range():
-    global _FULL_DATETIME_RANGE
-    if _FULL_DATETIME_RANGE is None:
-        _FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1min")
-    return _FULL_DATETIME_RANGE
 
 
 # AI-AGENT-REF: add simple timeout helper for API calls
@@ -9187,23 +8831,6 @@ from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
 TRADING_MODE_ENV = _resolve_runtime_trading_mode()
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
-
-
-def _require_cfg(value: str | None, name: str) -> str:
-    """Return a required config value or raise with a deterministic error."""
-    if value:
-        return value
-
-    # In testing mode, return a dummy value
-    if getattr(CFG, "testing", False):
-        dummy_values = {
-            "ALPACA_API_KEY": "test_api_key",
-            "ALPACA_SECRET_KEY": "test_secret_key",
-            "TRADING_MODE": "test",
-        }
-        return dummy_values.get(name, f"test_{name.lower()}")
-
-    raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 
 def _coerce_secret_value(value: Any) -> str | None:
@@ -9708,28 +9335,6 @@ def save_portfolio_snapshot(
         json.dump(data, f, indent=2)
 
 
-def load_portfolio_snapshot() -> dict[str, int]:
-    if not os.path.exists(PORTFOLIO_FILE):
-        return {}
-    with open(PORTFOLIO_FILE) as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        return {}
-    raw_positions = data.get("positions", {})
-    if not isinstance(raw_positions, dict):
-        return {}
-    positions: dict[str, int] = {}
-    for symbol, qty in raw_positions.items():
-        key = str(symbol).strip().upper()
-        if not key:
-            continue
-        try:
-            positions[key] = int(qty)
-        except (TypeError, ValueError):
-            positions[key] = 0
-    return positions
-
-
 def compute_current_positions(ctx: Any) -> dict[str, int]:
     try:
         if hasattr(ctx.api, "list_positions"):
@@ -9843,47 +9448,6 @@ def _resolve_latest_close(df_obj: Any) -> float | None:
     return number
 
 
-@dataclass
-class FeatureDataResult:
-    df: Optional["pd.DataFrame"]
-    data_quality: str
-
-
-def _is_minute_stale(frame: Any, *, symbol: Optional[str] = None) -> bool:
-    try:
-        staleness._ensure_data_fresh(
-            frame,
-            _minute_data_freshness_limit(),
-            symbol=symbol,
-            now=datetime.now(UTC),
-        )
-        return False
-    except RuntimeError:
-        return True
-    except COMMON_EXC:
-        return False
-
-
-def fetch_feature_data(symbol: str, *args: Any, **kwargs: Any) -> FeatureDataResult:
-    minute_df = kwargs.pop("minute_df", None)
-    if minute_df is None:
-        try:
-            minute_df = fetch_minute_df_safe(symbol, *args, **kwargs)
-        except DataFetchError as exc:
-            reason = getattr(exc, "fetch_reason", None)
-            quality = "stale" if reason == "stale_minute_data" else "empty"
-            return FeatureDataResult(df=None, data_quality=quality)
-    if minute_df is None:
-        return FeatureDataResult(df=None, data_quality="empty")
-    if _is_minute_stale(minute_df, symbol=symbol):
-        logger.warning(
-            "FETCH_MINUTE_STALE_DATA",
-            extra={"symbol": symbol, "detail": "age>threshold"},
-        )
-        return FeatureDataResult(df=None, data_quality="stale")
-    return FeatureDataResult(df=minute_df, data_quality="ok")
-
-
 def _call_provider_factory(factory: Any, symbol: str):
     try:
         sig = inspect.signature(factory)
@@ -9892,20 +9456,6 @@ def _call_provider_factory(factory: Any, symbol: str):
         return factory(symbol)
     except COMMON_EXC:
         return factory() if callable(factory) else factory
-
-
-def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
-    """Return a UTC datetime range spanning the past ``minutes`` minutes."""
-    # AI-AGENT-REF: provide timezone-aware datetimes
-    now = datetime.now(UTC)
-    start = now - timedelta(minutes=minutes)
-    return start, now
-
-
-def safe_price(price: float) -> float:
-    """Defensively clamp ``price`` to a minimal positive value."""
-    # AI-AGENT-REF: prevent invalid zero/negative prices
-    return max(price, 1e-3)
 
 
 # AI-AGENT-REF: utility to detect row drops during feature engineering
@@ -11914,124 +11464,6 @@ _finbert_tokenizer = None
 _finbert_model = None
 
 
-def ensure_finbert(cfg=None):
-    """
-    Load FinBERT on first use, if enabled in config.
-    Returns (tokenizer, model) or (None, None) if disabled/unavailable.
-    """
-    global _finbert_tokenizer, _finbert_model
-    # If already loaded (or deliberately disabled), short-circuit
-    if _finbert_tokenizer is not None and _finbert_model is not None:
-        return _finbert_tokenizer, _finbert_model
-    try:
-        # config gate: disable by default on low-RAM machines
-        if cfg is not None:
-            enabled = bool(getattr(cfg, "enable_finbert", False))
-        else:
-            # best-effort: try to read a default TradingConfig if none provided
-            try:
-                from ai_trading.config.management import TradingConfig
-
-                enabled = bool(
-                    getattr(_trading_config_from_env(), "enable_finbert", False)
-                )
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ):  # AI-AGENT-REF: narrow exception
-                enabled = False
-        if not enabled:
-            _log_finbert_disabled()  # AI-AGENT-REF: reduce log spam
-            return None, None
-
-        # dependency presence check without ImportError guards
-        if (
-            importlib.util.find_spec("transformers") is None
-            or importlib.util.find_spec("torch") is None
-        ):
-            logger.warning(
-                "FinBERT requested but transformers/torch not installed; returning neutral sentiment."
-            )
-            return None, None
-
-        import torch  # type: ignore
-        import transformers  # type: ignore
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=".*_register_pytree_node.*",
-                module="transformers.*",
-            )
-            finbert_model_name = str(
-                get_env("AI_TRADING_FINBERT_MODEL_NAME", "yiyanghkust/finbert-tone")
-                or "yiyanghkust/finbert-tone"
-            )
-            tok = transformers.AutoTokenizer.from_pretrained(
-                finbert_model_name,
-                local_files_only=True,
-            )
-            mdl = transformers.AutoModelForSequenceClassification.from_pretrained(
-                finbert_model_name,
-                local_files_only=True,
-            )
-            mdl.eval()
-        _finbert_tokenizer, _finbert_model = tok, mdl
-        _emit_once(logger, "finbert_loaded", logging.INFO, "FinBERT loaded successfully")
-        return _finbert_tokenizer, _finbert_model
-    except (
-        ImportError,
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error("FinBERT lazy-load failed: %s", e)
-        return None, None
-
-
-def _finbert_label_key(raw: Any) -> str | None:
-    token = str(raw or "").strip().lower().replace("_", "-")
-    if "positive" in token or token in {"pos", "bull", "bullish"}:
-        return "pos"
-    if "negative" in token or token in {"neg", "bear", "bearish"}:
-        return "neg"
-    if "neutral" in token or token == "neu":
-        return "neu"
-    return None
-
-
-def _finbert_pos_neg_from_probs(probs: Any, model: Any) -> tuple[float, float]:
-    values = [float(x) for x in probs.tolist()]
-    id2label = getattr(getattr(model, "config", None), "id2label", {}) or {}
-    mapped = {"pos": 0.0, "neg": 0.0}
-    used_mapping = False
-    for index, value in enumerate(values):
-        label = id2label.get(index)
-        if label is None and isinstance(id2label, dict):
-            label = id2label.get(str(index))
-        key = _finbert_label_key(label)
-        if key in {"pos", "neg"}:
-            mapped[key] = value
-            used_mapping = True
-    if used_mapping:
-        return mapped["pos"], mapped["neg"]
-    if len(values) >= 3:
-        neg, _neu, pos = values[:3]
-        return pos, neg
-    return 0.0, 0.0
-
-
 # REMOVED: module-scope get_disaster_dd_limit() = CFG.disaster_dd_limit
 # Paths
 
@@ -12088,23 +11520,6 @@ def atomic_joblib_dump(obj, path: str) -> None:
     os.close(fd)
     try:
         joblib.dump(obj, tmp_path)
-        os.replace(tmp_path, path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
-def atomic_pickle_dump(obj, path: str) -> None:
-    """Safely pickle object to path with atomic replace."""
-    import tempfile
-
-    dir_name = os.path.dirname(path)
-    os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
-    os.close(fd)
-    try:
-        with open(tmp_path, "wb") as f:
-            pickle.dump(obj, f)
         os.replace(tmp_path, path)
     finally:
         if os.path.exists(tmp_path):
@@ -12201,50 +11616,6 @@ def load_hyperparams() -> dict:
     return {}
 
 
-def _maybe_warm_cache(ctx: BotContext) -> None:
-    """
-    Warm up cache for the main universe symbols (daily + optional intraday).
-    """
-    settings = get_settings()
-    if not getattr(settings, "data_cache_enable", False):
-        return
-    try:
-        # Daily warm-up via batched fetch
-        end_dt = datetime.now(UTC)
-        start_dt = end_dt - timedelta(days=int(settings.data_warmup_lookback_days))
-        if ctx.symbols:
-            get_bars_batch(
-                ctx.symbols,
-                "1D",
-                start_dt,
-                end_dt,
-                feed=getattr(ctx, "data_feed", None),
-            )
-        # Optional intraday warm-up
-        if getattr(settings, "intraday_batch_enable", True):
-            end_dt = datetime.now(UTC)
-            start_dt = end_dt - timedelta(
-                minutes=int(settings.intraday_lookback_minutes)
-            )
-            _fetch_intraday_bars_chunked(
-                ctx.symbols,
-                start=start_dt,
-                end=end_dt,
-                feed=getattr(ctx, "data_feed", None),
-            )
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.warning("Cache warm-up failed: %s", exc)
-
-
 def _fetch_universe_bars(
     symbols: list[str],
     timeframe: str,
@@ -12332,132 +11703,6 @@ def _fetch_universe_bars_chunked(
     return out
 
 
-def _fetch_intraday_bars_chunked(
-    symbols: list[str],
-    start: datetime | str,
-    end: datetime | str,
-    feed: str | None = None,
-) -> dict[str, pd.DataFrame]:
-    """
-    Chunked batched fetch for 1-minute bars with safe fallback.
-    """
-    if not symbols:
-        return {}
-
-    start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
-    if end_dt <= start_dt:
-        raise ValueError("end must be after start")
-
-    max_span = timedelta(days=8)
-
-    def _time_slices() -> Iterable[tuple[datetime, datetime]]:
-        cur = start_dt
-        while cur < end_dt:
-            nxt = min(cur + max_span, end_dt)
-            yield cur, nxt
-            cur = nxt
-
-    settings = get_settings()
-    batch_size = max(1, int(getattr(settings, "intraday_batch_size", 40)))
-
-    def _fetch_symbol(sym: str) -> pd.DataFrame:
-        frames = []
-        for s_dt, e_dt in _time_slices():
-            if (e_dt - s_dt) > max_span:
-                raise ValueError("time slice exceeds 8-day limit")
-            df = get_minute_df(sym, s_dt, e_dt, feed=feed)
-            if df is not None and not getattr(df, "empty", False):
-                frames.append(df)
-        return pd.concat(frames) if frames else pd.DataFrame()
-
-    if not getattr(settings, "intraday_batch_enable", True):
-        return {s: _fetch_symbol(s) for s in symbols}
-
-    out: dict[str, pd.DataFrame] = {s: pd.DataFrame() for s in symbols}
-    for s_dt, e_dt in _time_slices():
-        for i in range(0, len(symbols), batch_size):
-            chunk = symbols[i : i + batch_size]
-            try:
-                got = get_bars_batch(chunk, str(bars.TimeFrame.Minute), s_dt, e_dt, feed=feed)
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as exc:  # AI-AGENT-REF: narrow exception
-                logger.warning(
-                    "Intraday batch failed for chunk size %d: %s; falling back",
-                    len(chunk),
-                    exc,
-                )
-                got = {}
-            missing = [
-                s
-                for s in chunk
-                if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)
-            ]
-            if missing:
-                max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
-
-                def _pull(
-                    sym: str,
-                    _slice_start: datetime = s_dt,
-                    _slice_end: datetime = e_dt,
-                ):
-                    try:
-                        return sym, get_minute_df(sym, _slice_start, _slice_end, feed=feed)
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ) as one_exc:  # AI-AGENT-REF: narrow exception
-                        logger.warning(
-                            "Intraday per-symbol fallback failed for %s: %s", sym, one_exc
-                        )
-                        return sym, None
-
-                with ThreadPoolExecutor(
-                    max_workers=max_workers, thread_name_prefix="fallback-intraday"
-                ) as ex:
-                    for fut in as_completed([ex.submit(_pull, s) for s in missing]):
-                        sym, df = fut.result()
-                        if df is not None and not getattr(df, "empty", False):
-                            got[sym] = df
-            for sym, df in got.items():
-                if df is not None and not getattr(df, "empty", False):
-                    out[sym] = (
-                        df
-                        if out[sym].empty
-                        else pd.concat([out[sym], df])
-                    )
-
-    total_symbols = len({k: v for k, v in out.items() if not v.empty})
-    try:
-        bars_loaded = sum(len(v) for v in out.values())
-    except (TypeError, AttributeError):  # AI-AGENT-REF: bars summary fallback
-        bars_loaded = 0
-    first_symbol = next((k for k, v in out.items() if not v.empty), None)
-    logger.info(
-        "FETCH_SUMMARY",
-        extra={
-            "total_symbols": total_symbols,
-            "bars_loaded": bars_loaded,
-            "first_symbol": first_symbol,
-        },
-    )
-    return {k: v for k, v in out.items() if not v.empty}
-
-
 def _resolve_model_data_feed_role() -> str:
     role_raw = str(
         get_env(
@@ -12489,134 +11734,6 @@ def _get_daily_df_for_feed_role(
         if "unexpected keyword argument" in message and "feed_role" in message:
             return getter(ctx, symbol)
         raise
-
-
-def _fetch_regime_bars(
-    ctx: BotContext, start, end, timeframe="1D"
-) -> dict[str, pd.DataFrame]:
-    settings = get_settings()
-    syms_csv = (getattr(settings, "regime_symbols_csv", None) or "SPY").strip()
-    symbols = [s.strip() for s in syms_csv.split(",") if s.strip()]
-    model_feed_role = _resolve_model_data_feed_role()
-    if model_feed_role == "reference":
-        out: dict[str, pd.DataFrame] = {}
-        for symbol in symbols:
-            try:
-                df = _get_daily_df_for_feed_role(ctx, symbol, feed_role=model_feed_role)
-            except COMMON_EXC:
-                df = None
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                out[symbol] = df
-        if out:
-            return out
-    feed_override = (
-        get_reference_feed(getattr(ctx, "data_feed", None))
-        if model_feed_role == "reference"
-        else getattr(ctx, "data_feed", None)
-    )
-    return _fetch_universe_bars_chunked(
-        symbols, timeframe, start, end, feed_override
-    )
-
-
-def _build_regime_dataset(ctx: Any) -> pd.DataFrame:
-    """
-    Build regime dataset using a configurable basket via batched fetch.
-    Returns a *wide* DataFrame: columns are symbols, rows are aligned by timestamp (index reset).
-    """
-    logger.info("Building regime dataset (batched)")
-    try:
-        end_dt = datetime.now(UTC)
-        start_dt = end_dt - timedelta(
-            days=max(30, int(getattr(ctx, "regime_lookback_days", 100)))
-        )
-        bundle = _fetch_regime_bars(ctx, start=start_dt, end=end_dt, timeframe="1D")
-        if not bundle:
-            return pd.DataFrame()
-        cols = []
-        for sym, df in bundle.items():
-            if df is None or getattr(df, "empty", False):
-                continue
-            s = (
-                df[["timestamp", "close"]]
-                .rename(columns={"close": sym})
-                .set_index("timestamp")
-            )
-            cols.append(s)
-        if not cols:
-            logger.warning(
-                "Regime dataset empty after normalization; attempting SPY-only fallback"
-            )
-            try:
-                spy_df = _get_daily_df_for_feed_role(
-                    ctx,
-                    "SPY",
-                    feed_role=_resolve_model_data_feed_role(),
-                )
-                if spy_df is not None and not getattr(spy_df, "empty", False):
-                    s = (
-                        spy_df[["timestamp", "close"]]
-                        .rename(columns={"close": "SPY"})
-                        .set_index("timestamp")
-                    )
-                    cols.append(s)
-                else:
-                    raise Exception("SPY data not available")
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as e:  # AI-AGENT-REF: narrow exception
-                logger.error("SPY fallback failed: %s", e)
-                logger.error(
-                    "Not enough valid rows (0) to train regime model; using dummy fallback"
-                )
-                return pd.DataFrame()
-
-        if not cols:  # Final check after SPY fallback attempt
-            return pd.DataFrame()
-        out = pd.concat(cols, axis=1).sort_index().reset_index()
-        out.columns.name = None
-        return out
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.warning("REGIME bootstrap failed: %s", exc)
-        return pd.DataFrame()
-
-
-def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert a wide close-price frame (timestamp + per-symbol columns) into a single proxy 'bars'
-    DataFrame with at least ['timestamp','close'] for downstream model training.
-    The proxy is an equal-weighted index of normalized closes.
-    """
-    if wide is None or getattr(wide, "empty", False):
-        return pd.DataFrame()
-    if "timestamp" not in wide.columns:
-        return pd.DataFrame()
-    close_cols = [c for c in wide.columns if c != "timestamp"]
-    if not close_cols:
-        return pd.DataFrame()
-    df = wide.copy()
-    # Normalize each series to 1.0 at first valid point to avoid scale bias
-    base = df[close_cols].iloc[0]
-    norm = df[close_cols] / base.replace(0, pd.NA)
-    proxy_close = norm.mean(axis=1).astype(float)
-    out = pd.DataFrame({"timestamp": df["timestamp"], "close": proxy_close})
-    return out
 
 
 # <-- NEW: marker file for daily retraining -->
@@ -13663,86 +12780,9 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
 
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
-class OrderExecutionError(Exception):
-    """Raised when an Alpaca order fails after submission."""
 
 
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
-
-
-def ensure_alpaca_credentials() -> None:
-    """Verify Alpaca credentials are present before starting."""
-    validate_alpaca_credentials()
-
-
-def log_circuit_breaker_status():
-    """Log the status of all circuit breakers for monitoring."""
-    try:
-        breakers = {
-            "main": breaker,
-            "alpaca": alpaca_breaker,
-            "data": data_breaker,
-            "finnhub": finnhub_breaker,
-        }
-
-        for name, cb in breakers.items():
-            if hasattr(cb, "state") and hasattr(cb, "fail_counter"):
-                logger.info(
-                    "CIRCUIT_BREAKER_STATUS",
-                    extra={
-                        "breaker": name,
-                        "state": cb.state,
-                        "failures": cb.fail_counter,
-                        "last_failure": getattr(cb, "last_failure", None),
-                    },
-                )
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.debug(f"Circuit breaker status logging failed: {e}")
-
-
-def get_circuit_breaker_health() -> dict:
-    """Get health status of all circuit breakers."""
-    try:
-        breakers = {
-            "main": breaker,
-            "alpaca": alpaca_breaker,
-            "data": data_breaker,
-            "finnhub": finnhub_breaker,
-        }
-
-        health = {}
-        for name, cb in breakers.items():
-            if hasattr(cb, "state"):
-                health[name] = {
-                    "state": str(cb.state),
-                    "healthy": cb.state != "open",
-                    "failures": getattr(cb, "fail_counter", 0),
-                }
-            else:
-                health[name] = {"state": "unknown", "healthy": True, "failures": 0}
-
-        return health
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error(f"Failed to get circuit breaker health: {e}")
-        return {}
 
 
 # IMPORTANT: startup fail-fast already validates required credentials.
@@ -14072,66 +13112,6 @@ def is_high_vol_regime() -> bool:
 
 
 _last_fh_prefetch_date: date | None = None
-
-
-def _memo_is_fresh(entry: Any, *, now: float, ttl: float) -> tuple[bool, Any | None]:
-    """Return ``(is_fresh, value)`` for memoized daily fetch entries."""
-
-    def _coerce_ts(candidate: Any) -> float | None:
-        try:
-            ts_value = float(candidate)
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(ts_value):
-            return None
-        return ts_value
-
-    try:
-        if isinstance(entry, MappingABC):
-            ts_raw = None
-            for ts_key in ("ts", "timestamp", "time", "monotonic"):
-                with suppress(Exception):  # tolerate custom mappings
-                    ts_raw = entry.get(ts_key)  # type: ignore[call-arg]
-                if ts_raw is not None:
-                    break
-            if ts_raw is not None:
-                ts = float(ts_raw)
-                if ttl <= 0 or (now - ts) <= ttl:
-                    value: Any | None = None
-                    with suppress(Exception):  # tolerate custom mappings
-                        value = (
-                            entry.get("value")
-                            or entry.get("df")
-                            or entry.get("data")
-                        )
-                    return True, value
-            fallback_value: Any | None = None
-            with suppress(Exception):  # tolerate custom mappings
-                fallback_value = (
-                    entry.get("value")
-                    or entry.get("df")
-                    or entry.get("data")
-                )
-            return False, fallback_value
-        if isinstance(entry, (tuple, list)) and len(entry) >= 2:
-            first_ts = _coerce_ts(entry[0])
-            second_ts = _coerce_ts(entry[1])
-            if first_ts is not None:
-                value = entry[1]
-                if ttl <= 0 or (now - first_ts) <= ttl:
-                    return True, value
-                return False, value
-            if second_ts is not None:
-                value = entry[0]
-                if ttl <= 0 or (now - second_ts) <= ttl:
-                    return True, value
-                return False, value
-            return False, entry[1]
-    except COMMON_EXC:
-        return False, None
-    if entry is None:
-        return False, None
-    return False, entry
 
 
 @dataclass
@@ -16769,216 +15749,6 @@ def _try_sip_recovery(
 
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
 # issues and falling back to IEX delayed feed per symbol if needed.
-def prefetch_daily_data(
-    symbols: list[str], start_date: date, end_date: date
-) -> dict[str, pd.DataFrame]:
-    settings = get_settings()
-    alpaca_key = settings.alpaca_api_key
-    alpaca_secret = _coerce_secret_value(
-        getattr(settings, "alpaca_secret_key_plain", None)
-    ) or _coerce_secret_value(get_alpaca_secret_key_plain())
-    # AI-AGENT-REF: use plain secret string
-    if not alpaca_key or not alpaca_secret:
-        raise RuntimeError(
-            "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
-        )
-
-    client = StockHistoricalDataClient(
-        api_key=alpaca_key,
-        secret_key=alpaca_secret,
-    )
-
-    try:
-        req = bars.StockBarsRequest(
-            symbol_or_symbols=symbols,
-            timeframe=bars.TimeFrame.Day,
-            start=start_date,
-            end=end_date,
-            feed=_DEFAULT_FEED,
-        )
-        safe_fetch = getattr(bars, "safe_get_stock_bars", None)
-        if callable(safe_fetch):
-            bars_df = safe_fetch(client, req, str(symbols), "BULK DAILY")
-        else:
-            bars_df = DataFetcher._call_stock_bars(
-                client, req, str(symbols), "BULK DAILY"
-            )
-        if bars_df is None:
-            return {}
-        if isinstance(bars_df.columns, pd.MultiIndex):
-            grouped_raw = {
-                sym: bars_df.xs(sym, level=0, axis=1)
-                for sym in symbols
-                if sym in bars_df.columns.get_level_values(0)
-            }
-        else:
-            grouped_raw = {sym: frame for sym, frame in bars_df.groupby("symbol")}
-        grouped = {}
-        for sym, df in grouped_raw.items():
-            df = df.drop(columns=["symbol"], errors="ignore")
-            try:
-                idx = safe_to_datetime(df.index, context=f"bulk {sym}")
-            except ValueError as e:
-                logger.warning(f"Invalid bulk index for {sym}; skipping | {e}")
-                continue
-            df.index = idx
-            df = df.rename(columns=lambda c: c.lower())
-            grouped[sym] = df
-        return grouped
-    except APIError as e:
-        err_msg = str(e).lower()
-        if "subscription does not permit querying recent sip data" in err_msg:
-            logger.warning(f"ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {repr(e)}")
-            logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
-            try:
-                req.feed = "iex"
-                safe_fetch = getattr(bars, "safe_get_stock_bars", None)
-                if callable(safe_fetch):
-                    bars_iex = safe_fetch(
-                        client, req, str(symbols), "IEX BULK DAILY"
-                    )
-                else:
-                    bars_iex = DataFetcher._call_stock_bars(
-                        client, req, str(symbols), "IEX BULK DAILY"
-                    )
-                if bars_iex is None:
-                    return {}
-                if isinstance(bars_iex.columns, pd.MultiIndex):
-                    grouped_raw = {
-                        sym: bars_iex.xs(sym, level=0, axis=1)
-                        for sym in symbols
-                        if sym in bars_iex.columns.get_level_values(0)
-                    }
-                else:
-                    grouped_raw = {sym: frame for sym, frame in bars_iex.groupby("symbol")}
-                grouped = {}
-                for sym, df in grouped_raw.items():
-                    df = df.drop(columns=["symbol"], errors="ignore")
-                    try:
-                        idx = safe_to_datetime(df.index, context=f"IEX bulk {sym}")
-                    except ValueError as e:
-                        logger.warning(
-                            f"Invalid IEX bulk index for {sym}; skipping | {e}"
-                        )
-                        continue
-                    df.index = idx
-                    df = df.rename(columns=lambda c: c.lower())
-                    grouped[sym] = df
-                return grouped
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as iex_err:  # AI-AGENT-REF: narrow exception
-                logger.warning(f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
-                daily_dict = {}
-                for sym in symbols:
-                    try:
-                        req_sym = bars.StockBarsRequest(
-                            symbol_or_symbols=[sym],
-                            timeframe=bars.TimeFrame.Day,
-                            start=start_date,
-                            end=end_date,
-                            feed=_DEFAULT_FEED,
-                        )
-                        safe_fetch = getattr(bars, "safe_get_stock_bars", None)
-                        if callable(safe_fetch):
-                            df_sym = safe_fetch(
-                                client, req_sym, sym, "FALLBACK DAILY"
-                            )
-                        else:
-                            df_sym = DataFetcher._call_stock_bars(
-                                client, req_sym, sym, "FALLBACK DAILY"
-                            )
-                        if df_sym is None:
-                            continue
-                        df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
-                        try:
-                            idx = safe_to_datetime(
-                                df_sym.index, context=f"fallback bulk {sym}"
-                            )
-                        except ValueError as _e:
-                            logger.warning(
-                                f"Invalid fallback bulk index for {sym}; skipping | {_e}"
-                            )
-                            continue
-                        df_sym.index = idx
-                        df_sym = df_sym.rename(columns=lambda c: c.lower())
-                        daily_dict[sym] = df_sym
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ) as indiv_err:  # AI-AGENT-REF: narrow exception
-                        logger.warning(f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
-                        logger.info(
-                            f"INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
-                        )
-                        tsd = pd.to_datetime(end_date, utc=True, errors="coerce")
-                        if tsd is None:
-                            tsd = pd.Timestamp.now(tz="UTC")
-                        dummy_date = tsd
-                        dummy_df = pd.DataFrame(
-                            [
-                                {
-                                    "open": 0.0,
-                                    "high": 0.0,
-                                    "low": 0.0,
-                                    "close": 0.0,
-                                    "volume": 0,
-                                }
-                            ],
-                            index=[dummy_date],
-                        )
-                        daily_dict[sym] = dummy_df
-                return daily_dict
-        else:
-            logger.warning("ALPACA BULK FETCH UNKNOWN ERROR for %s", symbols)
-            daily_dict = {}
-            for sym in symbols:
-                t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
-                if t2 is None:
-                    t2 = pd.Timestamp.now(tz="UTC")
-                dummy_date = t2
-                dummy_df = pd.DataFrame(
-                    [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
-                    index=[dummy_date],
-                )
-                daily_dict[sym] = dummy_df
-            return daily_dict
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning(f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
-        daily_dict = {}
-        for sym in symbols:
-            t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
-            if t3 is None:
-                t3 = pd.Timestamp.now(tz="UTC")
-            dummy_date = t3
-            dummy_df = pd.DataFrame(
-                [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
-                index=[dummy_date],
-            )
-            daily_dict[sym] = dummy_df
-        return daily_dict
 
 
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
@@ -19045,67 +17815,6 @@ def get_allocator():
     return allocator
 
 
-def _is_concrete_strategy(obj, BaseStrategy):
-    return (
-        inspect.isclass(obj)
-        and issubclass(obj, BaseStrategy)
-        and obj is not BaseStrategy
-        and not inspect.isabstract(obj)
-    )
-
-
-def _import_all_strategy_submodules(pkg_name: str):
-    """
-    Import all submodules under pkg_name so strategy classes defined anywhere under
-    ai_trading/strategies become visible without manual re-exports.
-    Never raises: logs errors and returns best-effort imported package.
-    """
-    try:
-        pkg = importlib.import_module(pkg_name)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error("Failed to import %s: %s", pkg_name, e)
-        return None
-    path = getattr(pkg, "__path__", None)
-    if not path:
-        return pkg
-    for modinfo in pkgutil.walk_packages(path, pkg_name + "."):
-        name = modinfo.name
-        try:
-            submodule = importlib.import_module(name)
-            # After importing submodule, scan it for strategy classes and add them to pkg namespace
-            for attr_name, attr_obj in vars(submodule).items():
-                if (
-                    inspect.isclass(attr_obj)
-                    and hasattr(attr_obj, "__module__")
-                    and attr_obj.__module__ == name
-                    and attr_name not in ["BaseStrategy"]
-                ):  # Don't re-add BaseStrategy
-                    # Add strategy classes to the main package namespace
-                    setattr(pkg, attr_name, attr_obj)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            # Keep going; one bad module shouldn't hide others.
-            logger.error("Failed to import strategy module %s: %s", name, e)
-    return pkg
-
-
 def _strategies_netting_pipeline_enabled() -> bool:
     """Return whether the live netting pipeline governs decisions."""
     try:
@@ -20024,71 +18733,11 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
     return fetch_sentiment(ctx, ticker, ttl_s=SENTIMENT_TTL_SEC, session=http)
 
 
-def predict_text_sentiment(text: str, cfg=None) -> float:
-    """
-    Compatibility wrapper around canonical FinBERT text sentiment.
-
-    Returns a signed sentiment score in [-1, 1].
-    """
-    _ = cfg
-    try:
-        result = _canonical_sentiment_module().analyze_text(text)
-        return float(result.get("pos", 0.0) - result.get("neg", 0.0))
-    except (RuntimeError, ValueError, TypeError) as e:
-        logger.warning(
-            "[predict_text_sentiment] canonical sentiment failed (%s); returning neutral",
-            e,
-        )
-        return 0.0
-
-
-def analyze_sentiment(text: str, cfg=None) -> float:
-    """
-    Compatibility wrapper around canonical FinBERT text sentiment.
-
-    Returns positive probability or neutral when unavailable.
-    """
-    _ = cfg
-    try:
-        result = _canonical_sentiment_module().analyze_text(text)
-        return float(result.get("pos", 0.0))
-    except (RuntimeError, ValueError, TypeError) as e:
-        logger.warning(
-            "[analyze_sentiment] canonical sentiment failed (%s); returning neutral",
-            e,
-        )
-        return 0.0
-
-
 def fetch_form4_filings(ticker: str) -> list[dict]:
     """
     Delegate Form 4 lookup to the canonical sentiment module.
     """
     return list(_canonical_sentiment_module().fetch_form4_filings(ticker))
-
-
-def _can_fetch_events(symbol: str) -> bool:
-    now_ts = pytime.time()
-    last_ts = _LAST_EVENT_TS.get(symbol, 0)
-    if now_ts - last_ts < EVENT_COOLDOWN:
-        if event_cooldown_hits:
-            try:
-                event_cooldown_hits.inc()
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as exc:  # AI-AGENT-REF: narrow exception
-                logger.exception("bot.py unexpected", exc_info=exc)
-                raise
-        return False
-    _LAST_EVENT_TS[symbol] = now_ts
-    return True
 
 
 _calendar_cache: dict[str, pd.DataFrame] = {}
@@ -20240,29 +18889,6 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     loss = (state.week_start_equity[1] - equity) / state.week_start_equity[1]
     weekly_drawdown.set(loss)
     return loss >= WEEKLY_DRAWDOWN_LIMIT
-
-
-def count_day_trades() -> int:
-    try:  # AI-AGENT-REF: gate heavy import
-        import pandas as pd  # type: ignore
-    except ImportError:
-        return 0
-    df = _read_trade_log(TRADE_LOG_FILE, usecols=["entry_time", "exit_time"])
-    if df is None:
-        return 0
-    df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
-    df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
-    df = df.dropna(subset=["entry_time", "exit_time"])
-    today_ts = pd.Timestamp.now().normalize()
-    bdays = pd.bdate_range(end=today_ts, periods=5)
-    df["entry_date"] = df["entry_time"].dt.normalize()
-    df["exit_date"] = df["exit_time"].dt.normalize()
-    mask = (
-        (df["entry_date"].isin(bdays))
-        & (df["exit_date"].isin(bdays))
-        & (df["entry_date"] == df["exit_date"])
-    )
-    return int(mask.sum())
 
 
 def set_halt_flag(reason: str) -> None:
@@ -20685,101 +19311,6 @@ def sector_exposure(ctx: BotContext) -> dict[str, float]:
     return {k: v / total for k, v in exposure.items()}
 
 
-def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> bool:
-    """Return True if adding qty*price of symbol keeps sector exposure within cap."""
-    sec = get_sector(symbol)
-    exposures = sector_exposure(ctx)
-    try:
-        total = float(ctx.api.get_account().portfolio_value)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning(
-            f"SECTOR_EXPOSURE_PORTFOLIO_ERROR: Failed to get portfolio value for {symbol}: {e}"
-        )
-        total = 0.0
-
-    # Calculate trade value and exposure metrics
-    trade_value = qty * price
-    current_sector_exposure = exposures.get(sec, 0.0)
-    projected_exposure = (
-        current_sector_exposure + (trade_value / total) if total > 0 else 0.0
-    )
-    cap = getattr(ctx, "sector_cap", get_sector_exposure_cap())
-
-    # AI-AGENT-REF: Enhanced sector cap logic with clear reasoning
-    if total <= 0:
-        # For empty portfolios, allow initial positions as they can't exceed sector caps
-        logger.info(
-            f"SECTOR_EXPOSURE_EMPTY_PORTFOLIO: Allowing initial position for {symbol} (sector: {sec})"
-        )
-        return True
-
-    # AI-AGENT-REF: Special handling for "Unknown" sector to prevent false concentration
-    if sec == "Unknown":
-        # Use a higher cap for Unknown sector since it's a catch-all category
-        # and may contain diversified stocks that couldn't be classified
-        unknown_cap = min(
-            cap * 2.0, 0.8
-        )  # Allow up to 2x normal cap or 80%, whichever is lower
-        logger.debug(
-            f"SECTOR_EXPOSURE_UNKNOWN: Using relaxed cap {unknown_cap:.1%} for Unknown sector"
-        )
-        cap = unknown_cap
-
-    # Log detailed exposure analysis
-    exposure_pct = current_sector_exposure * 100
-    projected_pct = projected_exposure * 100
-    cap_pct = cap * 100
-
-    # AI-AGENT-REF: Enhanced debugging for sector exposure analysis
-    logger.info(
-        f"SECTOR_EXPOSURE_DEBUG: {symbol} analysis - "
-        f"Sector: {sec}, Trade Value: ${trade_value:,.2f}, "
-        f"Portfolio Value: ${total:,.2f}, "
-        f"Current Sector Exposure: {exposure_pct:.1f}%, "
-        f"Projected Exposure: {projected_pct:.1f}%, "
-        f"Sector Cap: {cap_pct:.1f}%"
-    )
-
-    logger.debug(
-        f"SECTOR_EXPOSURE_ANALYSIS: {symbol} (sector: {sec}) - "
-        f"Current: {exposure_pct:.1f}%, Projected: {projected_pct:.1f}%, Cap: {cap_pct:.1f}%"
-    )
-
-    if projected_exposure <= cap:
-        logger.debug(
-            f"SECTOR_EXPOSURE_OK: {symbol} trade approved - projected exposure {projected_pct:.1f}% within {cap_pct:.1f}% cap"
-        )
-        return True
-    else:
-        # Provide clear reasoning for sector cap rejection
-        excess_pct = (projected_exposure - cap) * 100
-        logger.warning(
-            f"SECTOR_EXPOSURE_EXCEEDED: {symbol} trade rejected - "
-            f"projected exposure {projected_pct:.1f}% exceeds {cap_pct:.1f}% cap by {excess_pct:.1f}%",
-            extra={
-                "symbol": symbol,
-                "sector": sec,
-                "current_exposure_pct": exposure_pct,
-                "projected_exposure_pct": projected_pct,
-                "cap_pct": cap_pct,
-                "excess_pct": excess_pct,
-                "trade_value": trade_value,
-                "portfolio_value": total,
-                "reason": "sector_concentration_risk",
-            },
-        )
-        return False
-
-
 def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) -> int:
     """Clamp quantity to sector cap headroom (0 if none).
 
@@ -21034,24 +19565,6 @@ def _entry_requires_account_snapshot(ctx: Any) -> bool:
 
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
-def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
-    """Return True if current time is during regular Eastern trading hours."""
-    now_et = datetime.now(UTC).astimezone(ZoneInfo("America/New_York"))
-    start = dt_time(9, 30)
-    end = dt_time(16, 0)
-    if not (start <= now_et.time() <= end):
-        logger.info(
-            "SKIP_ENTRY_WINDOW",
-            extra={"start": start, "end": end, "now": now_et.time()},
-        )
-        return False
-    if (
-        state.streak_halt_until
-        and datetime.now(UTC).astimezone(PACIFIC) < state.streak_halt_until
-    ):
-        logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
-        return False
-    return True
 
 
 def scaled_atr_stop(
@@ -21698,11 +20211,6 @@ def adjust_position_size(position, scale: float) -> None:
         logger.debug("adjust_position_size no-op")
 
 
-def adjust_trailing_stop(position, new_stop: float) -> None:
-    """Placeholder for adjusting trailing stop price."""
-    logger.debug("adjust_trailing_stop %s -> %.2f", position.symbol, new_stop)
-
-
 def submit_order(
     ctx: BotContext,
     symbol: str,
@@ -21817,592 +20325,6 @@ def _call_submit_order(
     )
 
 
-def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Any | None:
-    """Submit an order while guarding against closed-market submissions.
-
-    The market status check is skipped when running in testing mode, when the
-    ``PYTEST_RUNNING`` flag is set, or when ``bypass_market_check`` is
-    explicitly ``True``.
-    """
-
-    if normalize_execution_mode(get_env("EXECUTION_MODE", "paper", cast=str)) == "live":
-        raise RuntimeError(
-            "Direct bot_engine.safe_submit_order is unavailable in live mode; "
-            "use the canonical execution engine with durable OMS ownership."
-        )
-    pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
-    alpaca_classes_available = True
-    try:
-        _ensure_alpaca_classes()
-    except BOT_ENGINE_FALLBACK_EXC:
-        alpaca_classes_available = False
-        if not (getattr(CFG, "testing", False) or pytest_running):
-            raise
-
-    skip_market_check = pytest_running or bypass_market_check
-
-    def _req_to_args(r):
-        side = getattr(r, "side", "")
-        side = getattr(side, "value", str(side)).lower()
-        tif = getattr(r, "time_in_force", "day")
-        tif = getattr(tif, "value", str(tif)).lower()
-        order_type_map = {
-            "MarketOrderRequest": "market",
-            "LimitOrderRequest": "limit",
-            "StopOrderRequest": "stop",
-            "StopLimitOrderRequest": "stop_limit",
-        }
-        otype = order_type_map.get(r.__class__.__name__, "market")
-        args = {
-            "symbol": getattr(r, "symbol", ""),
-            "qty": getattr(r, "qty", 0),
-            "side": side,
-            "type": otype,
-            "time_in_force": tif,
-            "client_order_id": getattr(r, "client_order_id", None),
-        }
-        if hasattr(r, "limit_price"):
-            args["limit_price"] = r.limit_price
-        if hasattr(r, "stop_price"):
-            args["stop_price"] = r.stop_price
-        return args
-
-    order_args = _req_to_args(req)
-
-    def _assign_attr_or_item(target: Any, name: str, value: Any) -> None:
-        if isinstance(target, dict):
-            target[name] = value
-            return
-        try:
-            setattr(target, name, value)
-        except COMMON_EXC:
-            pass
-
-    def _coerce_enum(enum_cls: Any, value: Any) -> Any:
-        if enum_cls is None or value is None:
-            return value
-        if isinstance(value, enum_cls):
-            return value
-        try:
-            return enum_cls(value)
-        except COMMON_EXC:
-            try:
-                return getattr(enum_cls, str(value).upper())
-            except COMMON_EXC:
-                return value
-
-    def _build_order_request_from_args(args: dict[str, Any]):
-        if alpaca_classes_available:
-            try:
-                side = _coerce_enum(OrderSide, args.get("side"))
-                tif = _coerce_enum(TimeInForce, args.get("time_in_force"))
-                base_kwargs: dict[str, Any] = {
-                    "symbol": args.get("symbol"),
-                    "qty": args.get("qty"),
-                    "side": side,
-                    "time_in_force": tif,
-                }
-                client_order_id = args.get("client_order_id")
-                if client_order_id:
-                    base_kwargs["client_order_id"] = client_order_id
-                limit_price = args.get("limit_price")
-                stop_price = args.get("stop_price")
-                order_type = str(args.get("type") or "market").lower()
-                if order_type == "limit" and limit_price is not None:
-                    base_kwargs["limit_price"] = limit_price
-                    return LimitOrderRequest(**base_kwargs)
-                if (
-                    order_type == "stop_limit"
-                    and limit_price is not None
-                    and stop_price is not None
-                ):
-                    base_kwargs["limit_price"] = limit_price
-                    base_kwargs["stop_price"] = stop_price
-                    return StopLimitOrderRequest(**base_kwargs)
-                if order_type == "stop" and stop_price is not None:
-                    base_kwargs["stop_price"] = stop_price
-                    return StopOrderRequest(**base_kwargs)
-                return MarketOrderRequest(**base_kwargs)
-            except BOT_ENGINE_FALLBACK_EXC:
-                pass
-        return types.SimpleNamespace(**args)
-
-    def _submit_order_expects_request(submit_fn: Any) -> bool:
-        if submit_fn is None:
-            return False
-        try:
-            sig = inspect.signature(submit_fn)
-        except (TypeError, ValueError):
-            return False
-        return "order_data" in sig.parameters
-
-    submit_requires_order_data = _submit_order_expects_request(
-        getattr(api, "submit_order", None)
-    )
-
-    def _invoke_submit(args: dict[str, Any]):
-        nonlocal submit_requires_order_data
-        if submit_requires_order_data:
-            req_obj = _build_order_request_from_args(args)
-            return api.submit_order(order_data=req_obj)
-        try:
-            return api.submit_order(**args)
-        except TypeError as exc:
-            message = str(exc)
-            if "order_data" in message and not submit_requires_order_data:
-                submit_requires_order_data = True
-                req_obj = _build_order_request_from_args(args)
-                return api.submit_order(order_data=req_obj)
-            raise
-
-    def _dummy_order(status: str) -> Any:
-        """Return a placeholder order object with minimal attributes."""
-        client_order_id = order_args.get("client_order_id")
-        qty_val = order_args.get("qty", 0)
-        try:
-            qty_num = float(qty_val or 0)
-        except (TypeError, ValueError):
-            qty_num = 0.0
-        return types.SimpleNamespace(
-            id=client_order_id,
-            client_order_id=client_order_id,
-            status=status,
-            filled_qty=0.0,
-            qty=qty_num,
-            symbol=order_args.get("symbol", ""),
-        )
-
-    def _client_order_prefix(args: dict[str, Any]) -> str:
-        symbol_raw = args.get("symbol")
-        symbol_value = getattr(symbol_raw, "value", symbol_raw)
-        symbol_text = str(symbol_value or "").strip().upper().replace(" ", "")
-        if not symbol_text:
-            symbol_text = "UNKNOWN"
-        side_raw = args.get("side")
-        side_value = getattr(side_raw, "value", side_raw)
-        side_text = str(side_value or "").strip().lower().replace(" ", "_")
-        if not side_text:
-            side_text = "buy"
-        return f"{symbol_text}-{side_text}"
-
-    def _stable_client_order_id(prefix: str) -> str:
-        timestamp = datetime.now(tz=UTC).strftime("%Y%m%d%H%M%S%f")
-        return f"{prefix}-{timestamp}"
-
-    # Ensure client_order_id present for idempotency across retries
-    if not order_args.get("client_order_id"):
-        prefix = _client_order_prefix(order_args)
-        client_order_id: str | None = None
-        try:
-            from ai_trading.core.order_ids import generate_client_order_id as _gen_id
-
-            client_order_id = _gen_id(prefix)
-        except BOT_ENGINE_FALLBACK_EXC:
-            client_order_id = None
-        if not client_order_id:
-            client_order_id = _stable_client_order_id(prefix)
-        order_args["client_order_id"] = client_order_id
-        try:
-            setattr(req, "client_order_id", client_order_id)
-        except COMMON_EXC:
-            pass
-        ids_attr = getattr(api, "client_order_ids", None)
-        appended = False
-        if isinstance(ids_attr, list):
-            ids_attr.append(client_order_id)
-            appended = True
-        elif hasattr(ids_attr, "append"):
-            try:
-                ids_attr.append(client_order_id)  # type: ignore[attr-defined]
-            except COMMON_EXC:
-                pass
-            else:
-                appended = True
-        elif hasattr(ids_attr, "add"):
-            try:
-                ids_attr.add(client_order_id)  # type: ignore[attr-defined]
-            except COMMON_EXC:
-                pass
-            else:
-                appended = True
-        if not appended:
-            try:
-                if ids_attr is None:
-                    ids_list = [client_order_id]
-                elif isinstance(ids_attr, str):
-                    ids_list = [ids_attr, client_order_id]
-                elif isinstance(ids_attr, bytes):
-                    ids_list = [ids_attr.decode("utf-8", errors="ignore"), client_order_id]
-                elif isinstance(ids_attr, Iterable):
-                    ids_list = list(ids_attr)
-                    ids_list.append(client_order_id)
-                else:
-                    ids_list = [client_order_id]
-                setattr(api, "client_order_ids", ids_list)
-            except COMMON_EXC:
-                pass
-
-    cfg = get_trading_config()
-    kill_switch, kill_reason = _kill_switch_active(cfg)
-    if kill_switch:
-        logger.warning(
-            "KILL_SWITCH_BLOCK",
-            extra={"symbol": order_args.get("symbol", ""), "reason": kill_reason or "kill_switch"},
-        )
-        return _dummy_order("kill_switch")
-
-    rth_only = bool(getattr(cfg, "rth_only", True))
-    allow_extended = bool(getattr(cfg, "allow_extended", False))
-    if not skip_market_check and (rth_only or not allow_extended) and not (pytest_running or market_is_open()):
-        logger.warning(
-            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": order_args.get("symbol", ""), "reason": "MARKET_CLOSED_BLOCK"}
-        )
-        client_order_id = order_args.get("client_order_id") or "market_closed"
-        qty_val = order_args.get("qty", 0)
-        try:
-            qty_num = float(qty_val or 0)
-        except (TypeError, ValueError):
-            qty_num = 0.0
-        return types.SimpleNamespace(
-            id=client_order_id,
-            client_order_id=client_order_id,
-            status="market_closed",
-            filled_qty=0.0,
-            qty=qty_num,
-            symbol=order_args.get("symbol", ""),
-        )
-
-    # Deduplicate via idempotency cache before sending to broker
-    try:
-        from ai_trading.execution.idempotency import get_idempotency_cache
-        _idem_cache = get_idempotency_cache()
-    except (ImportError, AttributeError):
-        _idem_cache = None
-        _idem_key = None
-    else:
-        if getattr(CFG, "testing", False) or pytest_running or get_env("PYTEST_CURRENT_TEST"):
-            _idem_cache = None
-            _idem_key = None
-        else:
-            _idem_key = _idem_cache.generate_key(
-                order_args.get("symbol", ""),
-                order_args.get("side", ""),
-                float(order_args.get("qty", 0) or 0),
-            )
-            if _idem_cache.is_duplicate(_idem_key):
-                logger.warning(
-                    "ORDER_DUPLICATE_SKIPPED",
-                    extra={
-                        "symbol": order_args.get("symbol", ""),
-                        "side": order_args.get("side", ""),
-                        "qty": order_args.get("qty", 0),
-                    },
-                )
-                return _dummy_order("duplicate")
-
-    for attempt in range(2):
-        try:
-            positions: list[Any] = []
-            try:
-                get_account_fn = getattr(api, "get_account", None)
-                acct = get_account_fn() if callable(get_account_fn) else None
-            except (APIError, TimeoutError, ConnectionError, AttributeError):
-                acct = None
-            if acct and order_args.get("side") == "buy":
-                price_val = order_args.get("limit_price")
-                if price_val is None:
-                    price_val = order_args.get("notional")
-                try:
-                    price = float(price_val) if price_val is not None else 0.0
-                except (TypeError, ValueError):
-                    price = 0.0
-                qty_val = order_args.get("qty")
-                try:
-                    qty = float(qty_val) if qty_val is not None else 0.0
-                except (TypeError, ValueError):
-                    qty = 0.0
-                need = price * qty
-                if need > float(getattr(acct, "buying_power", 0)):
-                    logger.warning(
-                        "insufficient buying power for %s: requested %s, available %s",
-                        order_args.get("symbol"),
-                        order_args.get("qty"),
-                        getattr(acct, "buying_power", 0),
-                    )
-                    return _dummy_order("insufficient_funds")
-            avail = 0.0
-            if order_args.get("side") == "sell":
-                try:
-                    if hasattr(api, "get_all_positions") and callable(getattr(api, "get_all_positions")):
-                        positions = api.get_all_positions()
-                    elif hasattr(api, "list_positions") and callable(getattr(api, "list_positions")):
-                        positions = api.list_positions()
-                    elif hasattr(api, "get_position") and callable(getattr(api, "get_position")):
-                        pos = api.get_position(order_args.get("symbol"))
-                        positions = [pos] if pos is not None else []
-                    else:
-                        positions = []
-                except (APIError, TimeoutError, ConnectionError, AttributeError):
-                    positions = []
-                target_symbol = order_args.get("symbol")
-                avail = 0.0
-                for pos in positions:
-                    if not pos:
-                        continue
-                    try:
-                        symbol_value = getattr(pos, "symbol", None)
-                    except COMMON_EXC:
-                        symbol_value = None
-                    if symbol_value in (None, "", target_symbol) and target_symbol:
-                        try:
-                            setattr(pos, "symbol", target_symbol)
-                        except COMMON_EXC:
-                            pass
-                        symbol_value = target_symbol
-                    if symbol_value != target_symbol:
-                        continue
-                    try:
-                        avail = float(getattr(pos, "qty", 0) or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    else:
-                        break
-                try:
-                    req_qty = float(order_args.get("qty") or 0)
-                except (TypeError, ValueError):
-                    req_qty = 0.0
-                if req_qty > avail:
-                    logger.warning(
-                        f"insufficient qty available for {order_args.get('symbol')}: requested {order_args.get('qty')}, available {avail}"
-                    )
-                    return _dummy_order("insufficient_position")
-
-            timing_meta = {
-                "symbol": order_args.get("symbol"),
-                "side": order_args.get("side"),
-                "qty": order_args.get("qty", 0),
-                "attempt": attempt + 1,
-            }
-            try:
-                with execution_span(logger, **timing_meta):
-                    order = _invoke_submit(order_args)
-            except APIError as e:
-                if getattr(e, "code", None) == 40310000:
-                    available = int(
-                        getattr(e, "_raw_errors", [{}])[0].get("available", 0)
-                    )
-                    if available > 0:
-                        logger.info(
-                            f"Adjusting order for {order_args.get('symbol')} to available qty={available}"
-                        )
-                        order_args["qty"] = available
-                        adjusted_meta = dict(timing_meta)
-                        adjusted_meta["phase"] = "adjusted_qty"
-                        with execution_span(logger, **adjusted_meta):
-                            order = _invoke_submit(order_args)
-                    else:
-                        logger.warning(
-                            f"Skipping {order_args.get('symbol')}, no available qty"
-                        )
-                        continue
-                else:
-                    raise
-
-            client_order_id_value = order_args.get("client_order_id")
-            if (
-                getattr(order, "client_order_id", None) in (None, "", 0)
-                and client_order_id_value
-            ):
-                _assign_attr_or_item(order, "client_order_id", client_order_id_value)
-
-            start_ts = monotonic_time()
-            def _normalize_order_status(value: Any) -> str:
-                """Return a lowercase status string regardless of input type."""
-
-                if value is None:
-                    return ""
-                status_value = getattr(value, "value", value)
-                if isinstance(status_value, str):
-                    return status_value.lower()
-                try:
-                    return str(status_value).lower()
-                except COMMON_EXC:
-                    return ""
-
-            pending_new_attr = getattr(OrderStatus, "PENDING_NEW", "pending_new")
-            pending_new = _normalize_order_status(pending_new_attr)
-            last_order = order
-            max_pending_polls = 20
-            pending_poll_count = 0
-            while (
-                pending_poll_count < max_pending_polls
-                and _normalize_order_status(getattr(last_order, "status", None)) == pending_new
-            ):
-                if monotonic_time() - start_ts > 1:
-                    logger.warning(
-                        f"Order stuck in PENDING_NEW: {order_args.get('symbol')}, retrying or monitoring required."
-                    )
-                    break
-                pending_poll_count += 1
-                time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
-                try:
-                    get_order = (
-                        getattr(api, "get_order", None)
-                        or getattr(api, "get_order_by_id", None)
-                        or getattr(api, "get_order_by_client_order_id", None)
-                    )
-                    if callable(get_order):
-                        next_order = get_order(last_order.id)
-                    else:
-                        # Fallback: fetch orders list and locate by id/client_order_id
-                        next_order = None
-                        try:
-                            orders_iter = getattr(api, "list_orders", None) or getattr(api, "get_orders", None)
-                            if callable(orders_iter):
-                                orders = orders_iter()
-                                for candidate in orders or []:
-                                    cand_id = getattr(candidate, "id", None)
-                                    cand_client_id = getattr(candidate, "client_order_id", None)
-                                    if cand_id == getattr(last_order, "id", None) or cand_client_id == getattr(
-                                        last_order, "client_order_id", None
-                                    ):
-                                        next_order = candidate
-                                        break
-                        except COMMON_EXC:
-                            next_order = None
-                    if next_order is None:
-                        break
-                except COMMON_EXC:
-                    break
-                if getattr(next_order, "symbol", None) in (None, "") and getattr(last_order, "symbol", None):
-                    try:
-                        setattr(next_order, "symbol", getattr(last_order, "symbol", ""))
-                    except COMMON_EXC:
-                        pass
-                last_order = next_order
-            order = last_order
-            logger.info(
-                f"Order status for {order_args.get('symbol')}: {getattr(order, 'status', '')}"
-            )
-            status_raw = getattr(order, "status", "")
-            status = _normalize_order_status(status_raw)
-            if (
-                client_order_id_value
-                and status in _PENDING_ORDER_STATUSES
-                and getattr(order, "id", None) not in (client_order_id_value,)
-            ):
-                _assign_attr_or_item(order, "id", str(client_order_id_value))
-            filled_qty = getattr(order, "filled_qty", 0) or 0
-            if status == "filled":
-                logger.info(
-                    "ORDER_ACK",
-                    extra={
-                        "symbol": order_args.get("symbol"),
-                        "order_id": getattr(order, "id", ""),
-                    },
-                )
-            elif status == "partially_filled":
-                logger.warning(
-                    f"Order partially filled for {order_args.get('symbol')}: {filled_qty}/{order_args.get('qty', 0)}"
-                )
-            elif status in ("rejected", "canceled"):
-                logger.error(
-                    f"Order for {order_args.get('symbol')} was {status}: {getattr(order, 'reject_reason', '')}"
-                )
-                raise OrderExecutionError(
-                    f"Buy failed for {order_args.get('symbol')}: {status}"
-                )
-            elif status == _normalize_order_status(getattr(OrderStatus, "NEW", "new")):
-                logger.info(
-                    f"Order for {order_args.get('symbol')} is NEW; awaiting fill"
-                )
-            elif status == pending_new:
-                warn_threshold_s, error_threshold_s = _pending_new_thresholds()
-                age_seconds = _order_pending_age_seconds(order)
-                symbol = order_args.get("symbol") or ""
-                client_order_id = (
-                    getattr(order, "client_order_id", None)
-                    or order_args.get("client_order_id")
-                    or ""
-                )
-                log_msg = (
-                    "ORDER_PENDING | "
-                    f"symbol={symbol} "
-                    f"status={status or pending_new} "
-                    f"client_order_id={client_order_id} "
-                    f"age_s={int(round(age_seconds))} "
-                    f"warn_s={int(round(warn_threshold_s))} "
-                    f"error_s={int(round(error_threshold_s))}"
-                )
-                if age_seconds >= error_threshold_s:
-                    logger.error(log_msg)
-                elif age_seconds >= warn_threshold_s:
-                    logger.warning(log_msg)
-                else:
-                    logger.info(log_msg)
-            else:
-                logger.error(
-                    f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
-                )
-            try:
-                if _idem_cache is not None and _idem_key is not None and getattr(order, "id", None):
-                    _idem_cache.mark_submitted(_idem_key, getattr(order, "id"))
-            except (AttributeError, KeyError):
-                pass
-            def _coerce_numeric(o: Any, attr: str, default: float = 0.0) -> None:
-                val = getattr(o, attr, None)
-                if val is None:
-                    setattr(o, attr, float(default))
-                    return
-                if isinstance(val, bool):
-                    raise ValueError(f"order.{attr} must be numeric")
-                try:
-                    num = float(val)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"order.{attr} must be numeric") from exc
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    # Preserve integer semantics when the source is an int-like value.
-                    if isinstance(val, int):
-                        num = float(val)
-                setattr(o, attr, num)
-
-            _coerce_numeric(order, "qty", float(order_args.get("qty", 0) or 0))
-            _coerce_numeric(order, "filled_qty", 0.0)
-            return order
-        except APIError as e:
-            if "insufficient qty" in str(e).lower():
-                logger.warning(
-                    f"insufficient qty available for {order_args.get('symbol')}: {e}"
-                )
-                return _dummy_order("insufficient_qty")
-            time.sleep(1)
-            if attempt == 1:
-                logger.error(
-                    "BROKER_OP_FAILED",
-                    extra={
-                        "cause": e.__class__.__name__,
-                        "detail": str(e),
-                        "op": "submit",
-                        "symbol": order_args.get("symbol", ""),
-                    },
-                )
-                raise
-        except (TimeoutError, ConnectionError) as e:
-            time.sleep(1)
-            if attempt == 1:
-                logger.error(
-                    "BROKER_OP_FAILED",
-                    extra={
-                        "cause": e.__class__.__name__,
-                        "detail": str(e),
-                        "op": "submit",
-                        "symbol": getattr(req, "symbol", ""),
-                    },
-                )
-                raise
-    return _dummy_order("failed")
-
-
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
     """Poll Alpaca for order fill status until it is no longer open.
 
@@ -22458,18 +20380,6 @@ def send_exit_order(
 ) -> None:
     from ai_trading.core.execution_flow import send_exit_order as _impl
     return _impl(ctx, symbol, exit_qty, price, reason, raw_positions)
-
-
-def twap_submit(
-    ctx: BotContext,
-    symbol: str,
-    total_qty: int,
-    side: str,
-    window_secs: int = 600,
-    n_slices: int = 10,
-) -> None:
-    from ai_trading.core.execution_flow import twap_submit as _impl
-    return _impl(ctx, symbol, total_qty, side, window_secs, n_slices)
 
 
 def vwap_pegged_submit(
@@ -22647,19 +20557,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     return _impl(ctx, symbol, qty, side)
 
 
-def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
-    from ai_trading.core.execution_flow import execute_exit as _impl
-    return _impl(ctx, state, symbol, qty)
-
-
 def exit_all_positions(ctx: BotContext) -> None:
     from ai_trading.core.execution_flow import exit_all_positions as _impl
     return _impl(ctx)
-
-
-def _liquidate_all_positions(runtime: BotContext) -> None:
-    from ai_trading.core.execution_flow import _liquidate_all_positions as _impl
-    return _impl(runtime)
 
 
 def liquidate_positions_if_needed(runtime: BotContext) -> None:
@@ -22668,19 +20568,6 @@ def liquidate_positions_if_needed(runtime: BotContext) -> None:
 
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
-def signal_and_confirm(
-    ctx: BotContext, state: BotState, symbol: str, df: pd.DataFrame, model
-) -> tuple[int, float, str]:
-    """Wrapper that evaluates signals and checks confidence threshold."""
-    return _evaluate_signal_and_confirm_service(
-        ctx,
-        state,
-        symbol,
-        df,
-        model,
-        conf_threshold=get_conf_threshold(),
-        logger=logger,
-    )
 
 
 def pre_trade_checks(
@@ -22731,12 +20618,6 @@ def pre_trade_checks(
         _log_health_diagnostics(ctx, "correlation")
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
-
-
-def should_enter(
-    ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
-) -> bool:
-    return pre_trade_checks(ctx, state, symbol, balance, regime_ok)
 
 
 def _position_opened_at(state: BotState, symbol: str) -> datetime | None:
@@ -25118,27 +22999,6 @@ def _should_skip_order_for_alpaca_unavailable(
     return False
 
 
-def _price_reliability(state: BotState, symbol: str) -> tuple[bool, str | None]:
-    mapping = getattr(state, "price_reliability", None)
-    if isinstance(mapping, dict):
-        info = mapping.get(symbol)
-        if isinstance(info, tuple) and len(info) >= 2:
-            reliable, reason = info[0], info[1]
-            return bool(reliable), reason
-        if isinstance(info, dict):
-            reliable = bool(info.get("price_reliable", True))
-            reason_val = info.get("reason")
-            if reason_val not in (None, ""):
-                try:
-                    reason = str(reason_val)
-                except COMMON_EXC:
-                    reason = None
-                else:
-                    return reliable, reason
-            return reliable, None
-    return True, None
-
-
 @dataclass
 class DataGateDecision:
     block: bool
@@ -25971,75 +23831,6 @@ def _failsoft_mode_active(provider_state: Mapping[str, Any] | None = None) -> bo
             provider_state = {}
     backup_ready = safe_mode_flag and _provider_backup_available(provider_state)
     return safe_mode_soft or backup_ready
-
-
-def _should_failsoft_allow_low_coverage(
-    *,
-    fallback_used: bool,
-    relax_ratio: float,
-    symbol: str,
-    coverage_threshold: int,
-    actual_bars: int,
-    fallback_feed: str | None,
-    fallback_provider: str | None,
-) -> bool:
-    """Return ``True`` when failsoft should allow low coverage scenarios."""
-
-    if not fallback_used:
-        return False
-    if not _safe_mode_failsoft_enabled():
-        return False
-    try:
-        safe_mode_active = bool(provider_monitor.is_safe_mode_active())
-    except BOT_ENGINE_FALLBACK_EXC:
-        safe_mode_active = False
-    if not safe_mode_active:
-        return False
-    degraded_only = False
-    degraded_marker = getattr(provider_monitor, "safe_mode_degraded_only", None)
-    if callable(degraded_marker):
-        try:
-            degraded_only = bool(degraded_marker())
-        except BOT_ENGINE_FALLBACK_EXC:
-            degraded_only = False
-    if not degraded_only:
-        return False
-    try:
-        expected = max(1, int(coverage_threshold))
-    except BOT_ENGINE_FALLBACK_EXC:
-        expected = 1
-    try:
-        ratio = float(actual_bars) / float(expected)
-    except BOT_ENGINE_FALLBACK_EXC:
-        ratio = 0.0
-    try:
-        coverage_threshold_int = int(coverage_threshold)
-    except BOT_ENGINE_FALLBACK_EXC:
-        coverage_threshold_int = 0
-    try:
-        actual_bars_int = int(actual_bars)
-    except BOT_ENGINE_FALLBACK_EXC:
-        actual_bars_int = 0
-    if isinstance(relax_ratio, (int, float)):
-        relax_value: float | None = float(relax_ratio)
-    else:
-        try:
-            relax_value = float(relax_ratio)
-        except (TypeError, ValueError):
-            relax_value = None
-    logger.warning(
-        "DEGRADED_COVERAGE_FAILSOFT_ALLOW",
-        extra={
-            "symbol": symbol,
-            "fallback_feed": fallback_feed or "",
-            "fallback_provider": fallback_provider or "",
-            "coverage_threshold": coverage_threshold_int,
-            "actual_bars": actual_bars_int,
-            "coverage_ratio": float(ratio),
-            "relax_ratio": relax_value,
-        },
-    )
-    return True
 
 
 def _safe_mode_blocks_trading() -> bool:
@@ -28821,13 +26612,6 @@ def _log_execution_summary(metrics: "ExecutionCycleMetrics") -> None:
     )
 
 
-def _recent_rebalance_flag(ctx: BotContext, symbol: str) -> bool:
-    """Return ``False`` and clear any rebalance timestamp."""
-    if symbol in ctx.rebalance_buys:
-        ctx.rebalance_buys.pop(symbol, None)
-    return False
-
-
 def trade_logic(
     ctx: BotContext,
     state: BotState,
@@ -28860,157 +26644,7 @@ def compute_portfolio_weights(ctx: BotContext, symbols: list[str]) -> dict[str, 
     return _compute_portfolio_weights_service(ctx, symbols)
 
 
-def on_trade_exit_rebalance(ctx: BotContext) -> None:
-    from ai_trading import portfolio
-    from ai_trading.utils import portfolio_lock
-
-    try:
-        positions = ctx.api.list_positions()
-        symbols = [p.symbol for p in positions]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        symbols = []
-    current = portfolio.compute_portfolio_weights(ctx, symbols)
-    old = ctx.portfolio_weights
-    drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
-    if drift <= 0.1:
-        return
-    with portfolio_lock:  # FIXED: protect shared portfolio state
-        ctx.portfolio_weights = current
-    total_value = float(ctx.api.get_account().portfolio_value)
-    for sym, w in current.items():
-        target_dollar = w * total_value
-        try:
-            raw = fetch_minute_df_safe(sym)
-        except DataFetchError:
-            logger.warning("REBALANCE_NO_DATA | %s", sym)
-            continue
-        price = get_latest_close(raw) if raw is not None else 1.0
-        if price <= 0:
-            continue
-        target_shares = int(round(target_dollar / price))
-        try:
-            submit_order(
-                ctx,
-                sym,
-                abs(target_shares),
-                "buy" if target_shares > 0 else "sell",
-                price=price,
-            )
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):  # AI-AGENT-REF: narrow exception
-            logger.exception(f"Rebalance failed for {sym}")
-    logger.info("PORTFOLIO_REBALANCED")
-
-
-def pair_trade_signal(ctx: BotContext, sym1: str, sym2: str) -> tuple[str, int]:
-    from statsmodels.tsa.stattools import coint
-
-    df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)
-    df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)
-    if not hasattr(df1, "loc") or "close" not in df1.columns:
-        raise ValueError(
-            f"pair_trade_signal: df1 for {sym1} is invalid or missing 'close'"
-        )
-    if not hasattr(df2, "loc") or "close" not in df2.columns:
-        raise ValueError(
-            f"pair_trade_signal: df2 for {sym2} is invalid or missing 'close'"
-        )
-    df = pd.concat([df1["close"], df2["close"]], axis=1).dropna()
-    if df.empty:
-        return ("no_signal", 0)
-    t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
-    if p_value < 0.05:
-        beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
-        spread = df.iloc[:, 0] - beta * df.iloc[:, 1]
-        z = (spread - spread.mean()) / spread.std()
-        z0 = z.iloc[-1]
-        if z0 > 2:
-            return ("short_spread", 1)
-        elif z0 < -2:
-            return ("long_spread", 1)
-    return ("no_signal", 0)
-
-
 # ─── M. UTILITIES ─────────────────────────────────────────────────────────────
-def fetch_data(
-    ctx: BotContext, symbols: list[str], period: str, interval: str
-) -> pd.DataFrame | None:
-    if not get_env("FINNHUB_API_KEY"):
-        logger.debug("Skipping Finnhub fetch; FINNHUB_API_KEY not set")
-        return None
-    if not FINNHUB_AVAILABLE:
-        logger.debug("Skipping Finnhub fetch; finnhub-python not installed")
-        return None
-
-    finnhub = importlib.import_module("finnhub")
-    global finnhub_client
-    if finnhub_client is None:
-        finnhub_client = finnhub.Client(get_env("FINNHUB_API_KEY"))
-
-    frames: list[pd.DataFrame] = []
-    now = datetime.now(UTC)
-    if period.endswith("d"):
-        delta = timedelta(days=int(period[:-1]))
-    elif period.endswith("mo"):
-        delta = timedelta(days=30 * int(period[:-2]))
-    elif period.endswith("y"):
-        delta = timedelta(days=365 * int(period[:-1]))
-    else:
-        delta = timedelta(days=7)
-    unix_to = int(now.timestamp())
-    unix_from = int((now - delta).timestamp())
-
-    for batch in chunked(symbols, 3):
-        for sym in batch:
-            try:
-                ohlc = finnhub_client.stock_candle(
-                    sym, resolution=interval, _from=unix_from, to=unix_to
-                )
-            except finnhub.FinnhubAPIException as e:
-                logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": sym, "err": str(e)})
-                continue
-
-            if not ohlc or ohlc.get("s") != "ok":
-                continue
-
-            idx = safe_to_datetime(ohlc.get("t", []), context=f"prefetch {sym}")
-            df_sym = pd.DataFrame(
-                {
-                    "open": ohlc.get("o", []),
-                    "high": ohlc.get("h", []),
-                    "low": ohlc.get("l", []),
-                    "close": ohlc.get("c", []),
-                    "volume": ohlc.get("v", []),
-                },
-                index=idx,
-            )
-
-            df_sym.columns = pd.MultiIndex.from_product([[sym], df_sym.columns])
-            frames.append(df_sym)
-
-        pytime.sleep(random.uniform(2, 5))
-
-    if not frames:
-        return None
-
-    return pd.concat(frames, axis=1)
 
 
 class EnsembleModel:
@@ -29089,42 +26723,6 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.exception("MODEL_LOAD_FAILED: %s", e)
         return None
-
-
-def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
-    y_new = np.clip(y_new, -0.05, 0.05)
-    if state.updates_halted:
-        return
-    with model_lock:
-        try:
-            _import_model_pipeline().partial_fit(X_new, y_new)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(f"Online update failed for {symbol}: {e}")
-            return
-    pred = _import_model_pipeline().predict(X_new)
-    online_error = float(np.mean((pred - y_new) ** 2))
-    ml = _get_metrics_logger()  # AI-AGENT-REF: lazy metrics import
-    ml.log_metrics(
-        {
-            "timestamp": utc_now_iso(),
-            "type": "online_update",
-            "symbol": symbol,
-            "error": online_error,
-        }
-    )
-    state.rolling_losses.append(online_error)
-    if len(state.rolling_losses) >= 20 and sum(state.rolling_losses[-20:]) > 0.02:
-        state.updates_halted = True
-        logger.warning("Halting online updates due to 20-trade rolling loss >2%")
 
 
 def update_signal_weights() -> None:
@@ -29581,388 +27179,6 @@ def load_global_signal_performance(
         return {}
 
 
-def _normalize_index(data: pd.DataFrame) -> pd.DataFrame:
-    """Return ``data`` with a clean UTC index named ``date``."""
-    if data.index.name:
-        data = data.reset_index().rename(columns={data.index.name: "date"})
-    else:
-        data = data.reset_index().rename(columns={"index": "date"})
-    data["date"] = pd.to_datetime(data["date"], utc=True)
-    data = data.sort_values("date").set_index("date")
-    if data.index.tz is not None:
-        data.index = data.index.tz_convert("UTC").tz_localize(None)
-    return data
-
-
-def _add_basic_indicators(
-    df: pd.DataFrame, symbol: str, state: BotState | None
-) -> None:
-    """Add VWAP, RSI, ATR and simple moving averages."""
-    try:
-        df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_VWAP_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["vwap"] = np.nan
-    try:
-        df["rsi"] = ta.rsi(df["close"], length=14)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_RSI_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["rsi"] = np.nan
-    try:
-        df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_ATR_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["atr"] = np.nan
-    if "close" not in df.columns:
-        raise KeyError("'close' column missing for SMA calculations")
-    close = df["close"].dropna()
-    if close.empty:
-        raise ValueError("No close price data available for SMA calculations")
-    df["sma_50"] = close.astype(float).rolling(window=50).mean()
-    df["sma_200"] = close.astype(float).rolling(window=200).mean()
-
-
-def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
-    """Add MACD indicators using the defensive helper."""
-    # ai_trading/core/bot_engine.py:7337 - Convert import guard to hard import (internal module)
-    from ai_trading.signals import (
-        calculate_macd as signals_calculate_macd,  # type: ignore
-    )
-
-    try:
-        if "close" not in df.columns:
-            raise KeyError("'close' column missing for MACD calculation")
-        close_series = df["close"].dropna()
-        if close_series.empty:
-            raise ValueError("No close price data available for MACD")
-        min_len = 26 + 9  # slow period + signal period
-        if len(close_series) < min_len:
-            logger.warning(
-                "MACD window too small for %s: need %s bars, have %s",
-                symbol,
-                min_len,
-                len(close_series),
-            )
-            df["macd"] = np.nan
-            df["macds"] = np.nan
-            if state:
-                state.indicator_failures += 1
-            return
-        macd_df = signals_calculate_macd(close_series)
-        if macd_df is None:
-            logger.warning("MACD returned None for %s", symbol)
-            raise ValueError("MACD calculation returned None")
-        macd_col = macd_df.get("macd")
-        signal_col = macd_df.get("signal")
-        if macd_col is None or signal_col is None:
-            raise KeyError("MACD dataframe missing required columns")
-        df["macd"] = macd_col.astype(float)
-        df["macds"] = signal_col.astype(float)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning(
-            "INDICATOR_MACD_FAIL",
-            exc=exc,
-            extra={"symbol": symbol, "snapshot": df["close"].tail(5).to_dict()},
-        )
-        if state:
-            state.indicator_failures += 1
-        df["macd"] = np.nan
-        df["macds"] = np.nan
-
-
-def _add_additional_indicators(
-    df: pd.DataFrame, symbol: str, state: BotState | None
-) -> None:
-    """Add a suite of secondary technical indicators."""
-    # dedupe any duplicate timestamps
-    df = df[~df.index.duplicated(keep="first")]
-    try:
-        kc = ta.kc(df["high"], df["low"], df["close"], length=20)
-        df["kc_lower"] = kc.iloc[:, 0]
-        df["kc_mid"] = kc.iloc[:, 1]
-        df["kc_upper"] = kc.iloc[:, 2]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_KC_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["kc_lower"] = np.nan
-        df["kc_mid"] = np.nan
-        df["kc_upper"] = np.nan
-
-    df["atr_band_upper"] = df["close"] + 1.5 * df["atr"]
-    df["atr_band_lower"] = df["close"] - 1.5 * df["atr"]
-    df["avg_vol_20"] = df["volume"].rolling(20).mean()
-    df["dow"] = df.index.dayofweek
-
-    try:
-        bb = ta.bbands(df["close"], length=20)
-        df["bb_upper"] = bb["BBU_20_2.0"]
-        df["bb_lower"] = bb["BBL_20_2.0"]
-        df["bb_percent"] = bb["BBP_20_2.0"]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_BBANDS_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["bb_upper"] = np.nan
-        df["bb_lower"] = np.nan
-        df["bb_percent"] = np.nan
-
-    try:
-        adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-        df["adx"] = adx["ADX_14"]
-        df["dmp"] = adx["DMP_14"]
-        df["dmn"] = adx["DMN_14"]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_ADX_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["adx"] = np.nan
-        df["dmp"] = np.nan
-        df["dmn"] = np.nan
-
-    try:
-        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_CCI_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["cci"] = np.nan
-
-    df[["high", "low", "close", "volume"]] = df[
-        ["high", "low", "close", "volume"]
-    ].astype(float)
-    try:
-        mfi_vals = ta.mfi(df.high, df.low, df.close, df.volume, length=14)
-        df["+mfi"] = mfi_vals
-    except ValueError:
-        logger.warning("Skipping MFI: insufficient or duplicate data")
-
-    try:
-        df["tema"] = ta.tema(df["close"], length=10)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_TEMA_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["tema"] = np.nan
-
-    try:
-        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_WILLR_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["willr"] = np.nan
-
-    try:
-        psar = ta.psar(df["high"], df["low"], df["close"])
-        df["psar_long"] = psar["PSARl_0.02_0.2"]
-        df["psar_short"] = psar["PSARs_0.02_0.2"]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_PSAR_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["psar_long"] = np.nan
-        df["psar_short"] = np.nan
-
-    try:
-        # compute_ichimoku returns the indicator dataframe and the signal dataframe
-        ich_df, ich_signal_df = compute_ichimoku(df["high"], df["low"], df["close"])
-        for col in ich_df.columns:
-            df[f"ich_{col}"] = ich_df[col]
-        for col in ich_signal_df.columns:
-            df[f"ichi_signal_{col}"] = ich_signal_df[col]
-    except (KeyError, IndexError):
-        logger.warning("Skipping Ichimoku: empty or irregular index")
-
-    try:
-        st = ta.stochrsi(df["close"])
-        df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_STOCHRSI_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["stochrsi"] = np.nan
-
-
-def _add_multi_timeframe_features(
-    df: pd.DataFrame, symbol: str, state: BotState | None
-) -> None:
-    """Add multi-timeframe and lag-based features."""
-    try:
-        df["ret_5m"] = df["close"].pct_change(5, fill_method=None)
-        df["ret_1h"] = df["close"].pct_change(60, fill_method=None)
-        df["ret_d"] = df["close"].pct_change(390, fill_method=None)
-        df["ret_w"] = df["close"].pct_change(1950, fill_method=None)
-        df["vol_norm"] = (
-            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
-        )
-        df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
-        df["vol_5m"] = df["close"].pct_change(fill_method=None).rolling(5).std()
-        df["vol_1h"] = df["close"].pct_change(fill_method=None).rolling(60).std()
-        df["vol_d"] = df["close"].pct_change(fill_method=None).rolling(390).std()
-        df["vol_w"] = df["close"].pct_change(fill_method=None).rolling(1950).std()
-        df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
-        df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
-        df["lag_close_1"] = df["close"].shift(1)
-        df["lag_close_3"] = df["close"].shift(3)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_MULTITF_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
-        df["vol_norm"] = df["5m_vs_1h"] = np.nan
-        df["vol_5m"] = df["vol_1h"] = df["vol_d"] = df["vol_w"] = np.nan
-        df["vol_ratio"] = df["mom_agg"] = df["lag_close_1"] = df["lag_close_3"] = np.nan
-
-
-def _drop_inactive_features(df: pd.DataFrame) -> None:
-    """Remove features listed in ``INACTIVE_FEATURES_FILE`` if present."""
-    if os.path.exists(INACTIVE_FEATURES_FILE):
-        try:
-            with open(INACTIVE_FEATURES_FILE) as f:
-                inactive = set(json.load(f))
-            df.drop(
-                columns=[c for c in inactive if c in df.columns],
-                inplace=True,
-                errors="ignore",
-            )
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as exc:  # pragma: no cover - unexpected I/O  # AI-AGENT-REF: narrow exception
-            logger.exception("bot.py unexpected", exc_info=exc)
-            raise
-
-
 @profile
 def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     """Add core technical indicators to ``frame``.
@@ -30130,97 +27346,6 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- Back-compat path for tests that expect this symbol at module scope ---
-def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute regime features; tolerate proxy bars that only include 'close'."""
-    # 1) Canonicalize columns (o/h/l/c/v mapping, lowercase)
-    try:
-        from ai_trading.utils.ohlcv import standardize_ohlcv
-
-        df = standardize_ohlcv(df)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        # OHLCV standardization failed - log warning but continue with raw data
-        logger.warning("Failed to standardize OHLCV data: %s", e)
-
-    # 2) Synthesize missing OHLC from 'close' when needed (proxy baskets)
-    if "close" in df.columns:
-        if "high" not in df.columns:
-            df["high"] = df["close"].rolling(3, min_periods=1).max()
-        if "low" not in df.columns:
-            df["low"] = df["close"].rolling(3, min_periods=1).min()
-        if "open" not in df.columns:
-            df["open"] = df["close"].shift(1).fillna(df["close"])
-        if "volume" not in df.columns:
-            df["volume"] = 0.0
-
-    # 3) Optional MACD import (keep failures soft)
-    try:
-        from ai_trading.signals import (
-            calculate_macd as signals_calculate_macd,  # type: ignore
-        )
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        logger.warning("signals module not available for regime features")
-        signals_calculate_macd = None
-
-    # 4) Build features with fallbacks
-    feat = pd.DataFrame(index=df.index)
-    try:
-        feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        # Fallback ATR proxy from close-to-close movement
-        tr = (df["close"].diff().abs()).fillna(0.0)
-        feat["atr"] = tr.rolling(14, min_periods=1).mean()
-    feat["rsi"] = ta.rsi(df["close"], length=14)
-    if signals_calculate_macd:
-        try:
-            macd_df = signals_calculate_macd(df["close"])
-            feat["macd"] = (
-                macd_df["macd"] if macd_df is not None and "macd" in macd_df else np.nan
-            )
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning("Regime MACD calculation failed: %s", e)
-            feat["macd"] = np.nan
-    else:
-        feat["macd"] = np.nan
-    feat["vol"] = (
-        df["close"].pct_change(fill_method=None).rolling(14, min_periods=1).std()
-    )
-    return feat.dropna(how="all")
 
 
 def detect_regime(df: pd.DataFrame) -> str:
@@ -30235,127 +27360,6 @@ def detect_regime(df: pd.DataFrame) -> str:
     if sma50.iloc[-1] < sma200.iloc[-1]:
         return "bear"
     return "chop"
-
-
-def _initialize_regime_model(ctx=None):
-    """Initialize regime model - load existing or train new one."""
-    # Train or load regime model - skip in test environment
-    if get_env("TESTING") == "1" or get_env("PYTEST_RUNNING"):
-        logger.info("Skipping regime model training in test environment")
-        return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
-    elif os.path.exists(REGIME_MODEL_PATH):
-        try:
-            return load_verified_joblib_artifact(REGIME_MODEL_PATH)
-        except RuntimeError as e:
-            logger.warning("Failed to load regime model: %s", e)
-            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
-    else:
-        if ctx is None:
-            logger.warning(
-                "No context provided for regime model training; using fallback"
-            )
-            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
-
-        # --- Regime training uses basket-based proxy now ---
-        wide = _build_regime_dataset(ctx)
-        if wide is None or getattr(wide, "empty", False):
-            logger.warning("Regime basket is empty; skipping model train")
-            bars = pd.DataFrame()
-        else:
-            bars = _regime_basket_to_proxy_bars(wide)
-
-        # Normalize to a DatetimeIndex robustly (proxy has 'timestamp' column)
-        try:
-            if "timestamp" in getattr(bars, "columns", []):
-                idx = safe_to_datetime(bars["timestamp"], context="regime data")
-                bars = bars.drop(columns=["timestamp"])
-                bars.index = idx
-            # Final conversion (idempotent for Timestamps)
-            bars.index = safe_to_datetime(bars.index, context="regime data")
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning("REGIME index normalization failed: %s", e)
-            bars = pd.DataFrame()
-        bars = bars.rename(columns=lambda c: c.lower())
-        feats = _compute_regime_features(bars)
-        labels = (
-            (bars["close"] > bars["close"].rolling(200).mean())
-            .loc[feats.index]
-            .astype(int)
-            .rename("label")
-        )
-        training = feats.join(labels, how="inner").dropna()
-
-        # Add validation for training data quality
-        if training.empty:
-            logger.warning(
-                "Regime training dataset is empty after joining features and labels"
-            )
-            if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-                logger.warning("No valid training data for regime model; using fallback")
-                _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
-            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
-
-        # Import settings for regime configuration
-        from ai_trading.config.settings import get_settings
-
-        settings = get_settings()
-
-        logger.debug(
-            "Regime training data validation: %d rows available, minimum required: %d",
-            len(training),
-            settings.REGIME_MIN_ROWS,
-        )
-
-        if len(training) >= settings.REGIME_MIN_ROWS:
-            X = training[["atr", "rsi", "macd", "vol"]]
-            y = training["label"]
-            regime_model = _rf_class()(
-                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
-            )
-            if X.empty:
-                logger.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
-            else:
-                regime_model.fit(X, y)
-            try:
-                atomic_joblib_dump(regime_model, REGIME_MODEL_PATH)
-                write_artifact_manifest(
-                    model_path=REGIME_MODEL_PATH,
-                    model_version="regime_model_v1",
-                    metadata={"artifact_type": "regime_model"},
-                )
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as e:  # AI-AGENT-REF: narrow exception
-                logger.warning(f"Failed to save regime model: {e}")
-            else:
-                logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
-            return regime_model
-        else:
-            # Log once at WARNING level; avoid noisy ERROR during closed market.
-            if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-                logger.warning(
-                    "Insufficient rows (%d < %d) for regime model; using fallback",
-                    len(training),
-                    settings.REGIME_MIN_ROWS,
-                )
-                _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
-            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 
 # Initialize regime model lazily
@@ -31196,40 +28200,6 @@ def screen_candidates(runtime, candidates, *, fallback_symbols=None) -> list[str
 
 
 # Fix for handling missing tickers.csv file
-def get_stock_bars_safe(api, symbol, timeframe):
-    """Safely fetch stock bars using Alpaca's request object."""
-
-    import pandas as pd
-
-    try:
-        req = bars.StockBarsRequest(
-            symbol_or_symbols=[symbol],
-            timeframe=_parse_timeframe(timeframe),
-        )
-    except (TypeError, ValueError) as exc:  # noqa: BLE001
-        raise RuntimeError("Malformed StockBarsRequest") from exc
-
-    get_stock_bars_fn = getattr(api, "get_stock_bars", None)
-    if callable(get_stock_bars_fn):
-        try:
-            resp = get_stock_bars_fn(req)
-        except TypeError as exc:
-            raise RuntimeError(
-                "Incompatible Alpaca SDK: expected get_stock_bars(request)"
-            ) from exc
-    else:
-        get_bars_fn = getattr(api, "get_bars", None)
-        if callable(get_bars_fn):
-            return get_bars_fn(symbol, timeframe)
-        raise AttributeError("API missing get_stock_bars/get_bars")
-
-    df = getattr(resp, "df", resp)
-    if not isinstance(df, pd.DataFrame):
-        try:
-            df = pd.DataFrame(df)
-        except (TypeError, ValueError) as exc:  # noqa: BLE001
-            raise RuntimeError("Unexpected get_stock_bars response") from exc
-    return df
 
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
@@ -31327,61 +28297,6 @@ def daily_summary() -> None:
 
 
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
-def run_daily_pca_adjustment(ctx: BotContext) -> None:
-    from ai_trading.utils import portfolio_lock
-
-    if not SKLEARN_AVAILABLE:
-        return
-    from sklearn.decomposition import PCA  # lazy import
-
-    """
-    Once per day, run PCA on last 90-day returns of current universe.
-    If top PC explains >40% variance and portfolio loads heavily,
-    reduce those weights by 20%.
-    """
-    universe = list(ctx.portfolio_weights.keys())
-    if not universe:
-        return
-    returns_df = pd.DataFrame()
-    for sym in universe:
-        df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is None or len(df) < 90:
-            continue
-        rts = df["close"].pct_change(fill_method=None).tail(90).reset_index(drop=True)
-        returns_df[sym] = rts
-    returns_df = returns_df.dropna(axis=1, how="any")
-    if returns_df.shape[1] < 2:
-        return
-    pca = PCA(n_components=3)
-    if returns_df.empty:
-        logger.warning("PCA_SKIPPED_EMPTY_RETURNS")
-        return
-    pca.fit(returns_df.values)
-    var_explained = pca.explained_variance_ratio_[0]
-    if var_explained < 0.4:
-        return
-    top_loadings = pd.Series(pca.components_[0], index=returns_df.columns).abs()
-    # Identify symbols loading > median loading
-    median_load = top_loadings.median()
-    high_load_syms = top_loadings[top_loadings > median_load].index.tolist()
-    if not high_load_syms:
-        return
-    # Reduce those weights by 20%
-    with portfolio_lock:  # FIXED: protect shared portfolio state
-        for sym in high_load_syms:
-            old = ctx.portfolio_weights.get(sym, 0.0)
-            ctx.portfolio_weights[sym] = round(old * 0.8, 4)
-        # Re-normalize to sum to 1
-        total = sum(ctx.portfolio_weights.values())
-        if total > 0:
-            for sym in ctx.portfolio_weights:
-                ctx.portfolio_weights[sym] = round(
-                    ctx.portfolio_weights[sym] / total, 4
-                )
-    logger.info(
-        "PCA_ADJUSTMENT_APPLIED",
-        extra={"var_explained": round(var_explained, 3), "adjusted": high_load_syms},
-    )
 
 
 def daily_reset(state: BotState) -> None:
@@ -32186,10 +29101,6 @@ def on_market_close() -> None:
 
 
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
-def _legacy_health_payload() -> dict[str, Any]:
-    from ai_trading.core.runtime_services import legacy_health_payload_runtime
-
-    return legacy_health_payload_runtime()
 
 def start_healthcheck() -> None:
     from ai_trading.core.runtime_services import start_healthcheck_runtime
@@ -32267,55 +29178,6 @@ def start_metrics_server(default_port: int = 9200) -> None:
         OSError,
     ) as exc:  # pragma: no cover - unexpected error  # AI-AGENT-REF: narrow exception
         logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
-
-
-def _resolve_exec_price(
-    symbol: str,
-    minute_df: pd.DataFrame | None,
-    last_close: float | None,
-    stale_sec_limit: int = 180,
-):
-    """Return a valid execution price or ``None`` when data is unusable."""
-
-    try:  # pragma: no cover - pandas always available in prod
-        import pandas as pd_mod  # type: ignore
-    except ImportError:  # pragma: no cover - defensive
-        pd_mod = pd
-
-    price = 0.0
-    if minute_df is not None and len(minute_df):
-        try:
-            price = float(minute_df["close"].iloc[-1])
-        except COMMON_EXC:
-            price = 0.0
-        if pd_mod is not None:
-            try:
-                last_idx = minute_df.index[-1]
-                last_ts = pd_mod.Timestamp(last_idx)
-                if last_ts.tzinfo is None:
-                    last_ts = last_ts.tz_localize("UTC")
-                age = (
-                    pd_mod.Timestamp.utcnow().tz_localize("UTC")
-                    - last_ts.tz_convert("UTC")
-                ).total_seconds()
-            except COMMON_EXC:  # pragma: no cover - defensive
-                age = 0.0
-            if age > stale_sec_limit:
-                logger.warning(
-                    "FETCH_MINUTE_STALE_DATA",
-                    extra={"symbol": symbol, "age": f"{int(age)}s"},
-                )
-                price = 0.0
-    if price <= 0.0:
-        if last_close and last_close > 0:
-            logger.info(
-                "PRICE_FALLBACK_LAST_CLOSE",
-                extra={"symbol": symbol, "price": float(last_close)},
-            )
-            return float(last_close), "last_close"
-        logger.warning("PRICE_INVALID_SKIP_SYMBOL", extra={"symbol": symbol})
-        return None, "invalid"
-    return price, "minute_close"
 
 
 def _quote_to_mid(quote: Any | None) -> tuple[float | None, float, float]:
@@ -34273,14 +31135,6 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
     )
 
 
-def _send_heartbeat() -> None:
-    """Lightweight heartbeat when halted."""
-    logger.info(
-        "HEARTBEAT_HALTED",
-        extra={"timestamp": utc_now_iso()},  # AI-AGENT-REF: Use UTC timestamp utility
-    )
-
-
 def manage_position_risk(ctx, position) -> None:
     """Adjust trailing stops and position size while halted."""
 
@@ -34308,19 +31162,6 @@ def pyramid_add_position(
         price=px,
     )
     logger.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
-
-
-def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
-    current_qty = _current_qty(ctx, symbol)
-    reduce_qty = max(1, int(abs(current_qty) * fraction))
-    side = "sell" if current_qty > 0 else "buy"
-    try:
-        raw = fetch_minute_df_safe(symbol)
-        px = get_latest_close(raw) if raw is not None else None
-    except DataFetchError:
-        px = None
-    submit_order(ctx, symbol, reduce_qty, side, price=px)
-    logger.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
 
 
 def _ensure_execution_engine(runtime) -> None:
@@ -34689,55 +31530,6 @@ def _pending_order_force_cleanup_seconds() -> float:
     except COMMON_EXC:
         value = _PENDING_ORDER_FORCE_CLEANUP_SEC_DEFAULT
     return max(5.0, min(value, 3600.0))
-
-
-def _pending_order_log_thresholds(cfg: Any | None) -> tuple[float, float]:
-    """Resolve pending-order warning/error escalation thresholds."""
-
-    warn_raw: Any = _PENDING_ORDER_WARN_SEC_DEFAULT
-    error_raw: Any = _PENDING_ORDER_ERROR_SEC_DEFAULT
-    if cfg is not None:
-        warn_raw = getattr(cfg, "orders_pending_new_warn_s", warn_raw)
-        error_raw = getattr(cfg, "orders_pending_new_error_s", error_raw)
-    try:
-        warn_after_s = float(warn_raw)
-    except (TypeError, ValueError):
-        warn_after_s = _PENDING_ORDER_WARN_SEC_DEFAULT
-    try:
-        error_after_s = float(error_raw)
-    except (TypeError, ValueError):
-        error_after_s = _PENDING_ORDER_ERROR_SEC_DEFAULT
-    warn_after_s = max(0.0, min(warn_after_s, 86400.0))
-    error_after_s = max(warn_after_s, min(error_after_s, 86400.0))
-    return warn_after_s, error_after_s
-
-
-def _pending_order_log_level(
-    age_s: float,
-    *,
-    warn_after_s: float,
-    error_after_s: float,
-) -> int:
-    """Return log level for pending-order age-based escalation."""
-
-    effective_age_s = max(float(age_s), 0.0)
-    if error_after_s <= 0.0:
-        return logging.ERROR
-    if effective_age_s >= error_after_s:
-        return logging.ERROR
-    if warn_after_s <= 0.0:
-        return logging.WARNING
-    if effective_age_s >= warn_after_s:
-        return logging.WARNING
-    return logging.INFO
-
-
-def _pending_order_scope_log_level(level: int, *, block_scope: str) -> int:
-    """Adjust pending-order log level to match the active block scope."""
-
-    if block_scope == "symbol" and int(level) > int(logging.WARNING):
-        return logging.WARNING
-    return int(level)
 
 
 def _pending_cleanup_warmup_cycles() -> int:
@@ -37050,21 +33842,6 @@ def _ensure_policy_learning_artifacts(
     return _ensure_policy_learning_artifacts_service(now=now)
 
 
-def _build_policy_runtime_toggles_payload(
-    *,
-    disabled_slices: Sequence[str],
-    diagnostics: Mapping[str, Any] | None = None,
-    updated_at: str | None = None,
-    source_updated_at: str | None = None,
-) -> dict[str, Any]:
-    return _build_policy_runtime_toggles_payload_service(
-        disabled_slices=disabled_slices,
-        diagnostics=diagnostics,
-        updated_at=updated_at,
-        source_updated_at=source_updated_at,
-    )
-
-
 def _load_policy_runtime_toggles() -> dict[str, Any]:
     return _load_policy_runtime_toggles_service()
 
@@ -37462,10 +34239,6 @@ def _load_policy_ablation_state() -> dict[str, Any]:
         "updated_at": payload.get("updated_at"),
         "slices": dict(slices_raw) if isinstance(slices_raw, Mapping) else {},
     }
-
-
-def _load_policy_rollback_state() -> dict[str, Any]:
-    return _load_policy_rollback_state_service()
 
 
 def _policy_slices_from_observation(observation: Mapping[str, Any]) -> set[str]:
@@ -39392,20 +36165,6 @@ def _load_replay_bars(
     return filtered
 
 
-def _replay_parity_shadow_row(
-    record: Mapping[str, Any],
-    *,
-    cutoff: datetime,
-    now: datetime,
-) -> tuple[str, dict[str, Any]] | None:
-    parsed, _reason = _replay_parity_shadow_row_diagnostic(
-        record,
-        cutoff=cutoff,
-        now=now,
-    )
-    return parsed
-
-
 def _replay_parity_shadow_row_diagnostic(
     record: Mapping[str, Any],
     *,
@@ -40353,41 +37112,6 @@ def _replay_bucket_summary_metrics(
             fill_bps_by_symbol_session_regime
         ),
     }
-
-
-def _load_latest_replay_summary(output_dir: Path, *, before_path: Path) -> dict[str, Any] | None:
-    """Return latest replay summary payload for baseline non-regression comparison."""
-
-    candidates = sorted(output_dir.glob("replay_hash_*.json"))
-    for candidate in reversed(candidates):
-        if candidate.resolve() == before_path.resolve():
-            continue
-        try:
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
-        summary = payload.get("replay_summary")
-        if isinstance(summary, Mapping):
-            return {
-                "sample_count": int(summary.get("sample_count", 0) or 0),
-                "net_edge_bps": float(summary.get("net_edge_bps", 0.0) or 0.0),
-                "max_drawdown_pct": float(summary.get("max_drawdown_pct", 0.0) or 0.0),
-            }
-    return None
-
-
-def _load_latest_replay_symbol_summary(
-    output_dir: Path,
-    *,
-    max_age_hours: float,
-) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
-    """Load most recent replay per-symbol quality metrics with freshness guard."""
-
-    symbol_summary, _, _, context = _load_latest_replay_quality_summaries(
-        output_dir,
-        max_age_hours=max_age_hours,
-    )
-    return symbol_summary, context
 
 
 def _load_latest_replay_quality_summaries(
@@ -43451,28 +40175,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     run_all_trades_worker_cycle(state=state, runtime=runtime)
 
 
-def schedule_run_all_trades(runtime):
-    """Spawn run_all_trades_worker if market is open."""
-    from ai_trading.core.startup_runtime import schedule_run_all_trades_runtime
-
-    schedule_run_all_trades_runtime(runtime)
-
-
-def schedule_run_all_trades_with_delay(runtime):
-    from ai_trading.core.startup_runtime import (
-        schedule_run_all_trades_with_delay_runtime,
-    )
-
-    schedule_run_all_trades_with_delay_runtime(runtime)
-
-
-def initial_rebalance(ctx: Any, symbols: list[str]) -> None:
-    """Initial portfolio rebalancing."""
-    from ai_trading.core.startup_runtime import initial_rebalance_runtime
-
-    initial_rebalance_runtime(ctx, symbols)
-
-
 def main() -> None:
     bootstrap_runtime_defaults()
     logger.info("Main trading bot starting")
@@ -43758,122 +40460,6 @@ def simple_calculate_macd(
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.error(f"Exception in MACD calculation: {e}", exc_info=True)
         return None, None, None
-
-
-def compute_ichimoku(
-    high: pd.Series, low: pd.Series, close: pd.Series
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return Ichimoku lines and signal DataFrames."""
-    try:
-        ich_func = getattr(ta, "ichimoku", None)
-        if ich_func is None:
-            try:
-                from ai_trading.indicators import ichimoku_fallback  # type: ignore
-
-                ich_func = ichimoku_fallback
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ):  # pragma: no cover  # AI-AGENT-REF: narrow exception
-                logger.warning("ichimoku indicators not available")
-                ich_func = None
-
-        if ich_func:
-            ich = ich_func(high=high, low=low, close=close)
-        else:
-            # Return empty dataframes if no ichimoku function available
-            return pd.DataFrame(index=high.index), pd.DataFrame(index=high.index)
-        if isinstance(ich, tuple):
-            ich_df = ich[0]
-            signal_df = ich[1] if len(ich) > 1 else pd.DataFrame(index=ich_df.index)
-        else:
-            ich_df = ich
-            signal_df = pd.DataFrame(index=ich_df.index)
-        # AI-AGENT-REF: Use attribute check instead of isinstance to avoid type errors
-        if not hasattr(ich_df, "iloc") or not hasattr(ich_df, "columns"):
-            ich_df = pd.DataFrame(ich_df)
-        if not hasattr(signal_df, "iloc") or not hasattr(signal_df, "columns"):
-            signal_df = pd.DataFrame(signal_df)
-        leaky_cols = [
-            col for col in ich_df.columns if str(col).upper().startswith("ICS")
-        ]
-        if leaky_cols:
-            ich_df = ich_df.drop(columns=leaky_cols, errors="ignore")
-        signal_leaky_cols = [
-            col for col in signal_df.columns if str(col).upper().startswith("ICS")
-        ]
-        if signal_leaky_cols:
-            signal_df = signal_df.drop(columns=signal_leaky_cols, errors="ignore")
-        return ich_df, signal_df
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc)
-        return pd.DataFrame(), pd.DataFrame()
-
-
-def ichimoku_indicator(
-    df: pd.DataFrame,
-    symbol: str,
-    state: BotState | None = None,
-) -> tuple[pd.DataFrame, Any | None]:
-    """Return Ichimoku indicator DataFrame and optional params."""
-    try:
-        ich_func = getattr(ta, "ichimoku", None)
-        if ich_func is None:
-            try:
-                from ai_trading.indicators import ichimoku_fallback  # type: ignore
-
-                ich_func = ichimoku_fallback
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ):  # pragma: no cover  # AI-AGENT-REF: narrow exception
-                logger.warning("ichimoku indicators not available")
-                ich_func = None
-
-        if ich_func:
-            ich = ich_func(high=df["high"], low=df["low"], close=df["close"])
-        if isinstance(ich, tuple):
-            ich_df = ich[0]
-            params = ich[1] if len(ich) > 1 else None
-        else:
-            ich_df = ich
-            params = None
-        return ich_df, params
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
-        log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        return pd.DataFrame(), None
 
 
 def _trade_limit_reached(state: BotState, current_time: datetime) -> bool:
@@ -45000,43 +41586,14 @@ def get_price_source(symbol: str) -> str:
     return _PRICE_SOURCE.get(symbol, "unknown")
 
 
-def initialize_bot(api=None, data_loader=None):
-    """Return a minimal context and state for unit tests."""
-    ctx = types.SimpleNamespace(api=api, data_loader=data_loader)
-    state: dict[str, dict[str, int]] = {"positions": {}}
-    return ctx, state
-
-
 def generate_signals(df):
     """+1 if price rise, -1 if price fall, else 0."""
     return _generate_directional_signals_service(df)
 
 
-def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
-    """Return orders inferred from ``signals`` without hitting real APIs."""
-    return _execute_signal_orders_service(ctx, signals, logger=logger)
-
-
-def run_trading_cycle(ctx, df: pd.DataFrame) -> list[tuple[str, str]]:
-    """Generate signals from ``df`` and execute trades via ``ctx``."""
-    signals = generate_signals(df)
-    return execute_trades(ctx, signals)
-
-
 def health_check(df: pd.DataFrame, resolution: str) -> bool:
     """Delegate to :func:`utils.health_check` for convenience."""  # AI-AGENT-REF
     return _health_check(df, resolution)
-
-
-def compute_atr_stop(df, atr_window=14, multiplier=2):
-    # AI-AGENT-REF: helper for ATR-based trailing stop
-    high_low = df["high"] - df["low"]
-    high_close = np.abs(df["high"] - df["close"].shift())
-    low_close = np.abs(df["low"] - df["close"].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    atr = tr.rolling(atr_window).mean()
-    stop_level = df["close"] - (atr * multiplier)
-    return stop_level
 
 
 if __name__ == "__main__":

@@ -465,10 +465,6 @@ def observe_launch_profile_state(profile: LaunchProfile | None = None) -> dict[s
     return state
 
 
-def observe_live_canary_state() -> dict[str, Any]:
-    return observe_launch_profile_state(resolve_launch_profile("live_canary"))
-
-
 def evaluate_launch_profile_order(
     order: Mapping[str, Any],
     *,
@@ -671,25 +667,7 @@ def _evaluate_launch_profile_order_locked(
     return allowed, event
 
 
-def evaluate_canary_order(
-    order: Mapping[str, Any],
-    *,
-    profile: LaunchProfile | None = None,
-    execution_mode: str | None = None,
-) -> tuple[bool, dict[str, Any]]:
-    resolved = profile or resolve_launch_profile()
-    if resolved.name != "live_canary":
-        return True, {"enabled": False, "profile": resolved.name, "reason": "not_live_canary"}
-    return evaluate_launch_profile_order(
-        order,
-        profile=resolved,
-        execution_mode=execution_mode,
-    )
-
-
 __all__ = [
-    "evaluate_canary_order",
     "evaluate_launch_profile_order",
     "observe_launch_profile_state",
-    "observe_live_canary_state",
 ]

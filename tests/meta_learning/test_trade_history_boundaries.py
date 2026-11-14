@@ -69,14 +69,6 @@ def test_observed_round_trip_conversion_keeps_prices_and_timestamps(history):
     assert row["reward"] == pytest.approx(0.02)
 
 
-def test_stored_meta_history_appends_without_repeating_headers(history):
-    core, _ = history
-    first = {"symbol": "AAPL", "entry_price": 100, "exit_price": 102}
-    second = {"symbol": "MSFT", "entry_price": 200, "exit_price": 198}
-    assert core.store_meta_learning_data(first)
-    assert core.store_meta_learning_data(second)
-    result = pd.read_csv(core.config.META_LEARNING_LOG_FILE)
-    assert result.to_dict("records") == [first, second]
 
 
 @pytest.mark.parametrize("numpy_available", [True, False])

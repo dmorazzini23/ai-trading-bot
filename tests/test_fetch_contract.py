@@ -98,40 +98,5 @@ def test_get_bars_requires_settings(monkeypatch):
         )
 
 
-@pytest.mark.asyncio
-async def test_run_with_concurrency_returns_worker_failures() -> None:
-    async def _ok() -> str:
-        return "ok"
-
-    async def _fail() -> str:
-        raise RuntimeError("fetch failed")
-
-    results, succeeded, failed = await data_fetcher.run_with_concurrency(
-        2,
-        [_ok(), _fail()],
-    )
-
-    assert results[0] == "ok"
-    assert isinstance(results[1], RuntimeError)
-    assert succeeded == 1
-    assert failed == 1
 
 
-@pytest.mark.asyncio
-async def test_run_with_concurrency_propagates_cancellation() -> None:
-    cleanup = asyncio.Event()
-
-    async def _cancel() -> str:
-        raise asyncio.CancelledError()
-
-    async def _slow() -> str:
-        try:
-            await asyncio.sleep(30)
-        finally:
-            cleanup.set()
-        return "slow"
-
-    with pytest.raises(asyncio.CancelledError):
-        await data_fetcher.run_with_concurrency(2, [_cancel(), _slow()])
-
-    assert cleanup.is_set()

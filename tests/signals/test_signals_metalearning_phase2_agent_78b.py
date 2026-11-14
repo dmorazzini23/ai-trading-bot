@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 
 import ai_trading.signals as signals_mod
-from ai_trading.signals import ensemble_vote_signals, generate_ensemble_signal, generate_signal
 from ai_trading.strategies import metalearning as ml_mod
 from ai_trading.strategies.base import StrategySignal
 from ai_trading.strategies.metalearning import MetaLearning
@@ -43,101 +42,12 @@ def _feature_row(**overrides: float) -> pd.DataFrame:
     return pd.DataFrame([values])
 
 
-def test_generate_signal_maps_nonfinite_values_and_rejects_invalid_inputs() -> None:
-    index = pd.date_range("2026-01-02", periods=6, freq="min", tz="UTC")
-    df = pd.DataFrame({"momentum": [-2.5, 0.0, 3.5, np.nan, np.inf, -np.inf]}, index=index)
-
-    signal = generate_signal(df, "momentum")
-
-    assert signal.tolist() == [-1, 0, 1, 0, 0, 0]
-    assert signal.index.equals(index)
-    assert signal.name == "signal"
-
-    with pytest.raises(ValueError, match="df cannot be None"):
-        generate_signal(None, "momentum")
-    with pytest.raises(TypeError, match="df must be a pandas DataFrame"):
-        generate_signal([1, 2, 3], "momentum")
-    with pytest.raises(ValueError, match="df cannot be empty"):
-        generate_signal(pd.DataFrame(columns=["momentum"]), "momentum")
-    with pytest.raises(TypeError, match="column must be a string"):
-        generate_signal(df, 1)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="column 'missing' not found"):
-        generate_signal(df, "missing")
 
 
-def test_score_candidates_clips_model_outputs_and_generate_signals_copies() -> None:
-    features = pd.DataFrame({"alpha": [0.1, 0.2, 0.3]})
-
-    class ProbaModel:
-        def predict_proba(self, data: pd.DataFrame) -> np.ndarray:
-            assert data is features
-            return np.array([[0.2, 1.4], [0.9, -0.5], [0.6, 0.35]])
-
-    scored = signals_mod.score_candidates(features, ProbaModel())
-
-    assert scored["score"].tolist() == [1.0, 0.0, 0.35]
-    assert "score" not in features
-
-    generated = signals_mod.generate_signals(scored, buy_threshold=0.75)
-
-    assert generated.equals(scored)
-    assert generated is not scored
 
 
-def test_compute_signal_matrix_does_not_backfill_rsi_inputs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    index = pd.date_range("2026-01-02 14:30", periods=30, freq="min", tz="UTC")
-    close = pd.Series(np.linspace(100.0, 103.0, len(index)), index=index)
-    close.iloc[0] = np.nan
-    df = pd.DataFrame(
-        {
-            "close": close,
-            "high": close.ffill().fillna(100.0) + 1.0,
-            "low": close.ffill().fillna(100.0) - 1.0,
-        },
-        index=index,
-    )
-    captured: dict[str, tuple[float, ...]] = {}
-
-    def fake_rsi(prices: tuple[float, ...], period: int) -> pd.Series:
-        captured["prices"] = prices
-        assert period == 14
-        return pd.Series([50.0] * len(prices), index=index)
-
-    monkeypatch.setattr(signals_mod, "rsi", fake_rsi)
-
-    matrix = signals_mod.compute_signal_matrix(df)
-
-    assert matrix is not None
-    assert np.isnan(captured["prices"][0])
-    assert captured["prices"][1] == pytest.approx(close.iloc[1])
 
 
-def test_signal_aggregation_votes_and_breakout_branches() -> None:
-    index = pd.date_range("2026-01-03", periods=3, freq="min", tz="UTC")
-    matrix = pd.DataFrame(
-        {
-            "macd": [0.7, -0.8, 0.6],
-            "rsi": [0.9, -0.2, 0.0],
-            "sma_diff": [0.1, -0.9, 0.0],
-        },
-        index=index,
-    )
-
-    votes = ensemble_vote_signals(matrix)
-
-    assert votes.tolist() == [1, -1, 0]
-    assert ensemble_vote_signals(pd.DataFrame()).empty
-    assert signals_mod.classify_regime(pd.DataFrame()).empty
-
-    sell_breakout = pd.DataFrame({"close": [111.0], "UB": [110.0]})
-    lower_band_buy = pd.DataFrame({"close": [89.0], "LB": [90.0]})
-    neutral = pd.DataFrame({"close": [100.0], "UB": [110.0], "LB": [90.0]})
-
-    assert generate_ensemble_signal(sell_breakout) == -1
-    assert generate_ensemble_signal(lower_band_buy) == 1
-    assert generate_ensemble_signal(neutral) == 0
 
 
 def test_execute_strategy_handles_invalid_short_training_and_prediction_branches(

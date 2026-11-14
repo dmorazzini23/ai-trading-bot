@@ -52,33 +52,3 @@ def test_safe_account_none():
     assert safe_alpaca_get_account(ctx) is None
 
 
-def test_run_all_trades_aborts_without_api(monkeypatch, caplog):
-    """run_all_trades_worker should abort early when Alpaca client missing."""
-    reset_emit_once_state()
-    state = bot_engine.BotState()
-    monkeypatch.setenv("SHADOW_MODE", "true")
-    monkeypatch.setenv("WEBHOOK_SECRET", "test")
-    runtime = bot_engine.get_ctx()
-    runtime.api = None
-    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
-    monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: None)
-    monkeypatch.setattr(bot_engine, "_ALPACA_IMPORT_ERROR", None)
-    monkeypatch.setattr(bot_engine, "get_minute_df", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine, "last_minute_bar_age_seconds", lambda *a, **k: 0)
-    monkeypatch.setattr(bot_engine, "get_cached_minute_timestamp", lambda *a, **k: 0)
-    hb: dict[str, bool] = {}
-    monkeypatch.setattr(bot_engine, "_log_loop_heartbeat", lambda *a, **k: hb.setdefault("loop", True))
-    monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: hb.setdefault("halt", True))
-    monkeypatch.setattr(bot_engine, "ensure_data_fetcher", lambda _rt: True)
-    with caplog.at_level(logging.WARNING):
-        bot_engine.run_all_trades_worker(state, runtime)
-    assert hb.get("loop") and not hb.get("halt")
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any("ALPACA_CLIENT_MISSING" in m for m in msgs)
-    assert any(r.levelno == logging.WARNING for r in caplog.records)
-    errors = [
-        r
-        for r in caplog.records
-        if r.levelno >= logging.ERROR and "Market status check failed" not in r.getMessage()
-    ]
-    assert not errors

@@ -73,13 +73,6 @@ def register_model(symbol: str, version: str, path: Path, meta: dict[str, Any] |
     _save_registry(reg)
 
 
-def set_active_model(symbol: str, version: str) -> None:
-    reg = _load_registry()
-    if symbol in reg and version in reg[symbol].get("versions", {}):
-        reg[symbol]["active"] = version
-        _save_registry(reg)
-
-
 def get_active_model_meta(symbol: str) -> dict[str, Any] | None:
     reg = _load_registry()
     entry = reg.get(symbol)
@@ -93,29 +86,6 @@ def get_active_model_meta(symbol: str) -> dict[str, Any] | None:
         return None
     payload = versions.get(ver)
     return payload if isinstance(payload, dict) else None
-
-
-def record_evaluation(symbol: str, metrics: dict[str, Any]) -> None:
-    """Append evaluation metrics for a symbol in JSONL format."""
-    try:
-        _EVAL_DIR.mkdir(parents=True, exist_ok=True)
-        payload = {"symbol": symbol, "ts": datetime.now(UTC).isoformat(), **metrics}
-        with (_EVAL_DIR / f"{symbol}.jsonl").open("a") as f:
-            f.write(json.dumps(payload) + "\n")
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("MODEL_EVAL_WRITE_FAILED", exc_info=True)
-
-
-def list_evaluations(symbol: str, limit: int = 100) -> list[dict[str, Any]]:
-    try:
-        path = _EVAL_DIR / f"{symbol}.jsonl"
-        if not path.exists():
-            return []
-        lines = path.read_text().splitlines()[-limit:]
-        return [json.loads(l) for l in lines if l.strip()]
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("MODEL_EVAL_READ_FAILED", exc_info=True)
-        return []
 
 
 # ---------------------------------------------------------------------------
@@ -965,8 +935,5 @@ class ModelRegistry:
 __all__ = [
     "ModelRegistry",
     "register_model",
-    "set_active_model",
     "get_active_model_meta",
-    "record_evaluation",
-    "list_evaluations",
 ]

@@ -136,30 +136,6 @@ class TestOrderExecutionTracking(unittest.TestCase):
                 # The issue: poll_order_fill_status runs in a separate thread
                 # and doesn't communicate back to the main slicing logic
 
-    def test_safe_submit_order_quantity_validation(self):
-        """Test that safe_submit_order validates filled_qty matches intended qty."""
-
-        # Mock order request
-        mock_req = Mock()
-        mock_req.symbol = "AAPL"
-        mock_req.qty = 100
-
-        # Mock order with partial fill
-        partial_order = Mock()
-        partial_order.status = "partially_filled"
-        partial_order.filled_qty = "50"  # Only half filled
-        partial_order.qty = "100"
-
-        with patch.object(self.mock_ctx.api, 'submit_order', return_value=partial_order), \
-             patch.object(self.mock_ctx.api, 'get_order', return_value=partial_order), \
-             patch.object(bot_engine, 'market_is_open', return_value=True):
-
-            if hasattr(bot_engine, 'safe_submit_order'):
-                result = bot_engine.safe_submit_order(self.mock_ctx.api, mock_req)
-
-                # The order should expose numeric quantity fields
-                self.assertEqual(result.filled_qty, 50.0)
-                self.assertEqual(result.qty, 100.0)
 
 
 class TestMetaLearningLogFormat(unittest.TestCase):
@@ -175,35 +151,6 @@ class TestMetaLearningLogFormat(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_mixed_format_detection(self):
-        """Test detection of mixed audit/meta-learning log formats."""
-
-        # Create a mixed format CSV file without headers to test raw data parsing
-        mixed_data = [
-            # Audit format row (UUID in first column)
-            ["12345678-1234-1234-1234-123456789012", "2025-08-05T10:00:00Z", "AAPL", "buy", "100", "150.00", "live", "filled"],
-            # Meta format row (Symbol in first column)
-            ["MSFT", "2025-08-05T10:05:00Z", "140.00", "2025-08-05T10:10:00Z", "142.00", "50", "buy", "momentum", "profitable", "ma_cross", "0.75", "100.00"],
-            # Another audit format row
-            ["87654321-4321-4321-4321-210987654321", "2025-08-05T10:15:00Z", "GOOGL", "sell", "25", "2800.00", "live", "filled"]
-        ]
-
-        with open(self.trade_log_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            for row in mixed_data:
-                writer.writerow(row)
-
-        if hasattr(meta_learning, 'validate_trade_data_quality'):
-            quality_report = meta_learning.validate_trade_data_quality(self.trade_log_path)
-
-            # Should detect mixed format
-            self.assertTrue(meta_learning.has_mixed_format(self.trade_log_path))
-            self.assertGreater(quality_report.get('audit_format_rows', 0), 0)
-            self.assertGreater(quality_report.get('meta_format_rows', 0), 0)
-
-            # Should have recommendations for handling mixed format
-            recommendations = quality_report.get('recommendations', [])
-            self.assertTrue(any('unified parsing' in rec.lower() for rec in recommendations))
 
     def test_meta_learning_empty_log_issue(self):
         """Test the METALEARN_EMPTY_TRADE_LOG issue reproduction."""

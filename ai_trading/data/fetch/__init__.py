@@ -1126,16 +1126,6 @@ def _sip_explicitly_disabled() -> bool:
     return allow_env in {"0", "false", "no", "off"}
 
 
-def _ordered_fallbacks(primary_feed: str) -> list[str]:
-    """Return fallback feeds ordered by preference for *primary_feed*."""
-    normalized = (primary_feed or "").strip().lower()
-    if normalized == "iex":
-        return ["sip", "yahoo"] if _sip_allowed() else ["yahoo"]
-    if normalized == "sip":
-        return ["yahoo"]
-    return ["yahoo"]
-
-
 def _alternate_alpaca_feed(feed: str) -> str:
     normalized = (feed or "").strip().lower()
     if normalized == "iex":
@@ -1182,13 +1172,6 @@ def _env_signature() -> tuple[str | None, str | None]:
 def _clear_cycle_overrides() -> None:
     _cycle_feed_override.clear()
     _override_set_ts.clear()
-
-
-def reload_env_settings() -> None:
-    """Reset cached override state when environment configuration changes."""
-    global _ENV_STAMP
-    _clear_cycle_overrides()
-    _ENV_STAMP = _env_signature()
 
 
 def _ensure_override_state_current() -> None:
@@ -1460,106 +1443,8 @@ def _cache_fallback(symbol: str, feed: str, timeframe: str = "1Min") -> None:
     _record_override(symbol, feed, timeframe)
 
 
-async def run_with_concurrency(limit: int, coros):
-    """Execute *coros* concurrently while keeping at most *limit* in flight."""
-    try:
-        reload_host_limit_if_env_changed()
-    except FETCH_FALLBACK_EXCEPTIONS:
-        pass
-
-    max_concurrency = max(1, int(limit or 1))
-    semaphore = asyncio.Semaphore(max_concurrency)
-
-    async def _run(index: int, coro):
-        async with semaphore:
-            try:
-                result = await coro
-            except asyncio.CancelledError:
-                raise
-            except FETCH_FALLBACK_EXCEPTIONS as exc:
-                return index, exc
-            return index, result
-
-    pending: set[asyncio.Task[tuple[int, Any]]] = set()
-    results: dict[int, Any] = {}
-    total = 0
-    iterator = iter(coros)
-
-    iterator_exhausted = False
-    try:
-        while pending or not iterator_exhausted:
-            while len(pending) < max_concurrency and not iterator_exhausted:
-                try:
-                    coro = next(iterator)
-                except StopIteration:
-                    iterator_exhausted = True
-                    break
-                pending.add(asyncio.create_task(_run(total, coro)))
-                total += 1
-
-            if not pending:
-                break
-
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                index, value = task.result()
-                results[index] = value
-    except asyncio.CancelledError:
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        raise
-
-    ordered_results = [results[i] for i in range(total)] if total else []
-    succeeded = sum(1 for item in ordered_results if not isinstance(item, BaseException))
-    failed = total - succeeded
-    return ordered_results, succeeded, failed
-
-
 _daily_memo: dict[tuple[str, str], tuple[float, Any]] = {}
 _DAILY_TTL_S = 60.0
-
-
-def daily_fetch_memo(key: tuple[str, str], value_factory):
-    """Memoize intraday daily fetch results for a short TTL."""
-    now = _time_now()
-    cached = _daily_memo.get(key)
-    if cached is not None:
-        ts, value = cached
-        if (now - ts) < _DAILY_TTL_S:
-            return value
-    try:
-        value_or_generator = value_factory()
-    except StopIteration:
-        _daily_memo.pop(key, None)
-        return None
-    except RuntimeError as exc:
-        if is_generator_stop(exc):
-            _daily_memo.pop(key, None)
-            return None
-        raise
-
-    if isinstance(value_or_generator, GeneratorType):
-        generator = value_or_generator
-        try:
-            value = next(generator)
-        except StopIteration:
-            _daily_memo.pop(key, None)
-            return None
-        except RuntimeError as exc:
-            if is_generator_stop(exc):
-                _daily_memo.pop(key, None)
-                return None
-            raise
-        finally:
-            with suppress(Exception):
-                generator.close()
-    else:
-        value = value_or_generator
-
-    _daily_memo[key] = (now, value)
-    return value
 
 
 def _emit_capture_record(
@@ -1808,10 +1693,6 @@ def _incr_empty_metric(symbol: str, feed: str, timeframe: str) -> None:
         pass
 
 
-def _to_timeframe_str(tf: object) -> str:
-    return str(_canon_tf(tf))
-
-
 def _normalize_feed_value(feed: object) -> str:
     """Return canonical feed string while enforcing validation."""
     try:
@@ -1886,8 +1767,6 @@ class MissingOHLCVColumnsError(DataFetchError):
 
 
 # Dedicated error for SIP authorization failures so callers can branch.
-class UnauthorizedSIPError(DataFetchError):
-    """Raised when Alpaca SIP requests fail due to authorization issues."""
 
 
 class EmptyBarsError(DataFetchError, ValueError):
@@ -1944,20 +1823,6 @@ def _format_fallback_payload_df(tf_str: str, feed_str: str, start_dt: _dt.dateti
     s = ensure_datetime(start_dt).astimezone(UTC).isoformat()
     e = ensure_datetime(end_dt).astimezone(UTC).isoformat()
     return [tf_str, feed_str, s, e]
-
-
-def bars_time_window_day(days: int = 10, *, end: _dt.datetime | None = None) -> tuple[_dt.datetime, _dt.datetime]:
-    """Return start/end datetimes covering ``days`` full days inclusively.
-
-    ``end`` defaults to the current UTC time. The ``start`` is normalized to
-    midnight UTC ``days`` days before ``end`` so that the entire first day is
-    included in the range. The returned ``start`` and ``end`` are timezone-aware
-    in UTC and satisfy ``(end - start).days == days``.
-    """
-    end_dt = ensure_datetime(end or _dt.datetime.now(tz=UTC))
-    start_dt = (end_dt - _dt.timedelta(days=days)).astimezone(UTC)
-    start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start_dt, end_dt
 
 
 _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
@@ -2030,13 +1895,6 @@ def _fetch_bars_backoff_cap() -> float:
     except FETCH_FALLBACK_EXCEPTIONS:
         cap_value = _env_float("FETCH_BARS_BACKOFF_CAP", 5.0)
     return max(_fetch_bars_backoff_base(), cap_value)
-
-
-def _minute_gap_warning_threshold() -> int:
-    try:
-        return max(0, int(globals().get("_MINUTE_GAP_WARNING_THRESHOLD", 3)))
-    except FETCH_FALLBACK_EXCEPTIONS:
-        return max(0, _env_int("MINUTE_GAP_WARNING_THRESHOLD", 3))
 
 
 def _enable_http_fallback() -> bool:
@@ -4966,19 +4824,6 @@ _CAPTURE_LOCK = Lock()
 _FINNHUB_CAPTURE_KEYS: set[str] = set()
 
 
-def _pytest_logging_active() -> bool:
-    """Return ``True`` when pytest's logging capture is active."""
-    if get_env("PYTEST_RUNNING") in {"1", "true", "True"}:
-        return True
-    if get_env("PYTEST_CURRENT_TEST"):
-        return True
-    try:
-        root_handlers = getattr(logging.getLogger(), "handlers", [])
-        return any(h.__class__.__name__ == "LogCaptureHandler" for h in root_handlers)
-    except FETCH_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive
-        return False
-
-
 def _find_pytest_capture_handler() -> logging.Handler | None:
     """Return the active ``LogCaptureHandler`` when pytest's caplog is in use."""
 
@@ -5318,15 +5163,6 @@ def clear_cached_minute_timestamp(symbol: str) -> None:
     _MINUTE_CACHE.pop(symbol, None)
 
 
-def age_cached_minute_timestamps(max_age_seconds: int) -> int:
-    """Drop cache entries older than max_age_seconds (based on inserted time)."""
-    now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-    to_del = [sym for sym, (_, ins) in _MINUTE_CACHE.items() if now_s - ins > max_age_seconds]
-    for sym in to_del:
-        _MINUTE_CACHE.pop(sym, None)
-    return len(to_del)
-
-
 def last_minute_bar_age_seconds(symbol: str) -> int | None:
     """Age in seconds of last cached minute bar for symbol, or None if absent."""
     ts = get_cached_minute_timestamp(symbol)
@@ -5534,27 +5370,6 @@ def _env_flag(key: str, default: bool = False) -> bool:
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _prefers_sip() -> bool:
-    feed = get_execution_feed(
-        str(
-            get_env("ALPACA_EXECUTION_FEED", None)
-            or get_env("ALPACA_DATA_FEED", "iex")
-            or "iex"
-        )
-    )
-    if "sip" in feed:
-        return True
-    failover = str(get_env("ALPACA_FEED_FAILOVER", "") or "")
-    if any(part.strip().lower() == "sip" for part in failover.split(",")):
-        return True
-    try:
-        settings = _current_settings()
-    except FETCH_FALLBACK_EXCEPTIONS:
-        return False
-    failover_tuple = getattr(settings, "alpaca_feed_failover", ()) or ()
-    return any(str(part).strip().lower() == "sip" for part in failover_tuple)
 
 
 _SIP_UNAUTHORIZED = _env_flag("ALPACA_SIP_UNAUTHORIZED")
@@ -5855,24 +5670,6 @@ def _sip_fallback_allowed(session: Any | None, headers: dict[str, str], timefram
         return False
 
     return True
-
-
-def get_last_available_bar(symbol: str) -> pd.DataFrame:
-    """Placeholder; tests monkeypatch this to return a last available daily bar."""
-    raise NotImplementedError("Tests should monkeypatch get_last_available_bar")
-
-
-def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
-    """Derive [start, end] when callers omit them."""
-    now = _dt.datetime.now(tz=UTC)
-    end = now - _dt.timedelta(minutes=1)
-    tf = str(timeframe).lower()
-    if "day" in tf:
-        days = int(get_env("DATA_LOOKBACK_DAYS_DAILY", "200"))
-    else:
-        days = int(get_env("DATA_LOOKBACK_DAYS_MINUTE", "5"))
-    start = end - _dt.timedelta(days=days)
-    return (start, end)
 
 
 def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -8097,18 +7894,6 @@ def should_skip_symbol(
     return skip
 
 
-def _ensure_http_client():
-    try:
-        from importlib import import_module
-
-        client = import_module("ai_trading.utils.http")
-        logger.debug("HTTP_INIT_PRIMARY", extra={"transport": "ai_trading.utils.http"})
-        return client
-    except ImportError:  # pragma: no cover - optional dependency
-        logger.debug("HTTP_INIT_FALLBACK", extra={"transport": "requests"})
-        return None
-
-
 def _parse_host_limit(raw: Any) -> int:
     """Return a sane integer host limit derived from *raw*."""
     try:
@@ -8217,25 +8002,6 @@ def _last_complete_minute(pd_local: Any | None = None) -> _dt.datetime:
     return datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
 
 
-def _ensure_yfinance():
-    global yf
-    if getattr(yf, "download", None) is None:
-        try:
-            import yfinance as _yf  # type: ignore
-
-            try:
-                if hasattr(_yf, "set_tz_cache_location"):
-                    os.makedirs("/tmp/py-yfinance", exist_ok=True)
-                    _yf.set_tz_cache_location("/tmp/py-yfinance")
-            except OSError:
-                pass
-            yf = _yf
-        except ImportError:  # pragma: no cover - optional dependency
-            yf = _YFinancePlaceholder()
-            logger.info("YFINANCE_MISSING", extra={"hint": "pip install yfinance"})
-    return yf
-
-
 def _ensure_requests():
     global requests, ConnectionError, HTTPError, RequestException, Timeout, _requests
     exceptions_mod = getattr(requests, "exceptions", None)
@@ -8319,32 +8085,6 @@ def _get_alpaca_data_base_url() -> str:
     return base_url.rstrip("/") or "https://data.alpaca.markets"
 
 
-def _parse_bars(symbol: str, content_type: str, body: bytes) -> pd.DataFrame:
-    """Parse raw bar data into a normalized DataFrame.
-
-    Supports a minimal subset of JSON or CSV payloads.  Raises
-    ``DataFetchError`` when parsing fails or when ``pandas`` is unavailable.
-    """
-    pd = _ensure_pandas()
-    if pd is None:
-        raise DataFetchError("pandas not available")
-    try:
-        if "json" in (content_type or "").lower():
-            import json
-
-            data = json.loads(body.decode() or "{}")
-            if isinstance(data, dict) and "bars" in data:
-                data = data["bars"]
-            df = pd.DataFrame(data)
-        else:
-            import io
-
-            df = pd.read_csv(io.BytesIO(body))
-    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - narrow parsing
-        raise DataFetchError(f"parse error: {exc}") from exc
-    return _flatten_and_normalize_ohlcv(df, symbol)
-
-
 def _alpaca_get_bars(
     client: Any,
     symbol: str,
@@ -8368,71 +8108,6 @@ def _alpaca_get_bars(
         return _flatten_and_normalize_ohlcv(pd.DataFrame(bars), symbol, timeframe)
     except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - conversion failure
         raise DataFetchError(f"invalid bars: {exc}") from exc
-
-
-def get_daily(symbol: str, start: Any, end: Any) -> pd.DataFrame:
-    """Fetch daily bars for ``symbol`` using a Yahoo-style endpoint."""
-    pd = _ensure_pandas()
-    _ensure_requests()
-    pytest_active = _detect_pytest_env()
-    if pd is None:
-        raise DataFetchError("pandas not available")
-    start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
-    url = _build_daily_url(symbol, start_dt, end_dt)
-    try:
-        resp = _HTTP_SESSION.get(url, timeout=clamp_request_timeout(10))
-    except FETCH_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - network variance
-        raise DataFetchError(str(exc)) from exc
-    if getattr(resp, "status_code", 0) != 200:
-        raise DataFetchError(f"http {getattr(resp, 'status_code', 'unknown')}")
-    ctype = resp.headers.get("Content-Type", "") if getattr(resp, "headers", None) else ""
-    return _parse_bars(symbol, ctype, resp.content)
-
-
-def fetch_daily_data_async(
-    symbols: list[str],
-    start: Any,
-    end: Any,
-    *,
-    timeout: float | None = None,
-) -> dict[str, pd.DataFrame]:
-    """Fetch daily bars for multiple symbols concurrently."""
-    pd = _ensure_pandas()
-    if pd is None:
-        raise DataFetchError("pandas not available")
-    if start is None:
-        raise ValueError("start_required")
-    if end is None:
-        raise ValueError("end_required")
-    http = _ensure_http_client()
-    start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
-    urls = [_build_daily_url(sym, start_dt, end_dt) for sym in symbols]
-    timeout_raw = clamp_request_timeout(timeout)
-    timeout_seconds: float | None
-    if timeout_raw is None:
-        timeout_seconds = None
-    elif isinstance(timeout_raw, tuple):
-        try:
-            timeout_seconds = float(timeout_raw[0])
-        except (TypeError, ValueError, IndexError):
-            timeout_seconds = None
-    else:
-        try:
-            timeout_seconds = float(timeout_raw)
-        except (TypeError, ValueError):
-            timeout_seconds = None
-    results = http.map_get(urls, timeout=timeout_seconds)
-    out: dict[str, Any] = {}
-    for sym, (res, err) in zip(symbols, results, strict=False):
-        if err or res is None:
-            raise DataFetchError(str(err))
-        _, status, body = res
-        if status != 200:
-            raise DataFetchError(f"http {status}")
-        out[sym] = _parse_bars(sym, "application/json", body)
-    return out
 
 
 # Singleton holder for DataFetcher instances
@@ -8514,13 +8189,6 @@ def retry_empty_fetch_once(
 
 _ALLOWED_FEEDS = {"iex", "sip", "delayed_sip", "yahoo", None}
 _ALLOWED_ADJUSTMENTS = {"all", "raw", "split", None}
-
-
-def _to_datetime_utc(value: Any) -> _dt.datetime:
-    dt_value = ensure_datetime(value)
-    if dt_value.tzinfo is None:
-        return dt_value.replace(tzinfo=UTC)
-    return dt_value.astimezone(UTC)
 
 
 def _validate_fetch_params(
@@ -12461,28 +12129,6 @@ def _fetch_bars(
     return _finalize_frame(df)
 
 
-def _fetch_minute_from_provider(
-    symbol: str,
-    feed: str,
-    provider: str,
-    start: Any,
-    end: Any,
-    *,
-    feed_role: str = "execution",
-    **kwargs: Any,
-):
-    """Fetch minute bars from a specific provider/feed combination."""
-    fetch_kwargs = dict(kwargs)
-    normalized_feed = str(feed or "").strip().lower() or None
-    provider_lower = provider.lower()
-    if provider_lower == "yahoo":
-        fetch_kwargs["feed"] = "yahoo"
-    elif normalized_feed:
-        fetch_kwargs["feed"] = normalized_feed
-    fetch_kwargs.setdefault("feed_role", feed_role)
-    return get_minute_df(symbol, start, end, **fetch_kwargs)
-
-
 def _minute_df_from_finnhub(
     symbol: str,
     start: _dt.datetime,
@@ -15131,12 +14777,6 @@ def get_bars_batch(
     }
 
 
-def fetch_minute_yfinance(symbol: str, start_dt: _dt.datetime, end_dt: _dt.datetime) -> pd.DataFrame:
-    """Explicit helper for tests and optional direct Yahoo minute fetch."""
-    df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
-    return _post_process(df, symbol=symbol, timeframe="1m")
-
-
 def is_market_open() -> bool:
     """Return True if the market is currently open.
 
@@ -15173,7 +14813,6 @@ __all__ = [
     "DataFetchError",
     "FinnhubAPIException",
     "MissingOHLCVColumnsError",
-    "UnauthorizedSIPError",
     "_alpaca_get_bars",
     "_backup_get_bars",
     "_build_daily_url",
@@ -15182,44 +14821,32 @@ __all__ = [
     "_fallback_cache_for_cycle",
     "_fallback_frame_is_usable",
     "_fetch_bars",
-    "_fetch_minute_from_provider",
     "_get_cached_or_primary",
     "_get_cycle_id",
     "_is_sip_unauthorized",
     "_mark_sip_unauthorized",
-    "_ordered_fallbacks",
-    "_parse_bars",
     "_reset_provider_auth_state_for_tests",
     "_sip_allowed",
     "_yahoo_get_bars",
-    "age_cached_minute_timestamps",
-    "bars_time_window_day",
     "build_fetcher",
     "clear_cached_minute_timestamp",
     "clear_safe_mode_cycle",
-    "daily_fetch_memo",
     "ensure_datetime",
     "fetch_daily_backup",
-    "fetch_daily_data_async",
-    "fetch_minute_yfinance",
     "fh_fetcher",
     "get_bars",
     "get_bars_batch",
     "get_cached_minute_timestamp",
-    "get_daily",
     "get_daily_df",
     "get_default_feed",
     "get_fallback_metadata",
-    "get_last_available_bar",
     "get_minute_df",
     "is_market_open",
     "is_primary_provider_enabled",
     "last_minute_bar_age_seconds",
     "metrics",
     "refresh_default_feed",
-    "reload_env_settings",
     "retry_empty_fetch_once",
-    "run_with_concurrency",
     "set_cached_minute_timestamp",
     "should_skip_symbol",
 ]

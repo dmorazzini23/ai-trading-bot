@@ -11,7 +11,7 @@ import importlib
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import numpy as np
-from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
 from ai_trading.utils.time import monotonic_time
 from ai_trading.data.fetch import normalize_ohlcv_columns
@@ -1590,22 +1590,6 @@ class RiskEngine:
             return False
 
 
-def dynamic_position_size(capital: float, volatility: float, drawdown: float) -> float:
-    """Return position size using volatility and drawdown aware Kelly fraction.
-
-    The base Kelly fraction of ``0.5 / volatility`` is throttled by current
-    drawdown. When drawdown exceeds 10% the fraction is scaled down by 50%.
-    """
-    if capital <= 0:
-        return 0.0
-    vol = max(volatility, 1e-06)
-    kelly_fraction = 0.5 / vol
-    kelly_fraction = min(max(kelly_fraction, 0.0), 1.0)
-    if drawdown > 0.1:
-        kelly_fraction *= 0.5
-    return capital * kelly_fraction
-
-
 def calculate_position_size(*args, **kwargs) -> int:
     """
     Calculate optimal position size using Kelly criterion and risk management.
@@ -1698,194 +1682,7 @@ def calculate_position_size(*args, **kwargs) -> int:
     raise TypeError("Invalid arguments for calculate_position_size. Expected (cash, price) or (signal, cash, price)")
 
 
-def check_max_drawdown(state: dict[str, float]) -> bool:
-    """
-    Validate if current portfolio drawdown exceeds maximum allowed threshold.
-
-    This function checks portfolio performance against configured drawdown limits
-    to implement risk management controls. When drawdown exceeds the threshold,
-    trading may be halted or position sizes reduced.
-
-    Parameters
-    ----------
-    state : Dict[str, float]
-        Portfolio state dictionary containing:
-        - 'current_drawdown' (float): Current drawdown as decimal (e.g., 0.05 = 5%)
-        - 'max_drawdown' (float): Maximum allowed drawdown threshold
-        - 'portfolio_value' (float): Current portfolio value (optional)
-        - 'peak_value' (float): Historical peak portfolio value (optional)
-
-    Returns
-    -------
-    bool
-        True if current drawdown exceeds maximum allowed threshold,
-        False if within acceptable limits or if data is insufficient.
-
-    Notes
-    -----
-    - Returns False for missing or invalid state data
-    - Drawdown values should be positive decimals (0.05 = 5%)
-    - Used for automated risk management decisions
-    """
-    if not isinstance(state, dict):
-        logger.warning(f"Invalid state type: {type(state)}")
-        return False
-    current_dd = state.get("current_drawdown", 0)
-    max_dd = state.get("max_drawdown", 0)
-    if not isinstance(current_dd, int | float) or current_dd < 0:
-        logger.warning(f"Invalid current_drawdown: {current_dd}")
-        return False
-    if not isinstance(max_dd, int | float) or max_dd <= 0:
-        logger.warning(f"Invalid max_drawdown: {max_dd}")
-        return False
-    return current_dd > max_dd
-
-
 def can_trade(engine: RiskEngine) -> bool:
     """Return True if trading should proceed based on engine state."""
     return engine.current_trades < engine.max_trades
 
-
-def register_trade(engine: RiskEngine, size: int) -> dict | None:
-    """Register a trade and increment the count if allowed."""
-    if size <= 0 or not engine.acquire_trade_slot():
-        return None
-    return {"size": size}
-
-
-def check_exposure_caps(portfolio, exposure, cap):
-    for sym, pos in portfolio.positions.items():
-        quantity = getattr(pos, "quantity", getattr(pos, "qty", 0))
-        gross_exposure = abs(float(exposure.get(sym, 0.0) or 0.0))
-        if abs(float(quantity or 0.0)) > 0 and gross_exposure > cap:
-            logger.warning("Exposure cap triggered, blocking new orders for %s", sym)
-            return False
-
-
-def apply_trailing_atr_stop(
-    df: PDDataFrame, entry_price: float, *, context: Any | None = None, symbol: str = "SYMBOL", qty: int | None = None
-) -> None:
-    """Exit ``qty`` at market if the trailing stop is triggered."""
-    try:
-        if entry_price <= 0:
-            logger.warning("apply_trailing_atr_stop invalid entry price: %.2f", entry_price)
-            return
-        ta_mod = load_pandas_ta()
-        if ta_mod is not None and hasattr(df, "ta"):
-            atr = df.ta.atr()
-        else:
-            from ai_trading.indicators import atr as _atr
-
-            atr = _atr(df["High"], df["Low"], df["Close"])
-        trailing_stop = entry_price - 2 * atr
-        last_valid_close = df["Close"].dropna()
-        if not last_valid_close.empty:
-            price = last_valid_close.iloc[-1]
-        else:
-            logger.critical("All NaNs in close column for ATR stop")
-            price = 0.0
-        logger.debug("Latest 5 rows for ATR stop:\n%s", df.tail(5))
-        logger.debug("Computed price for ATR stop: %s", price)
-        if price <= 0 or pd.isna(price):
-            logger.critical("Invalid price computed for ATR stop: %s", price)
-            return
-        if price < trailing_stop.iloc[-1]:
-            logger.info("ATR stop hit: price=%s vs stop=%s", price, trailing_stop.iloc[-1])
-            if context is not None and qty:
-                try:
-                    if hasattr(context, "risk_engine") and (
-                        not context.risk_engine.position_exists(context.api, symbol)
-                    ):
-                        logger.info("No position to sell for %s, skipping.", symbol)
-                        return
-                    bot_mod = importlib.import_module("ai_trading.core.bot_engine")
-                    bot_mod.send_exit_order(context, symbol, abs(int(qty)), price, "atr_stop")
-                except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
-                    logger.error("ATR stop exit failed: %s", exc)
-            else:
-                logger.warning("ATR stop triggered but no context/qty provided")
-            schedule_reentry_check(symbol, lookahead_days=2)
-    except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
-        logger.error("ATR stop error: %s", e)
-
-
-def schedule_reentry_check(symbol: str, lookahead_days: int) -> None:
-    """Log a re-entry check after a stop out."""
-    logger.info("Scheduling reentry for %s in %s days", symbol, lookahead_days)
-
-
-def calculate_atr_stop(entry_price: float, atr: float, multiplier: float = 1.5, direction: str = "long") -> float:
-    """Return ATR-based stop price."""
-    stop = entry_price - multiplier * atr if direction == "long" else entry_price + multiplier * atr
-    from ai_trading.telemetry import metrics_logger
-
-    _safe_call(metrics_logger.log_atr_stop, symbol="generic", stop=stop)
-    return stop
-
-
-def calculate_bollinger_stop(price: float, upper_band: float, lower_band: float, direction: str = "long") -> float:
-    """Return stop price using Bollinger band width."""
-    mid = (upper_band + lower_band) / 2
-    if direction == "long":
-        stop = min(price, mid)
-    else:
-        stop = max(price, mid)
-    from ai_trading.telemetry import metrics_logger
-
-    _safe_call(metrics_logger.log_atr_stop, symbol="bb", stop=stop)
-    return stop
-
-
-def dynamic_stop_price(
-    entry_price: float,
-    atr: float | None = None,
-    upper_band: float | None = None,
-    lower_band: float | None = None,
-    percent: float | None = None,
-    direction: str = "long",
-) -> float:
-    """Return the tightest stop price based on ATR, Bollinger width or percent."""
-    stops: list[float] = []
-    if atr is not None:
-        stops.append(calculate_atr_stop(entry_price, atr, direction=direction))
-    if upper_band is not None and lower_band is not None:
-        stops.append(calculate_bollinger_stop(entry_price, upper_band, lower_band, direction=direction))
-    if percent is not None:
-        pct_stop = entry_price * (1 - percent) if direction == "long" else entry_price * (1 + percent)
-        stops.append(pct_stop)
-    if not stops:
-        return entry_price
-    return max(stops) if direction == "long" else min(stops)
-
-
-def compute_stop_levels(entry_price: float, atr: float, take_mult: float = 2.0) -> tuple[float, float]:
-    """Return stop-loss and take-profit levels using ATR."""
-    stop = entry_price - atr
-    take = entry_price + take_mult * atr
-    return (stop, take)
-
-
-def correlation_position_weights(corr: PDDataFrame, base: dict[str, float]) -> dict[str, float]:
-    """Scale weights inversely proportional to asset correlations."""
-    weights = {}
-    for sym, w in base.items():
-        if sym in corr.columns:
-            c = corr[sym].abs().mean()
-            scale = 1.0 / (1.0 + c)
-            weights[sym] = w * scale
-        else:
-            weights[sym] = w
-    return weights
-
-
-def drawdown_circuit(drawdowns: Sequence[float], limit: float = 0.2) -> bool:
-    """Return True if cumulative drawdown exceeds ``limit``."""
-    dd = abs(min(0.0, *drawdowns)) if drawdowns else 0.0
-    return dd > limit
-
-
-def volatility_filter(atr: float, sma: float, threshold: float = 0.05) -> bool:
-    """Return True when volatility below ``threshold`` relative to SMA."""
-    if sma == 0:
-        return True
-    return atr / sma < threshold

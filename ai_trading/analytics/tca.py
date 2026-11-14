@@ -162,22 +162,6 @@ def fill_latency_ms(submit_ts: datetime, first_fill_ts: datetime) -> int:
     return int(max(0.0, (fill_utc - submit_utc).total_seconds() * 1000.0))
 
 
-def cancel_replace_rate(window: list[Mapping[str, Any]]) -> float:
-    if not window:
-        return 0.0
-    submits = 0
-    cancels_replaces = 0
-    for event in window:
-        action = str(event.get("action", "")).lower()
-        if action in {"submit", "new"}:
-            submits += 1
-        if action in {"cancel", "replace", "cancel_replace"}:
-            cancels_replaces += 1
-    if submits <= 0:
-        return 0.0
-    return float(cancels_replaces) / float(submits)
-
-
 def build_tca_record(
     *,
     client_order_id: str,

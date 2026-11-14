@@ -8,11 +8,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ai_trading.data.splits import (
-    PurgedGroupTimeSeriesSplit,
-    validate_no_leakage,
-    walkforward_splits,
-)
+from ai_trading.data.splits import PurgedGroupTimeSeriesSplit, validate_no_leakage
 
 
 def test_purged_group_time_series_split_handles_arrays_and_fractional_test_size() -> None:
@@ -56,25 +52,6 @@ def test_purge_overlapping_defensive_paths() -> None:
     assert purged.tolist() == []
 
 
-def test_walkforward_splits_support_rolling_expanding_and_bad_input() -> None:
-    dates = pd.date_range("2026-01-01", periods=90, freq="D")
-
-    rolling = walkforward_splits(
-        dates,
-        mode="rolling",
-        train_span=timedelta(days=30),
-        test_span=timedelta(days=10),
-        embargo_pct=0.1,
-    )
-    expanding = walkforward_splits(dates.tolist(), mode="anchored", train_span=30, test_span=10)
-    bad = walkforward_splits([object(), object()], train_span=30, test_span=10)
-
-    assert rolling
-    assert expanding
-    assert bad == []
-    assert rolling[0]["mode"] == "rolling"
-    assert rolling[0]["embargo_days"] == 3
-    assert expanding[1]["train_start"] == dates.min()
 
 
 def test_validate_no_leakage_direct_temporal_t1_and_error_paths() -> None:

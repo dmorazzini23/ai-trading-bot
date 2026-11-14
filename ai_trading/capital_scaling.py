@@ -24,8 +24,6 @@ def update_if_present(runtime, equity) -> float:
             return 1.0
     return 1.0
 
-def capital_scaler_update(runtime, equity) -> float:
-    return update_if_present(runtime, equity)
 
 def capital_scale(runtime) -> float:
     """Return current scale or 1.0 if no scaler is configured."""
@@ -183,20 +181,6 @@ class CapitalScalingEngine:
         if self._base is None or equity > self._base:
             self._base = equity
 
-def volatility_parity_position(base_risk: float, atr_value: float) -> float:
-    """Scale position based on volatility parity, with a non-zero minimum floor."""
-    if base_risk <= 0 or atr_value == 0:
-        return 0.01
-    return base_risk / atr_value
-
-def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_spike: bool) -> float:
-    """Adjust Kelly fraction based on drawdown and volatility."""
-    adjustment = 1.0
-    if drawdown > 0.1:
-        adjustment *= 0.5
-    if volatility_spike:
-        adjustment *= 0.7
-    return base_fraction * adjustment
 
 def drawdown_adjusted_kelly(account_value: float, equity_peak: float, raw_kelly: float) -> float:
     """Scale down kelly fraction during drawdowns."""
@@ -211,37 +195,6 @@ def kelly_fraction(win_rate: float, win_loss_ratio: float) -> float:
     edge = win_rate - (1 - win_rate) / win_loss_ratio
     return max(edge / win_loss_ratio, 0)
 
-def pyramiding_add(position: float, profit_atr: float, base_size: float) -> float:
-    """Increase ``position`` when profit exceeds 1 ATR up to 2x base size."""
-    if position > 0 and profit_atr > 1.0:
-        target = 2 * base_size
-        return min(position + 0.25 * base_size, target)
-    return position
-
-def decay_position(position: float, atr: float, atr_mean: float) -> float:
-    """Reduce position when ATR spikes 50%% above its mean."""
-    if atr_mean and atr > 1.5 * atr_mean:
-        return position * 0.9
-    return position
-
-def fractional_kelly(kelly: float, regime: str='neutral') -> float:
-    """Return Kelly fraction adjusted for market ``regime``."""
-    if regime == 'risk_on':
-        return min(1.0, kelly * 1.2)
-    if regime == 'risk_off':
-        return max(0.0, kelly * 0.5)
-    return kelly
-
-def volatility_parity(weights: np.ndarray, volatilities: np.ndarray) -> np.ndarray:
-    """Scale ``weights`` using inverse volatility."""
-    import numpy as np  # local import to avoid hard dependency at module import
-    inv_vol = 1 / (volatilities + 1e-09)
-    scaled = weights * inv_vol
-    total_scaled = float(np.sum(scaled))
-    total_weights = float(np.sum(weights))
-    if total_scaled <= 0:
-        return np.zeros_like(weights, dtype=float)
-    return cast("np.ndarray", (scaled / total_scaled) * total_weights)
 
 def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
     """Return scaling factor based on CVaR at ``alpha`` level."""
@@ -254,16 +207,9 @@ def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
 
 __all__ = [
     'update_if_present',
-    'capital_scaler_update',
     'capital_scale',
     'CapitalScalingEngine',
-    'volatility_parity_position',
-    'dynamic_fractional_kelly',
     'drawdown_adjusted_kelly',
-    'pyramiding_add',
-    'decay_position',
-    'fractional_kelly',
     'kelly_fraction',
-    'volatility_parity',
     'cvar_scaling',
 ]

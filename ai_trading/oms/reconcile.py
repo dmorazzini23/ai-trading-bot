@@ -57,48 +57,6 @@ def fetch_broker_positions(api: Any) -> dict[str, float]:
     return positions
 
 
-def fetch_open_orders(api: Any) -> list[dict[str, Any]]:
-    orders: list[dict[str, Any]] = []
-    if api is None:
-        return orders
-    try:
-        get_orders = getattr(api, "get_orders", None)
-        list_orders = getattr(api, "list_orders", None)
-        if callable(get_orders):
-            raw_orders = get_orders()
-        elif callable(list_orders):
-            raw_orders = list_orders()
-        else:
-            return orders
-        for order in raw_orders or []:
-            if isinstance(order, dict):
-                orders.append(
-                    {
-                        "id": order.get("id"),
-                        "client_order_id": order.get("client_order_id"),
-                        "symbol": order.get("symbol"),
-                        "qty": order.get("qty", order.get("quantity")),
-                        "side": order.get("side"),
-                        "status": order.get("status"),
-                    }
-                )
-            else:
-                orders.append(
-                    {
-                        "id": getattr(order, "id", None),
-                        "client_order_id": getattr(order, "client_order_id", None),
-                        "symbol": getattr(order, "symbol", None),
-                        "qty": getattr(order, "qty", None),
-                        "side": getattr(order, "side", None),
-                        "status": getattr(order, "status", None),
-                    }
-                )
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        logger.warning("BROKER_OPEN_ORDERS_FETCH_FAILED", extra={"error": str(exc)})
-        raise RuntimeError(f"broker_open_orders_fetch_failed: {exc}") from exc
-    return orders
-
-
 def reconcile(
     internal_positions: dict[str, float],
     broker_positions: dict[str, float],

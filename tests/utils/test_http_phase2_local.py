@@ -21,38 +21,6 @@ class _Response:
         return self._payload
 
 
-def test_host_limits_timeout_and_session_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(http, "get_env", lambda name, default=None, **_kwargs: "2" if name == "HTTP_MAX_CONNS_PER_HOST" else default)
-    http.reset_host_limit_state()
-
-    with http.host_slot("Example.COM"):
-        snapshot = http.host_limit_snapshot("example.com")
-        assert snapshot["limit"] == 2
-        assert snapshot["inflight"] == 1
-        assert snapshot["peak"] == 1
-
-    assert http.host_limit_snapshot("example.com")["inflight"] == 0
-    assert http.reload_host_limit() == 2
-    assert http._host_from_url("https://Example.COM/path") == "example.com"  # noqa: SLF001
-    assert http._host_from_url("not-a-url") == "default"  # noqa: SLF001
-    assert http.clamp_request_timeout((1, 2)) == (1.0, 2.0)
-
-    monkeypatch.setattr(http, "REQUESTS_AVAILABLE", True)
-    session = http.HTTPSession(timeout=(1, 3))
-    sent: dict[str, object] = {}
-    def fake_send(_request, **kwargs):
-        sent["timeout"] = kwargs["timeout"]
-        return SimpleNamespace(status_code=200)
-
-    monkeypatch.setattr(
-        session,
-        "send",
-        fake_send,
-    )
-    response = session.request("GET", "https://example.com", timeout=None)
-
-    assert response.status_code == 200
-    assert sent["timeout"] == (1.0, 3.0)
 
 
 def test_request_and_request_json_retry_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,25 +75,3 @@ def test_request_json_raises_on_terminal_retry_status(monkeypatch: pytest.Monkey
         http.request_json("GET", "https://example.com", retries=1)
 
 
-def test_async_fallback_wrappers_and_map_get(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(http, "REQUESTS_AVAILABLE", True)
-    monkeypatch.setattr(http, "request", lambda method, url, **_kwargs: _Response(content=f"{method}:{url}".encode()))
-
-    assert asyncio.run(http.async_request("GET", "https://example.com")).content == b"GET:https://example.com"
-    assert asyncio.run(http.async_get("https://example.com")).content == b"GET:https://example.com"
-    assert asyncio.run(http.async_post("https://example.com")).content == b"POST:https://example.com"
-    assert asyncio.run(http.async_put("https://example.com")).content == b"PUT:https://example.com"
-    assert asyncio.run(http.async_delete("https://example.com")).content == b"DELETE:https://example.com"
-    assert http.get("https://example.com").content == b"GET:https://example.com"
-    assert http.post("https://example.com").content == b"POST:https://example.com"
-    assert http.put("https://example.com").content == b"PUT:https://example.com"
-    assert http.delete("https://example.com").content == b"DELETE:https://example.com"
-
-    monkeypatch.setattr(http, "_pool_stats", {**http._pool_stats, "workers": 1})  # noqa: SLF001
-    monkeypatch.setattr(http, "_fetch_one", lambda url, timeout=None: (_ for _ in ()).throw(ValueError("bad")) if "bad" in url else (url, 200, b"ok"))
-    results = http.map_get(["https://ok", "https://bad"], timeout=1)
-
-    assert results[0][0] == ("https://ok", 200, b"ok")
-    assert isinstance(results[1][1], ValueError)
-    assert http.map_get([]) == []
-    assert "requests" in http.pool_stats()

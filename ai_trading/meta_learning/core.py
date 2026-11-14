@@ -321,60 +321,6 @@ def get_device() -> str:
     except COMMON_EXC:
         return "cpu"
 
-class SimpleMetaLearner:
-    """
-    Lightweight wrapper so the module can import without torch.
-    When TORCH_AVAILABLE is False, construction raises on actual use,
-    but mere import of the module succeeds.
-    """
-
-    def __init__(self, input_dim: int, hidden: int = 32):
-        try:
-            _import_torch()
-        except ImportError as exc:  # pragma: no cover - environment guard
-            raise RuntimeError("Meta-learner requires PyTorch") from exc
-        nn_mod: Any = nn
-
-        class _Net(nn_mod.Module):
-            def __init__(self, d: int, h: int):
-                super().__init__()
-                self.net = nn_mod.Sequential(
-                    nn_mod.Linear(d, h), nn_mod.ReLU(), nn_mod.Linear(h, 1), nn_mod.Sigmoid()
-                )
-
-            def forward(self, x):
-                return self.net(x)
-
-        self.impl = _Net(input_dim, hidden)
-
-    def forward(self, x):
-        return self.impl.forward(x)
-
-def train_meta_learner(X, y, *, epochs: int=20, lr: float=0.001):
-    """
-    Train only if TORCH_AVAILABLE; otherwise raise a clear error on call.
-    Importing the module remains safe.
-    """
-    try:
-        t = _import_torch()
-    except ImportError as exc:
-        raise RuntimeError("train_meta_learner requires PyTorch") from exc
-    device = get_device()
-    model = SimpleMetaLearner(X.shape[1]).impl.to(device)
-    dataset = TensorDataset(t.from_numpy(X).float(), t.from_numpy(y).float())
-    loader = DataLoader(dataset, batch_size=32, shuffle=True)
-    optim = t.optim.Adam(model.parameters(), lr=lr)
-    loss_fn = nn.BCELoss()
-    model.train()
-    for _ in range(epochs):
-        for batch_X, batch_y in loader:
-            batch_X, batch_y = (batch_X.to(device), batch_y.to(device))
-            preds = model(batch_X).view(-1)
-            loss = loss_fn(preds, batch_y)
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-    return model
 
 class MetaLearning:
     """Meta-learning class for trading strategy optimization."""
@@ -642,127 +588,6 @@ def validate_trade_data_quality(trade_log_path: str | os.PathLike[str]) -> dict[
     return quality_report
 
 
-def has_mixed_format(trade_log_path: str | os.PathLike) -> bool:
-    """Return ``True`` when both audit and meta-learning rows exist.
-
-    Uses the row counts from :func:`validate_trade_data_quality` so the file is
-    parsed only once.  ``True`` is returned only if *both* audit-style rows and
-    meta-learning rows are present in the log.
-    """
-
-    report = validate_trade_data_quality(trade_log_path)
-    audit_rows = int(report.get("audit_format_rows") or 0)
-    meta_rows = int(report.get("meta_format_rows") or 0)
-    return audit_rows > 0 and meta_rows > 0
-
-def normalize_score(score: float, cap: float=1.2) -> float:
-    """Clip ``score`` to ``cap`` preserving sign."""
-    try:
-        score = float(score)
-    except (ValueError, TypeError):
-        return 0.0
-    return max(-cap, min(cap, score))
-
-def adjust_confidence(confidence: float, volatility: float, threshold: float=1.0) -> float:
-    """Scale confidence by inverse volatility to reduce spam at high levels."""
-    try:
-        conf = float(confidence)
-        vol = float(volatility)
-    except (ValueError, TypeError):
-        return 0.0
-    factor = 1.0 if vol <= threshold else 1.0 / max(vol, 0.001)
-    return max(0.0, min(1.0, conf * factor))
-
-def volatility_regime_filter(atr: float, sma100: float) -> str:
-    """Return volatility regime string based on ATR and SMA."""
-    from ai_trading.telemetry import metrics_logger
-    if sma100 == 0:
-        return 'unknown'
-    ratio = atr / sma100
-    regime = 'high_vol' if ratio > 0.05 else 'low_vol'
-    metrics_logger.log_volatility(ratio)
-    metrics_logger.log_regime_toggle('generic', regime)
-    return regime
-
-def load_weights(path: str, default: Any | None = None) -> Any:
-    """Load signal weights array from ``path`` or return ``default``."""
-    np_mod = _import_numpy()
-    p = Path(path).resolve()
-    if not any(p.is_relative_to(d) for d in ALLOWED_DIRS):
-        raise RuntimeError(f"weights path not allowed: {p}")
-    if default is None:
-        default = np_mod.zeros(0)
-    try:
-        if p.exists():
-            try:
-                if path.endswith(".csv"):
-                    try:
-                        pd_mod = _import_pandas(optional=True)
-                        if pd_mod is not None:
-                            df = pd_mod.read_csv(p, usecols=["signal_name", "weight"])
-                            if not df.empty:
-                                weights = df["weight"].values
-                                if isinstance(weights, np_mod.ndarray):
-                                    logger.info("Successfully loaded weights from CSV: %s", path)
-                                    return weights
-                    except ValueError as e:
-                        logger.debug("Pandas CSV read failed, trying numpy: %s", e)
-                weights = np_mod.loadtxt(p, delimiter=",")
-                if isinstance(weights, np_mod.ndarray):
-                    logger.debug("Loaded weights using numpy from: %s", path)
-                    return weights
-            except (ValueError, OSError) as e:
-                logger.warning('Weight loading failed for %s: %s', path, e)
-        else:
-            logger.debug('Weights file %s not found, creating with default', path)
-            if default.size > 0:
-                try:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    np_mod.savetxt(p, default, delimiter=",")
-                    logger.info("Created default weights file: %s", path)
-                except (OSError, IOError) as e:
-                    logger.error('Failed initializing weights file %s: %s', path, e)
-                except COMMON_EXC as e:
-                    logger.error('Failed initializing weights file %s: %s', path, e)
-    except COMMON_EXC as e:
-        logger.warning('Failed to load weights from %s: %s', path, e)
-    return default
-
-def update_weights(weight_path: str, new_weights: Any, metrics: dict[str, Any], history_file: str = "metrics.json", n_history: int = 5) -> bool:
-    """Update signal weights and append metric history."""
-    np_mod = _import_numpy()
-    if new_weights.size == 0:
-        logger.error("update_weights called with empty weight array")
-        return False
-    p = Path(weight_path)
-    prev = None
-    try:
-        if p.exists():
-            prev = np_mod.loadtxt(p, delimiter=",")
-            if np_mod.allclose(prev, new_weights):
-                logger.info("META_WEIGHTS_UNCHANGED")
-                return False
-        np_mod.savetxt(p, new_weights, delimiter=",")
-        logger.info("META_WEIGHTS_UPDATED", extra={"previous": prev, "current": new_weights.tolist()})
-    except (OSError, ValueError) as exc:
-        logger.exception("META_WEIGHT_UPDATE_FAILED: %s", exc)
-        return False
-    try:
-        if Path(history_file).exists():
-            with open(history_file, encoding='utf-8') as f:
-                hist = json.load(f)
-        else:
-            hist = []
-    except (OSError, json.JSONDecodeError) as e:
-        logger.error('Failed to read metric history: %s', e)
-        hist = []
-    hist.append({'ts': datetime.now(UTC).isoformat(), **metrics})
-    hist = hist[-n_history:]
-    with open(history_file, 'w', encoding='utf-8') as f:
-        json.dump(hist, f)
-    logger.info('META_METRICS', extra={'recent': hist})
-    return True
-
 def update_signal_weights(weights: dict[str, float], performance: dict[str, float]) -> dict[str, float] | None:
     if not weights or not performance:
         logger.error('Empty weights or performance dict passed to update_signal_weights')
@@ -787,28 +612,6 @@ def update_signal_weights(weights: dict[str, float], performance: dict[str, floa
         logger.exception('Exception in update_signal_weights: %s', exc)
         return weights
 
-
-class WeightOptimizer:
-    """Optimize signal weights from trade data."""
-
-    def optimize(self, df: Any) -> dict[str, float]:
-        """Compute signal weights from ``df``.
-
-        Logs a warning and returns an empty dict when ``df`` is empty.
-        """
-        if df is None or df.empty:
-            logger.warning("WEIGHT_OPTIMIZER_EMPTY_DF")
-            return {}
-        tags = {
-            t.strip()
-            for row in df.get("signal_tags", [])
-            for t in str(row).split("+")
-            if t.strip()
-        }
-        if not tags:
-            return {}
-        weight = round(1 / len(tags), 3)
-        return {tag: weight for tag in sorted(tags)}
 
 def save_model_checkpoint(model: Any, filepath: str) -> None:
     """Serialize ``model`` to ``filepath`` as a verified joblib artifact."""
@@ -877,25 +680,6 @@ def load_model_checkpoint(filepath: str) -> Any | None:
     except RuntimeError as exc:
         logger.error('Failed to load model checkpoint: %s', exc, exc_info=True)
         return None
-
-def load_checkpoint(filepath: str) -> dict[str, Any] | None:
-    """Load a JSON checkpoint dictionary from ``filepath``."""
-    p = Path(filepath).resolve()
-    if not any(p.is_relative_to(d) for d in ALLOWED_DIRS):
-        logger.error('Checkpoint path not allowed: %s', p)
-        return None
-    if not p.exists():
-        logger.warning('Checkpoint file missing: %s', p)
-        return None
-    try:
-        obj = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        logger.error('Failed to load checkpoint: %s', exc, exc_info=True)
-        return None
-    if not isinstance(obj, dict):
-        logger.error('Checkpoint file %s did not contain a dict', filepath)
-        return None
-    return obj
 
 
 def load_history_checkpoint(filepath: str) -> list[dict[str, Any]] | None:
@@ -1748,29 +1532,6 @@ def optimize_signals(
         logger.exception('optimize_signals prediction processing failed: %s', exc)
         return signal_data if signal_data is not None else []
 
-def trigger_rebalance_on_regime(df: Any) -> None:
-    """Invoke the RL rebalancer when the market regime changes."""
-    settings = get_settings()
-    if not bool(getattr(settings, "enable_reinforcement_learning", False)):
-        return
-    if not bool(get_env("AI_TRADING_RL_RUNTIME_REBALANCE_ENABLED", False, cast=bool)):
-        logger.warning(
-            "RL_REBALANCE_SKIPPED_RESEARCH_ONLY",
-            extra={"reason": "runtime_rebalance_evidence_missing"},
-        )
-        return
-    if PortfolioReinforcementLearner is None:
-        raise RuntimeError('Reinforcement learning enabled but ai_trading.portfolio_rl module unavailable. Set ENABLE_REINFORCEMENT_LEARNING=False to disable')
-    rl = PortfolioReinforcementLearner()
-    cols_obj = getattr(df, "columns", None)
-    try:
-        cols = set(cols_obj) if cols_obj is not None else set()
-    except TypeError:
-        cols = set()
-    if 'Regime' in cols and len(df) > 2:
-        if df['Regime'].iloc[-1] != df['Regime'].iloc[-2]:
-            state_data = df.tail(10).dropna().values.flatten()
-            rl.rebalance_portfolio(state_data)
 
 def trigger_meta_learning_conversion(trade_data: dict) -> bool:
     """Automatically convert audit logs to meta-learning format after trade execution."""
@@ -1862,44 +1623,6 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
         logger.error('METALEARN_TRIGGER_ERROR | symbol=%s error=%s', trade_data.get('symbol', 'UNKNOWN'), exc)
         return False
 
-def convert_audit_to_meta(trade_data: dict) -> dict | None:
-    """Convert audit trade data to meta-learning format."""
-    try:
-        converted_data = {'symbol': trade_data.get('symbol', ''), 'entry_time': trade_data.get('timestamp', ''), 'entry_price': trade_data.get('price', 0.0), 'exit_time': '', 'exit_price': '', 'qty': trade_data.get('qty', 0), 'side': trade_data.get('side', ''), 'strategy': trade_data.get('strategy', 'auto_converted'), 'classification': 'converted', 'signal_tags': f"order_{trade_data.get('order_id', '')[:8]}", 'confidence': trade_data.get('confidence', 0.5), 'reward': ''}
-        logger.info('METALEARN_SINGLE_CONVERSION | symbol=%s', converted_data['symbol'])
-        return converted_data
-    except COMMON_EXC as exc:
-        logger.error('METALEARN_SINGLE_CONVERSION_ERROR | error=%s', exc)
-        return None
-
-def store_meta_learning_data(converted_data: dict) -> bool:
-    """Store converted meta-learning data."""
-    try:
-        if config is None:
-            logger.warning('Config not available for storing meta-learning data')
-            return False
-        if hasattr(config, 'META_LEARNING_LOG_FILE') and getattr(config, 'META_LEARNING_LOG_FILE'):
-            meta_log_path = getattr(config, 'META_LEARNING_LOG_FILE')
-        else:
-            from ai_trading.paths import LOG_DIR
-
-            meta_log_path = str((LOG_DIR / 'meta_trades.csv').resolve())
-        meta_log_dir = Path(meta_log_path).parent
-        meta_log_dir.mkdir(parents=True, exist_ok=True)
-        if pd is not None:
-            df = pd.DataFrame([converted_data])
-            if Path(meta_log_path).exists():
-                df.to_csv(meta_log_path, mode='a', header=False, index=False)
-            else:
-                df.to_csv(meta_log_path, index=False)
-            logger.info('METALEARN_DATA_STORED | symbol=%s path=%s', converted_data.get('symbol', 'UNKNOWN'), meta_log_path)
-            return True
-        else:
-            logger.warning('METALEARN_STORE_NO_PANDAS | pandas not available')
-            return False
-    except COMMON_EXC as exc:
-        logger.error('METALEARN_STORE_ERROR | error=%s', exc)
-        return False
 
 def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> dict[str, float]:
     """Load global signal performance with enhanced error handling.

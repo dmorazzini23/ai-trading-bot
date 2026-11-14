@@ -156,54 +156,6 @@ def set_data_feed_intraday(feed: str | None) -> str:
     return DATA_FEED_INTRADAY
 
 
-def refresh_data_feed_intraday(feed: str | None = None) -> str:
-    """Refresh DATA_FEED_INTRADAY from *feed* or the latest trading config."""
-
-    if feed is None:
-        try:
-            cfg = get_trading_config()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover - defensive fallback
-            cfg = _CFG
-        feed = getattr(cfg, "data_feed_intraday", getattr(cfg, "alpaca_data_feed", "iex"))
-    return set_data_feed_intraday(feed)
-
-
-def _is_lock_held_by_current_thread() -> bool:
-    """Return True when the calling thread currently holds the validation lock."""
-
-    return bool(getattr(_LOCK_STATE, "held", False))
-
-
-def _set_lock_held_by_current_thread(held: bool) -> None:
-    """Record whether the calling thread owns the validation lock."""
-
-    _LOCK_STATE.held = bool(held)
-
-
-@contextmanager
-def _validation_lock() -> Iterator[None]:
-    """Acquire the validation lock with timeout handling.
-
-    Re-entrant usage within the same thread is permitted to avoid the
-    historical deadlock where ``validate_env_vars`` invoked
-    ``validate_environment`` while already holding the lock.
-    """
-
-    if _is_lock_held_by_current_thread():
-        yield
-        return
-
-    acquired = _VALIDATION_LOCK.acquire(timeout=_LOCK_TIMEOUT)
-    if not acquired:
-        raise TimeoutError("CONFIG_VALIDATION_LOCK_TIMEOUT")
-
-    try:
-        _set_lock_held_by_current_thread(True)
-        yield
-    finally:
-        _set_lock_held_by_current_thread(False)
-        _VALIDATION_LOCK.release()
-
 SENTIMENT_API_KEY = _CFG.sentiment_api_key
 SENTIMENT_API_URL = _CFG.sentiment_api_url
 SENTIMENT_ENHANCED_CACHING = bool(_CFG.sentiment_enhanced_caching)
@@ -320,22 +272,6 @@ ALPACA_SECRET_KEY = _env_value("ALPACA_SECRET_KEY") or ""
 ALPACA_BASE_URL = _env_value("ALPACA_TRADING_BASE_URL") or ""
 
 
-def derive_cap_from_settings(
-    settings: Settings | None = None,
-    *,
-    equity: float | None = None,
-    fallback: float = 8000.0,
-    capital_cap: float | None = None,
-) -> float:
-    """Calculate maximum capital allocation based on settings and equity."""
-
-    s = settings or get_settings()
-    cap = capital_cap if capital_cap is not None else float(getattr(s, "capital_cap", 0.25))
-    if equity and equity > 0:
-        return float(equity) * cap
-    return float(fallback)
-
-
 @dataclass(frozen=True)
 class ExecutionSettingsSnapshot:
     """Lightweight snapshot of execution-related configuration."""
@@ -404,34 +340,6 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
     )
 
 
-def validate_environment() -> None:
-    """Validate required environment variables are present."""
-
-    with _validation_lock():
-        logger.debug("CONFIG_ENV_VALIDATION_START")
-        reload_trading_config(allow_missing_drawdown=False)
-        if _env_value("MAX_DRAWDOWN_THRESHOLD") is None:
-            logger.error("CONFIG_ENV_MISSING_DRAWDOWN")
-            raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
-        snapshot = merged_env_snapshot()
-        try:
-            validate_required_env(env=snapshot)
-        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-            logger.exception("CONFIG_ENV_VALIDATION_FAILED")
-            raise RuntimeError(f"Configuration validation failed: {exc}") from exc
-        logger.debug("CONFIG_ENV_VALIDATION_SUCCESS")
-
-
-def validate_env_vars(*names: str) -> None:
-    """Ensure specific environment variables are defined."""
-
-    with _validation_lock():
-        reload_trading_config()
-        if names:
-            _require_env_vars(*names)
-        validate_required_env()
-
-
 def get_max_drawdown_threshold() -> float:
     raw = _env_value("MAX_DRAWDOWN_THRESHOLD")
     if raw is None:
@@ -444,16 +352,6 @@ def get_max_drawdown_threshold() -> float:
 
 def validate_alpaca_credentials() -> None:
     _validate_alpaca_credentials_from_management()
-
-
-def log_config(mask_fields: Sequence[str] | None = None) -> None:
-    """Mark configuration as logged without emitting secrets."""
-
-    global _CONFIG_LOGGED
-    _ = mask_fields
-    if _CONFIG_LOGGED:
-        return
-    _CONFIG_LOGGED = True
 
 
 __all__ = [
@@ -474,14 +372,10 @@ __all__ = [
     "Settings",
     "TradingConfig",
     "broker_keys",
-    "derive_cap_from_settings",
     "get_alpaca_config",
     "get_env",
     "get_settings",
-    "log_config",
     "reload_env",
     "require_env_vars",
     "validate_alpaca_credentials",
-    "validate_environment",
-    "validate_env_vars",
 ]

@@ -30,16 +30,3 @@ def test_compute_macd_ignores_string_nan(caplog):
     assert list(result.columns) == ["close"]
 
 
-def test_position_none_safe(monkeypatch):
-    class Dummy:
-        def get_position(self, symbol):
-            return None
-
-    class Ctx:
-        pass
-
-    ctx = Ctx()
-    setattr(ctx, "api", Dummy())
-    from ai_trading.core import bot_engine as be
-
-    assert be._current_position_qty(ctx, "SPY") == 0

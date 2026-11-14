@@ -85,34 +85,6 @@ def test_live_entry_deferred_when_account_snapshot_unavailable(monkeypatch: pyte
     assert all(call[1]["accepted"] is False for call in calls)
 
 
-def test_sparse_and_quote_source_helpers_cover_error_fallbacks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _NoLen:
-        def __len__(self) -> int:
-            raise TypeError("length unavailable")
-
-    assert bot_engine._expected_minute_bars_window(_BadStr(), datetime.now(UTC)) == 0
-    assert bot_engine._frame_is_sparse(None, 3) is True
-    assert bot_engine._frame_is_sparse([], 0) is False
-    assert bot_engine._frame_is_sparse(_NoLen(), 2) is True
-    assert bot_engine._normalize_quote_source_token(_BadStr()) is None
-
-    monkeypatch.setattr(
-        bot_engine,
-        "get_price_source",
-        lambda _symbol: pytest.fail("metadata source should win"),
-    )
-    order = SimpleNamespace(metadata={"fallback_source": " Yahoo "})
-
-    assert (
-        bot_engine._resolve_quote_proxy_source(
-            order,
-            symbol="AAPL",
-            default_source="last_trade",
-        )
-        == "yahoo"
-    )
 
 
 def test_count_trading_minutes_skips_calendar_failures_and_bad_sessions(
@@ -388,38 +360,6 @@ def test_pre_trade_gate_blocks_sip_and_unsafe_fallback_quotes(
     assert any(record.getMessage() == "EXECUTION_BLOCKED_UNSAFE_QUOTES" for record in caplog.records)
 
 
-def test_pending_order_thresholds_and_warmup_state_machine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = SimpleNamespace(orders_pending_new_warn_s="bad", orders_pending_new_error_s="2")
-
-    assert bot_engine._pending_order_log_thresholds(cfg) == (
-        bot_engine._PENDING_ORDER_WARN_SEC_DEFAULT,
-        bot_engine._PENDING_ORDER_WARN_SEC_DEFAULT,
-    )
-    assert bot_engine._pending_order_log_level(1, warn_after_s=10, error_after_s=0) == logging.ERROR
-    assert bot_engine._pending_order_log_level(11, warn_after_s=10, error_after_s=20) == logging.WARNING
-    assert bot_engine._pending_order_log_level(5, warn_after_s=0, error_after_s=20) == logging.WARNING
-    assert bot_engine._pending_order_log_level(1, warn_after_s=10, error_after_s=20) == logging.INFO
-    assert (
-        bot_engine._pending_order_scope_log_level(logging.ERROR, block_scope="symbol")
-        == logging.WARNING
-    )
-
-    _patch_get_env(monkeypatch, {"AI_TRADING_PENDING_CLEANUP_WARMUP_CYCLES": 2})
-    runtime = SimpleNamespace(state={})
-
-    assert (
-        bot_engine._arm_pending_cleanup_warmup(
-            runtime,
-            source="startup",
-            open_count=2,
-            pending_count=1,
-        )
-        is True
-    )
-    assert bot_engine._consume_pending_cleanup_warmup(runtime, open_count=1) is True
-    assert bot_engine._consume_pending_cleanup_warmup(runtime, open_count=1) is False
 
 
 def test_startup_cancel_mode_identifier_subset_and_decision(

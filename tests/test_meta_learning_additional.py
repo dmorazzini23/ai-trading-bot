@@ -22,17 +22,6 @@ def _stub_ridge(*args, **kwargs):
     return types.SimpleNamespace(fit=fit, predict=predict)
 
 
-def test_load_weights_save_fail(monkeypatch, tmp_path, caplog):
-    """Failure to write default weights is logged and default returned."""
-    p = tmp_path / "w.csv"
-    monkeypatch.setattr(meta_learning.Path, "exists", lambda self: False)
-    def fail(*a, **k):
-        raise OSError("fail")
-    monkeypatch.setattr(np, "savetxt", fail)
-    caplog.set_level("ERROR")
-    arr = meta_learning.load_weights(str(p), default=np.array([1.0]))
-    assert arr.tolist() == [1.0]
-    assert "Failed initializing" in caplog.text
 
 
 def test_update_signal_weights_edge_cases():

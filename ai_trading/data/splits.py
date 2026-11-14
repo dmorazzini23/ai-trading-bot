@@ -157,60 +157,6 @@ class PurgedGroupTimeSeriesSplit:
         """Return the number of splitting iterations."""
         return self.n_splits
 
-def walkforward_splits(
-    dates: "pd.DatetimeIndex" | list[datetime],
-    mode: str = 'rolling',
-    train_span: int | timedelta = 252,
-    test_span: int | timedelta = 21,
-    embargo_pct: float = 0.01,
-) -> list[dict[str, datetime | list[datetime]]]:
-    """
-    Generate walk-forward analysis splits.
-    
-    Args:
-        dates: Timeline of dates for analysis
-        mode: 'rolling', 'anchored', or 'expanding' walk-forward (anchored == expanding)
-        train_span: Training period length (days or timedelta)
-        test_span: Test period length (days or timedelta)  
-        embargo_pct: Embargo period as fraction of training period
-        
-    Returns:
-        List of split dictionaries with train/test periods
-    """
-    pd = load_pandas()
-    try:
-        if not isinstance(dates, pd.DatetimeIndex):
-            dates = pd.DatetimeIndex(dates)
-        if isinstance(train_span, int):
-            train_span = timedelta(days=train_span)
-        if isinstance(test_span, int):
-            test_span = timedelta(days=test_span)
-        embargo_period = timedelta(days=int(train_span.days * embargo_pct))
-        splits = []
-        start_date = dates.min()
-        end_date = dates.max()
-        current_train_end = start_date + train_span
-        while current_train_end + test_span <= end_date:
-            normalized_mode = str(mode).lower().strip()
-            if normalized_mode == 'rolling':
-                train_start = current_train_end - train_span
-            else:
-                train_start = start_date
-            test_start = current_train_end + embargo_period
-            test_end = test_start + test_span
-            test_end = min(test_end, end_date)
-            train_dates = dates[(dates >= train_start) & (dates < current_train_end)]
-            test_dates = dates[(dates >= test_start) & (dates < test_end)]
-            if len(train_dates) > 0 and len(test_dates) > 0:
-                split_info = {'train_start': train_start, 'train_end': current_train_end, 'test_start': test_start, 'test_end': test_end, 'train_dates': train_dates.tolist(), 'test_dates': test_dates.tolist(), 'mode': mode, 'embargo_days': embargo_period.days}
-                splits.append(split_info)
-                logger.debug(f'Walk-forward split: train {train_start.date()} to {current_train_end.date()}, test {test_start.date()} to {test_end.date()}')
-            current_train_end += test_span
-        logger.info(f'Generated {len(splits)} walk-forward splits using {mode} mode')
-        return splits
-    except (ValueError, TypeError) as e:
-        logger.error(f'Error generating walk-forward splits: {e}')
-        return []
 
 def validate_no_leakage(train_indices: np.ndarray, test_indices: np.ndarray, timeline: pd.DatetimeIndex | np.ndarray, t1: pd.Series | None=None) -> bool:
     """

@@ -287,52 +287,6 @@ def get_slo_monitor() -> SLOMonitor:
         _global_slo_monitor = SLOMonitor()
     return _global_slo_monitor
 
-def record_latency(operation: str, latency_ms: float) -> None:
-    """Record operation latency."""
-    monitor = get_slo_monitor()
-    monitor.record_metric(f'{operation}_latency_ms', latency_ms)
-
-def record_error_rate(component: str, error_rate_pct: float) -> None:
-    """Record component error rate."""
-    monitor = get_slo_monitor()
-    value = float(error_rate_pct)
-    component_name = str(component or '').strip()
-    metric_name = f'{component_name}_error_rate_pct' if component_name else 'error_rate_pct'
-    monitor.record_metric(metric_name, value)
-    thresholds = getattr(monitor, '_slo_thresholds', {})
-    if metric_name != 'error_rate_pct' and metric_name not in thresholds:
-        monitor.record_metric('error_rate_pct', value)
-
-def record_performance_metric(name: str, value: float, tags: dict[str, str] | None=None) -> None:
-    """Record performance metric."""
-    monitor = get_slo_monitor()
-    monitor.record_metric(name, value, tags)
-
-def pause_trading_circuit_breaker(metric_name: str, value: float) -> None:
-    """Circuit breaker to pause trading on critical SLO breach."""
-    logger.critical(f'CIRCUIT BREAKER: Pausing trading due to {metric_name} breach (value: {value})')
-
-def reduce_position_size_circuit_breaker(metric_name: str, value: float) -> None:
-    """Circuit breaker to reduce position sizes on SLO breach."""
-    logger.warning(f'CIRCUIT BREAKER: Reducing position sizes due to {metric_name} breach (value: {value})')
-
-def setup_default_circuit_breakers() -> None:
-    """Setup default circuit breakers for critical SLOs."""
-    monitor = get_slo_monitor()
-    monitor.register_circuit_breaker('order_latency_ms', pause_trading_circuit_breaker)
-    monitor.register_circuit_breaker('error_rate_pct', pause_trading_circuit_breaker)
-    monitor.register_circuit_breaker('order_reject_rate_pct', pause_trading_circuit_breaker)
-    monitor.register_circuit_breaker('execution_drift_bps', pause_trading_circuit_breaker)
-    monitor.register_circuit_breaker('realized_slippage_bps', pause_trading_circuit_breaker)
-    monitor.register_circuit_breaker('live_calibration_ece', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('live_calibration_brier', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('drift_psi', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('label_drift_psi', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('residual_drift_psi', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('pending_oldest_age_sec', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('live_sharpe_ratio', reduce_position_size_circuit_breaker)
-    monitor.register_circuit_breaker('position_skew_pct', reduce_position_size_circuit_breaker)
-
 
 def record_order_reject_rate(reject_rate_pct: float) -> None:
     """Record order reject rate percentage."""
@@ -351,55 +305,6 @@ def record_realized_slippage(realized_slippage_bps: float) -> None:
 
     monitor = get_slo_monitor()
     monitor.record_metric("realized_slippage_bps", float(realized_slippage_bps))
-
-
-def record_live_calibration_ece(live_calibration_ece: float) -> None:
-    """Record live expected calibration error."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("live_calibration_ece", float(live_calibration_ece))
-
-
-def record_live_calibration_brier(live_calibration_brier: float) -> None:
-    """Record live Brier score."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("live_calibration_brier", float(live_calibration_brier))
-
-
-def record_feature_drift_psi(drift_psi: float) -> None:
-    """Record feature drift PSI."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("drift_psi", float(drift_psi))
-
-
-def record_label_drift_psi(label_drift_psi: float) -> None:
-    """Record label drift PSI."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("label_drift_psi", float(label_drift_psi))
-
-
-def record_residual_drift_psi(residual_drift_psi: float) -> None:
-    """Record residual drift PSI."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("residual_drift_psi", float(residual_drift_psi))
-
-
-def record_pending_orders_count(pending_orders_count: float) -> None:
-    """Record number of currently pending open orders."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("pending_orders_count", float(pending_orders_count))
-
-
-def record_pending_oldest_age(pending_oldest_age_sec: float) -> None:
-    """Record age in seconds for the oldest pending open order."""
-
-    monitor = get_slo_monitor()
-    monitor.record_metric("pending_oldest_age_sec", float(pending_oldest_age_sec))
 
 
 def record_order_pacing_cap_hit_rate(order_pacing_cap_hit_rate_pct: float) -> None:

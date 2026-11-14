@@ -133,49 +133,6 @@ def test_model_registry():
         pass
 
 
-def test_walk_forward_monotone_timeline():
-    """Test walk-forward analysis maintains monotone timeline."""
-    try:
-        from ai_trading.data.splits import walkforward_splits
-
-        # Create date range
-        dates = pd.date_range('2020-01-01', '2022-12-31', freq='D')
-
-        # Generate splits
-        splits = walkforward_splits(
-            dates=dates,
-            mode="rolling",
-            train_span=timedelta(days=180),
-            test_span=timedelta(days=30),
-            embargo_pct=0.01
-        )
-
-        # Verify monotone timeline
-        for i in range(1, len(splits)):
-            current_split = splits[i]
-            previous_split = splits[i-1]
-            current_train_start = cast(datetime, current_split["train_start"])
-            previous_train_start = cast(datetime, previous_split["train_start"])
-            current_test_start = cast(datetime, current_split["test_start"])
-            current_train_end = cast(datetime, current_split["train_end"])
-
-            # Current train start should be after previous train start
-            assert current_train_start >= previous_train_start, \
-                "Train start dates should be monotone"
-
-            # Test start should be after train end
-            assert current_test_start > current_train_end, \
-                "Test should start after train ends"
-
-            # No overlap between train and test
-            assert current_test_start >= current_train_end, \
-                "No overlap between train and test periods"
-
-
-    except ImportError:
-        pass
-    except (ValueError, TypeError):
-        pass
 
 
 

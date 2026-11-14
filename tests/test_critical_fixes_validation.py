@@ -49,34 +49,6 @@ class TestCriticalFixes(unittest.TestCase):
             "Recovery timeout should be at least 1 minute",
         )
 
-    def test_data_staleness_detection_improvement(self):
-        """Test 4: Data Staleness Detection - Weekend/holiday awareness."""
-        from ai_trading.utils.base import is_market_holiday, is_weekend
-
-        # Test weekend detection
-        saturday = datetime(2024, 1, 6, 12, 0, tzinfo=UTC)  # Saturday
-        sunday = datetime(2024, 1, 7, 12, 0, tzinfo=UTC)  # Sunday
-        monday = datetime(2024, 1, 8, 12, 0, tzinfo=UTC)  # Monday
-
-        self.assertTrue(is_weekend(saturday), "Saturday should be detected as weekend")
-        self.assertTrue(is_weekend(sunday), "Sunday should be detected as weekend")
-        self.assertFalse(is_weekend(monday), "Monday should not be detected as weekend")
-
-        # Test holiday detection
-        new_years = date(2024, 1, 1)  # New Year's Day
-        christmas = date(2024, 12, 25)  # Christmas
-        regular_day = date(2024, 3, 15)  # Regular Friday
-
-        self.assertTrue(
-            is_market_holiday(new_years), "New Year's should be detected as holiday"
-        )
-        self.assertTrue(
-            is_market_holiday(christmas), "Christmas should be detected as holiday"
-        )
-        self.assertFalse(
-            is_market_holiday(regular_day),
-            "Regular day should not be detected as holiday",
-        )
 
     def test_meta_learning_price_validation(self):
         """Test 2: MetaLearning Data Validation - Price validation logic."""

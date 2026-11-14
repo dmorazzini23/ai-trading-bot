@@ -45,19 +45,6 @@ def test_latest_quote_request_retries_without_feed_when_sdk_class_rejects_feed(m
     ]
 
 
-def test_twap_submit_places_slices_and_sleeps(monkeypatch):
-    orders: list[tuple[str, int, str]] = []
-    sleeps: list[float] = []
-    monkeypatch.setattr(
-        "ai_trading.services.execution.submit_order",
-        lambda _ctx, symbol, qty, side: orders.append((symbol, qty, side)),
-    )
-    monkeypatch.setattr(execution_flow.pytime, "sleep", lambda seconds: sleeps.append(seconds))
-
-    execution_flow.twap_submit(SimpleNamespace(), "MSFT", 9, "buy", window_secs=6, n_slices=3)
-
-    assert orders == [("MSFT", 3, "buy"), ("MSFT", 3, "buy"), ("MSFT", 3, "buy")]
-    assert sleeps == [2.0, 2.0, 2.0]
 
 
 @pytest.mark.parametrize(
@@ -440,33 +427,5 @@ def test_execute_entry_handles_indicator_preparation_failure(monkeypatch):
     assert orders == ["order"]
 
 
-def test_execute_exit_clears_targets_when_trade_log_fails(monkeypatch):
-    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda _symbol: SimpleNamespace())
-    monkeypatch.setattr(bot_engine, "get_latest_close", lambda _raw: 101.5)
-    exit_calls: list[tuple[str, int, float, str]] = []
-    monkeypatch.setattr(
-        bot_engine,
-        "send_exit_order",
-        lambda _ctx, symbol, qty, price, reason: exit_calls.append((symbol, qty, price, reason)),
-    )
-    monkeypatch.setattr(bot_engine, "targets_lock", threading.Lock(), raising=False)
-    ctx = SimpleNamespace(
-        trade_logger=SimpleNamespace(log_exit=lambda *_args: (_ for _ in ()).throw(OSError("log"))),
-        take_profit_targets={"AAPL": 110.0},
-        stop_targets={"AAPL": 95.0},
-    )
-
-    execution_flow.execute_exit(ctx, SimpleNamespace(), "AAPL", 3)
-
-    assert exit_calls == [("AAPL", 3, 101.5, "manual_exit")]
-    assert ctx.take_profit_targets == {}
-    assert ctx.stop_targets == {}
 
 
-def test_execute_exit_rejects_non_positive_quantity(monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(bot_engine, "send_exit_order", lambda *_args, **_kwargs: calls.append("exit"))
-
-    execution_flow.execute_exit(SimpleNamespace(), SimpleNamespace(), "AAPL", 0)
-
-    assert calls == []

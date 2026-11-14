@@ -63,16 +63,6 @@ def _ensure_executors() -> None:
             prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
 
 
-def get_executor() -> ThreadPoolExecutor:
-    """Return the main executor, creating pools on first use."""
-
-    with _EXECUTOR_LOCK:
-        _ensure_executors()
-        if executor is None:  # pragma: no cover - defensive invariant guard
-            raise RuntimeError("executor unavailable after initialization")
-        return executor
-
-
 def get_prediction_executor() -> ThreadPoolExecutor:
     """Return the prediction executor, creating pools on first use."""
 

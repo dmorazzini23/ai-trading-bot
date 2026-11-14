@@ -128,10 +128,6 @@ def verify_artifact(
     return True, "OK"
 
 
-def manifest_dict(manifest: ArtifactManifest) -> dict[str, Any]:
-    return asdict(manifest)
-
-
 def _execution_mode() -> str:
     raw = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim")
     return raw.strip().lower() or "sim"

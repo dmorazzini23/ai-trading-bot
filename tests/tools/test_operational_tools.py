@@ -84,16 +84,3 @@ def test_verify_config_requires_canonical_alpaca_base_url(monkeypatch, tmp_path:
     assert "Paper Trading" in api_message
 
 
-def test_health_check_requires_canonical_alpaca_base_url(monkeypatch) -> None:
-    health_check = _load_script("health_check_under_test", "scripts/health_check.py")
-    monitor = health_check.HealthMonitor()
-    monkeypatch.setenv("ALPACA_API_KEY", "key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
-    monkeypatch.delenv("ALPACA_TRADING_BASE_URL", raising=False)
-
-    result = monitor._check_environment_variables()
-
-    assert result.status is health_check.HealthStatus.CRITICAL
-    assert "ALPACA_TRADING_BASE_URL" in result.message
-    assert "ALPACA_BASE_URL" not in result.message

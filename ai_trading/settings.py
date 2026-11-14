@@ -1318,10 +1318,6 @@ def get_max_trades_per_day() -> int:
     return _to_int(getattr(get_settings(), "max_trades_per_day", 200), 200)
 
 
-def get_finnhub_rpm() -> int:
-    return _to_int(getattr(get_settings(), "finnhub_rpm", 55), 55)
-
-
 def get_backup_data_provider() -> str:
     settings = get_settings()
     return str(
@@ -1333,31 +1329,8 @@ def get_backup_data_provider() -> str:
     )
 
 
-def get_data_cache_enable() -> bool:
-    return _to_bool(getattr(get_settings(), "data_cache_enable", True), True)
-
-
-def get_data_cache_ttl_seconds() -> int:
-    return _to_int(getattr(get_settings(), "data_cache_ttl_seconds", 300), 300)
-
-
 def get_verbose_logging() -> bool:
     return _to_bool(getattr(get_settings(), "verbose_logging", False), False)
-
-
-def get_enable_plotting() -> bool:
-    return _to_bool(getattr(get_settings(), "enable_plotting", False), False)
-
-
-def get_position_size_min_usd() -> float:
-    return _to_float(
-        getattr(
-            get_settings(),
-            "position_size_min_usd",
-            POSITION_SIZE_MIN_USD_DEFAULT,
-        ),
-        POSITION_SIZE_MIN_USD_DEFAULT,
-    )
 
 
 def get_volume_threshold() -> float:
@@ -1375,13 +1348,3 @@ def get_seed_int(default: int = 42) -> int:
     s = get_settings()
     return _to_int(getattr(s, "ai_trading_seed", default), default)
 
-
-def get_intraday_windows() -> dict[str, int]:
-    """Return configured intraday window lengths in minutes."""
-
-    s = get_settings()
-    return {
-        "lookback_minutes": _to_int(getattr(s, "intraday_lookback_minutes", 120), 120),
-        "indicator_window_minutes": _to_int(getattr(s, "intraday_indicator_window_minutes", 0), 0),
-        "longest_indicator_minutes": _to_int(getattr(s, "longest_intraday_indicator_minutes", 200), 200),
-    }
