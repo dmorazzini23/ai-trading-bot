@@ -1,10 +1,10 @@
 # Current handoff
 
-## November 14: unreferenced functions and classes removed (`fb2df3aee`, not deployed) (start here)
+## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`) (start here)
 
 Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,
 about 29,700 lines removed (14,700 in `ai_trading/`); no `CONFIG_SPECS` or
-trading-decision change. Live service is still on `6a81aedb5`.
+trading-decision change.
 - **Method:** name-based call graph over `ai_trading`, `scripts`, `tools`,
   `plugins`. A top-level definition was removed only if no non-test code
   mentions its name anywhere (identifier, attribute or string). Largest cuts:
@@ -31,11 +31,16 @@ trading-decision change. Live service is still on `6a81aedb5`.
   `fb2df3aee` with the unchanged config hash.
   `scripts/agent_validate_changed.sh` stops at its broad-exception scan on a
   pre-existing `except BaseException` in `ai_trading/http/pooling.py:710`.
-- **Next:** deploy with the usual closed-market procedure, watch one market
-  session, then the legacy (non-netting) path removal, phase 1 first. The
+- **Deploy:** live checkout detached at `fb2df3aee`, restarted 03:43:46 UTC
+  Sat Nov 14 (market closed). `IMPORT_PREFLIGHT_OK`, `ExecutionEngine
+  initialized`, 3 `BROKER_SYNC`, 0 errors or warnings, `NRestarts=0`;
+  `/healthz` 503 with only `required_model_stale` and
+  `replay_live_parity_gate_failed` (unchanged). No market-hours session has
+  run on this or the two November 12 commits yet.
+- **Next:** watch Monday's session, then the legacy (non-netting) path removal, phase 1 first. The
   phase 0 lists are in `artifacts/phase0_legacy_path/` (gitignored).
-- **Rollback after deploy:** checkout `6a81aedb5`, restore the saved release
-  spec, restart.
+- **Rollback:** checkout `6a81aedb5`, restore
+  `/var/lib/ai-trading-bot/runtime/release_spec.6a81aedb5.bak.json`, restart.
 
 ## November 12: second unreachable-module batch removed; deployed (`6a81aedb5`)
 
