@@ -1,6 +1,43 @@
 # Current handoff
 
-## November 12: second unreachable-module batch removed; deployed (`6a81aedb5`) (start here)
+## November 14: unreferenced functions and classes removed (`fb2df3aee`, not deployed) (start here)
+
+Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,
+about 29,700 lines removed (14,700 in `ai_trading/`); no `CONFIG_SPECS` or
+trading-decision change. Live service is still on `6a81aedb5`.
+- **Method:** name-based call graph over `ai_trading`, `scripts`, `tools`,
+  `plugins`. A top-level definition was removed only if no non-test code
+  mentions its name anywhere (identifier, attribute or string). Largest cuts:
+  `core/bot_engine.py` (~3,450 lines, including standalone
+  `safe_submit_order`), `signals/__init__.py`, `data/fallback/concurrency.py`,
+  `portfolio/sizing.py`, `core/interfaces.py`.
+- **Modules removed (left empty or orphaned):** `audit`, `trade_logic`,
+  `health_monitor`, `execution/algorithms`, `utils/capital_scaling`,
+  `utils/ohlcv`, `data/fetch/empty_handling`, `core/order_ids`.
+- **Kept on purpose:** module `__getattr__`/`__dir__` hooks, 29 test-reset
+  helpers (`reset_*`, `clear_*`, `*_for_tests`), everything under
+  `ai_trading/tools/`, `strategies/`, `research/`, `health.py`,
+  `runtime/equity_risk.py`. About 135 imports left unused by the deletion
+  remain because other modules or tests may reach them as attributes.
+- **Tests:** 65 test files deleted, 134 trimmed (6,623 tests remain).
+- **Validation:** full `pytest` 6,619 passed, 2 skipped, 4 failed; three of
+  the failures tested deleted entry points and were removed afterwards (their
+  files re-run green). The fourth,
+  `tests/test_idempotency_cache_fallback.py::test_order_idempotency_cache_fallback`,
+  is order-dependent (frozen clock) and fails identically on `6a81aedb5` when
+  run alone. `ruff check`, `mypy`, `scripts/typecheck_strict.sh`, import of
+  every module, lazy-export resolution and startup imports pass with the
+  editable finder stripped. `release_identity` (both modes) passes for
+  `fb2df3aee` with the unchanged config hash.
+  `scripts/agent_validate_changed.sh` stops at its broad-exception scan on a
+  pre-existing `except BaseException` in `ai_trading/http/pooling.py:710`.
+- **Next:** deploy with the usual closed-market procedure, watch one market
+  session, then the legacy (non-netting) path removal, phase 1 first. The
+  phase 0 lists are in `artifacts/phase0_legacy_path/` (gitignored).
+- **Rollback after deploy:** checkout `6a81aedb5`, restore the saved release
+  spec, restart.
+
+## November 12: second unreachable-module batch removed; deployed (`6a81aedb5`)
 
 Follow-on to `192123ebc`, same branch `claude/unreachable-module-cleanup`.
 124 files, about 12,100 lines removed; no trading decision or `CONFIG_SPECS`
