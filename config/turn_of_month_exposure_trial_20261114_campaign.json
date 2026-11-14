@@ -1,0 +1,137 @@
+{
+  "campaign_id": "turn_of_month_exposure_trial_20261114",
+  "status": "draft_not_registered",
+  "draft_notice": "Proposal only (docs/RESEARCH_CANDIDATES_20261114.md). Not adopted by the owner, not listed in config/research_reset.json registered_trials, no ledger exists, no runner exists, and nothing has been acquired, audited, preflighted, claimed or scored. Every runner refuses a contract whose status is not 'registered'.",
+  "authorization": "none; requires an owner-adopted research-reset amendment before status may change",
+  "max_trials": 1,
+  "hypotheses": [
+    "spy_bil_turn_of_month_last_1_first_3_sessions_v1"
+  ],
+  "hypothesis": "Holding SPY only from the open of the last session of each calendar month to the open of the fourth session of the next month, and BIL otherwise, earns more per month after a fixed 10 bps cost per switch than a static SPY/BIL mix holding the same average SPY weight on identical dates, and has a Sharpe ratio at least equal to buy-and-hold SPY.",
+  "economic_motivation": "Equity index returns have been concentrated around the turn of the month in US data since 1897 and in most developed markets (Ariel 1987; Lakonishok and Smidt 1988; Ogden 1990; McConnell and Xu 2008). The proposed cause is the month-end concentration of cash flows: salaries, pension and retirement-plan contributions, and coupon and dividend payments that are reinvested within a few sessions. The rule needs no price signal and no estimated parameter; the calendar is known in advance.",
+  "distinct_from_consumed": "No price-direction signal (research_reset_trend_20260908), no relative-strength ranking (cross_sectional_momentum_trial_20261018), no volatility estimate or continuous weight (volatility_target_core_trial_20261025), no model and no intraday horizon (day_sleeve_horizon_trial_20261018, model_replacement_20260921). The exposure schedule is a function of the exchange calendar only.",
+  "development_start": "2016-01-04",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "symbols": {
+    "risk_asset": "SPY",
+    "cash_asset": "BIL"
+  },
+  "feed": "sip",
+  "adjustment": "all",
+  "acquisition": "No new download. Reuse the daily SIP bars already on disk for volatility_target_core_trial_20261025 (SPY and BIL, 2016-01-04 through 2025-12-31, adjustment=all, 2514 rows each). The runner must verify each file's sha256 against reused_sources before reading any price and refuse any row dated in 2026.",
+  "reused_sources": {
+    "manifest": "artifacts/volatility_target_core_trial_20261025/data/acquisition.json",
+    "SPY": {
+      "path": "artifacts/volatility_target_core_trial_20261025/data/SPY.csv",
+      "rows": 2514,
+      "sha256": "626ff4e2733c60e3b7bb9b743b6a5758068a6835c5347e2f3bc6ee1f46b221f6"
+    },
+    "BIL": {
+      "path": "artifacts/volatility_target_core_trial_20261025/data/BIL.csv",
+      "rows": 2514,
+      "sha256": "cf72c0cb731fed63e390c835682202ec6486a5abc4f78547bf88e9d1e858c97e"
+    }
+  },
+  "availability_check": "2026-11-14, exchange calendar only (no price file opened): 2514 development sessions, 119 month cycles with entries from 2016-01-29 through 2025-11-28; 12 cycles per entry year except 11 in 2025; 476 of 2495 scheduled sessions in SPY (average weight 0.1908). This is arithmetic for sizing the thresholds, not the support audit.",
+  "calendar_window": {
+    "enter_risk": "open of the last regular session of calendar month m",
+    "exit_risk": "open of the fourth regular session of calendar month m+1",
+    "sessions_before_month_end": 1,
+    "sessions_after_month_start": 3,
+    "source": "exchange calendar (ai_trading.utils.market_calendar); early closes count as sessions"
+  },
+  "cycle": "One cycle per month m: the in-window leg (SPY, enter_risk to exit_risk) followed by the out-of-window leg (BIL, exit_risk to the next cycle's enter_risk). Cycles never overlap and tile the schedule without gaps.",
+  "decision": "Fixed by the calendar before the development window; no price, return or volatility is used at any decision.",
+  "entry": "Regular-session open of the last session of the month.",
+  "exit": "Regular-session open of the fourth session of the following month.",
+  "window_note": "The literature window is the close of session -2 to the close of session +3. Open-to-open execution, the convention of the earlier contracts, shifts it by about half a session: it omits the overnight move into session -1 and adds the overnight move into session +4. The shift is fixed here and is not a tunable.",
+  "allocation": "SPY weight 1 inside the window and 0 outside; BIL weight is the complement. No leverage, no shorts, no other assets, no partial weights.",
+  "weight_accounting": "Weights are held at their leg-start value (drift is not modelled). The same convention applies to the static mix and to buy-and-hold.",
+  "primary_round_trip_cost_bps": 10,
+  "cost_tiers": [
+    {
+      "name": "primary",
+      "round_trip_bps": 10,
+      "role": "decision"
+    },
+    {
+      "name": "stress_high",
+      "round_trip_bps": 20,
+      "role": "required_positive_paired_difference"
+    },
+    {
+      "name": "stress_low",
+      "round_trip_bps": 6,
+      "role": "reported_only"
+    },
+    {
+      "name": "measured_paper_taker_median",
+      "round_trip_bps": 2.8,
+      "role": "reported_only",
+      "source": "docs/PAPER_ROUND_TRIP_COST_EVIDENCE_20261018.md (stock quotes, not SPY or BIL)"
+    }
+  ],
+  "cost_accounting": "Same as volatility_target_core_trial_20261025: each switch charges round_trip_bps / 2 on the absolute weight traded in each leg, i.e. round_trip_bps x |dw| of portfolio value. Every cycle has two full switches (|dw| = 1 each), so the strategy pays 2 x round_trip_bps per cycle: 20 bps per month and about 2.4 percent per year at the primary tier, 40 bps per month at stress_high. The static mix and buy-and-hold are charged one initial entry only.",
+  "cost_status": "fixed_unverified_scenarios_not_calibrated_execution_costs",
+  "controls": {
+    "static_mix": "Constant SPY weight equal to the schedule's fraction of sessions in SPY (calendar arithmetic gives 476/2495), remainder BIL, on identical cycles; the decision comparison, so a gain cannot come from holding equity exposure alone.",
+    "buy_and_hold": "100 percent SPY on identical cycles; the plan's SPY benchmark and the Sharpe comparison.",
+    "cash": "100 percent BIL; reported only."
+  },
+  "paired_difference": "Per cycle: strategy net return minus static-mix return over the same cycle.",
+  "sharpe": "Annualized mean / standard deviation of per-cycle returns in excess of BIL over the same cycle, x sqrt(12).",
+  "folds": "calendar_year_of_entry_session",
+  "support_thresholds": {
+    "minimum_cycles": 110,
+    "minimum_supported_years": 9,
+    "minimum_cycles_per_year": 10
+  },
+  "support_rationale": "The calendar gives 119 cycles, 11 or 12 per entry year. The thresholds tolerate at most 9 cycles lost to missing or invalid bars and at most one unsupported year.",
+  "support_audit": {
+    "required_before_claim": true,
+    "kind": "daily_grid_timestamp_only",
+    "rule": "A cycle counts only if SPY and BIL both have a bar on its entry session, its exit session and the next cycle's entry session. The audit reads session dates only, writes artifacts/turn_of_month_exposure_trial_20261114/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false, and blocks without consuming the trial if any threshold fails."
+  },
+  "acceptance": {
+    "positive_paired_difference_lower_bound_at_primary": true,
+    "sharpe_at_least_buy_and_hold_at_primary": true,
+    "positive_paired_difference_at_stress_high": true,
+    "minimum_years_with_positive_paired_difference": 6,
+    "summary": "All of: adequate support; positive 95 percent circular-block-bootstrap lower bound of the mean per-cycle paired difference versus the static mix at 10 bps; Sharpe(strategy) - Sharpe(buy-and-hold SPY) >= 0 as a point estimate at 10 bps; positive mean paired difference versus the static mix at 20 bps; positive mean paired difference at 10 bps in at least 6 of the 10 entry years. Reported only: the bootstrap interval of the Sharpe difference, CAGR, volatility, maximum drawdown, worst year, mean in-window and out-of-window SPY excess return per session, and the 6 and 2.8 bps tiers."
+  },
+  "acceptance_rationale": "The confidence requirement sits on the exposure-matched paired difference because that is the comparison ten years can resolve. The volatility-target trial showed a Sharpe-difference interval about 0.39 wide for a strategy 0.89 invested in SPY; this rule is invested 0.19 of the time, so its Sharpe-difference interval against buy-and-hold will be wider still and is required only as a point estimate. A pass therefore does not show that the rule beats holding SPY with confidence.",
+  "bootstrap": {
+    "unit": "circular_blocks_of_cycles",
+    "block_periods": 6,
+    "replicates": 10000,
+    "seed": 20261114
+  },
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "preconditions": [
+    "owner adopts a research-reset amendment and config/research_reset.json registered_trials cites this campaign_id",
+    "a runner for calendar exposure schedules exists with regression tests (schedule from the calendar, non-overlap, cost per switch, static-mix weight, refusal of 2026 rows, refusal of non-registered contracts); none exists on 2026-11-14",
+    "status set to registered and the contract registered under artifacts/turn_of_month_exposure_trial_20261114/campaign_state.json before any price is read",
+    "timestamp-only support audit passes",
+    "non-claiming preflight passes: reused source hashes, 2016-2025 date bounds, no 2026 timestamp, price validity"
+  ],
+  "stop_rule": "Claim once immediately before returns are computed; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires this hypothesis and authorizes no tuning of the window length or position, execution time, assets, cost or acceptance.",
+  "holdout_policy": "The holdout is not read during development. It contains three window entries (end of September, October and November 2026); three cycles cannot support or refute the rule, so a pass asks only for an owner decision on forward paper observation, not for a holdout score.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical open-to-open markouts on adjusted prices with fixed costs; executable fills, opening-auction slippage and per-fill fees are not established.",
+  "limitations": [
+    "One equity index and one decade. The decade was a strong bull market, so being out of SPY four fifths of the time will trail buy-and-hold in total return unless the out-of-window sessions earn no more than BIL.",
+    "The effect is published and widely known; post-publication decay is the main reason to expect failure.",
+    "The fixed cost is 2.4 percent per year at the primary tier, large against the literature's in-window excess of roughly 40 to 60 bps per month.",
+    "Power is moderate at best: about 119 cycles with a paired standard deviation near 1.8 percent give a standard error near 17 bps per cycle, so only a net paired difference above roughly 33 bps per month can pass.",
+    "The 2016-2025 SPY and BIL bars were used by the volatility-target trial, whose report shows calendar-year returns; no calendar-conditional statistic has been computed, but the window is not untouched.",
+    "adjustment=all approximates total return; BIL approximates the cash return."
+  ],
+  "runner": "not yet written; proposed ai_trading/tools/calendar_exposure_trial.py with --support-audit, --preflight and --fit modes"
+}
