@@ -169,3 +169,24 @@ only (they never become blockers or gates):
      matched that day's broker fills exactly (REG by sell proceeds, TAF by
      sold shares and sells, CAT by fill count). Until the review decides,
      allocations never complete a chain or validate net fees.
+- **2026-11-14 — review held early; branch rules B and C superseded (rule
+  change, made after outcomes were viewed).** At the owner's request the
+  review was held on November 14 instead of December 9
+  ([record](RESEARCH_RESET_REVIEW_20261114.md)). All three registered trials
+  had ended in October with no edge, so only B and C remained. The owner
+  ended the pause on new work: portfolio manager mode is built per its
+  proposal (offline, then paper), and new strategy research runs under
+  pre-registered contracts. This is a deviation from this plan, not an
+  application of it. It was decided after the trial outcomes were known,
+  which the amendment rule above does not allow, so it is recorded as an
+  owner override:
+  - **B is superseded.** The day-sleeve model is still to be retired from
+    runtime, not retrained, but in a separate later change and not on
+    December 9.
+  - **C is superseded.** "Continue the pause" no longer applies. Its
+    conditions for a new campaign stay: a pre-registered contract whose
+    timestamp-only sampling-support audit passes before a trial is claimed.
+  - **Unchanged:** the holdout (September 9–December 8) stays unscored and
+    reserved; consumed budgets stay consumed; the real-money gate above is
+    unchanged; scheduled training stays blocked. No holdout data was opened
+    for this decision.
