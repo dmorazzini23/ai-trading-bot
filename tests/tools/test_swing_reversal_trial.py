@@ -40,15 +40,18 @@ def spec(**changes):
     return trial.contract_spec(small_contract(**changes))
 
 
-def test_repository_contract_is_an_unregistered_draft_with_the_written_rules(tmp_path):
+def test_repository_contract_is_registered_with_the_written_rules_and_the_probe_result(tmp_path):
     draft = json.loads(REPO_CONTRACT.read_text())
-    assert draft["status"] == "draft_not_registered" and draft["survivorship"]["probe_status"] == "not_run"
+    assert draft["status"] == "registered" and "draft_notice" not in draft
+    assert draft["survivorship"]["probe_status"] == "delisted_symbols_missing_or_partial"
+    assert draft["survivorship"]["bias_label"] == trial.PROBE_STATUSES[draft["survivorship"]["probe_status"]] == "upward_biased"
     reset = json.loads((REPO_CONTRACT.parents[1] / trial.RESET_CONFIG).read_text())
-    assert draft["campaign_id"] not in reset["registered_trials"]
+    assert draft["campaign_id"] in reset["registered_trials"]
+    assert any(a["campaign_id"] == draft["campaign_id"] and (REPO_CONTRACT.parents[1] / a["record"]).is_file() for a in reset["amendments"])
     with pytest.raises(ValueError, match="probe_status"):
-        trial.contract_spec(draft)
+        trial.contract_spec(draft | {"survivorship": draft["survivorship"] | {"probe_status": "not_run"}})
     (tmp_path / "config").mkdir()
-    (tmp_path / "config/draft.json").write_text(json.dumps(draft))
+    (tmp_path / "config/draft.json").write_text(json.dumps(draft | {"status": "draft_not_registered"}))
     with pytest.raises(ValueError, match="not registered"):
         trial.run(tmp_path, mode="acquire", contract_path=Path("config/draft.json"), client_factory=lambda: pytest.fail("fetched"))
     full = trial.contract_spec(draft | {"survivorship": draft["survivorship"] | {"probe_status": "delisted_symbols_served"}})

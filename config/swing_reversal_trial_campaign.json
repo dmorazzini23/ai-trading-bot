@@ -1,8 +1,7 @@
 {
   "campaign_id": "swing_reversal_trial_20261115",
-  "status": "draft_not_registered",
-  "draft_notice": "Proposal only (docs/SWING_REVERSAL_TRIAL_RULES_20261115.md). Not adopted by the owner, not listed in config/research_reset.json registered_trials, no ledger exists, and nothing has been acquired, audited, preflighted, claimed or scored. The survivorship probe has not been run. The runner refuses this file while status is not 'registered'.",
-  "authorization": "none; requires an owner-adopted research-reset amendment before status may change",
+  "status": "registered",
+  "authorization": "owner approved the written rules on 2026-11-15 and adopted docs/RESEARCH_RESET_AMENDMENT_20261115_SWING_REVERSAL.md: one registered development trial, no promotion or runtime authority",
   "max_trials": 1,
   "hypotheses": [
     "sector_relative_5_session_reversal_top300_long_only_primary_long_short_secondary_v1"
@@ -83,8 +82,9 @@
     }
   },
   "survivorship": {
-    "probe_status": "not_run",
-    "probe_finding": "TO BE FILLED from `--probe` before registration. On 2026-11-15 the probe could not be run: the secrets loader needs AI_TRADING_SECRETS_BACKEND, AI_TRADING_AWS_SECRET_ID and the AWS region in the process environment, and those values exist only in .env and the runtime env file, which this work was not allowed to read.",
+    "probe_status": "delisted_symbols_missing_or_partial",
+    "probe_finding": "Probe run 2026-11-15 (artifacts/swing_reversal_trial_20261115/survivorship_probe.json, dates and counts only). The provider returned monthly bars for all 16 probe symbols, but its asset list (33,556 rows, 19,150 inactive) contains only 9 of them: FTR, LNKD, MNK, MON, TWTR, TWX and YHOO are not listed, so a universe built from the asset list cannot include them. Symbols have been reused: EMC is listed active with bars to 2025-12, SHLD is listed both active and inactive with bars to 2025-12, and MON has bars to 2022-12, after the 2018 acquisition. Delisted companies are therefore partly missing and some histories join two companies.",
+    "bias_label": "upward_biased",
     "probe_status_values": "Before registration set probe_status to 'delisted_symbols_served' or 'delisted_symbols_missing_or_partial'. The runner refuses any other value. With the second value the report labels every result 'upward_biased'.",
     "probe_symbols": ["TWX", "MON", "CELG", "AGN", "RTN", "TIF", "XLNX", "ALXN", "TWTR", "CERN", "YHOO", "LNKD", "EMC", "SHLD", "FTR", "MNK"],
     "probe_symbols_note": "Large US companies acquired, merged or bankrupt between 2016 and 2022. A symbol may since have been reused by another company, so first and last bar months must be read against the known delisting date.",
@@ -189,7 +189,7 @@
   "data_size_estimate": "Not measured. Expected order of magnitude: 8,000 to 15,000 candidate symbols x up to 120 monthly rows, about 1 to 1.5 million rows and 60 to 90 MB; 600 to 1,000 symbols ever in the universe x up to 2,514 daily rows, about 1.5 to 2.5 million rows and 100 to 170 MB; a few hundred paginated requests and several hundred to 1,000 sector lookups.",
   "acquisition": "Not done. After registration and on the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, refuses any row dated outside development or in 2026, records every symbol it could not fetch, and refuses to overwrite an existing acquisition.",
   "acquisition_manifest": "artifacts/swing_reversal_trial_20261115/data/acquisition.json",
-  "availability_check": "none run; no request of any kind was made for this draft",
+  "availability_check": "survivorship probe only (2026-11-15): asset list and monthly bar dates for 16 symbols; no price was read for analysis",
   "preconditions": [
     "owner approves these written rules before any result exists",
     "`--probe` is run and survivorship.probe_status, probe_finding and bias_label are filled in; draft_notice is removed",
@@ -205,7 +205,7 @@
   "runtime_authority": false,
   "execution_assumption": "Historical open-to-open markouts on adjusted prices with fixed costs; fills at the opening auction, their slippage, partial fills and per-fill fees are not established.",
   "limitations": [
-    "Survivorship: unknown until the probe is run. A buy-the-losers rule is the kind most flattered by missing delisted stocks.",
+    "Survivorship: the probe found delisted companies partly missing from the asset list and reused symbols, so every result is labelled upward_biased by an unmeasured amount. A buy-the-losers rule is the kind most flattered by missing delisted stocks. A fail is informative; a pass is not established without the holdout check and paper trading.",
     "Turnover is about 25 times a year per book even with the hold band, far above the 50 percent a month under which published strategies usually survive costs.",
     "The effect is published and has weakened in large stocks; the supporting net-of-cost results use institutional cost models and pre-2012 data.",
     "It pays mostly in fearful markets, so it can look poor for years and carries its largest positions when losses are most likely.",
