@@ -95,3 +95,43 @@ authority (`promotion_authority: false`, `runtime_authority: false`).
   directory are not touched.
 - Rollback: revert the config edits and this record. Keep the ledger as
   evidence; a registered campaign is never silently unregistered.
+
+## Result (November 15, 2026): retired
+
+Claimed once at 2026-11-15T15:59:50Z (market closed), after the acquisition
+(6,294 candidates, 757 symbols ever in the universe, no fetch failures, 300
+members in every month from April 2016, 67 symbols without a sector), the
+support audit (489 periods, 9 supported years) and the non-claiming preflight
+(no rejected prices) passed. Ledger status `retired`. The holdout was not
+evaluated; no model was fitted; no orders were sent. Every figure below is
+labelled `upward_biased`: 9 of the 16 probe companies never entered the
+universe.
+
+Figures are basis points per 5-session period, at 5 bps per side unless noted.
+
+| Long-only criterion (decision) | Result | Met |
+| --- | --- | --- |
+| Adequate support | 489 periods, 9 years | yes |
+| Ahead of exposure-matched SPY, lower bound > 0 | +12.0 (33.7 vs 21.7); lower bound −6.8 | **no** |
+| Positive after costs, lower bound > 0 | +33.7; lower bound +5.3 | yes |
+| Ahead of matched SPY at 10 bps | +8.5 | yes |
+| Ahead of matched SPY in at least 6 of 10 years | 5 (2018, 2020, 2022, 2023, 2025) | **no** |
+| Ahead under the −30% survivorship stress | +11.1 | yes |
+
+| Long-short criterion (secondary) | Result | Met |
+| --- | --- | --- |
+| Positive vs cash after costs and borrow, lower bound > 0 | +9.3; lower bound −8.4 | **no** |
+| Positive at 10 bps and 300 bps borrow | +0.9 net | yes |
+| Positive in at least 6 of 10 years | 4 | **no** |
+| Positive under the −30% survivorship stress | +9.3 | yes |
+
+Reported only: long-only Sharpe 0.62 and maximum drawdown 45% at an average
+exposure of 0.65; annual one-way turnover 17.7. The long-only excess was +81
+in 2020 and negative in 2016, 2017, 2019, 2021 and 2024; 2018 was ahead by
+0.4. Without the volatility sizing the long-only excess was +8.4.
+
+The contract requires all criteria, so both versions are retired. The average
+excess was positive but ten years could not distinguish it from zero, it came
+mostly from 2020 and 2022, and the data favoured a pass. Per the stop rule, no
+tuning of any parameter, universe, mapping, cost or acceptance rule is
+authorized, and the holdout stays unread.
