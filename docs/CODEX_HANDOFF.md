@@ -1,5 +1,32 @@
 # Current handoff
 
+## November 14: research reset reviewed early; pause on new work ended (start here)
+
+Governance record only, on branch `claude/reset-early-review` (not merged, not
+deployed). No runtime code changed.
+- **Decision:** [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). The
+  owner held the December 9 review early. Allowed now: portfolio manager mode
+  build per `docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md` (offline, then
+  paper), and new strategy research under one pre-registered contract per
+  hypothesis. It supersedes branch rules B and C of the December 9 plan.
+- **Unchanged:** holdout September 9–December 8 unscored and reserved;
+  consumed budgets; real-money gate; scheduled training blocked; the
+  day-sleeve model is to be retired from runtime in a separate change, not
+  retrained.
+- **Do not set `enabled: false`** in `config/research_reset.json`. That flag
+  is the only thing `training_block_reason()` checks; turning it off would
+  restart after-hours training on the live service and return research
+  automation to its full daily/weekly/monthly step lists.
+- **Changed:** `config/research_reset.json` (`last_review_*`, `review_record`,
+  `allowed_work`, `paused_work`; no code reads those fields), `AGENTS.md`
+  section 8, `docs/RESEARCH_RESET.md`, the December 9 plan (amendment), this
+  file, and one test pinning the checked-in policy.
+- **Release identity:** `resolved_config_hash` is not affected; it hashes the
+  sanitized `TradingConfig` snapshot only. A deploy still needs the new commit
+  SHA in the release spec, as for any commit.
+- **Next:** merge when the owner agrees. No restart is needed for the policy
+  file: readers load it on each call.
+
 ## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`) (start here)
 
 Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,

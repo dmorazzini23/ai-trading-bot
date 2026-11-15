@@ -180,11 +180,18 @@ Use these stable strings to anchor surgical edits:
 
 ## 8. Anti-Patterns to Avoid
 
-- During the research reset beginning September 8, 2026, follow
-  `config/research_reset.json` and `docs/RESEARCH_RESET.md`. Pause discretionary
-  features, new models and unregistered searches; prioritize named evidence gaps.
-  The October 8 review does not automatically resume broad research. Preserve
-  the September 9–December 8 holdout and consumed campaign budgets.
+- The research reset that began September 8, 2026 no longer pauses new work
+  (early review of November 14, 2026:
+  `docs/RESEARCH_RESET_REVIEW_20261114.md`). Follow `config/research_reset.json`
+  and `docs/RESEARCH_RESET.md`. Allowed: building portfolio manager mode per
+  `docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md` (offline, then paper), and
+  new strategy research under one pre-registered contract per hypothesis, with
+  the sampling-support audit passing before a trial is claimed and the owner's
+  word for each claim. Still forbidden: unregistered searches; scheduled or
+  automatic training (keep `enabled: true` in the policy file, which is what
+  blocks it); retraining the day-sleeve model (it is to be retired from
+  runtime in a separate change); scoring the September 9–December 8 holdout;
+  reusing consumed campaign budgets; any change to the real-money gate.
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
 - Adding behavior to legacy compatibility entrypoints instead of the canonical
   package module.
