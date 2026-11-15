@@ -58,3 +58,39 @@ account. No promotion, runtime or real-money authority.
   directory are not touched.
 - Rollback: revert the config edits and this record. Keep the ledger as
   evidence.
+
+## Result (November 15, 2026): retired
+
+Claimed once at 2026-11-15T18:40:33Z (market closed), after the acquisition
+(2,514 sessions with bars, 21 early closes, no incomplete session), the
+ex-dividend check (mean overnight gap on 40 ex-dividend dates −0.05%, against
+about −0.3% to −0.45% if the bars were unadjusted), the support audit (2,492
+eligible days, 10 supported years) and the non-claiming preflight (no rejected
+prices) passed. Ledger status `retired`. The holdout was not evaluated; no
+model was fitted; no orders were sent.
+
+Figures are basis points per eligible day at 1 bp per side unless noted.
+
+| Long-only criterion (decision) | Result | Met |
+| --- | --- | --- |
+| Adequate support | 2,492 days, 10 years, 1,390 traded | yes |
+| Net mean vs cash, lower bound > 0 | −1.55 (−3.9% a year); lower bound −2.71 | **no** |
+| Net mean > 0 at 2 bps | −2.66 | **no** |
+| Positive in at least 6 of 10 years | 1 (2020) | **no** |
+| Mean ahead of always-in | +0.96 (+0.08 before costs) | yes |
+
+| Long-short criterion (secondary) | Result | Met |
+| --- | --- | --- |
+| Net mean vs cash, lower bound > 0 | −2.34 (−5.9% a year); lower bound −3.87 | **no** |
+| Net mean > 0 at 2 bps | −4.33 | **no** |
+| Positive in at least 6 of 10 years | 1 (2020) | **no** |
+
+Reported only: before any cost the long-only version averaged −0.43 and the
+long-short version −0.34 per eligible day, and the last half hour itself
+averaged −0.51. The always-in comparison was passed almost entirely on saved
+cost. Neither reported-only variant (both predictors agreeing; high
+volatility) was positive at any cost tier.
+
+The published effect is not present in SPY half-hour bars for 2016–2025 even
+before costs, so both versions are retired. Per the stop rule no tuning is
+authorized and the holdout stays unread.
