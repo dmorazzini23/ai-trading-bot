@@ -1,0 +1,175 @@
+{
+  "campaign_id": "intraday_momentum_trial_20261115",
+  "status": "draft_not_registered",
+  "draft_notice": "DRAFT, 2026-11-15. Not registered, not listed in config/research_reset.json, no ledger created, no data downloaded, nothing scored. The runner refuses this file until the owner approves docs/INTRADAY_MOMENTUM_TRIAL_RULES_20261115.md, adopts a research-reset amendment and status is set to registered.",
+  "authorization": "none; awaiting the owner's approval of the written rules",
+  "max_trials": 1,
+  "hypotheses": [
+    "spy_first_half_hour_sign_last_half_hour_long_only_primary_long_short_secondary_v1"
+  ],
+  "versions": {
+    "long_only": "PRIMARY. Holds SPY for the last half hour only on days the signal is positive; flat otherwise. It must pass on its own, because the paper account has shorting disabled. Its decision is the ledger decision.",
+    "long_short": "SECONDARY. Long on a positive signal, short on a negative one. Its decision is reported as secondary_decision and cannot rescue a failed long-only version."
+  },
+  "ledger_note": "The experiment ledger permits exactly one hypothesis id per campaign, so the two versions are one registered trial with one claim. Both are scored in the same run from the same frozen data.",
+  "hypothesis": "On full trading days, when SPY's return from the prior session's close to 10:00 New York time is positive, holding SPY from 15:30 to the end of the regular session earns more than cash after 1 bp per side, and more than holding SPY over that half hour every day at the same cost (long-only); and holding SPY long on a positive sign and short on a negative sign earns more than cash after the same cost (long-short).",
+  "economic_motivation": "Gao, Han, Li and Zhou (Journal of Financial Economics 2018) found that SPY's first half-hour return, measured from the previous close, predicts its last half-hour return in 1993-2013. Baltussen, Da, Lammers and Martens (Journal of Financial Economics 2021) found the same pattern in more than 60 futures and tie it to hedging: option dealers and leveraged funds must trade in the direction of the day's move before the close, and more so in volatile markets.",
+  "distinct_from_consumed": "A single-instrument intraday timing rule held for half an hour with no overnight position. The consumed campaigns were an intraday model on three stocks (model_replacement_20260921, day_sleeve_horizon_trial_20261018), a 60-session price filter on six ETFs (research_reset_trend_20260908), a 63-session relative-strength rule on six ETFs (cross_sectional_momentum_trial_20261018), an SPY volatility target (volatility_target_core_trial_20261025) and a 5-session sector-relative reversal in 300 stocks (swing_reversal_trial_20261115).",
+  "development_start": "2016-01-04",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "symbols": {
+    "instrument": "SPY"
+  },
+  "feed": "sip",
+  "adjustment": "all",
+  "timeframe": "30Min",
+  "annualization": 252,
+  "session_rules": {
+    "timezone": "America/New_York (stdlib zoneinfo)",
+    "regular_session": "09:30 to 16:00. A full session has 13 half-hour bars stamped 09:30, 10:00, ..., 15:30. Bars outside regular hours are discarded at acquisition and counted.",
+    "early_closes": "A session that the exchange calendar does not run from 09:30 to 16:00 (the 13:00 closes around holidays, 21 in the window) is never traded. Its final regular bar still supplies the next session's prior close.",
+    "missing_bars": "A full session is traded only if all 13 of its half-hour bars are present with valid prices and the previous session's final regular bar is present. Otherwise it is skipped. Every skip is counted by reason in the audit and the report.",
+    "first_session": "2016-01-04 has no prior close inside the data and is skipped."
+  },
+  "signal": {
+    "bar": "09:30",
+    "reference": "prior_session_final_regular_bar_close",
+    "threshold": 0,
+    "rule": "signal = close of the 09:30 half-hour bar (the last regular trade before 10:00) divided by the close of the previous session's final regular half-hour bar, minus 1. Positive: long. Negative: short in the long-short version, flat in the long-only version. Exactly zero: flat in both. Nothing after 10:00 is used.",
+    "choice": "The single first-half-hour predictor, not the two-predictor rule. It is the headline result of Gao et al., it trades about twice as many days, and the second predictor (the 15:00-15:30 return) ends at the very price the trade enters at, so an error in that one price would move the signal and the trade return in opposite directions."
+  },
+  "trade": {
+    "entry_bar": "15:30",
+    "entry_price": "open",
+    "exit_bar": "15:30",
+    "exit_price": "close",
+    "exposure": 1.0,
+    "early_close_sessions": "skip",
+    "sessions_with_missing_bars": "skip",
+    "rule": "Enter at the open of the 15:30 bar (the first trade at or after 15:30). Exit at the close of the same bar (the last regular trade before 16:00). Fully invested while in the trade, no leverage, no stop, no overnight position."
+  },
+  "reported_only_variants": {
+    "note": "Both variants are computed for both versions and decide nothing. A pass in a variant does not rescue a failed plain version and authorizes no follow-up.",
+    "both_predictors_agree": "Trade only when the 15:00-15:30 return (close of the 15:00 bar over the close of the 14:30 bar) has the same sign as the signal: Gao et al.'s two-predictor rule.",
+    "high_volatility": {
+      "lookback_sessions": 21,
+      "reference_sessions": 252,
+      "rule": "Trade only when SPY's realized volatility over the 21 sessions ending at the prior session (sample standard deviation of log changes in the final regular close, annualized) is above the median of the same measure over the 252 sessions ending at the prior session (at least 126 required). Uses nothing from the trading day."
+    }
+  },
+  "primary_per_side_cost_bps": 1,
+  "cost_tiers": [
+    {
+      "name": "primary",
+      "per_side_bps": 1,
+      "role": "decision"
+    },
+    {
+      "name": "stress_high",
+      "per_side_bps": 2,
+      "role": "required_positive_at_stress"
+    },
+    {
+      "name": "measured_median_region",
+      "per_side_bps": 0.5,
+      "role": "reported_only",
+      "caveat": "Between the measured median (0.2 bps) and mean (0.9 bps). A result that holds at 0.5 bps but not at 1 bp is not established."
+    }
+  ],
+  "cost_basis": "Research note 'measured_costs_from_fills' (2026-11-15): 124 marketable one-to-two-share paper fills in AAPL, AMZN and MSFT, almost all midday, cost against the mid: median 0.2 bps, mean 0.9 bps (bootstrap interval -0.4 to 2.1), 90th percentile 6 bps. SPY's quoted half-spread is well under 1 bp. None of those fills was in SPY, at 15:30 or near the close, and the paper simulator has no queue or impact model.",
+  "cost_accounting": "Two sides on every traded day (one entry, one exit), each charged per_side_bps of the position. Flat days cost nothing. The always-in benchmark pays two sides every eligible day. No borrow fee: no short is held overnight. Cash earns nothing over the half hour.",
+  "cost_status": "fixed_scenarios_not_calibrated_execution_costs",
+  "controls": {
+    "cash": "Zero return. Both versions.",
+    "always_in": "Holding SPY from the 15:30 bar open to its close on every eligible day, charged the same per-side cost every day. The long-only timing comparison."
+  },
+  "paired_difference": "Per eligible day: long-only net return minus the always-in net return. It is zero on long days and equals the round-trip cost minus the half-hour return on flat days, so part of it is saved trading cost. The same difference without costs is reported only.",
+  "observation_unit": "One observation per eligible session. A flat day is an observation with return zero, so the series keeps its calendar order for the block bootstrap. The mean per traded day is also reported; it has the same sign.",
+  "folds": "calendar_year_of_session",
+  "support_thresholds": {
+    "minimum_eligible_days": 2300,
+    "minimum_supported_years": 9,
+    "minimum_eligible_days_per_year": 230,
+    "minimum_traded_days": 800
+  },
+  "support_rationale": "The exchange calendar has 2,514 development sessions; less the first and 21 early closes that leaves at most 2,492 eligible days, 247 to 251 a year. The thresholds allow about 7 percent of days to be lost to missing bars and one thin year. Each version must also trade on at least 800 days (about a third of eligible days); this depends on the signal, so it is checked only after the claim.",
+  "support_audit": {
+    "required_before_claim": true,
+    "kind": "half_hour_bar_timestamp_only",
+    "rule": "`--support-audit` reads bar dates and times only and writes artifacts/intraday_momentum_trial_20261115/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial."
+  },
+  "acceptance": {
+    "positive_lower_bound_vs_cash_at_primary": true,
+    "positive_at_stress": true,
+    "long_only_positive_mean_vs_always_in_at_primary": true,
+    "long_only_lower_bound_vs_always_in": "reported_only",
+    "minimum_positive_years": 6,
+    "long_only_summary": "All of: adequate support; the bootstrap lower bound of the mean net return per eligible day at 1 bp per side is above zero; the mean net return is above zero at 2 bps per side; the mean net return at 1 bp is above zero in at least 6 of the 10 calendar years; the mean paired difference against always-in at 1 bp is above zero.",
+    "long_short_summary": "All of: adequate support; the bootstrap lower bound of the mean net return per eligible day at 1 bp per side is above zero; the mean net return is above zero at 2 bps per side; the mean net return at 1 bp is above zero in at least 6 of the 10 calendar years.",
+    "timing_criterion_choice": "The timing comparison requires a positive mean, not a positive lower bound. The difference is non-zero only on flat days, about half the sample, so a required bound would be a second significance test with about half the data, and the 1.25 percent level was sized for two tests. The case it guards against, a last half hour that simply drifts up by more than the cost, makes the expected difference negative. The lower bound is reported.",
+    "reported_only": "The 0.5 bp tier, both variants, the timing lower bound, the timing difference without costs, the plain last-half-hour return, Sharpe, maximum drawdown, annualized percent, days traded and per-year figures.",
+    "pass_means": "Long-only pass: in 2016-2025, after 1 bp per side, being in SPY for the last half hour only after a positive first half hour made money by a margin a block bootstrap separates from zero, in most years, still made money at double the cost, and did better than being in every day. It permits one check on the untouched holdout and, if that agrees, at least eight weeks on the paper account. It does not permit real-money trading. Long-short pass: the same against cash; it cannot be traded while shorting is disabled.",
+    "fail_means": "Retired: the data were adequate and at least one criterion failed. Both versions end; no tuning of signal, times, thresholds, variants, costs or acceptance follows. Inconclusive: support was inadequate after the claim; the budget is still consumed."
+  },
+  "multiple_testing": "This contract tests two hypotheses, so each bootstrap lower bound is the 1.25th percentile (a 97.5 percent two-sided interval) instead of the 2.5th. By the swing contract's count seven earlier hypotheses were tested and none passed, so a pass here would be the first in nine attempts on overlapping data; at this threshold the chance of at least one false pass in nine is roughly 11 percent. That is why a pass leads to one untouched holdout check and paper trading, not to real money.",
+  "bootstrap": {
+    "unit": "circular_blocks_of_eligible_days",
+    "block_days": 21,
+    "replicates": 10000,
+    "seed": 20261115,
+    "lower_quantile": 0.0125
+  },
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "parameter_justifications": {
+    "symbols.instrument=SPY": "The instrument of Gao et al.; the most liquid US equity product, so cost is smallest where the effect is smallest.",
+    "timeframe=30Min": "Gao et al. split the day into 13 half hours; half-hour bars give every price the rules need (the 10:00, 15:00, 15:30 and final prices) in one thirtieth of the rows of minute bars.",
+    "adjustment=all": "The signal spans the overnight gap; without dividend adjustment each quarterly ex-dividend morning would read about 0.3 percent too low and flip signs.",
+    "signal.bar=09:30, reference=prior close": "Gao et al. measure the first half hour from the previous close to 10:00, so it includes the overnight gap.",
+    "signal.threshold=0": "The published timing rule uses the sign alone; any band would be a tuned parameter.",
+    "signal=single predictor": "The headline predictor of Gao et al.; see signal.choice.",
+    "trade.entry=15:30 open, exit=15:30 close": "The last half hour is the predicted interval in both papers; no position is held overnight.",
+    "trade.exposure=1.0": "No leverage, no sizing rule, nothing to tune.",
+    "session_rules.early_closes=skip": "On a 13:00 close there is no 15:30; redefining the last half hour for those days would add a rule the papers do not test.",
+    "reported_only_variants.high_volatility=21/252 sessions": "One trading month and one trading year, the windows of the earlier contracts; both papers report a stronger effect in volatile markets. Reported only.",
+    "cost_tiers=1/2/0.5 bps per side": "1 bp is just above the measured mean of 0.9 bps and several times SPY's half-spread; 2 bps is the top of the interval on the measured mean (2.1) and about the 81st percentile of the fills; 0.5 bps lies between the measured median and mean.",
+    "acceptance.minimum_positive_years=6": "A majority of ten years, as in the swing contract; an effect that pays only in crisis years would otherwise pass on one episode.",
+    "support_thresholds": "About 92 percent of the possible days and nine of ten years; see support_rationale.",
+    "bootstrap.block_days=21": "One trading month of daily observations. Day-to-day returns are nearly uncorrelated, but volatility, and with it the size of this effect, clusters for weeks, and Baltussen et al. find the move reverts over the following days; a month keeps those runs inside a block while leaving about 119 blocks.",
+    "bootstrap.replicates=10000, lower_quantile=0.0125": "The swing contract's values: Bonferroni for two hypotheses at a 5 percent two-sided level."
+  },
+  "data_required": "From Alpaca, SIP feed: 30-minute bars for SPY, adjustment=all, 2016-01-04 to 2025-12-31, one request per calendar year. Nothing else.",
+  "data_size_estimate": "Not measured. The provider returns extended-hours bars too: about 32 bars a session x 2,514 sessions, about 80,000 bars over about ten paginated requests. Regular-session bars kept: about 13 x 2,514, about 32,500 rows in one CSV of about 2 to 3 MB.",
+  "acquisition": "Not done. After registration and on the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, retries a transient error up to four times, refuses any bar dated outside development or in 2026, refuses a download in which more than 1 percent of full sessions lack a bar, and refuses to overwrite an existing acquisition.",
+  "acquisition_manifest": "artifacts/intraday_momentum_trial_20261115/data/acquisition.json",
+  "availability_check": "none; no request has been made",
+  "preconditions": [
+    "owner approves these written rules before any result exists",
+    "owner adopts a research-reset amendment and config/research_reset.json registered_trials cites this campaign_id",
+    "status set to registered, draft_notice removed, and the contract registered under artifacts/intraday_momentum_trial_20261115/campaign_state.json before any price is read",
+    "owner approves the one-time acquisition; manifest written with the source hash",
+    "timestamp-only support audit passes",
+    "non-claiming preflight passes: source hash, 2016-2025 date bounds, no 2026 timestamp, price validity, support after invalid bars are dropped"
+  ],
+  "stop_rule": "Claim once immediately before scoring; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires both versions and authorizes no tuning of any parameter, variant, cost or acceptance rule.",
+  "holdout_policy": "2026-09-09 to 2026-12-08 is not read during development. It is reserved as the single final check if the long-only version passes: about 60 sessions, scored once with these rules unchanged, as a consistency check that cannot establish significance. If it agrees, at least eight weeks on the paper account follow before any further decision.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical half-hour bar markouts on adjusted prices with fixed costs: bought at the bar's first trade price and sold at its last. Neither is a fill the account could count on, and the closing auction is not modelled.",
+  "limitations": [
+    "The effect is small: the research notes recall a published timing return of a couple of basis points per day before costs (not re-checked against the paper), about the size of the 2 bp round trip charged here. The long-only version trades only about half the days.",
+    "The published SPY sample ends in 2013; informal replications on later data found it weaker. Same-day option volume has since changed how dealers hedge.",
+    "Both papers find the effect concentrated in volatile markets and on days when dealers are short gamma; the plain rule trades every day and dilutes it.",
+    "A bar's open and close are prints, not executable fills. The 15:30 bar's close is the last trade before 16:00, not the closing-auction price, and the auction is not modelled.",
+    "The paper account's fills ignore queue position and market impact, and the measured costs come from midday mega-cap stock orders, not SPY at 15:30 or at the close.",
+    "The provider is assumed to stamp 30-minute bars on the half hour in New York time and to build them from regular trades; acquisition refuses bars off that grid, but how the provider treats late or odd-lot prints is not established.",
+    "Part of the timing comparison is saved trading cost on flat days rather than foresight; the comparison without costs is reported.",
+    "Earlier research viewed SPY daily prices for 2016-2025; the window is not untouched."
+  ],
+  "runner": "ai_trading/tools/intraday_momentum_trial.py"
+}
