@@ -399,6 +399,11 @@ def _register(root, payload=None):
     return state_path, trial.Clients(trading=_FakeTrading(), data=_FakeData(daily_development_dates(payload)))
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_pause(monkeypatch):
+    monkeypatch.setattr(trial, "sleep", lambda seconds: None)
+
+
 @pytest.fixture
 def registered(tmp_path):
     return (tmp_path, *_register(tmp_path))
@@ -407,6 +412,46 @@ def registered(tmp_path):
 def _run(root, mode, clients, path="config/trial.json"):
     return trial.run(root, mode=mode, contract_path=Path(path), client_factory=lambda: clients,
                      sector_lookup=lambda symbol: SECTORS.get(symbol))
+
+
+def test_acquisition_survives_a_short_outage_and_asks_for_the_whole_first_month(registered, monkeypatch):
+    root, _, clients = registered
+    served, outages = clients.data.get_stock_bars, iter([True, True, False, True])
+
+    def flaky(request):
+        if next(outages, False):
+            raise OSError("provider unavailable")
+        return served(request)
+
+    clients.data.get_stock_bars = flaky
+    acquired = _run(root, "acquire", clients)
+    manifest = json.loads(Path(acquired["manifest"]).read_text())
+    assert acquired["status"] == "acquisition_written" and manifest["failed"] == {"monthly": {}, "daily": {}}
+    monthly, daily_request = clients.data.requests[0], clients.data.requests[-1]
+    assert monthly.start.astimezone(trial.NEW_YORK).day == 1 and str(monthly.timeframe) == "1Month"
+    assert daily_request.start.astimezone(trial.NEW_YORK).date().isoformat() == small_contract()["development_start"]
+
+
+def test_acquisition_refuses_a_degraded_download_and_leaves_a_retry_possible(registered, monkeypatch):
+    root, _, clients = registered
+    manifest = root / small_contract()["acquisition_manifest"]
+    with pytest.raises(ValueError, match="sector provider failed"):
+        trial.run(root, mode="acquire", contract_path=Path("config/trial.json"), client_factory=lambda: clients,
+                  sector_lookup=lambda symbol: None)
+    served = clients.data.get_stock_bars
+
+    def daily_gap(request):
+        answer = served(request)
+        if str(request.timeframe) == "1Day":
+            answer.data = {s: bars for s, bars in answer.data.items() if s in ("SPY", NAMES[0])}
+        return answer
+
+    clients.data.get_stock_bars = daily_gap
+    with pytest.raises(ValueError, match="without daily bars"):
+        _run(root, "acquire", clients)
+    assert not manifest.exists()
+    clients.data.get_stock_bars = served
+    assert _run(root, "acquire", clients)["status"] == "acquisition_written"
 
 
 def test_acquisition_freezes_a_point_in_time_universe_and_stages_claim_exactly_once(registered, monkeypatch):

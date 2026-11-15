@@ -56,6 +56,16 @@ The runner's asset-list read was changed on November 15 (`0b8d88f39`) to take
 unvalidated rows, because the pinned SDK rejected the whole list on a new
 exchange code. This affects which rows can be read, not any rule.
 
+An independent pre-run review on November 15 found no defect in scoring,
+accounting or acceptance, and three ways the download could silently degrade.
+The runner was changed before the ledger existed and before any download:
+transient provider errors are retried; the monthly request starts on the 1st
+so the first month is not omitted; the sector lookup runs before the daily
+download and waits out rate limits; and acquisition refuses to write a
+manifest if more than 1% of candidates fail the monthly fetch, more than 1% of
+universe members have no daily bars, or more than half have no sector. These
+are data-integrity checks; no strategy rule or acceptance threshold changed.
+
 ## What a pass would permit
 
 Planning only: one untouched consistency check on the reserved holdout

@@ -28,6 +28,8 @@ from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time
+from functools import partial
+from time import sleep
 from pathlib import Path
 from typing import Any, cast
 
@@ -54,6 +56,10 @@ PROBE_STATUSES = {"delisted_symbols_served": "none_detected_by_probe", "delisted
 PRICE_COLUMNS = daily.PRICE_COLUMNS
 CHUNK = 100
 SECTOR_LOOKUP_ERRORS = (OSError, ValueError, KeyError, AttributeError, TypeError)
+FETCH_ATTEMPTS = 4
+RETRY_PAUSE_SECONDS = 20.0
+MAX_FAILED_FETCH_FRACTION = 0.01  # of candidates (monthly) and of universe members (daily)
+MAX_UNMAPPED_SECTOR_FRACTION = 0.5  # above this the sector provider failed and the rule would not be sector-relative
 
 
 @dataclass(frozen=True)
@@ -485,8 +491,17 @@ def _default_sector_lookup(symbol: str) -> str | None:
     """Today's sector label from the provider the runtime risk code falls back to; not point-in-time."""
     import yfinance
 
-    value = (yfinance.Ticker(symbol).info or {}).get("sector")
-    return str(value) if value else None
+    from yfinance.exceptions import YFRateLimitError
+
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            value = (yfinance.Ticker(symbol).info or {}).get("sector")
+            return str(value) if value else None
+        except YFRateLimitError:
+            if attempt == FETCH_ATTEMPTS - 1:
+                raise RuntimeError("sector provider rate limit did not clear; acquisition stopped before any manifest") from None
+            sleep(RETRY_PAUSE_SECONDS * 3 * (attempt + 1))
+    return None
 
 
 def list_assets(trading: Any) -> list[dict[str, Any]]:
@@ -532,6 +547,18 @@ def candidate_symbols(assets: list[dict[str, Any]], spec: SwingSpec) -> tuple[li
     return sorted(kept), dict(counts)
 
 
+def _with_retries(call: Callable[[], Any], errors: tuple[type[BaseException], ...], *, attempts: int = FETCH_ATTEMPTS) -> Any:
+    """A short provider outage must not drop a whole batch; the last error is re-raised for the caller to record."""
+    for attempt in range(attempts):
+        try:
+            return call()
+        except errors:
+            if attempt == attempts - 1:
+                raise
+            sleep(RETRY_PAUSE_SECONDS * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 def fetch_bars(data: Any, symbols: list[str], start: str, end: str, *, monthly: bool) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
     """Bars keyed by symbol. Monthly bars are raw; daily bars use adjustment=all. Failures are recorded, never hidden."""
     from alpaca.common.exceptions import APIError
@@ -544,7 +571,8 @@ def fetch_bars(data: Any, symbols: list[str], start: str, end: str, *, monthly: 
     def request(batch: list[str]) -> dict[str, list[Any]]:
         query = StockBarsRequest(
             symbol_or_symbols=batch, timeframe=TimeFrame.Month if monthly else TimeFrame.Day,
-            start=datetime.combine(date.fromisoformat(start), time(0), NEW_YORK),
+            # A monthly bar is stamped on the 1st, so a request starting on the first session would omit that month.
+            start=datetime.combine(date.fromisoformat(start).replace(day=1) if monthly else date.fromisoformat(start), time(0), NEW_YORK),
             end=datetime.combine(date.fromisoformat(end), time(23, 59), NEW_YORK),
             feed=DataFeed.SIP, adjustment=Adjustment.RAW if monthly else Adjustment.ALL)
         return dict(getattr(data.get_stock_bars(query), "data", {}))
@@ -554,13 +582,13 @@ def fetch_bars(data: Any, symbols: list[str], start: str, end: str, *, monthly: 
     for offset in range(0, len(symbols), CHUNK):
         batch = symbols[offset:offset + CHUNK]
         try:
-            groups = [request(batch)]
+            groups = [_with_retries(partial(request, batch), request_errors)]
         except request_errors as exc:  # one unknown symbol can fail a batch: retry singly and record
             LOGGER.warning("SWING_REVERSAL_BATCH_RETRY", extra={"first_symbol": batch[0], "error": type(exc).__name__})
             groups = []
             for symbol in batch:
                 try:
-                    groups.append(request([symbol]))
+                    groups.append(_with_retries(partial(request, [symbol]), request_errors, attempts=2))
                 except request_errors as single:  # recorded in the manifest, never hidden
                     failed[symbol] = type(single).__name__
         for group in groups:
@@ -603,6 +631,18 @@ def acquire(root: Path, contract: dict[str, Any], spec: SwingSpec, canonical: st
     months = sorted({d.isoformat()[:7] for d in daily_development_dates(contract)})
     universe = build_universe(monthly, months, spec)
     ever = sorted({s for names in universe.values() for s in names})
+    sector_map = {}
+    for symbol in ever:
+        try:
+            sector_map[symbol] = sector_lookup(symbol) or UNMAPPED
+        except SECTOR_LOOKUP_ERRORS as exc:  # an unmapped symbol is measured against the universe; counted below
+            LOGGER.warning("SWING_REVERSAL_SECTOR_UNMAPPED", extra={"symbol": symbol, "error": type(exc).__name__})
+            sector_map[symbol] = UNMAPPED
+    unmapped = sum(v == UNMAPPED for v in sector_map.values())
+    if unmapped > MAX_UNMAPPED_SECTOR_FRACTION * len(ever):
+        raise ValueError(f"sector provider failed:unmapped={unmapped}:members={len(ever)}")
+    if len(monthly_failed) > MAX_FAILED_FETCH_FRACTION * len(candidates):
+        raise ValueError(f"too many monthly fetch failures:{len(monthly_failed)}:candidates={len(candidates)}")
     daily_bars, daily_failed = fetch_bars(clients.data, sorted({*ever, spec.market}), start, end, monthly=False)
     daily.check_development_sessions({s: [bar["session"] for bar in bars] for s, bars in daily_bars.items()}, contract)
     if not daily_bars.get(spec.market):
@@ -616,13 +656,9 @@ def acquire(root: Path, contract: dict[str, Any], spec: SwingSpec, canonical: st
             raise ValueError(f"duplicate sessions:{symbol}")
         sources[symbol] = dict(_write_hashed(root, directory / "daily" / f"{symbol}.csv", frame.to_csv(index=False)), rows=len(frame),
                                first_session=str(frame.session.iloc[0]), last_session=str(frame.session.iloc[-1]))
-    sector_map = {}
-    for symbol in ever:
-        try:
-            sector_map[symbol] = sector_lookup(symbol) or UNMAPPED
-        except SECTOR_LOOKUP_ERRORS as exc:  # an unmapped symbol is measured against the universe; counted below
-            LOGGER.warning("SWING_REVERSAL_SECTOR_UNMAPPED", extra={"symbol": symbol, "error": type(exc).__name__})
-            sector_map[symbol] = UNMAPPED
+    missing_daily = [s for s in ever if s not in sources]
+    if len(missing_daily) > MAX_FAILED_FETCH_FRACTION * len(ever):
+        raise ValueError(f"too many universe members without daily bars:{len(missing_daily)}:members={len(ever)}")
     as_json = lambda payload: json.dumps(payload, indent=1, sort_keys=True) + "\n"  # noqa: E731
     frozen = dict(
         assets=_write_hashed(root, directory / "assets.json", as_json(assets)),
@@ -631,9 +667,9 @@ def acquire(root: Path, contract: dict[str, Any], spec: SwingSpec, canonical: st
         sectors=_write_hashed(root, directory / "sectors.json", as_json(sector_map)))
     counts = dict(assets=len(assets), inactive_assets=sum(row["status"] == "inactive" for row in assets),
                   candidates=len(candidates), **exclusions, symbols_with_monthly_bars=len(monthly_bars),
-                  ever_in_universe=len(ever), ever_in_universe_without_daily_bars=len([s for s in ever if s not in sources]),
+                  ever_in_universe=len(ever), ever_in_universe_without_daily_bars=len(missing_daily),
                   ever_in_universe_inactive=len({row["symbol"] for row in assets if row["status"] == "inactive"} & set(ever)),
-                  unmapped_sectors=sum(v == UNMAPPED for v in sector_map.values()))
+                  unmapped_sectors=unmapped)
     manifest = dict(campaign_id=contract["campaign_id"], contract_hash=canonical, feed="sip", adjustment="all",
                     request=dict(start=start, end=end), fetched_at=datetime.now(NEW_YORK).isoformat(), sources=sources,
                     frozen=frozen, counts=counts, failed=dict(monthly=monthly_failed, daily=daily_failed),
