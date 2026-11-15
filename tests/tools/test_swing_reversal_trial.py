@@ -557,3 +557,14 @@ def test_a_failing_symbol_is_retried_alone_and_recorded_not_hidden():
     found, failed = trial.fetch_bars(data, ["SA", "BAD", "SB"], "2024-01-02", "2024-12-31", monthly=True)
     assert sorted(found) == ["SA", "SB"] and failed == {"BAD": "ValueError"}
     assert len(found["SA"]) == 12 and set(found["SA"][0]) == {"session", "open", "high", "low", "close", "volume", "vwap"}
+
+
+def test_list_assets_reads_unvalidated_rows_so_an_unknown_exchange_does_not_reject_the_list():
+    class _RawTrading:
+        def get(self, path, params):
+            assert path == "/assets"
+            return [{"symbol": "AAA", "name": "Aaa Inc. Common Stock", "exchange": "TXSE", "shortable": True, "easy_to_borrow": False}]
+
+    rows = trial.list_assets(_RawTrading())
+    assert [row["status"] for row in rows] == ["active", "inactive"]
+    assert rows[0]["exchange"] == "TXSE" and rows[0]["shortable"] is True and rows[0]["easy_to_borrow"] is False

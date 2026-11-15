@@ -494,12 +494,24 @@ def list_assets(trading: Any) -> list[dict[str, Any]]:
     from alpaca.trading.enums import AssetClass, AssetStatus
     from alpaca.trading.requests import GetAssetsRequest
 
+    def field(asset: Any, name: str) -> Any:
+        return asset.get(name) if isinstance(asset, dict) else getattr(asset, name, None)
+
+    def fetch(request: Any) -> Any:
+        # The pinned SDK validates ``exchange`` against a closed enum and rejects the whole list when the
+        # broker adds a venue (seen: "TXSE"). Its REST ``get`` returns the same rows unvalidated.
+        raw_get = getattr(trading, "get", None)
+        if callable(raw_get) and hasattr(request, "to_request_fields"):
+            return raw_get("/assets", request.to_request_fields())
+        return trading.get_all_assets(request)
+
     rows = []
     for status in (AssetStatus.ACTIVE, AssetStatus.INACTIVE):
-        for asset in trading.get_all_assets(GetAssetsRequest(status=status, asset_class=AssetClass.US_EQUITY)):
-            rows.append(dict(symbol=str(asset.symbol), name=str(asset.name or ""), status=status.value,
-                             exchange=str(getattr(asset.exchange, "value", asset.exchange)),
-                             shortable=bool(asset.shortable), easy_to_borrow=bool(asset.easy_to_borrow)))
+        for asset in fetch(GetAssetsRequest(status=status, asset_class=AssetClass.US_EQUITY)):
+            exchange = field(asset, "exchange")
+            rows.append(dict(symbol=str(field(asset, "symbol")), name=str(field(asset, "name") or ""), status=status.value,
+                             exchange=str(getattr(exchange, "value", exchange)),
+                             shortable=bool(field(asset, "shortable")), easy_to_borrow=bool(field(asset, "easy_to_borrow"))))
     return sorted(rows, key=lambda row: (row["symbol"], row["status"]))
 
 
