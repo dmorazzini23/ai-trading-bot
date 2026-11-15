@@ -7,7 +7,13 @@ exchange calendar. `config/research_reset.json` is unchanged.
 
 The top candidate has a complete draft contract:
 `config/turn_of_month_exposure_trial_20261114_campaign.json`, status
-`draft_not_registered`. The other two are outlined below.
+`draft_not_registered`. It has no runner yet.
+
+Candidate 2 was prepared on November 15: it has a runner
+(`ai_trading/tools/fixed_mix_trial.py`), tests on synthetic prices, and a
+draft contract (`config/fixed_mix_trial_campaign.json`, status
+`draft_not_registered`, mix not confirmed). The runner has not been run on any
+real price file. Candidate 3 is an outline.
 
 ## 1. What the four consumed campaigns say
 
@@ -76,8 +82,8 @@ candidates.**
 
 The first two refuse a contract whose status is not `registered`, or one
 that `config/research_reset.json` does not list; the third reads only its own
-fixed path. Each candidate needs a small runner, written and tested before
-registration.
+fixed path. Candidates 1 and 3 each need a small runner, written and tested
+before registration. Candidate 2 now has one (section 3, rank 2).
 
 ## 3. Three candidates, ranked
 
@@ -123,43 +129,113 @@ target weights. It could run inside the no-model mode only if that mode
 accepts scheduled weight changes; that code is not on this branch and was not
 checked.
 
-### Rank 2: fixed diversified mix with tolerance-band rebalancing
+### Rank 2: fixed mix with tolerance-band rebalancing
 
-**Rule.** Hold 60% SPY and 40% IEF. Rebalance to target only when either
-weight is more than 5 percentage points from target at a session close,
-trading at the next open. This is the rule the portfolio manager proposal
-describes, and it settles that proposal's open question 4 (band width and
-calendar frequency) for one mix.
+**Prepared, not registered.** Runner: `ai_trading/tools/fixed_mix_trial.py`.
+Draft contract: `config/fixed_mix_trial_campaign.json`. The runner takes the
+symbols, target weights, cash buffer, band and calendar rule from the
+contract, for any number of assets, so it scores whatever mix the owner
+confirms.
 
-**Rationale.** Treasuries have had low or negative correlation with equities
-in most sell-offs, so a fixed mix lowers drawdown. Bands trade less than a
-calendar rule for the same drift control (Masters 2003; Daryanani 2008).
+**Rule.** Hold the owner's mix. Rebalance every asset to target when any
+weight, including the cash buffer, is strictly more than 5 points from
+target, or at a quarterly check when the largest drift is above 1 point.
+These are the triggers of `ai_trading/portfolio_manager/rebalance.py` on
+branch `claude/portfolio-manager-mode`.
 
-**Why it is distinct.** Fixed weights. No signal of any kind.
+**The mix is not set.** The draft copies the portfolio manager's placeholder
+plan (VTI 50, VXUS 20, BND 25, cash-like 4, cash 1) and marks it as to be
+replaced. Two things follow from the data window:
 
-**Draft acceptance, to be fixed in its own contract.** Maximum drawdown at
-most 0.75 times buy-and-hold SPY; Sharpe at least equal to SPY as a point
-estimate at 10 bps; turnover at most 0.5 per year. Reported only: the same
-mix under quarterly calendar rebalancing, for turnover and drift.
+- Every asset needs daily bars from 2016-01-04. SGOV is believed to have been
+  listed in 2020 (not checked), so the draft uses BIL for that sleeve. The
+  support audit blocks any symbol listed later than the window start.
+- A mix confirmed after a result has been seen is not a pre-registered test.
+  A different mix is a new hypothesis with its own contract.
 
-**Data needed.** IEF daily SIP bars, `adjustment=all`, 2016-01-04 to
-2025-12-31, acquired once into a hashed manifest. SPY would be re-acquired or
-reused by hash. The owner may prefer AGG or BND; that choice must be made
-before registration, not after.
+**Rationale.** Assets with low correlation to equities lower drawdown, and
+returning to fixed weights stops risk drifting toward whatever rose most.
+Bands trade less than a calendar rule for the same drift control (Masters
+2003; Daryanani 2008).
 
-**Why it might fail.** Bonds fell with equities in 2022, the largest
-drawdown in the window, so the drawdown gain may be small. The decade was
-strong for equities and weak for bonds, so the Sharpe criterion is more
-likely to fail than pass. A two-asset band rule may trigger fewer than ten
-times in ten years, which says little about the rule itself.
+**Acceptance, written before any result.** All of these at 10 bps, and the
+first three again at 20 bps:
 
-**Relation to holding SPY.** It will trail SPY in rising markets; the
-portfolio manager proposal says the same. It is a risk choice, not an edge.
-A retired result would not argue against running the portfolio manager,
-which claims no edge. It would argue against expecting the mix to match SPY.
+| Criterion | Threshold |
+| --- | --- |
+| Maximum drawdown against buy-and-hold SPY | at most 0.85 times |
+| Maximum drawdown against the same mix never rebalanced | at most 1.0 times |
+| Sharpe minus SPY's Sharpe, point estimate | at least 0 |
+| Annual one-way turnover after the first purchase | at most 0.5 |
+| Support | at least 2,400 sessions, 9 years of 240, at most 20 missing |
 
-**Fit with the portfolio manager.** Direct. This is the candidate where the
-two paths meet: the contract's weights and band are the mode's configuration.
+The Sharpe-difference interval is reported, not required.
+
+**Differences from the portfolio manager that daily bars force.**
+
+- The manager checks after 10:00 ET and trades the same day. The trial
+  decides on the previous close and trades at the next open.
+- The trial trades exact fractional weights. Whole shares, the minimum order,
+  order limits and the 25% daily cap are not modelled.
+- Every triggered rebalance is assumed approved and filled.
+- There are no deposits or withdrawals, so the cash-flow trigger never fires.
+- "Strictly greater" uses a 1e-12 guard on floating-point weights where the
+  manager compares exact decimals.
+
+**Data needed.** Daily SIP bars, `adjustment=all`, 2016-01-04 to 2025-12-31,
+for each mix asset plus SPY and BIL. Nothing has been acquired. The SPY and
+BIL files on disk cannot be reused, because the manifest must carry this
+contract's hash. Acquisition needs the Alpaca data credentials and the
+owner's word.
+
+**What a pass or a fail would tell the owner.** This is a risk choice, not an
+edge.
+
+- A pass says that, in 2016–2025, this mix fell materially less than SPY at
+  its worst, was not worse than SPY per unit of risk as a point estimate, and
+  that rebalancing did not deepen the worst loss. It does not say the mix
+  beats SPY, that it will do so again, or that anything here has an edge.
+- A fail most likely means the Sharpe criterion failed. The decade was strong
+  for US equities and weak for bonds, and bonds fell with equities in 2022.
+  That outcome is more likely than not for any mix with a large bond share.
+- Neither result decides whether to run the portfolio manager. That mode
+  claims no edge and has its own operational gate.
+- The rebalanced-against-never-rebalanced comparison may rest on a handful of
+  band triggers in ten years.
+
+**Relation to holding SPY.** The mix will trail SPY's return in rising
+markets. SPY is both the drawdown and the Sharpe comparison.
+
+**Running it.** Each step needs the owner's word.
+
+1. Confirm the mix. Set `mix.assets`, `mix.cash_buffer_weight` and
+   `mix.owner_confirmed: true`; remove `mix.to_be_set` and `draft_notice`.
+2. Adopt an amendment and add `fixed_mix_trial_20261115` to
+   `registered_trials` in `config/research_reset.json`.
+3. Set `status` to `registered` and register the ledger:
+
+```bash
+./venv/bin/python -c "
+import json, pathlib
+from ai_trading.tools.experiment_ledger import register_campaign
+contract = json.loads(pathlib.Path('config/fixed_mix_trial_campaign.json').read_text())
+register_campaign(pathlib.Path('artifacts') / contract['campaign_id'] / 'campaign_state.json', contract)
+"
+```
+
+4. Then, in order:
+
+```bash
+RUN="./venv/bin/python -m ai_trading.tools.fixed_mix_trial --repository-root . --contract config/fixed_mix_trial_campaign.json"
+$RUN --acquire         # one download, hash manifest; needs credentials; never claims
+$RUN --support-audit   # session dates only; never reads prices or claims
+$RUN --preflight       # source hashes, date bounds, price validity; never claims
+$RUN --fit             # the single claim, from a closed market window
+```
+
+A result of `retired` or `inconclusive_budget_consumed` ends the hypothesis
+for this mix. Weights, band, calendar, assets and costs are not tuned
+afterwards.
 
 ### Rank 3: pre-FOMC drift (SPY and BIL)
 
@@ -248,13 +324,18 @@ None of the three candidates needs September 9–December 8, 2026 during
 development; every development window ends on 2025-12-31. The holdout holds
 three month-ends and, by the published 2026 schedule, two FOMC announcements, too few to score either
 calendar rule, so those contracts ask for forward paper observation after a
-pass instead of a holdout score. The fixed mix could use the holdout once as
-a consistency check under the December 9 plan.
+pass instead of a holdout score. The fixed-mix contract allows at most one holdout
+consistency check after a pass, and says that about 62 sessions cannot
+establish anything about drawdown or Sharpe.
 
 ## 6. Change record
 
-- Added this document and the draft contract. No runtime code, test,
-  `config/research_reset.json` or reset document changed.
+- November 14: added this document and the turn-of-month draft contract.
+- November 15: added `ai_trading/tools/fixed_mix_trial.py`,
+  `tests/tools/test_fixed_mix_trial.py` and the fixed-mix draft contract, and
+  rewrote the rank 2 section. The new module is a research tool that nothing
+  in the runtime imports. `config/research_reset.json` and the reset
+  documents are unchanged.
 - No test or tool enumerates `config/*_campaign.json`; each names its
   contract path. The draft is inert because both contract-driven
   runners refuse a status other than `registered`.

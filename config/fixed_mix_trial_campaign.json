@@ -1,0 +1,139 @@
+{
+  "campaign_id": "fixed_mix_trial_20261115",
+  "status": "draft_not_registered",
+  "draft_notice": "Proposal only (docs/RESEARCH_CANDIDATES_20261114.md, candidate 2). Not adopted by the owner, not listed in config/research_reset.json registered_trials, no ledger exists, and nothing has been acquired, audited, preflighted, claimed or scored. The runner refuses this file while status is not 'registered' or mix.owner_confirmed is not true.",
+  "authorization": "none; requires an owner-adopted research-reset amendment before status may change",
+  "max_trials": 1,
+  "hypotheses": [
+    "owner_fixed_mix_band_5pt_quarterly_calendar_v1"
+  ],
+  "hypothesis": "The owner's fixed mix, rebalanced to target when any weight is strictly more than 5 points from target or at a quarterly check with drift above 1 point, has a maximum drawdown at most 0.85 times buy-and-hold SPY, a Sharpe ratio at least equal to buy-and-hold SPY, and a maximum drawdown no larger than the same mix never rebalanced, after a fixed 10 bps round-trip cost on traded weight.",
+  "economic_motivation": "Assets with low or negative correlation to equities lower portfolio drawdown, and returning to fixed weights keeps risk from drifting toward whichever asset has risen most. Tolerance bands trade less than a pure calendar rule for the same drift control (Masters 2003; Daryanani 2008). This is a risk choice with no signal and no claimed edge.",
+  "distinct_from_consumed": "Fixed weights. No price-direction signal (research_reset_trend_20260908), no ranking (cross_sectional_momentum_trial_20261018), no volatility estimate (volatility_target_core_trial_20261025), no model and no intraday horizon (day_sleeve_horizon_trial_20261018).",
+  "development_start": "2016-01-04",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "mix": {
+    "owner_confirmed": false,
+    "to_be_set": "PLACEHOLDER. Replace assets and cash_buffer_weight with the owner's confirmed mix, then set owner_confirmed to true, before registration and before any price is read. The values below copy the portfolio manager's placeholder plan (config/portfolio_plan.json on claude/portfolio-manager-mode) with BIL standing in for SGOV; they are an illustration, not a recommendation.",
+    "cash_buffer_weight": "0.01",
+    "assets": [
+      {"symbol": "VTI", "target_weight": "0.50"},
+      {"symbol": "VXUS", "target_weight": "0.20"},
+      {"symbol": "BND", "target_weight": "0.25"},
+      {"symbol": "BIL", "target_weight": "0.04"}
+    ]
+  },
+  "mix_constraints": "Target weights plus cash_buffer_weight must sum to 1. Every asset needs a daily bar on essentially every session from 2016-01-04; the support audit blocks a symbol listed later. SGOV is believed to have been listed in 2020 (not checked here), so the placeholder uses BIL for that sleeve; the owner may instead shorten the development window, which weakens the test and changes the support thresholds.",
+  "symbols": {
+    "benchmark": "SPY",
+    "risk_free": "BIL"
+  },
+  "feed": "sip",
+  "adjustment": "all",
+  "data_required": "Daily SIP bars, adjustment=all, 2016-01-04 through 2025-12-31, for every mix asset plus SPY (benchmark) and BIL (cash return for Sharpe). The SPY and BIL files of volatility_target_core_trial_20261025 cannot be reused: the manifest must carry this contract's hash.",
+  "acquisition": "Not done. After registration and on the owner's word only, `--acquire` downloads each symbol once into a hash-manifested artifact; it needs the Alpaca data credentials, refuses any row dated in 2026 before a file is written, and refuses to overwrite an existing acquisition.",
+  "acquisition_manifest": "artifacts/fixed_mix_trial_20261115/data/acquisition.json",
+  "availability_check": "none run; no request of any kind was made for this draft",
+  "rebalance": {
+    "band_abs": "0.05",
+    "calendar_frequency": "quarterly",
+    "calendar_min_drift": "0.01"
+  },
+  "rebalance_rule": "Same triggers as ai_trading/portfolio_manager/rebalance.py: drift is weight minus target for each asset and for the cash buffer; any absolute drift strictly greater than band_abs is a band trigger; otherwise a trade date in a later calendar period than the last rebalance, with the largest absolute drift strictly greater than calendar_min_drift, is a calendar trigger. Either trigger rebalances every asset to target. Drift exactly on the band does not trigger.",
+  "decision": "Drift is measured at the close of session t using closes through t only.",
+  "entry": "A triggered rebalance trades at the regular-session open of session t+1. The initial purchase is at the open of the first development session and counts as the last rebalance.",
+  "portfolio_manager_differences": [
+    "Timing: the portfolio manager checks after 10:00 ET with current prices and proposes orders for the same day; the trial decides on the previous close and trades at the next open, because only daily bars are used.",
+    "Sizing: the trial trades exact fractional weights. Whole-share rounding, the 50 dollar minimum order, order-count and notional limits and the 25 percent daily traded cap are not modelled.",
+    "Approval: every triggered rebalance is assumed approved and filled at the open. Owner delay, refusals, limit-order misses and open orders are not modelled.",
+    "Cash flows: no deposits or withdrawals, so the cash-flow trigger never fires.",
+    "Comparison tolerance: weights are floating point, so 'strictly greater' uses a 1e-12 guard where the portfolio manager compares exact decimals.",
+    "Cash buffer: earns zero, as in the portfolio manager; it drifts only because the rest of the portfolio moves."
+  ],
+  "evaluation": {
+    "period_sessions": 5,
+    "annualization": 252
+  },
+  "primary_round_trip_cost_bps": 10,
+  "cost_tiers": [
+    {
+      "name": "primary",
+      "round_trip_bps": 10,
+      "role": "decision"
+    },
+    {
+      "name": "stress_high",
+      "round_trip_bps": 20,
+      "role": "required_criteria_at_stress"
+    },
+    {
+      "name": "stress_low",
+      "round_trip_bps": 6,
+      "role": "reported_only"
+    }
+  ],
+  "cost_accounting": "Each trade pays round_trip_bps / 2 on the absolute weight traded, summed over assets, charged on equity at that open. The initial purchase is charged the same way on the invested weight. Buy-and-hold SPY and the never-rebalanced mix pay one initial purchase only.",
+  "cost_status": "fixed_unverified_scenarios_not_calibrated_execution_costs",
+  "controls": {
+    "benchmark": "100 percent SPY bought at the first open and held; the plan's SPY benchmark.",
+    "never_rebalanced": "The same mix and cash buffer bought at the first open and never traded again; isolates what the rebalance rule itself does.",
+    "risk_free": "BIL daily return; subtracted for Sharpe only."
+  },
+  "sharpe": "Annualized mean / standard deviation of non-overlapping 5-session close-to-close returns in excess of BIL over the same sessions, x sqrt(252 / 5). Maximum drawdown uses daily closes.",
+  "folds": "calendar_year_of_session",
+  "support_thresholds": {
+    "minimum_sessions": 2400,
+    "minimum_supported_years": 9,
+    "minimum_sessions_per_year": 240,
+    "maximum_missing_sessions": 20
+  },
+  "support_rationale": "The exchange calendar has 2514 development sessions, 250 to 253 per year. A session counts only if every symbol has a bar; sessions that do not are dropped and returns span the gap.",
+  "support_audit": {
+    "required_before_claim": true,
+    "kind": "daily_grid_timestamp_only",
+    "rule": "`--support-audit` reads session dates only and writes artifacts/fixed_mix_trial_20261115/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial."
+  },
+  "acceptance": {
+    "drawdown_ratio_vs_benchmark_at_most": 0.85,
+    "drawdown_ratio_vs_never_rebalanced_at_most": 1.0,
+    "sharpe_difference_vs_benchmark_at_least": 0.0,
+    "max_annual_turnover": 0.5,
+    "summary": "All of, at 10 bps: adequate support; maximum drawdown at most 0.85 x buy-and-hold SPY; maximum drawdown at most 1.0 x the never-rebalanced mix; Sharpe(mix) - Sharpe(SPY) >= 0 as a point estimate. The same three comparisons must also hold at 20 bps. Average annual one-way turnover after the initial purchase at most 0.5. Reported only: the 95 percent circular-block-bootstrap interval of the Sharpe difference, CAGR, volatility, per-year returns, rebalance counts by trigger, largest end-of-session drift and the 6 bps tier.",
+    "fixed_when": "Written 2026-11-15 before any mix was confirmed and before any price for this campaign existed. The thresholds apply to whichever mix the owner confirms; they may be changed only before registration."
+  },
+  "acceptance_rationale": "The Sharpe comparison is a point estimate because ten years cannot resolve it: the volatility-target trial's Sharpe-difference interval was about 0.39 wide for a strategy 0.89 invested in SPY. A pass therefore does not show the mix beats SPY with confidence, and nothing here measures an edge.",
+  "bootstrap": {
+    "unit": "circular_blocks_of_periods",
+    "block_periods": 13,
+    "replicates": 10000,
+    "seed": 20261115
+  },
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "preconditions": [
+    "owner confirms the mix; mix.assets, mix.cash_buffer_weight and mix.owner_confirmed are set and mix.to_be_set and draft_notice are removed",
+    "owner adopts a research-reset amendment and config/research_reset.json registered_trials cites this campaign_id",
+    "status set to registered and the contract registered under artifacts/fixed_mix_trial_20261115/campaign_state.json before any price is read",
+    "owner approves the one-time acquisition; manifest written with source hashes",
+    "timestamp-only support audit passes",
+    "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 timestamp, price validity"
+  ],
+  "stop_rule": "Claim once immediately before the simulation; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires this hypothesis for this mix and authorizes no tuning of weights, band, calendar, assets, cost or acceptance. A different owner-chosen mix is a new hypothesis and needs its own contract.",
+  "holdout_policy": "The holdout is not read during development. After a pass, at most one untouched consistency check on 2026-09-09..2026-12-08 under the December 9 review plan; about 62 sessions cannot establish anything about drawdown or Sharpe.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical daily markouts on adjusted prices with fixed costs; executable fills, opening-auction slippage and per-fill fees are not established.",
+  "limitations": [
+    "A pass or fail describes one mix in one decade. 2016-2025 was strong for US equities and weak for bonds, and bonds fell with equities in 2022.",
+    "The result does not decide whether portfolio manager mode should run; that mode claims no edge and has its own operational gate.",
+    "A band rule on a slow-moving mix may trigger only a handful of times in ten years, so the comparison with the never-rebalanced mix rests on few events.",
+    "adjustment=all approximates total return; taxes are not modelled.",
+    "Earlier research viewed SPY and BIL for 2016-2025 and six ETFs for 2024-2025; the window is not untouched."
+  ],
+  "runner": "ai_trading/tools/fixed_mix_trial.py"
+}
