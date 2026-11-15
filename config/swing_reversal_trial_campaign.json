@@ -1,0 +1,219 @@
+{
+  "campaign_id": "swing_reversal_trial_20261115",
+  "status": "draft_not_registered",
+  "draft_notice": "Proposal only (docs/SWING_REVERSAL_TRIAL_RULES_20261115.md). Not adopted by the owner, not listed in config/research_reset.json registered_trials, no ledger exists, and nothing has been acquired, audited, preflighted, claimed or scored. The survivorship probe has not been run. The runner refuses this file while status is not 'registered'.",
+  "authorization": "none; requires an owner-adopted research-reset amendment before status may change",
+  "max_trials": 1,
+  "hypotheses": [
+    "sector_relative_5_session_reversal_top300_long_only_primary_long_short_secondary_v1"
+  ],
+  "versions": {
+    "long_only": "PRIMARY. Buys the recent sector-relative losers only. It must pass on its own, because the paper account has shorting disabled. Its decision is the ledger decision.",
+    "long_short": "SECONDARY. The same long book plus an equal short book of recent sector-relative winners. Its decision is reported as secondary_decision and cannot rescue a failed long-only version."
+  },
+  "ledger_note": "The experiment ledger permits exactly one hypothesis id per campaign, so the two versions are one registered trial with one claim. Both are scored in the same run from the same frozen data.",
+  "hypothesis": "Among the 300 most liquid US common stocks, the 30 with the lowest trailing 5-session return relative to their sector, bought at the next session's open, held for 5 sessions with a hold band, and sized by trailing SPY volatility, earn more per period after 5 bps per side than an SPY position of the same size on the same days (long-only); and the same book with an equal short book of the 30 highest earns more than cash after costs and borrow (long-short).",
+  "economic_motivation": "Short-term reversal is a payment for providing liquidity: investors who must sell quickly push a large stock below where it would otherwise trade, and whoever buys from them is paid as the price recovers over the following days. The payment rises sharply when markets are fearful (Nagel 2012). Measuring the fall against the stock's own industry removes moves that reflect industry news and will not reverse (Da, Liu and Schaumburg 2014). Restricting to large liquid stocks and limiting turnover is what lets the published versions survive costs (de Groot, Huij and Zhou 2012; Novy-Marx and Velikov 2016; Blitz and co-authors 2022).",
+  "distinct_from_consumed": "A cross-sectional, multi-day, single-stock signal against recent losers. The consumed campaigns were an intraday model on three stocks (model_replacement_20260921, day_sleeve_horizon_trial_20261018), a 60-session price-direction filter on six ETFs (research_reset_trend_20260908), a 63-session relative-strength rule that bought winners among six ETFs (cross_sectional_momentum_trial_20261018) and an SPY volatility target (volatility_target_core_trial_20261025). This is not the sign-flip of the momentum trial: the horizon is 5 sessions against 63, the assets are about 300 stocks against 6 ETFs, and the signal is sector-relative.",
+  "development_start": "2016-01-04",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "symbols": {
+    "market": "SPY"
+  },
+  "feed": "sip",
+  "adjustment": "all",
+  "universe": {
+    "size": 300,
+    "reconstitution": "first session of each calendar month",
+    "dollar_volume_months": 3,
+    "minimum_raw_price": 5.0,
+    "exchanges": ["NYSE", "NASDAQ", "AMEX"],
+    "excluded_name_pattern": "\\b(ETF|ETN|Fund|iShares|SPDR|ProShares|Direxion|Vanguard|Invesco|PowerShares|VanEck|WisdomTree|Select Sector|Index|Depositary|ADR|ADS|Warrants?|Units?|Rights?|Preferred|Notes)\\b",
+    "rule": "For month M: every candidate with a monthly bar in each of the 3 calendar months before M and a raw (unadjusted) close of at least 5 dollars at the end of month M-1, ranked by summed raw dollar volume (monthly VWAP x volume) over those 3 months; the top 300 are members for all of month M. Nothing from month M or later is used. The membership table is computed once at acquisition, from raw prices and volume only, and frozen with a hash before any return is computed.",
+    "common_stock_proxy": "The provider's asset list has no security-type field. Candidates are symbols of one to five letters on NYSE, NASDAQ or NYSE American whose current name does not match excluded_name_pattern. ETFs listed on NYSE Arca and Cboe are removed by the exchange rule; the name pattern removes most of the rest, plus depositary receipts, warrants, units, rights and preferred shares. Names are today's names, not point-in-time, and the proxy can misclassify in both directions; the manifest records the count removed by each rule."
+  },
+  "signal": {
+    "lookback_sessions": 5,
+    "relative_to": "equal-weighted mean 5-session return of the universe members in the same sector",
+    "minimum_group_size": 5,
+    "rule": "At the close of decision session t: each member's adjusted close at t divided by its adjusted close at t-5, minus 1, minus the mean of the same quantity over the members in its sector. A member whose sector has fewer than 5 members with valid returns, or which has no sector, is measured against the mean of all members. Members are ranked from 0 (largest relative loser) to 1 (largest relative winner); ties break by symbol."
+  },
+  "industry_mapping": {
+    "source": "The 'sector' field of the yfinance provider, fetched once for every symbol that ever enters the universe and frozen with a hash at acquisition. It is the provider the runtime risk code already falls back to (ai_trading.core.bot_engine.get_sector); that function's built-in table covers about 140 symbols, too few for this universe, and is not used.",
+    "granularity": "About 11 sectors, so roughly 27 members per sector. Finer industries would leave many groups with one or two members.",
+    "point_in_time_weakness": "Labels are today's classification applied to all of 2016-2025, so stocks that changed sector are mislabelled in earlier years. Delisted and renamed symbols usually have no label; they stay in the universe and are measured against the whole universe. The manifest records how many symbols are unmapped. This weakens the signal for those names; it cannot leak future prices."
+  },
+  "portfolio": {
+    "slice_names": 30,
+    "entry_quantile": 0.1,
+    "hold_quantile": 0.5,
+    "weighting": "equal",
+    "hold_sessions": 5,
+    "rule": "Each side has 30 slots of weight exposure / 30. Long side at each decision: keep every held name that is still a member with rank at most 0.5; fill the remaining slots with the lowest-ranked names with rank at most 0.1, lowest first. Short side mirrors it from the top (keep while rank is at least 0.5, enter at 0.9 or above), never newly shorting a name excluded by shorts.hard_to_borrow_proxy. A slot with no qualifying name stays in cash at zero return. A name that leaves the universe is sold at the next rebalance.",
+    "expected_turnover": "Stated before any result, assuming a name's rank this period says nothing about its rank next period: about half of each book is replaced every 5 sessions, so about 25 times the book per year one-way at full exposure. At 5 bps per side that is about 5 bps per period, or 2.5 percent per year, on the long book; twice that for long-short; twice again at the 10 bps stress tier. Without the hold band about 90 percent would be replaced each period."
+  },
+  "rebalance_grid": {
+    "every_sessions": 5,
+    "first_decision_index": 65
+  },
+  "decision": "After the close of session t, using closes through t only.",
+  "entry": "Regular-session open of session t+1. Never the close of session t.",
+  "exit": "Regular-session open of session t+6, which is the next rebalance; holds never overlap.",
+  "missing_data_rules": "A selected name with no bar on the entry session is not bought and its slot stays in cash. A held name with no bar on the exit session is marked at its last close inside the hold, charged an exit trade, and cannot be carried into the next period.",
+  "fear_conditioning": {
+    "lookback_sessions": 21,
+    "annualization": 252,
+    "reference_volatility_annual": 0.2,
+    "floor": 0.25,
+    "cap": 1.0,
+    "no_trade_band": 0.1,
+    "rule": "target = min(1.0, max(0.25, realized / 0.20)), where realized is the sample standard deviation of SPY daily log returns over the 21 sessions ending at t, x sqrt(252). Exposure moves to the target only when they differ by at least 0.10; every position is then resized and the trade is charged. No leverage.",
+    "reported_only": "The same rules at constant exposure 1.0 are simulated and reported for both versions; they decide nothing."
+  },
+  "shorts": {
+    "account_note": "The paper account runs with shorting disabled, so the long-short version cannot be traded as configured today.",
+    "borrow_cost": "An annual rate on short weight for the sessions held: 100 bps in the measured and primary tiers, 300 bps in the stress tier. An assumption, not a measurement.",
+    "hard_to_borrow_proxy": {
+      "volatility_lookback_sessions": 21,
+      "exclude_top_volatility_fraction": 0.1,
+      "require_current_shortable_and_easy_to_borrow": true,
+      "rule": "No new short in a name whose 21-session realized volatility at t is in the top 10 percent of members, or which the frozen asset list marks as not shortable or not easy to borrow. The asset flags are today's, not point-in-time. Historical borrow availability is unknown."
+    }
+  },
+  "survivorship": {
+    "probe_status": "not_run",
+    "probe_finding": "TO BE FILLED from `--probe` before registration. On 2026-11-15 the probe could not be run: the secrets loader needs AI_TRADING_SECRETS_BACKEND, AI_TRADING_AWS_SECRET_ID and the AWS region in the process environment, and those values exist only in .env and the runtime env file, which this work was not allowed to read.",
+    "probe_status_values": "Before registration set probe_status to 'delisted_symbols_served' or 'delisted_symbols_missing_or_partial'. The runner refuses any other value. With the second value the report labels every result 'upward_biased'.",
+    "probe_symbols": ["TWX", "MON", "CELG", "AGN", "RTN", "TIF", "XLNX", "ALXN", "TWTR", "CERN", "YHOO", "LNKD", "EMC", "SHLD", "FTR", "MNK"],
+    "probe_symbols_note": "Large US companies acquired, merged or bankrupt between 2016 and 2022. A symbol may since have been reused by another company, so first and last bar months must be read against the known delisting date.",
+    "adverse_return_when_data_ends": 0.3,
+    "rule": "Base accounting: a position whose symbol has no bar on the exit session is marked at its last close inside the hold. Survivorship stress: every position whose symbol has no bar on or after the exit session additionally loses 30 percent of its weight, long or short. The stress is computed at the primary cost tier and is an acceptance criterion.",
+    "limits": "The stress covers positions the trial took in symbols whose data ends. It cannot cover symbols the provider omits entirely, because those never enter the universe. If the probe shows omissions, a pass is not established for a buy-the-losers rule and the report says so."
+  },
+  "primary_per_side_cost_bps": 5,
+  "cost_tiers": [
+    {
+      "name": "primary",
+      "per_side_bps": 5,
+      "borrow_annual_bps": 100,
+      "role": "decision"
+    },
+    {
+      "name": "stress_high",
+      "per_side_bps": 10,
+      "borrow_annual_bps": 300,
+      "role": "required_positive_at_stress"
+    },
+    {
+      "name": "measured_paper_fills",
+      "per_side_bps": 2,
+      "borrow_annual_bps": 100,
+      "role": "reported_only",
+      "source": "Owner-supplied from the bot's own fill records (research note 'measured_costs_from_fills', 2026-11-15): 124 one-to-two-share paper fills in AAPL, AMZN and MSFT at midday; bootstrap interval of the mean -0.4 to +2.1 bps; no fills at the open or in the first five minutes; the paper simulator has no impact or queue model.",
+      "caveat": "An extrapolation for entry at the open and for names beyond three mega caps. A result that holds at 2 bps but not at 5 bps is not established."
+    }
+  ],
+  "cost_accounting": "Every unit of weight bought or sold pays per_side_bps. Traded weight is measured from each position's drifted weight to its new target at every rebalance, so new entries, exits, hold-band keeps that are resized, exposure changes, forced exits and the final liquidation are all charged. Short weight pays borrow for the sessions held. Cash and short proceeds earn nothing.",
+  "cost_status": "fixed_scenarios_not_calibrated_execution_costs",
+  "controls": {
+    "cash": "Zero return; both versions.",
+    "exposure_matched_market": "SPY open-to-open over the same period, times the version's net weight (long weight minus short weight). Charged no cost. The long-only comparison. For long-short the net weight is about zero, so this is reported only."
+  },
+  "paired_difference": "Per period: net strategy return minus the version's benchmark (exposure-matched SPY for long-only, cash for long-short).",
+  "folds": "calendar_year_of_entry_session",
+  "support_thresholds": {
+    "minimum_periods": 400,
+    "minimum_supported_years": 8,
+    "minimum_periods_per_year": 40,
+    "minimum_eligible_names": 200
+  },
+  "support_rationale": "2514 development sessions with the first decision at index 65 (the first month with three completed months behind it is April 2016) give about 488 non-overlapping 5-session periods, about 50 per year and about 37 in 2016. The median period must have at least 200 members with bars on the signal and entry sessions.",
+  "support_audit": {
+    "required_before_claim": true,
+    "kind": "daily_grid_timestamp_only",
+    "rule": "`--support-audit` reads session dates and the frozen universe only and writes artifacts/swing_reversal_trial_20261115/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial."
+  },
+  "acceptance": {
+    "positive_lower_bound_vs_cash_at_primary": true,
+    "long_only_positive_lower_bound_vs_exposure_matched_market_at_primary": true,
+    "positive_at_stress": true,
+    "positive_under_survivorship_stress": true,
+    "minimum_positive_years": 6,
+    "long_only_summary": "All of: adequate support; the bootstrap lower bound of the mean net return per period at 5 bps is above zero; the bootstrap lower bound of the mean paired difference against exposure-matched SPY at 5 bps is above zero; the mean paired difference is above zero at 10 bps; the mean paired difference is above zero in at least 6 of the 10 entry years; the mean paired difference stays above zero under the survivorship stress.",
+    "long_short_summary": "All of: adequate support; the bootstrap lower bound of the mean net return per period at 5 bps and 100 bps borrow is above zero; the mean net return is above zero at 10 bps and 300 bps borrow; the mean net return is above zero in at least 6 of the 10 entry years; the mean net return stays above zero under the survivorship stress.",
+    "reported_only": "The 2 bps measured tier, the unconditioned versions, Sharpe, maximum drawdown, turnover, share of names kept, average names held, and per-year figures.",
+    "pass_means": "Long-only pass: in 2016-2025, after 5 bps per side, buying sector-relative losers earned more than holding the same amount of SPY on the same days, by a margin a block bootstrap separates from zero, in most years, and the margin survives doubled costs and a 30 percent loss on every position whose data ended. It permits planning one untouched check on the holdout. It does not permit trading. Long-short pass: the same for the market-neutral book against cash; it cannot be traded while shorting is disabled.",
+    "fail_means": "Retired: the data were adequate and at least one criterion failed. The hypothesis ends; no tuning of universe size, lookback, slice, band, weighting, fear rule, costs or acceptance follows. Inconclusive: support was inadequate after the claim; the budget is still consumed."
+  },
+  "multiple_testing": "This contract tests two hypotheses, so each bootstrap lower bound is the 1.25th percentile (a 97.5 percent two-sided interval) instead of the 2.5th. Four earlier campaigns tested five hypotheses and none passed, so a pass here would be the first in seven attempts on overlapping data; with seven attempts at this threshold the chance of at least one false pass is roughly 8 percent. That is why a pass leads to one untouched holdout check and not to trading.",
+  "bootstrap": {
+    "unit": "circular_blocks_of_decision_periods",
+    "block_periods": 13,
+    "replicates": 10000,
+    "seed": 20261115,
+    "lower_quantile": 0.0125
+  },
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "parameter_justifications": {
+    "universe.size=300": "Large enough for 30-name slices and about 27 names per sector; small enough to stay in stocks with spreads of a few bps (de Groot and co-authors found the 100 to 500 largest are where reversal survives costs).",
+    "universe.dollar_volume_months=3": "About 63 sessions: long enough that one busy week does not decide membership, short enough to follow listings.",
+    "universe.minimum_raw_price=5": "The SEC penny-stock threshold; uses the raw price so later splits cannot change earlier membership.",
+    "universe.reconstitution=monthly": "Monthly bars make the universe computable for every listed symbol without downloading daily bars for all of them.",
+    "signal.lookback_sessions=5": "One trading week, the horizon of Lehmann (1990) and of Nagel's reversal portfolio (days t-1 to t-5).",
+    "signal.minimum_group_size=5": "A sector mean over fewer than five names is mostly the name itself.",
+    "portfolio.slice_names=30, entry_quantile=0.10": "Decile sorts are the literature's standard; 10 percent of 300 is 30 names.",
+    "portfolio.hold_quantile=0.50": "The Blitz and co-authors rule: buy the top 10 percent, hold until it leaves the top 50 percent.",
+    "portfolio.weighting=equal": "No estimated parameter; the convention of de Groot and co-authors.",
+    "rebalance_grid.every_sessions=5": "Matches the signal horizon and the earlier contracts' non-overlapping grid.",
+    "rebalance_grid.first_decision_index=65": "The first decision in the first month (April 2016) that has three completed months of volume behind it.",
+    "fear_conditioning.lookback_sessions=21": "One trading month, the window of the volatility-target contract.",
+    "fear_conditioning.reference_volatility_annual=0.20": "The long-run average of the VIX is about 20; exposure is full at or above it. Linear below, as Nagel finds expected reversal returns roughly linear in the VIX.",
+    "fear_conditioning.floor=0.25, cap=1.0": "Never fully out, so calm periods are still measured; never leveraged.",
+    "fear_conditioning.no_trade_band=0.10": "The volatility-target contract's band; stops resizing every position for small changes.",
+    "shorts.borrow=100/300 bps": "Above general-collateral rates for large liquid stocks; the stress triples it.",
+    "shorts.hard_to_borrow_proxy=top 10 percent volatility": "Recent sharp winners with high volatility are where borrow is scarce and squeezes happen; one decile, matching the slice size.",
+    "survivorship.adverse_return=0.30": "Shumway (1997): about -30 percent for performance-related delistings missing from CRSP.",
+    "cost_tiers=2/5/10 bps per side": "Supplied by the owner from the bot's fills (2), and the 10 and 20 bps round trips of every earlier contract (5 and 10).",
+    "acceptance.minimum_positive_years=6": "A majority of ten years; an effect that pays only in stress years would otherwise pass on one episode.",
+    "support_thresholds": "The volatility-target contract's 400 periods and 8 years of 40; 200 names is two thirds of the universe.",
+    "bootstrap.block_periods=13": "One quarter of 5-session periods, as in the volatility-target contract.",
+    "bootstrap.lower_quantile=0.0125": "Bonferroni for two hypotheses at a 5 percent two-sided level."
+  },
+  "data_required": "From Alpaca, SIP feed: (1) the asset list, active and inactive; (2) monthly raw bars 2016-01 to 2025-12 for every candidate symbol, for the universe only; (3) daily bars, adjustment=all, 2016-01-04 to 2025-12-31, for every symbol that is ever a member, plus SPY. From yfinance: one sector label per member symbol.",
+  "data_size_estimate": "Not measured. Expected order of magnitude: 8,000 to 15,000 candidate symbols x up to 120 monthly rows, about 1 to 1.5 million rows and 60 to 90 MB; 600 to 1,000 symbols ever in the universe x up to 2,514 daily rows, about 1.5 to 2.5 million rows and 100 to 170 MB; a few hundred paginated requests and several hundred to 1,000 sector lookups.",
+  "acquisition": "Not done. After registration and on the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, refuses any row dated outside development or in 2026, records every symbol it could not fetch, and refuses to overwrite an existing acquisition.",
+  "acquisition_manifest": "artifacts/swing_reversal_trial_20261115/data/acquisition.json",
+  "availability_check": "none run; no request of any kind was made for this draft",
+  "preconditions": [
+    "owner approves these written rules before any result exists",
+    "`--probe` is run and survivorship.probe_status, probe_finding and bias_label are filled in; draft_notice is removed",
+    "owner adopts a research-reset amendment and config/research_reset.json registered_trials cites this campaign_id",
+    "status set to registered and the contract registered under artifacts/swing_reversal_trial_20261115/campaign_state.json before any price is read",
+    "owner approves the one-time acquisition; manifest written with source hashes",
+    "timestamp-only support audit passes",
+    "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 timestamp, price validity, complete SPY"
+  ],
+  "stop_rule": "Claim once immediately before the simulation; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires both versions and authorizes no tuning of any parameter, universe, mapping, cost or acceptance rule.",
+  "holdout_policy": "2026-09-09 to 2026-12-08 is not read during development. It is reserved as the single final check if the long-only version passes: about 12 periods, scored once with these rules unchanged, as a consistency check that cannot establish significance.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical open-to-open markouts on adjusted prices with fixed costs; fills at the opening auction, their slippage, partial fills and per-fill fees are not established.",
+  "limitations": [
+    "Survivorship: unknown until the probe is run. A buy-the-losers rule is the kind most flattered by missing delisted stocks.",
+    "Turnover is about 25 times a year per book even with the hold band, far above the 50 percent a month under which published strategies usually survive costs.",
+    "The effect is published and has weakened in large stocks; the supporting net-of-cost results use institutional cost models and pre-2012 data.",
+    "It pays mostly in fearful markets, so it can look poor for years and carries its largest positions when losses are most likely.",
+    "Sector labels and shortable flags are today's, not point-in-time; ticker changes and reused symbols may break or merge price histories.",
+    "The ETF and depositary-receipt exclusion is a name-and-exchange proxy.",
+    "Costs are assumptions. The measured tier comes from midday fills in three mega caps on a paper simulator.",
+    "Long-only returns are mostly market exposure; only the comparison with exposure-matched SPY says anything about the signal.",
+    "Earlier research viewed SPY for 2016-2025 and three of these stocks for 2024-2025; the window is not untouched."
+  ],
+  "runner": "ai_trading/tools/swing_reversal_trial.py"
+}
