@@ -56,6 +56,7 @@ BAR_COLUMNS = ["session", "time", *PRICE_COLUMNS]
 INSTRUMENT = "SPY"
 TIMEFRAME = "30Min"
 BAR_MINUTES = 30
+REGULAR_OPEN, REGULAR_CLOSE = "09:30", "16:00"
 FULL_SESSION = tuple(f"{m // 60:02d}:{m % 60:02d}" for m in range(9 * 60 + 30, 16 * 60, BAR_MINUTES))  # 13 bars
 SIGNAL_BAR = "09:30"  # its close is the last regular price before 10:00
 SECOND_BARS = ("14:30", "15:00")  # close of the first to close of the second is the 15:00-15:30 return
@@ -178,6 +179,11 @@ def _session_stamps(day: date) -> tuple[str, ...]:
 
 
 def session_calendar(contract: dict[str, Any]) -> SessionCalendar:
+    from ai_trading.utils import market_calendar
+
+    if market_calendar._get_calendar() is None:
+        # The rule-based fallback misdates sessions (Juneteenth before 2022, unscheduled closures), silently shifting prior closes.
+        raise ValueError("exchange calendar unavailable; the rule-based fallback is not accepted for a registered trial")
     dates = tuple(daily_development_dates(contract))
     return SessionCalendar(dates=dates, stamps=tuple(_session_stamps(day) for day in dates))
 
@@ -436,6 +442,8 @@ def regular_session_bars(rows: list[dict[str, Any]], calendar: SessionCalendar) 
     for row in rows:
         stamps = expected.get(row["session"])
         if stamps is None:
+            if REGULAR_OPEN <= row["time"] < REGULAR_CLOSE:
+                raise ValueError(f"regular-hours bar on a date the exchange calendar lacks:{row['session']}T{row['time']}")
             counts["off_calendar_dropped"] += 1
         elif row["time"] in stamps:
             kept.append(row)

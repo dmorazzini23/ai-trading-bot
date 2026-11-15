@@ -455,6 +455,9 @@ def test_a_degraded_download_is_refused_and_leaves_a_retry_possible(registered):
     clients.data.extra = [datetime(2024, 5, 15, 14, 0, tzinfo=trial.NEW_YORK)]
     with pytest.raises(ValueError, match="duplicated"):
         _run(root, "acquire", clients)
+    clients.data.extra = [datetime(2024, 3, 29, 11, 0, tzinfo=trial.NEW_YORK)]  # Good Friday: the exchange is closed
+    with pytest.raises(ValueError, match="calendar lacks:2024-03-29T11:00"):
+        _run(root, "acquire", clients)
     assert not manifest.exists() and not list(manifest.parent.glob("*.csv"))
     clients.data.extra = []
     clients.data.drop = lambda session, stamp: session == "2024-03-05" and stamp == "11:00"  # one bar: tolerated and counted
@@ -551,3 +554,11 @@ def test_output_hashes_are_deterministic_across_independent_runs(tmp_path):
         results.append((report["signature"], report["output_sha256"],
                         hashlib.sha256((root / f"artifacts/{CAMPAIGN}/report.json").read_bytes()).hexdigest()))
     assert results[0] == results[1]
+
+
+def test_the_rule_based_fallback_calendar_is_refused(monkeypatch):
+    from ai_trading.utils import market_calendar
+
+    monkeypatch.setattr(market_calendar, "_get_calendar", lambda: None)
+    with pytest.raises(ValueError, match="exchange calendar unavailable"):
+        trial.session_calendar(small_contract())
