@@ -20,7 +20,7 @@ EARLY_CLOSES = ("2023-07-03", "2023-11-24", "2024-07-03", "2024-11-29", "2024-12
 
 def small_contract(**changes):
     payload = json.loads(REPO_CONTRACT.read_text())
-    payload.pop("draft_notice")
+    payload.pop("draft_notice", None)
     payload.update(
         campaign_id=CAMPAIGN, status="registered", development_start="2023-01-03", development_end="2024-12-31",
         acquisition_manifest=f"artifacts/{CAMPAIGN}/data/acquisition.json",
@@ -59,17 +59,18 @@ def _bar(bars, session, stamp):
 
 # --- contract ---------------------------------------------------------------------------------------
 
-def test_repository_contract_is_an_unregistered_draft_with_every_parameter_fixed(tmp_path):
+def test_repository_contract_is_registered_with_every_parameter_fixed(tmp_path):
     draft = json.loads(REPO_CONTRACT.read_text())
     reset = json.loads((REPO_CONTRACT.parents[1] / trial.RESET_CONFIG).read_text())
-    assert draft["status"] == "draft_not_registered" and draft["campaign_id"] == "intraday_momentum_trial_20261115"
-    assert draft["campaign_id"] not in reset["registered_trials"]
+    assert draft["status"] == "registered" and draft["campaign_id"] == "intraday_momentum_trial_20261115"
+    assert "draft_notice" not in draft and draft["campaign_id"] in reset["registered_trials"]
+    assert any(a["campaign_id"] == draft["campaign_id"] and (REPO_CONTRACT.parents[1] / a["record"]).is_file() for a in reset["amendments"])
     assert draft["promotion_authority"] is False and draft["runtime_authority"] is False
     assert (draft["development_start"], draft["development_end"]) == ("2016-01-04", "2025-12-31")
     assert (draft["holdout_start"], draft["holdout_end"]) == (reset["holdout_start"], reset["holdout_end"]) == ("2026-09-09", "2026-12-08")
     assert draft["max_trials"] == 1 and len(draft["hypotheses"]) == 1 and list(draft["versions"]) == ["long_only", "long_short"]
     (tmp_path / "config").mkdir()
-    (tmp_path / "config/draft.json").write_text(json.dumps(draft))
+    (tmp_path / "config/draft.json").write_text(json.dumps(draft | {"status": "draft_not_registered"}))
     for mode in ("acquire", "support-audit", "preflight", "fit"):
         with pytest.raises(ValueError, match="not registered"):
             trial.run(tmp_path, mode=mode, contract_path=Path("config/draft.json"), client_factory=lambda: pytest.fail("fetched"))

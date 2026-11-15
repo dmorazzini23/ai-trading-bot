@@ -1,8 +1,7 @@
 {
   "campaign_id": "intraday_momentum_trial_20261115",
-  "status": "draft_not_registered",
-  "draft_notice": "DRAFT, 2026-11-15. Not registered, not listed in config/research_reset.json, no ledger created, no data downloaded, nothing scored. The runner refuses this file until the owner approves docs/INTRADAY_MOMENTUM_TRIAL_RULES_20261115.md, adopts a research-reset amendment and status is set to registered.",
-  "authorization": "none; awaiting the owner's approval of the written rules",
+  "status": "registered",
+  "authorization": "owner approved the written rules on 2026-11-15, including the plain-mean timing criterion, and adopted docs/RESEARCH_RESET_AMENDMENT_20261115_INTRADAY_MOMENTUM.md: one registered development trial, no promotion or runtime authority",
   "max_trials": 1,
   "hypotheses": [
     "spy_first_half_hour_sign_last_half_hour_long_only_primary_long_short_secondary_v1"
