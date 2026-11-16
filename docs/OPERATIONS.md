@@ -97,10 +97,11 @@ Live mode now requires one authoritative durability path:
 - Live JSONL OMS ledgers are disabled in the hot path.
 - Legacy/non-netting live execution is blocked in non-test runtimes.
 - `STRATEGIES` only applies on the legacy non-netting path
-  (`AI_TRADING_NETTING_ENABLED=0`). Under netting the listed classes are
-  instantiated but never consulted, and the bot logs
+  (`AI_TRADING_NETTING_ENABLED=0`), which the service no longer accepts:
+  startup exits with `NETTING_DISABLED_UNSUPPORTED`. Under netting the listed
+  classes are instantiated but never consulted, and the bot logs
   `STRATEGIES_NOT_CONSUMED_UNDER_NETTING` once per day. Leave `STRATEGIES`
-  unset under netting. A list where no name matches a registry key logs
+  unset. A list where no name matches a registry key logs
   `STRATEGIES_NONE_RESOLVED` and loads no strategies.
 - Pretrade pacing persists by default at `runtime/pretrade_rate_limiter.db`; point
   `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` at a shared durable runtime volume if
