@@ -1,6 +1,31 @@
 # Current handoff
 
-## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`) (start here)
+## November 16: legacy-path removal phase 1 deployed (`98f7b9d3b`) (start here)
+
+Branch `claude/legacy-path-phase1` (on top of `claude/unreachable-module-cleanup`).
+- **Change:** `_fail_fast_env()` in `ai_trading/main.py` exits with
+  `NETTING_DISABLED_UNSUPPORTED` when `netting_enabled` is false outside test
+  mode; `_netting_pipeline_enabled()` and the root `conftest.py` no longer
+  route tests to the legacy path by default. Seven legacy-path tests opt in
+  with `AI_TRADING_NETTING_ENABLED=0`. No `CONFIG_SPECS` change; no legacy
+  code deleted.
+- **Monday session check of `fb2df3aee` (14:25-15:17 UTC):** normal; no new
+  errors against Nov 12.
+- **Validation:** full `pytest` 6,626 passed, 2 skipped, 1 failed
+  (`tests/test_idempotency_cache_fallback.py::test_order_idempotency_cache_fallback`,
+  the known frozen-clock failure, identical on `fb2df3aee`).
+  `scripts/agent_validate_changed.sh --market-hours` passed.
+- **Deployed** Mon 21:27 UTC (closed, flat), owner-approved. `release_identity`
+  passed both phases with the unchanged config hash. Spec backup
+  `runtime/release_spec.fb2df3aee.bak.json`. First start: `IMPORT_PREFLIGHT_OK`,
+  `ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, NRestarts=0.
+- **Rollback:** checkout `fb2df3aee`, restore that backup, restart.
+- **Not covered:** `ai_trading/__main__.py::run_trade()` does not call the
+  startup check (no non-test caller); handle in phase 2.
+- **Next:** phase 2 (delete the legacy cycle) needs the owner's go-ahead and
+  an offline replay before and after.
+
+## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`)
 
 Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,
 about 29,700 lines removed (14,700 in `ai_trading/`); no `CONFIG_SPECS` or
