@@ -131,6 +131,8 @@ def test_run_all_trades_worker_uses_base_universe_not_previous_cycle_overlay(mon
         captured.append(list(tickers) if tickers is not None else None)
         return 0.0, True, []
 
+    # _prepare_run is only reached on the legacy non-netting path; opt in explicitly.
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(eng, "_prepare_run", fake_prepare)
 
     eng.run_all_trades_worker(state, runtime)

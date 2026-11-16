@@ -218,6 +218,8 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     def _raise_df(*_a, **_k):
         raise eng.DataFetchError("boom")
 
+    # _prepare_run is only reached on the legacy non-netting path; opt in explicitly.
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(eng, "_prepare_run", _raise_df)
     monkeypatch.setattr(eng.CFG, "log_market_fetch", False, raising=False)
     stub_fetcher = types.SimpleNamespace()
@@ -336,6 +338,8 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
     def _raise_df(*_a, **_k):
         raise eng.DataFetchError("boom")
 
+    # _prepare_run is only reached on the legacy non-netting path; opt in explicitly.
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(eng, "_prepare_run", _raise_df)
 
     trade_log = tmp_path / "trades.csv"

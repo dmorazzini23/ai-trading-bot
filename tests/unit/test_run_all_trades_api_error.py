@@ -112,6 +112,8 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     def raise_api_error(*_a, **_k):
         raise eng.APIError("boom")
 
+    # _prepare_run is only reached on the legacy non-netting path; opt in explicitly.
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(eng, "_prepare_run", raise_api_error)
 
     caplog.set_level("WARNING")

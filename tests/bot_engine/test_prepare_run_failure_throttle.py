@@ -165,6 +165,8 @@ def _patch_minimal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(be, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(be, "_handle_pending_orders", lambda *_a, **_k: False)
     monkeypatch.setattr(be, "signal_manager", types.SimpleNamespace(begin_cycle=lambda: None))
+    # These tests drive the legacy non-netting path (_prepare_run, run_multi_strategy); opt in explicitly.
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(be, "run_multi_strategy", lambda _rt: None)
     monkeypatch.setattr(be, "check_halt_flag", lambda _rt: False)
     monkeypatch.setattr(be, "_log_loop_heartbeat", lambda *_a, **_k: None)

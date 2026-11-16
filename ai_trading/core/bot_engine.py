@@ -32065,13 +32065,6 @@ def _resolve_trading_config(runtime) -> TradingConfig:
 
 
 def _netting_pipeline_enabled(runtime) -> bool:
-    cfg = getattr(runtime, "cfg", None)
-    try:
-        pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
-    except BOT_ENGINE_FALLBACK_EXC:
-        pytest_running = False
-    if cfg is None and pytest_running:
-        return False
     cfg = _resolve_trading_config(runtime)
     return bool(getattr(cfg, "netting_enabled", False))
 
