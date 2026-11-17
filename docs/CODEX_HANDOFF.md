@@ -1,6 +1,55 @@
 # Current handoff
 
-## November 17: legacy-path removal phase 2 built, not deployed (`4e9d951a1`) (start here)
+## November 17: drawdown breaker wired into the netting cycle, not deployed (`0e0abae3b`) (start here)
+
+Branch `claude/netting-drawdown-breaker` from the phase 2 tip `8a3a07b18`.
+Not pushed, not merged, not deployed; the running service is still `98f7b9d3b`.
+- **Gap closed:** only the deleted legacy tail scored the drawdown breaker, so
+  on the netting path it never saw equity and could not trip.
+- **Change:** `_run_netting_cycle` calls `_score_drawdown_breaker` after the
+  halt, market-closed, reconciliation and daily/weekly-loss returns. It feeds
+  `DrawdownCircuitBreaker.score_account_snapshot` the execution engine's
+  per-cycle account snapshot (`_get_account_snapshot`, already fetched by
+  `start_cycle`; no extra broker call). `process_netting_symbol` applies the
+  result after the stop lock, quarantine and kill switch: an order that
+  increases exposure is recorded with gate `DRAWDOWN_BREAKER_BLOCK` and not
+  submitted; a reducing order goes out; a reversal is cut to an exit and
+  tagged `DRAWDOWN_BREAKER_REDUCE_ONLY`. It does not set `state.halt_trading`
+  (that latches and stops exits). The gate is in `_NON_DISABLEABLE_GATE_NAMES`.
+- **Logs:** `DRAWDOWN_BREAKER_TRIPPED` (critical), `DRAWDOWN_BREAKER_RESET`
+  (warning), `DRAWDOWN_BREAKER_FEED_SKIPPED` (warning; equity missing,
+  non-numeric, non-finite, zero or negative: state unchanged),
+  `DRAWDOWN_BREAKER_ACCOUNT_SNAPSHOT_FAILED`, and once per day
+  `DRAWDOWN_BREAKER_UNAVAILABLE` when the runtime has no breaker.
+- **Thresholds with today's config:** `MAX_DRAWDOWN_THRESHOLD=0.08`. Trips at
+  drawdown >= 8% from the highest equity this process has seen; resets as soon
+  as drawdown is < 8% (the hard-coded `recovery_threshold=0.8` resolves to the
+  same 8%, so there is no recovery margin). With the Nov 16 close equity of
+  $81,655.06 as the peak, that is equity <= $75,122.65.
+- **Restart:** the peak is in memory only and starts at the first valid
+  reading, so a restart cannot trip it; it also closes an open breaker.
+  `peak_equity.txt` (10000.0, Oct 18) is not read by the breaker.
+- **Decision parity:** `breaker_0e0abae3b` gives `COMBINED_DECISIONS
+  5bd1a138...dbdf0b192` and `COMBINED_FULL 2ecc5ccd...32e877bb`; all six files
+  identical to `baseline_98f7b9d3b_run1`. The harness runtime has no breaker
+  and no account snapshot, so this shows the cycle is unchanged when the
+  breaker is absent; fed-and-closed and tripped cycles are covered by
+  `tests/test_netting_drawdown_breaker.py` (44 tests).
+- **Validation (market open, so no full suite):** 964 targeted tests passed
+  with the editable finder stripped; `ruff check`, `mypy` on changed files,
+  `scripts/typecheck_strict.sh`, `vulture --min-confidence 80` and
+  `scripts/agent_validate_changed.sh --market-hours` passed. No `CONFIG_SPECS`
+  change (`ai_trading/config/runtime.py` untouched).
+- **Not covered:** full `pytest`; no service restart; no run against a real
+  broker account object.
+- **Open:** no recovery margin (flaps at the 8% line); state lost on restart;
+  a cash withdrawal reads as drawdown. Sibling gaps not fixed: the
+  acceptance-rate governor's symbol cap has no netting consumer, and
+  `guards.begin_cycle` has no caller.
+- **Next:** owner review with phase 2, full suite after the close, then a
+  deploy decision.
+
+## November 17: legacy-path removal phase 2 built, not deployed (`4e9d951a1`)
 
 Branch `claude/legacy-path-phase2` from main `783ec7d6f`. Not pushed, not
 merged, not deployed; the running service is still `98f7b9d3b`.
