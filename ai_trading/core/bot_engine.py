@@ -30032,6 +30032,33 @@ def _kill_switch_active(cfg: TradingConfig) -> tuple[bool, str | None]:
     return False, None
 
 
+def _score_drawdown_breaker(runtime: Any, exec_engine: Any) -> dict[str, Any]:
+    """Feed the cycle's cached account snapshot to the drawdown breaker.
+
+    Returns the gate payload the symbol loop applies. An open breaker does not
+    set ``state.halt_trading``: that latches and stops exits as well.
+    """
+    breaker = getattr(runtime, "drawdown_circuit_breaker", None)
+    if not isinstance(breaker, DrawdownCircuitBreaker):
+        logger_once.warning(
+            "DRAWDOWN_BREAKER_UNAVAILABLE",
+            key="drawdown_breaker_unavailable",
+        )
+        return {"open": False}
+    account_snapshot = None
+    get_account_snapshot = getattr(exec_engine, "_get_account_snapshot", None)
+    if callable(get_account_snapshot):
+        try:
+            account_snapshot = get_account_snapshot()
+        except BOT_ENGINE_FALLBACK_EXC as exc:
+            logger.warning(
+                "DRAWDOWN_BREAKER_ACCOUNT_SNAPSHOT_FAILED",
+                extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+                exc_info=True,
+            )
+    return breaker.score_account_snapshot(account_snapshot)
+
+
 _TRANSIENT_HALT_REASONS: frozenset[str] = frozenset({"DERISK_SLO_BREACH_BLOCK"})
 
 
@@ -36880,6 +36907,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         return
 
+    drawdown_breaker = _score_drawdown_breaker(runtime, exec_engine)
+
     try:
         prepared_inputs = prepare_netting_cycle_inputs(
             state=state,
@@ -37777,6 +37806,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         thin_spread_bps=thin_spread_bps,
         thin_vol_mult=thin_vol_mult,
         primary_feed_derisk=primary_feed_derisk,
+        drawdown_breaker=drawdown_breaker,
         quarantine_enabled=quarantine_enabled,
         quarantine_manager=quarantine_manager,
         quarantine_apply_sleeve=quarantine_apply_sleeve,

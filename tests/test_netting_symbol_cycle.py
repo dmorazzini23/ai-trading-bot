@@ -177,6 +177,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
         thin_spread_bps=10.0,
         thin_vol_mult=2.0,
         primary_feed_derisk={},
+        drawdown_breaker={},
         quarantine_enabled=False,
         quarantine_manager=None,
         quarantine_apply_sleeve=False,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 'Circuit breakers and safety mechanisms for production trading.'
+import math
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -118,7 +119,15 @@ class DrawdownCircuitBreaker:
         try:
             self.state = CircuitBreakerState.OPEN
             self.halt_timestamp = safe_utcnow()
-            logger.critical(f'TRADING HALTED - Drawdown Circuit Breaker: {reason}. Current drawdown: {self._safe_format_percentage(self.current_drawdown)}')
+            logger.critical(
+                'DRAWDOWN_BREAKER_TRIPPED',
+                extra={
+                    'reason': reason,
+                    'current_drawdown': self.current_drawdown,
+                    'max_drawdown': self.max_drawdown,
+                    'peak_equity': self.peak_equity,
+                },
+            )
             for callback in self.reset_callbacks:
                 try:
                     callback('halt', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': self.halt_timestamp})
@@ -132,7 +141,15 @@ class DrawdownCircuitBreaker:
         try:
             self.state = CircuitBreakerState.CLOSED
             self.halt_timestamp = None
-            logger.info(f'TRADING RESUMED - Drawdown Circuit Breaker: {reason}')
+            logger.warning(
+                'DRAWDOWN_BREAKER_RESET',
+                extra={
+                    'reason': reason,
+                    'current_drawdown': self.current_drawdown,
+                    'max_drawdown': self.max_drawdown,
+                    'peak_equity': self.peak_equity,
+                },
+            )
             for callback in self.reset_callbacks:
                 try:
                     callback('reset', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': safe_utcnow()})
@@ -140,6 +157,47 @@ class DrawdownCircuitBreaker:
                     logger.error(f'Error in circuit breaker callback: {e}')
         except COMMON_EXC as e:
             logger.error(f'Error resetting drawdown breaker: {e}')
+
+    def score_account_snapshot(self, account_snapshot: Any) -> dict[str, Any]:
+        """Feed one account snapshot's equity; return the trading cycle's gate payload.
+
+        Equity that is missing, non-numeric, non-finite or not positive is a
+        failed reading, not a loss: scoring it would register a false drawdown.
+        Such a reading is logged and the breaker is left exactly as it was.
+        """
+        raw_equity = (
+            account_snapshot.get('equity')
+            if isinstance(account_snapshot, Mapping)
+            else getattr(account_snapshot, 'equity', None)
+        )
+        equity = 0.0
+        skip_reason: str | None = None
+        if account_snapshot is None:
+            skip_reason = 'account_snapshot_unavailable'
+        elif raw_equity is None:
+            skip_reason = 'account_equity_missing'
+        else:
+            try:
+                equity = float(raw_equity)
+            except (TypeError, ValueError):
+                skip_reason = 'account_equity_invalid'
+            else:
+                if isinstance(raw_equity, bool) or not math.isfinite(equity) or equity <= 0.0:
+                    skip_reason = 'account_equity_invalid'
+        if skip_reason is None:
+            self.update_equity(equity)
+        else:
+            logger.warning(
+                'DRAWDOWN_BREAKER_FEED_SKIPPED',
+                extra={'reason': skip_reason, 'breaker_state': self.state.value},
+            )
+        return {
+            'open': self.state is CircuitBreakerState.OPEN,
+            'current_drawdown': self.current_drawdown,
+            'max_drawdown': self.max_drawdown,
+            'peak_equity': self.peak_equity,
+            'equity': equity if skip_reason is None else None,
+        }
 
     def add_callback(self, callback: Callable[[str, dict], None]):
         """Add callback for circuit breaker events."""
