@@ -65,8 +65,13 @@ def test_repository_contract_is_a_draft_with_the_papers_parameters_fixed(tmp_pat
     assert (full.min_rel_volume, full.top_names, full.stop_atr_fraction) == (1.0, 20, 0.1)
     assert (full.risk_fraction, full.max_leverage, full.commission) == (0.01, 4.0, 0.0035)
     assert (full.stale_minutes, full.stale_adverse_atr, full.ssr_decline, full.first_index) == (30, 1.0, 0.1, 15)
-    assert [(n, c) for n, c, _ in full.tiers] == [("base", 5.0), ("double", 10.0), ("half", 2.5), ("commission_only_as_published", 0.0)]
-    assert full.tier("decision")[0] == "base" and full.tier(trial.STRESS_ROLE)[0] == "double"
+    assert [(n, c) for n, c, _ in full.tiers] == [("base", 5.0), ("stress", 7.5), ("double", 10.0), ("half", 2.5),
+                                                  ("commission_only_as_published", 0.0)]
+    assert full.tier("decision")[0] == "base" and full.tier(trial.STRESS_ROLE)[0] == "stress"
+    assert [r for _, _, r in full.tiers].count("reported_only") == 3
+    assert trial.FILL_RULES["deciding_model"] == trial.DECIDING_MODEL == "bar_executable"
+    assert set(draft["fills"]["models"]) == set(trial.FILL_MODELS) and draft["acceptance"]["positive_under_conservative_fills_at_primary"] is True
+    assert "permits nothing" in draft["versions"]["long_short"]
     assert (full.min_days, full.min_years, full.min_per_year, full.min_trades, full.min_selected) == (2300, 9, 230, 5000, 10)
     assert (full.block, full.replicates, full.seed, full.lower_quantile, full.min_positive_years) == (21, 10000, 20261117, 0.0125, 6)
     assert (draft["development_start"], draft["development_end"], draft["adjustment"]) == ("2016-01-04", "2025-12-31", "raw")
@@ -93,7 +98,7 @@ def test_repository_contract_is_a_draft_with_the_papers_parameters_fixed(tmp_pat
         ({"versions": {"long_short": "", "long_only": ""}}, "versions"),
         ({"cost_tiers": [{"name": "base", "per_side_bps": 5, "role": "decision"}]}, "stress tier"),
         ({"cost_tiers": [{"name": "base", "per_side_bps": 5, "role": "decision"},
-                         {"name": "double", "per_side_bps": 7, "role": "required_positive_at_stress"}]}, "at least double"),
+                         {"name": "stress", "per_side_bps": 5, "role": "required_positive_at_stress"}]}, "cost more"),
         ({"primary_per_side_cost_bps": 2}, "primary_per_side_cost_bps"),
     ],
 )
@@ -111,15 +116,17 @@ def test_contract_refusals_happen_before_any_data(changes, match):
         ("trade", {"exit": "next_open"}, "session close"),
         ("trade", {"early_close_sessions": "skip"}, "early closes"),
         ("trade", {"stop_atr_fraction": 0}, "stop_atr_fraction"),
-        ("fills", {"stop_order_fill": "trigger_price"}, "pessimistic"),
-        ("fills", {"bar_touches_entry_and_stop": "entry_first"}, "pessimistic"),
-        ("fills", {"gap_through": "trigger_price"}, "pessimistic"),
+        ("fills", {"deciding_model": "paper_exact"}, "fill models"),
+        ("fills", {"deciding_model": "lower_bound"}, "fill models"),
+        ("fills", {"required_positive_model": "paper_exact"}, "fill models"),
+        ("fills", {"reported_only_models": ["paper_exact"]}, "fill models"),
         ("fills", {"commission_per_share": -1}, "commission_per_share"),
         ("sizing", {"max_leverage": 8}, "max_leverage"),
         ("sizing", {"risk_fraction_of_slot": True}, "risk_fraction_of_slot"),
         ("shorts", {"require_current_shortable_and_easy_to_borrow": False}, "shortable"),
         ("survivorship", {"probe_status": "not_run"}, "probe_status"),
         ("acceptance", {"positive_at_stress": False}, "disabled"),
+        ("acceptance", {"positive_under_conservative_fills_at_primary": False}, "disabled"),
         ("acceptance", {"long_only_positive_lower_bound_vs_exposure_matched_market_at_primary": False}, "disabled"),
         ("bootstrap", {"replicates": 150}, "multiple of 100"),
         ("universe", {"minimum_open_price": "5"}, "minimum_open_price"),
@@ -322,11 +329,134 @@ def test_direction_trigger_doji_and_the_short_rule():
 
 # --- one order: entry, stop and exit ----------------------------------------------------------------
 
-def sim(bars, *, direction=1, trigger=100.0, stop=0.5, start="09:35", close="16:00", stale=30, adverse=5.0):
+def sim(bars, *, direction=1, trigger=100.0, stop=0.5, start="09:35", close="16:00", stale=30, adverse=5.0, model="lower_bound"):
     times = [trial._stamp(trial._minute(start) + i) for i in range(len(bars))]
     columns = [np.array(column, dtype=float) for column in zip(*bars)]
     return trial.simulate_trade(times, *columns, direction=direction, trigger=trigger, stop_distance=stop, close_stamp=close,
-                                stale_minutes=stale, stale_adverse=adverse)
+                                stale_minutes=stale, stale_adverse=adverse, model=model)
+
+
+def price(trade):
+    return trade["entry_time"], trade["entry_price"], trade["exit_time"], trade["exit_price"], trade["exit_reason"]
+
+
+# The deciding model: enter at the next bar's open, stop measured from that fill, stop-outs at the stop price.
+
+def test_the_deciding_model_enters_at_the_next_bars_open_whatever_it_is():
+    assert trial.DECIDING_MODEL == "bar_executable"
+    up = sim([QUIET, (99.7, 100.2, 99.6, 100.1), (100.3, 100.6, 100.2, 100.5), (100.5, 100.9, 100.4, 100.8)], close="09:39", model="bar_executable")
+    assert price(up) == ("09:37", 100.3, "09:38", 100.8, "session_end") and up["entry_at_open"] is True
+    down = sim([QUIET, (99.7, 100.2, 99.6, 99.9), (99.8, 99.95, 99.7, 99.85)], close="09:38", model="bar_executable")
+    assert price(down) == ("09:37", 99.8, "09:37", 99.85, "session_end")  # the next open is below the trigger: that is still the fill
+    # The trigger bar's own low is before the fill and cannot stop the trade; a gap through the trigger is not filled at the gap.
+    wide = sim([(99.9, 100.6, 99.0, 100.5), (100.9, 103.0, 100.8, 103.0)], close="09:37", model="bar_executable")
+    assert price(wide) == ("09:36", 100.9, "09:36", 103.0, "session_end")
+    gap = sim([(100.4, 100.7, 100.1, 100.6), (100.6, 100.8, 100.5, 100.7)], close="09:37", model="bar_executable")
+    assert price(gap) == ("09:36", 100.6, "09:36", 100.7, "session_end") and gap["gap_entry"] is True
+    # A trigger on the session's last bar has no next bar: no fill, in this model and in the conservative one.
+    assert sim([QUIET, (99.7, 100.3, 99.6, 100.2)], close="09:37", model="bar_executable") is None
+    assert sim([QUIET, (99.7, 100.3, 99.6, 100.2)], close="09:37", model="conservative") is None
+    assert sim([QUIET, QUIET], close="09:37", model="bar_executable") is None
+
+
+def test_the_deciding_model_measures_the_stop_from_the_fill_and_exits_at_the_stop_or_the_gapped_open():
+    start = [(99.7, 100.2, 99.6, 99.9), (100.3, 100.4, 100.2, 100.3)]  # filled at 100.3, so the stop is 99.8, not 99.5
+    held = sim([*start, (100.3, 100.4, 99.8, 99.9), (99.0, 99.1, 98.9, 99.0)], close="09:39", model="bar_executable")
+    assert price(held) == ("09:36", 100.3, "09:37", 99.8, "stop")  # the stop price, though the next bar opens far lower
+    careful = sim([*start, (100.3, 100.4, 99.8, 99.9), (99.0, 99.1, 98.9, 99.0)], close="09:39", model="conservative")
+    assert price(careful) == ("09:36", 100.3, "09:37", 99.0, "stop")  # the conservative model takes the worse next open
+    kept = sim([*start, (100.3, 100.4, 99.8, 99.9), (100.1, 100.2, 99.9, 100.0)], close="09:39", model="conservative")
+    assert kept["exit_price"] == 99.8  # ... but never better than the stop
+    above = sim([*start, (100.3, 100.4, 99.81, 99.9)], close="09:38", model="bar_executable")
+    assert price(above)[3:] == (99.9, "session_end")  # one cent above the stop is not a touch
+    gapped = sim([*start, (99.1, 99.5, 99.0, 99.4), (99.4, 99.9, 99.3, 99.8)], close="09:39", model="bar_executable")
+    assert price(gapped) == ("09:36", 100.3, "09:37", 99.1, "stop_gap")  # opened through the stop: the open, not the stop
+    same_bar = sim([(99.7, 100.2, 99.6, 99.9), (100.3, 100.4, 99.7, 100.0), (100.0, 101.0, 99.9, 101.0)], close="09:38", model="bar_executable")
+    assert price(same_bar) == ("09:36", 100.3, "09:36", 99.8, "stop")  # entered at the bar's open, so its low came after the fill
+
+
+def test_the_papers_fills_are_exactly_the_trigger_and_the_stop():
+    bars = [(100.4, 100.7, 99.0, 100.6), (100.6, 100.8, 100.5, 100.7), (99.0, 99.2, 98.0, 98.5), (98.5, 105.0, 98.4, 105.0)]
+    paper = sim(bars, close="09:39", model="paper_exact")
+    assert price(paper) == ("09:35", 100.0, "09:37", 99.5, "stop") and paper["entry_at_open"] is False  # gaps ignored on both sides
+    kept = sim(bars[:2], close="09:37", model="paper_exact")
+    assert price(kept)[3:] == (100.7, "session_end")  # the trigger bar's low of 99.0 does not stop it
+    last = sim([QUIET, (99.7, 100.3, 99.6, 100.2)], close="09:37", model="paper_exact")
+    assert price(last) == ("09:36", 100.0, "09:36", 100.2, "session_end")
+    with pytest.raises(ValueError, match="unknown fill model"):
+        sim(bars, model="optimistic")
+
+
+def test_every_model_mirrors_for_a_sell_and_the_models_are_ordered():
+    rng = np.random.default_rng(5)
+    seen = Counter()
+    for _ in range(300):
+        count = int(rng.integers(3, 40))
+        close = 99.6 + np.cumsum(rng.normal(0.02, 0.25, count))
+        open_ = np.concatenate([[99.6], close[:-1]]) + rng.normal(0, 0.1, count)
+        high, low = np.maximum(open_, close) + rng.uniform(0, 0.2, count), np.minimum(open_, close) - rng.uniform(0, 0.2, count)
+        bars = list(zip(open_, high, low, close))
+        result = {}
+        for model in trial.FILL_MODELS:
+            end = trial._stamp(575 + count)
+            buy, sell = sim(bars, close=end, model=model), sim(mirror(bars), direction=-1, close=end, model=model)
+            assert (buy is None) == (sell is None)
+            if buy is None:
+                continue
+            assert price(sell)[::2] + (price(sell)[4],) == price(buy)[::2] + (price(buy)[4],)
+            assert sell["entry_price"] == pytest.approx(200 - buy["entry_price"]) and sell["exit_price"] == pytest.approx(200 - buy["exit_price"])
+            assert buy["entry_time"] >= "09:35" and buy["entry_time"] <= buy["exit_time"]
+            result[model] = buy["exit_price"] - buy["entry_price"]
+            seen[model, buy["exit_reason"]] += 1
+        if "bar_executable" in result:
+            assert result["conservative"] <= result["bar_executable"] + 1e-12  # same entry, exits never better
+        if len(result) == 4:
+            assert result["lower_bound"] <= result["paper_exact"] + 1e-9
+    assert {reason for model, reason in seen if model == "bar_executable"} == {"session_end", "stop", "stop_gap"}
+
+
+def driftless_days(n_days, *, seed, k_vol=1.0, sub=30, minutes=390):
+    """A walk with no edge: volatile at the open, direction-aligned to its first five minutes, in units of the daily range."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(minutes)
+    profile = 1 + 2.0 * np.exp(-t / 15) + 0.5 * np.exp(-(minutes - 1 - t) / 20)
+    share = profile ** 2 / (profile ** 2).sum()
+    step = np.repeat(0.55 * k_vol * np.sqrt(share / sub), sub)
+    for _ in range(n_days):
+        path = np.cumsum(rng.normal(0.0, 1.0, minutes * sub) * step)
+        direction = np.sign(path[5 * sub - 1] - path[0])
+        if direction == 0:
+            continue
+        path = 50.0 + direction * path
+        bars = path[5 * sub:].reshape(minutes - 5, sub)
+        yield float(path[:5 * sub].max()), bars[:, 0], bars.max(axis=1), bars.min(axis=1), bars[:, -1]
+
+
+def test_zero_drift_calibration_the_deciding_model_scores_no_edge_as_zero_and_the_lower_bound_as_a_loss():
+    """A fill model that turns a process with no edge into a loss decides the trial by itself. This must stay near zero.
+
+    Measured with this seed, in planned losses per fill before costs (standard error 0.03): bar_executable +0.04,
+    conservative -0.06, paper_exact +0.10, lower_bound -0.21. The deciding model's small positive figure is the
+    two-second steps of this walk jumping past the stop while the model sells at the stop price; other seeds give
+    +0.04 to +0.05. The tolerance is 0.10, about three standard errors.
+    """
+    times = [trial._stamp(575 + m) for m in range(385)]
+    results = {model: [] for model in trial.FILL_MODELS}
+    for trigger, *columns in driftless_days(8000, seed=20261117):
+        for model in trial.FILL_MODELS:
+            trade = trial.simulate_trade(times, *columns, direction=1, trigger=trigger, stop_distance=0.1, close_stamp="16:00",
+                                         stale_minutes=30, stale_adverse=1.0, model=model)
+            if trade is not None:
+                results[model].append((trade["exit_price"] - trade["entry_price"]) / 0.1)
+    mean = {model: float(np.mean(values)) for model, values in results.items()}
+    error = float(np.std(results["bar_executable"]) / np.sqrt(len(results["bar_executable"])))
+    assert len(results["bar_executable"]) > 7000 and error < 0.035
+    assert abs(mean["bar_executable"]) < 0.10  # in planned losses per fill, before costs
+    assert mean["lower_bound"] < -0.15 and mean["lower_bound"] < mean["bar_executable"] - 0.15
+    assert mean["lower_bound"] < mean["conservative"] < mean["bar_executable"] < mean["paper_exact"]
+
+
+# The lower-bound model (reported only): the harsh rules of the first draft.
 
 
 def mirror(bars, pivot=200.0):
@@ -400,6 +530,22 @@ def test_a_trigger_on_the_last_bar_cannot_profit_and_a_stale_record_is_marked_ag
     assert early["exit_reason"] == "session_end"  # measured against the early close, not 16:00
 
 
+def test_a_stale_exit_never_goes_below_one_cent_so_scoring_cannot_crash_after_the_claim():
+    cheap = [(5.5, 5.7, 5.45, 5.6), (5.6, 5.8, 5.55, 5.7), (5.7, 5.8, 5.6, 5.7)]
+    for model in trial.FILL_MODELS:
+        trade = sim(cheap, trigger=5.65, stop=0.6, adverse=6.0, model=model)  # last print 5.70 less an ATR of 6.00 is below zero
+        assert (trade["exit_reason"], trade["exit_price"]) == ("stale_last_print", 0.01)
+        short = sim(mirror(cheap, 11.0), direction=-1, trigger=5.35, stop=0.6, adverse=6.0, model=model)
+        assert short["exit_reason"] == "stale_last_print" and short["exit_price"] == pytest.approx(5.3 + 6.0)
+    full = trial.contract_spec(json.loads(REPO_CONTRACT.read_text()))
+    calendar = trial.SessionCalendar(dates=(date(2024, 1, 5),), closes=("16:00",))
+    trial.validate_trades(trade_rows([SESSIONS[3]]).assign(exit_price=0.01, exit_reason="stale_last_print"), calendar, full)
+    # The floor belongs to the stale rule alone: an ordinary exit is never moved (a synthetic walk may sit below zero).
+    below = sim([(-1.0, -0.5, -1.1, -0.6), (-0.6, -0.55, -0.7, -0.65), (-0.65, -0.6, -2.0, -1.9)], trigger=-0.5, close="09:38",
+                model="bar_executable")
+    assert price(below) == ("09:36", -0.6, "09:37", -1.1, "stop")
+
+
 def test_a_sell_order_is_the_mirror_image_of_a_buy_order():
     cases = [
         [QUIET, (99.7, 100.2, 99.6, 100.1), (100.3, 100.6, 100.2, 100.5), (100.5, 100.9, 100.4, 100.8)],
@@ -432,7 +578,8 @@ def test_the_pessimistic_fill_is_never_better_than_filling_exactly_at_the_order_
         for direction, columns in ((1, (open_, high, low, close)), (-1, (200 - open_, 200 - low, 200 - high, 200 - close))):
             o, h, lo, c = columns
             trade = trial.simulate_trade([trial._stamp(575 + i) for i in range(count)], o, h, lo, c, direction=direction, trigger=100.0,
-                                         stop_distance=0.5, close_stamp=trial._stamp(575 + count), stale_minutes=30, stale_adverse=5.0)
+                                         stop_distance=0.5, close_stamp=trial._stamp(575 + count), stale_minutes=30, stale_adverse=5.0,
+                                         model="lower_bound")
             reached = np.flatnonzero(h >= 100.0) if direction > 0 else np.flatnonzero(lo <= 100.0)
             assert (trade is None) == (len(reached) == 0)
             if trade is None:
@@ -457,7 +604,7 @@ def test_impossible_trades_are_refused_before_a_report_is_written():
     trial.validate_trades(good, calendar, full)
     for change, match in ((dict(entry_time="09:34"), "outside 09:35"), (dict(exit_time="13:00"), "outside 09:35"),
                           (dict(exit_time="09:39"), "outside 09:35"), (dict(gross=np.nan), "nonfinite"),
-                          (dict(exit_price=-1.0), "nonpositive exit"), (dict(weight=6.0), "leverage cap")):
+                          (dict(exit_price=0.0), "nonpositive exit"), (dict(weight=6.0), "leverage cap")):
         with pytest.raises(ValueError, match=match):
             trial.validate_trades(good.assign(**change), calendar, full)
     with pytest.raises(ValueError, match="duplicate orders"):
@@ -481,7 +628,8 @@ def test_sizing_risks_one_percent_of_a_slot_and_is_capped_at_four_times_the_slot
 def trade_rows(sessions, *, direction=1, gross=0.0004, short_ok=False, matched=0.0, weight=0.2, status="filled"):
     return pd.DataFrame(dict(session=sessions, year=[s[:4] for s in sessions], symbol="AAA", rank=1, rel_volume=2.0, direction=direction,
                              short_ok=short_ok, status=status, entry_time="09:40", entry_price=50.0, exit_time="15:59", exit_price=50.1,
-                             exit_reason="session_end", gap_entry=False, shares=weight / 50.0, weight=weight, gross=gross,
+                             exit_reason="session_end", gap_entry=False, entry_at_open=True, shares=weight / 50.0, weight=weight,
+                             cap_scale=1.6, gross=gross,
                              commission=2 * weight / 50.0 * 0.0035, turnover=2 * weight, matched_market=matched, r_multiple=0.5))
 
 
@@ -524,8 +672,8 @@ def test_build_trades_accounts_for_each_order_and_stops_at_the_early_close():
                         path("LATE", np.array([70.0, 70.0]), ["13:00", "13:01"]),  # only bars at or after the 13:00 close
                         path("BUY", rise).assign(session=SESSIONS[3])], ignore_index=True)
     market_minutes = [trial._stamp(m) for m in range(trial._minute("09:30"), trial._minute("13:00"))]
-    market = pd.DataFrame(dict(session=session, time=market_minutes, open=500.0, high=500.0, low=500.0,
-                               close=np.linspace(500.0, 505.0, len(market_minutes)), volume=1.0))
+    market = pd.DataFrame(dict(session=session, time=market_minutes, open=np.linspace(499.9, 504.9, len(market_minutes)), high=506.0,
+                               low=499.0, close=np.linspace(500.0, 505.0, len(market_minutes)), volume=1.0))
     calendar = trial.SessionCalendar(dates=(date(2024, 1, 5), date.fromisoformat(session)), closes=("16:00", "13:00"))
     trades = trial.build_trades(selection, minute, market, calendar, {session}, full).set_index("symbol")
     assert trades.status.to_dict() == {"BUY": "filled", "SELL": "filled", "DOJI": "doji", "FLAT": "not_triggered",
@@ -534,17 +682,24 @@ def test_build_trades_accounts_for_each_order_and_stops_at_the_early_close():
     buy = trades.loc["BUY"]
     assert buy.entry_time >= "09:35" and buy.exit_time == "12:59" and buy.exit_reason == "session_end"
     exit_price = rise[minutes.index("12:59")]
-    assert buy.exit_price == pytest.approx(exit_price) and buy.entry_price >= 50.4
+    assert buy.exit_price == pytest.approx(exit_price) and buy.entry_price >= 50.4 and bool(buy.entry_at_open)
+    trigger_bar = int(np.flatnonzero(rise + 0.01 >= 50.4)[0])
+    assert buy.entry_time == minutes[trigger_bar + 1] and buy.entry_price == pytest.approx(rise[trigger_bar + 1])  # the next bar's open
+    assert buy.cap_scale == pytest.approx(4 / 20 / 50.4 / buy.shares)
     shares = trial.shares_per_equity(50.4, 0.2, full)
     assert buy.shares == pytest.approx(shares) and buy.weight == pytest.approx(shares * buy.entry_price)
     assert buy.gross == pytest.approx(shares * (exit_price - buy.entry_price)) and buy.commission == pytest.approx(2 * shares * 0.0035)
     assert buy.turnover == pytest.approx(shares * (buy.entry_price + exit_price))
     assert buy.r_multiple == pytest.approx((exit_price - buy.entry_price) / 0.2)
-    spy = dict(zip(market.time, market.close))
-    assert buy.matched_market == pytest.approx(buy.weight * (spy["12:59"] / spy[buy.entry_time] - 1))
+    spy, spy_open = dict(zip(market.time, market.close)), dict(zip(market.time, market.open))
+    assert buy.matched_market == pytest.approx(buy.weight * (spy["12:59"] / spy_open[buy.entry_time] - 1))  # from the open of the entry minute
     sell = trades.loc["SELL"]
     assert sell.gross == pytest.approx(sell.shares * (sell.entry_price - sell.exit_price)) and sell.gross > 0
-    assert sell.matched_market == pytest.approx(-sell.weight * (spy["12:59"] / spy[sell.entry_time] - 1)) and sell.matched_market < 0
+    assert sell.matched_market == pytest.approx(-sell.weight * (spy["12:59"] / spy_open[sell.entry_time] - 1)) and sell.matched_market < 0
+    exact = trial.build_trades(selection, minute, market, calendar, {session}, full, model="paper_exact").set_index("symbol")
+    assert exact.at["BUY", "entry_price"] == 50.4 and exact.at["SELL", "entry_price"] == 49.6 and not exact.at["BUY", "entry_at_open"]
+    assert exact.at["BUY", "matched_market"] == pytest.approx(exact.at["BUY", "weight"] * (spy["12:59"] / spy[exact.at["BUY", "entry_time"]] - 1))
+    assert exact.at["BUY", "gross"] > buy.gross  # the paper's fill is the better price on a rising path
     trial.validate_trades(trades.reset_index(), calendar, full)
     assert trial.version_trades(trades.reset_index(), "long_only").symbol.tolist() == ["BUY"]
     assert trial.version_trades(trades.reset_index(), "long_short").symbol.tolist() == ["BUY", "SELL"]
@@ -559,6 +714,13 @@ def noisy(sessions, mean, seed=11):
     return mean + np.random.default_rng(seed).normal(0, 0.0002, len(sessions))
 
 
+def judge(frame, sessions, chosen, *, conservative=None):
+    tables = {model: frame for model in trial.FILL_MODELS}
+    if conservative is not None:
+        tables["conservative"] = conservative
+    return trial.evaluate(tables, sessions, chosen)
+
+
 def decision_spec(**support):
     contract = small_contract()
     contract["support_thresholds"] = contract["support_thresholds"] | {"minimum_filled_trades": 100} | support
@@ -568,31 +730,46 @@ def decision_spec(**support):
 def test_long_only_needs_every_criterion_including_the_market_comparison():
     sessions = SESSIONS[15:]
     good = trade_rows(sessions, gross=noisy(sessions, 0.0015))
-    report = trial.evaluate(good, sessions, decision_spec())
+    report = judge(good, sessions, decision_spec())
     version = report["versions"]["long_only"]
     assert report["decision"] == version["decision"] == "eligible_for_untouched_test_planning" and all(version["criteria"].values())
     assert set(version["criteria"]) == {"adequate_support", "positive_lower_bound_vs_cash_at_primary", "positive_at_stress",
-                                        "consistent_years", "positive_lower_bound_vs_exposure_matched_market_at_primary"}
-    assert version["cost_tiers"]["base"]["net_per_day_bps"] > version["cost_tiers"]["double"]["net_per_day_bps"] > 0
+                                        "consistent_years", "positive_under_conservative_fills_at_primary",
+                                        "positive_lower_bound_vs_exposure_matched_market_at_primary"}
+    tiers = version["cost_tiers"]
+    assert tiers["base"]["net_per_day_bps"] > tiers["stress"]["net_per_day_bps"] > tiers["double"]["net_per_day_bps"] > 0
+    assert (tiers["stress"]["per_side_bps"], tiers["stress"]["role"], tiers["double"]["role"]) == (7.5, trial.STRESS_ROLE, "reported_only")
+    assert report["deciding_fill_model"] == "bar_executable" and set(report["reported_only"]["fill_models"]) == set(trial.FILL_MODELS[1:])
+
+    # The same trades, but the conservative fill model loses money at the base cost: retired on that criterion alone.
+    cautious = judge(good, sessions, decision_spec(), conservative=trade_rows(sessions, gross=noisy(sessions, 0.0001)))
+    criteria = cautious["versions"]["long_only"]["criteria"]
+    assert cautious["decision"] == "retired" and not criteria["positive_under_conservative_fills_at_primary"]
+    assert all(value for key, value in criteria.items() if key != "positive_under_conservative_fills_at_primary")
+    assert not cautious["versions"]["long_short"]["criteria"]["positive_under_conservative_fills_at_primary"]
+
+    # Equal-notional sizing (every fill at the cap, 1.6 times larger here) is reported and decides nothing.
+    sized = report["reported_only"][trial.EQUAL_NOTIONAL]["long_only"]
+    assert "decision" not in sized and sized["cost_tiers"]["base"]["net_per_day_bps"] == pytest.approx(1.6 * tiers["base"]["net_per_day_bps"])
     assert version["cost_tiers"]["commission_only_as_published"]["net_per_day_bps"] > version["cost_tiers"]["half"]["net_per_day_bps"]
     assert version["filled_trades"] == len(sessions) and version["benchmark"] == "exposure_matched_market"
 
-    # Positive at 5 bps (cost 2.3 bps of equity a day) but not at 10 bps (4.3 bps): retired.
-    marginal = trial.evaluate(trade_rows(sessions, gross=0.00035), sessions, decision_spec())
+    # Positive at 5 bps (cost 2.3 bps of equity a day) but not at 7.5 bps (3.3 bps): retired.
+    marginal = judge(trade_rows(sessions, gross=0.0003), sessions, decision_spec())
     criteria = marginal["versions"]["long_only"]["criteria"]
     assert marginal["decision"] == "retired" and criteria["positive_lower_bound_vs_cash_at_primary"] and not criteria["positive_at_stress"]
 
     # The whole gain is what the market did over the same minutes: beats cash, does not beat the matched market.
     drift = trade_rows(sessions, gross=noisy(sessions, 0.0015))
     drift["matched_market"] = drift.gross
-    drifting = trial.evaluate(drift, sessions, decision_spec())
+    drifting = judge(drift, sessions, decision_spec())
     criteria = drifting["versions"]["long_only"]["criteria"]
     assert drifting["decision"] == "retired" and criteria["positive_lower_bound_vs_cash_at_primary"]
     assert not criteria["positive_lower_bound_vs_exposure_matched_market_at_primary"]
 
     # A noisy positive mean that the bootstrap cannot separate from zero does not pass.
     wild = trade_rows(sessions, gross=0.0004 + np.random.default_rng(3).normal(0, 0.01, len(sessions)))
-    assert not trial.evaluate(wild, sessions, decision_spec())["versions"]["long_only"]["criteria"]["positive_lower_bound_vs_cash_at_primary"]
+    assert not judge(wild, sessions, decision_spec())["versions"]["long_only"]["criteria"]["positive_lower_bound_vs_cash_at_primary"]
 
 
 def test_long_short_cannot_rescue_long_only_and_blocked_shorts_are_left_out():
@@ -600,8 +777,9 @@ def test_long_short_cannot_rescue_long_only_and_blocked_shorts_are_left_out():
     longs = trade_rows(sessions, gross=noisy(sessions, -0.0005))
     shorts = trade_rows(sessions, direction=-1, gross=noisy(sessions, 0.004, 13), short_ok=True).assign(symbol="BBB")
     blocked = trade_rows(sessions, direction=-1, gross=0.05, short_ok=False).assign(symbol="CCC")
-    report = trial.evaluate(pd.concat([longs, shorts, blocked], ignore_index=True), sessions, decision_spec())
+    report = judge(pd.concat([longs, shorts, blocked], ignore_index=True), sessions, decision_spec())
     assert report["decision"] == "retired" and report["secondary_decision"] == "eligible_for_untouched_test_planning"
+    assert report["secondary_decision_permits"] == "nothing; reported as information only"
     both = report["versions"]["long_short"]
     assert (both["long_trades"], both["short_trades"]) == (len(sessions), len(sessions)) and both["benchmark"] == "cash"
     assert "positive_lower_bound_vs_exposure_matched_market_at_primary" not in both["criteria"]
@@ -614,16 +792,16 @@ def test_long_short_cannot_rescue_long_only_and_blocked_shorts_are_left_out():
 def test_thin_support_is_inconclusive_and_most_years_must_be_positive():
     sessions = SESSIONS[15:]
     good = trade_rows(sessions, gross=noisy(sessions, 0.0015))
-    few = trial.evaluate(good, sessions, decision_spec(minimum_filled_trades=10_000))
+    few = judge(good, sessions, decision_spec(minimum_filled_trades=10_000))
     assert few["decision"] == "inconclusive_budget_consumed" and not few["versions"]["long_only"]["criteria"]["adequate_support"]
-    days = trial.evaluate(good, sessions, decision_spec(minimum_eligible_days=5_000))
+    days = judge(good, sessions, decision_spec(minimum_eligible_days=5_000))
     assert days["decision"] == "inconclusive_budget_consumed"
-    tiny = trial.evaluate(good[good.session.isin(sessions[:8])], sessions[:8], decision_spec())
+    tiny = judge(good[good.session.isin(sessions[:8])], sessions[:8], decision_spec())
     assert tiny["versions"]["long_only"]["uncertainty_status"] == "unavailable_fewer_than_two_blocks"
     contract = small_contract()
     contract["acceptance"] = contract["acceptance"] | {"minimum_positive_years": 2}
     contract["support_thresholds"] = contract["support_thresholds"] | {"minimum_filled_trades": 100}
-    one_year = trial.evaluate(good, sessions, trial.contract_spec(contract))
+    one_year = judge(good, sessions, trial.contract_spec(contract))
     assert one_year["decision"] == "retired" and not one_year["versions"]["long_only"]["criteria"]["consistent_years"]
     assert one_year["versions"]["long_only"]["positive_years"] == 1 and list(one_year["versions"]["long_only"]["by_year"]) == ["2024"]
 
@@ -645,8 +823,10 @@ def _bar(stamp, open, high, low, close, volume):  # noqa: A002
 class _World:
     """A deterministic synthetic market served through the provider's request interface."""
 
-    def __init__(self, *, extra_daily=(), drop_market=lambda session, stamp: False, fail=()):
+    def __init__(self, *, extra_daily=(), drop_market=lambda session, stamp: False, fail=(), fail_opening=(), thin_opening=(),
+                 drop_adjusted=None):
         self.extra_daily, self.drop_market, self.fail, self.requests = extra_daily, drop_market, set(fail), []
+        self.fail_opening, self.thin_opening, self.drop_adjusted = set(fail_opening), set(thin_opening), drop_adjusted
         n = len(SESSIONS)
         self.daily = {}
         for k, (symbol, (price, move, band, volume)) in enumerate(PROFILE.items()):
@@ -710,6 +890,8 @@ class _World:
                 elif kind == "1Day":
                     scale = frame.factor if request.adjustment.value == "split" else pd.Series(1.0, index=frame.index)
                     for i in held:
+                        if request.adjustment.value == "split" and self.drop_adjusted == (symbol, i):
+                            continue
                         row, d = frame.iloc[i], date.fromisoformat(SESSIONS[i])
                         bars.append(_bar(datetime(d.year, d.month, d.day, 5, tzinfo=UTC), row.open / scale.iat[i], row.high / scale.iat[i],
                                          row.low / scale.iat[i], row.close / scale.iat[i], row.volume * scale.iat[i]))
@@ -718,7 +900,10 @@ class _World:
                 elif kind == "5Min":
                     assert end - start < timedelta(minutes=5) and start.strftime("%H:%M") == "09:30"  # nothing after 09:35 is asked for
                     for i in held:
-                        bars.append(_bar(self._at(SESSIONS[i], "09:30"), **self.opening(symbol, i)))
+                        if SESSIONS[i] in self.fail_opening:
+                            raise ValueError("provider error")
+                        if SESSIONS[i] not in self.thin_opening or symbol == "SA":
+                            bars.append(_bar(self._at(SESSIONS[i], "09:30"), **self.opening(symbol, i)))
                 elif kind == "1Min":
                     assert len(held) <= 1
                     for i in held:
@@ -793,6 +978,9 @@ def test_acquisition_freezes_the_filters_the_ranking_and_only_the_bars_the_rules
     assert counts["names_ever_passing_daily_filters"] == 10 and counts["split_events"] == 1  # CALM fails the range filter
     manifest = _manifest(root)
     assert manifest["failed"] == {"monthly": {}, "daily": {}, "opening": {}, "minute": {}} and manifest["quality_passed"] is True
+    coverage = manifest["opening_coverage"]
+    assert len(coverage) == len(SESSIONS) - 1 and all(asked == returned and lost == 0 for asked, returned, lost in coverage.values())
+    assert sum(asked for asked, _, _ in coverage.values()) == counts["opening_bars_requested"] == counts["opening_bars"]
     assert json.loads((root / manifest["frozen"]["splits"]["path"]).read_text()) == [["SPLT", SESSIONS[SPLIT_AT]]]
     selection = pd.read_csv(root / manifest["frozen"]["selection"]["path"])
     index = selection.session.map({s: i for i, s in enumerate(SESSIONS)})
@@ -840,7 +1028,7 @@ def test_the_stages_run_in_order_and_claim_exactly_once(acquired, monkeypatch):
     assert audit["median_selected_names"] >= 2 and audit["audit"] == "session_symbol_and_bar_time_only"
     monkeypatch.undo()
     monkeypatch.setattr(trial, "sleep", lambda seconds: None)
-    monkeypatch.setattr(trial, "build_trades", lambda *a: pytest.fail("a trade was computed before the claim"))
+    monkeypatch.setattr(trial, "build_trades", lambda *a, **k: pytest.fail("a trade was computed before the claim"))
     preflight = _run(root, "preflight")
     assert preflight["status"] == "preflight_passed" and preflight["trial_claimed"] is False
     assert json.loads(state_path.read_text())["trials"] == [] and not (directory / "report.json").exists()
@@ -851,8 +1039,15 @@ def test_the_stages_run_in_order_and_claim_exactly_once(acquired, monkeypatch):
     assert report["decision"] in ("eligible_for_untouched_test_planning", "retired", "inconclusive_budget_consumed")
     assert report["survivorship_label"] == "incomplete_direction_unknown" and report["orders_sent"] == 0
     assert report["holdout_evaluated"] is False and report["promotion_authority"] is False and report["signature"] == preflight["signature"]
-    trades = pd.read_csv(directory / "trades.csv")
+    assert set(report["output_sha256"]) == {f"trades_{model}.csv" for model in trial.FILL_MODELS}
+    assert report["deciding_fill_model"] == "bar_executable" and set(report["reported_only"]["fill_models"]) == set(trial.FILL_MODELS[1:])
+    assert set(report["reported_only"][trial.EQUAL_NOTIONAL]) == set(trial.VERSIONS)
+    assert "positive_under_conservative_fills_at_primary" in report["versions"]["long_only"]["criteria"]
+    trades = pd.read_csv(directory / "trades_bar_executable.csv")
     filled = trades[trades.status == "filled"]
+    assert filled.entry_at_open.all() and (filled.entry_time >= "09:36").all()  # never the trigger bar itself
+    harsh = pd.read_csv(directory / "trades_lower_bound.csv")
+    assert harsh.gross.sum() < pd.read_csv(directory / "trades_conservative.csv").gross.sum() <= filled.gross.sum()
     assert set(trades.status) >= {"filled", "doji", "not_triggered"} and (filled.entry_time >= "09:35").all()
     assert (filled.exit_time <= "15:59").all() and (filled.weight <= 4 / 3 * 1.05).all()
     assert trades.session.min() >= SESSIONS[15] and (trades.groupby("session").size() <= 3).all()
@@ -936,7 +1131,7 @@ def test_an_incomplete_market_session_is_skipped_and_a_degraded_download_is_refu
     audit = _run(root, "support-audit")
     assert audit["skipped_sessions"] == {"insufficient_history": 15, "market_incomplete": 1} and audit["eligible_days"] == len(SESSIONS) - 16
     report = _run(root, "fit")
-    assert skipped not in set(pd.read_csv(root / f"artifacts/{CAMPAIGN}/trades.csv").session) and report["skipped_sessions"]["market_incomplete"] == 1
+    assert skipped not in set(pd.read_csv(root / f"artifacts/{CAMPAIGN}/trades_bar_executable.csv").session) and report["skipped_sessions"]["market_incomplete"] == 1
 
     other = tmp_path / "two"
     other.mkdir()
@@ -948,6 +1143,11 @@ def test_an_incomplete_market_session_is_skipped_and_a_degraded_download_is_refu
 
 def test_holdout_rows_and_lasting_fetch_failures_are_refused_and_nothing_is_written(tmp_path):
     for name, world, match in (
+            # One bad session must not hide among 145 good ones: each session's opening bars are checked on their own.
+            ("outage", dict(fail_opening=[SESSIONS[70]]), f"too many opening-bar fetch failures:{SESSIONS[70]}"),
+            ("thin", dict(thin_opening=[SESSIONS[70]]), f"opening bars cover too few names:{SESSIONS[70]}:returned=1"),
+            # The split guard reads the adjusted series: it must cover exactly the raw bars.
+            ("adjusted", dict(drop_adjusted=("SB", 40)), "split-adjusted daily bars do not cover the raw bars"),
             ("holdout", dict(extra_daily=[datetime(2026, 9, 10, 5, tzinfo=UTC)]), "outside development window"),
             ("year", dict(extra_daily=[datetime(2026, 1, 5, 5, tzinfo=UTC)]), "outside development window"),
             ("before", dict(extra_daily=[datetime(2023, 12, 29, 5, tzinfo=UTC)]), "outside development window"),
@@ -995,3 +1195,59 @@ def test_the_probe_runs_on_a_draft_and_keeps_counts_only(tmp_path):
     written = json.loads((tmp_path / f"artifacts/{CAMPAIGN}/data_probe.json").read_text())
     assert not any(key in json.dumps(written) for key in ('"open"', '"close"', '"high"', '"low"'))
     assert not (tmp_path / f"artifacts/{CAMPAIGN}/campaign_state.json").exists()
+
+
+def test_tickers_that_look_like_missing_values_are_read_as_text(tmp_path):
+    frame = pd.DataFrame(dict(session=SESSIONS[20], symbol=["NA", "NAN", "NULL", "AAA"], time="09:35", open=1.0, high=2.0, low=0.5,
+                              close=[1.5, 1.5, np.nan, 1.5], volume=10.0))
+    source = trial._write_table(tmp_path, tmp_path / "minute.csv.gz", frame)
+    back = trial._read(tmp_path, source, trial.MINUTE_COLUMNS)
+    assert back.symbol.astype(str).tolist() == ["NA", "NAN", "NULL", "AAA"] and not back.symbol.isna().any()
+    assert back.close.isna().tolist() == [False, False, True, False] and back.session.tolist() == [SESSIONS[20]] * 4
+    opening = pd.DataFrame([dict(session=SESSIONS[i], symbol="NA", open=50.0, high=50.3, low=49.9, close=50.2, volume=100_000.0 + i)
+                            for i in range(20)])
+    source = trial._write_table(tmp_path, tmp_path / "opening.csv.gz", opening)
+    parts = lambda: trial._opening_parts(tmp_path, {"opening/2024-01": source})  # noqa: E731
+    selection = trial.select_from_parts(feature_rows(["NA"], range(15, 20)), parts, SESSIONS, frozenset(), spec())
+    assert selection.symbol.tolist() == ["NA"] * 5 and selection.session.tolist() == SESSIONS[15:20]
+
+
+def test_a_name_with_exactly_fourteen_bars_does_not_borrow_history_from_the_name_before_it():
+    # AAA trades the last sessions of the window, BBB the first 14: BBB's 14th bar has only 13 behind it.
+    sessions = SESSIONS[:40]
+    rows = [dict(session=sessions[i], symbol="AAA", open=50.0, high=50.3, low=49.9, close=50.2, volume=1e5) for i in range(20, 40)]
+    rows += [dict(session=sessions[i], symbol="BBB", open=50.0, high=50.3, low=49.9, close=50.2, volume=9e9) for i in range(0, 14)]
+    features = pd.concat([feature_rows(["AAA"], range(20, 40)), feature_rows(["BBB"], range(0, 14))])
+    selection = trial.build_selection(features, pd.DataFrame(rows), sessions, frozenset(), spec())
+    assert set(selection.symbol) == {"AAA"} and selection.session.min() == sessions[34]
+
+
+def test_the_selection_stays_small_in_memory_at_scale():
+    """About a seventh of the full download (500 sessions x 1,000 names); the full-scale figure is in the contract."""
+    import tracemalloc
+
+    rng = np.random.default_rng(0)
+    n_sessions, n_names = 500, 1000
+    sessions = [f"2{i:04d}" for i in range(n_sessions)]
+    names = np.array([f"N{j:04d}" for j in range(n_names)], dtype=object)
+    present = rng.random((n_sessions, n_names)) < 0.98
+    at, who = np.nonzero(present)
+    months = at // 21
+    price_ = 20 + rng.random(len(at)) * 50
+    opening = pd.DataFrame(dict(session=pd.Categorical.from_codes(at, sessions), symbol=pd.Categorical.from_codes(who, names), open=price_,
+                                high=price_ + 0.2, low=price_ - 0.2, close=price_ + rng.choice([-0.1, 0.1], len(at)),
+                                volume=rng.integers(10_000, 1_000_000, len(at)).astype(float)))
+    keep = (rng.random(len(at)) < 0.33) & (at >= 15)
+    features = pd.DataFrame(dict(idx=at[keep].astype(np.int32), symbol=names[who[keep]], open=price_[keep], atr=2.0, avg_volume=2e6,
+                                 prior_close=price_[keep], ssr_carry=False))
+    pieces = [piece for _, piece in opening.groupby(months, sort=True)]
+    del opening
+    tracemalloc.start()
+    selection = trial.select_from_parts(features, lambda: iter(pieces), sessions, frozenset(), spec())
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    rows = sum(len(piece) for piece in pieces)
+    assert rows > 480_000 and selection.groupby("session").size().median() == 3 and len(selection) > 1400
+    assert peak < 100 * rows, f"peak {peak / rows:.0f} bytes per opening bar"  # measured 64; the pivot table this replaced used about 480
+    whole = trial.build_selection(features, pd.concat(pieces, ignore_index=True), sessions, frozenset(), spec())
+    pd.testing.assert_frame_equal(whole, selection)

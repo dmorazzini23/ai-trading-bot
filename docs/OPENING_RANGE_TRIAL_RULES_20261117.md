@@ -1,7 +1,9 @@
 # Opening-range breakout trial: the rules in plain words
 
 **Status, November 17, 2026:** a draft for the owner to approve or reject before
-any result exists. Nothing is registered. There is no ledger. No trade result
+any result exists. Revised the same day after an independent review: the way
+fills are assumed, the cost levels and several checks changed (see "What
+changed after review" at the end). Nothing is registered. There is no ledger. No trade result
 has been computed on real prices. The only contact with the data provider was a
 small check of what data exists (see "What the data check found"). The full
 contract is `config/opening_range_trial_campaign.json`; the program that would
@@ -21,6 +23,10 @@ gain of about 41% a year from 2016 to 2023 for a simple rule that trades the
 
 **Which stocks can be considered (checked every morning):**
 
+- It is an ordinary US company share. Funds are left out. So are foreign
+  companies' US-traded receipts (ADRs), warrants, units, rights and preferred
+  shares; they are recognised by words in the stock's name, which is not
+  perfect.
 - The stock opens above $5.
 - It traded at least 1,000,000 shares a day on average over the last 14
   trading days.
@@ -33,24 +39,28 @@ gain of about 41% a year from 2016 to 2023 for a simple rule that trades the
 - Divide it by that stock's own average 9:30–9:35 volume over the last 14
   days. This is its "relative volume". A value of 2 means twice the usual.
 - Drop any stock below 1 (less than usual).
+- A stock needs all 14 of its previous 9:30–9:35 volumes. If one is missing
+  (a new listing, a day with no early trade), the stock is not ranked until
+  it has 14 in a row again.
 - Take the 20 highest. On a quiet day there may be fewer than 20.
 - Nothing that happens after 9:35 is used to pick.
 
 **The order for each picked stock:**
 
-- If its price rose between 9:30 and 9:35: place an order to **buy** if the
-  price later goes above the highest price of those five minutes.
-- If its price fell: place an order to **sell short** if the price later goes
-  below the lowest price of those five minutes. (Selling short means selling
-  borrowed shares to buy them back later, hoping the price falls.)
+- If its price rose between 9:30 and 9:35: **buy** once the price later goes
+  above the highest price of those five minutes.
+- If its price fell: **sell short** once the price later goes below the
+  lowest price of those five minutes. (Selling short means selling borrowed
+  shares to buy them back later, hoping the price falls.)
 - If the price ended exactly where it began: no order.
 - Many orders never trigger. Those cost nothing.
 
 **Getting out:**
 
 - Each trade has a safety exit, called a stop loss. It sits one tenth of the
-  stock's typical daily range away from the entry price. That is close. For a
-  $50 stock that typically moves $2 a day, it is 20 cents.
+  stock's typical daily range away from the price actually paid, not from the
+  price the order was aiming at. That is close. For a $50 stock that
+  typically moves $2 a day, it is 20 cents.
 - If the stop loss is not hit, the trade is closed at the end of the day
   (4:00 pm, or 1:00 pm on a half day). Nothing is held overnight.
 
@@ -62,16 +72,21 @@ gain of about 41% a year from 2016 to 2023 for a simple rule that trades the
 - No position may be larger than 4 times its slice (20% of the account). All
   20 together can be up to 4 times the account. That is borrowed money, and
   the broker allows it only within the day.
+- For information only, the report also shows every trade at the full 20% of
+  the account. That is what the other way of reading the paper's sizing
+  sentence comes to. It decides nothing.
 
 **Two versions are scored:**
 
-- **Buy-only (the one that counts).** Only the buy orders. The paper account
-  cannot sell short today, so this is the version that could be traded.
-- **Buy and sell-short (secondary).** The rule as published. A short sale is
-  skipped when it probably could not have been made: the broker's list says
-  the stock is hard to borrow, or market rules restrict shorting that stock
-  that day (they do after a 10% fall). This version cannot rescue a failed
-  buy-only version.
+- **Buy-only (the one that counts).** Only the buys. The paper account cannot
+  sell short today, so this is the version that could be traded. It is the
+  only decision.
+- **Buy and sell-short (information only).** The rule as published. A short
+  sale is skipped when it probably could not have been made: the broker's
+  list says the stock is hard to borrow, or market rules restrict shorting
+  that stock that day (they do after a 10% fall). **If this version passes
+  while buy-only fails, nothing is permitted.** The idea is still retired. The
+  report only notes that the published form showed something.
 
 ## How fills are assumed
 
@@ -80,43 +95,68 @@ gets exactly the price it asked for. That is the weakest part of the paper,
 because these are fast-moving stocks and the stop loss is very close.
 
 Our price record has one line per minute: the first, highest, lowest and last
-price of that minute. It does not show the order in which they happened. Every
-doubt is settled against the strategy:
+price of that minute. It does not show the order in which they happened
+inside the minute. The first draft settled every doubt against the strategy.
+An independent review showed that this was not caution but a built-in loss:
+on made-up prices with no edge at all, those rules lost 0.2 to 0.6 of the
+planned loss on every trade before any cost. No strategy could pass.
 
-- **Entry.** We pay the worse of the price we asked for and the first price of
-  the next minute.
-- **Both in one minute.** If, in the minute the order triggers, the price was
-  also low enough to hit the stop loss, we count it as a loss. We do this even
-  if the low came first and the stock then ran in our favour. We cannot tell
-  which came first.
-- **Jumps.** If the price jumps past our level between two minutes, we get the
-  price after the jump, not our level.
-- **Stop loss.** We get the worse of the stop price and the first price of the
-  next minute.
+**The fill rule that decides** uses only prices whose order we know:
+
+- **Entry.** Wait for the first minute in which the price goes through the
+  level. Then buy at the first price of the *next* minute, whatever it is.
+  It may be above or below the level. (If the level is reached only in the
+  day's last minute, there is no trade.)
+- **Stop loss.** Measured from the price paid. If a later minute's lowest
+  price reaches it, we sell at the stop price. If a minute *opens* already
+  beyond it, we sell at that opening price, which is worse.
+- **Otherwise** we sell at the last price of the day.
 - **Trading halts.** If a stock stops trading more than 30 minutes before the
   close, we close the trade at its last price and then take off one full
-  day's typical range. That is ten times the planned loss.
+  day's typical range (ten times the planned loss), but never below one cent.
+
+On the same made-up prices with no edge, this rule comes out at about zero
+(between −0.02 and +0.09 of the planned loss per trade across calm to very
+jumpy prices). A program test now checks this every time the code changes.
+
+**Three other fill rules are scored beside it:**
+
+- **Cautious** (the strategy must still make money under it): the same entry,
+  but a stop-loss sale gets the worse of the stop price and the next minute's
+  first price. On no-edge prices it loses about 0.1 to 0.2 of the planned loss
+  per trade, so it is a demanding check.
+- **The paper's own** (information, the best case): every order filled at
+  exactly its price.
+- **The first draft's** (information, the worst case).
 
 ## What it costs
 
 - **Commission:** $0.0035 per share, each way, as in the paper.
 - **Slippage:** an extra charge on every buy and every sell, as a share of the
   trade's value. It stands for the gap between buying and selling prices and
-  for chasing a moving stock.
+  for chasing a moving stock. It is charged once; the fill rule above adds
+  none of its own.
   - **0.05% each way** decides the result.
-  - **0.10% each way** is the stress case. The strategy must still make money.
-  - 0.025% each way, and no slippage at all (the paper's assumption), are
-    shown for information only.
+  - **0.075% each way** is the stress case. The strategy must still make money.
+  - 0.10%, 0.025% and no slippage at all (the paper's assumption) are shown
+    for information only.
 - **Why 0.05%.** The bot's own orders in three giant stocks at midday cost
   about 0.01% on average and 0.06% in the worst tenth. The stocks here are
   smaller, cheaper and moving fast just after the open. We take the giant
   stocks' worst-tenth cost as the normal cost here. It is an assumption. It
   has not been measured for these stocks at this time of day.
-- **Why this matters so much.** The stop loss is about 0.4% of the price for
-  a typical stock. Buying and selling at the 0.05% level costs 0.10% of the
-  price. So every trade, win or lose, gives up about a quarter of the planned
-  loss in costs. The paper reports an average gain per trade of well under
-  one planned loss. **A fail is a realistic outcome.**
+- **The arithmetic, stated before any result.**
+  - A typical position is 10% to 12.5% of the account.
+  - Buying and selling it at 0.05% each way costs 2 × 0.05% × 10–12.5% =
+    0.010% to 0.0125% of the account per trade.
+  - With 12 to 15 trades a day, that is 0.12% to 0.19% of the account a day.
+    Call it **0.15% a day in costs.**
+  - The paper's published gain, 41.6% a year, is **0.14% a day**, and that is
+    with perfect fills and no slippage.
+  - So this cost alone is about as large as everything the paper says the
+    strategy earns. **Even if the paper is right about what it measured, a
+    fail at this cost is the likely outcome.** A pass would need real fills
+    to be better than the paper assumed, or costs to be lower than we assume.
 
 ## What counts as passing
 
@@ -126,18 +166,27 @@ Tested on January 2016 to December 2025: about 2,500 trading days.
 
 1. It made money after all costs, by a margin that a standard resampling test
    separates from luck.
-2. It still made money at double the slippage (0.10% each way).
-3. It made money in at least 6 of the 10 calendar years.
-4. It beat simply holding the same amount of the whole market (the SPY fund)
+2. It still made money at one and a half times the slippage (0.075% each way).
+3. It still made money under the cautious fill rule.
+4. It made money in at least 6 of the 10 calendar years.
+5. It beat simply holding the same amount of the whole market (the SPY fund)
    over the same minutes, again by a margin the resampling test separates
    from luck. This shows the gain is not just the market rising that day.
-5. There was enough data: at least 2,300 usable days, at least 230 in each of
+6. There was enough data: at least 2,300 usable days, at least 230 in each of
    9 years, at least 10 stocks picked on a typical day, and at least 5,000
    completed trades.
 
-The buy-and-sell-short version has tests 1, 2, 3 and 5.
+The buy-and-sell-short version is measured against tests 1, 2, 3, 4 and 6,
+for information. Its result permits nothing.
 
-**A pass** allows one final check on September 9 to December 8, 2026, which
+**Days that are left out.** A day is used only if the market fund SPY has a
+price for every single minute of it. A gap means our record of that day is
+incomplete, or trading was stopped for the whole market. This leaves out the
+four days in March 2020 when the whole market was halted, which were among
+the wildest days in the ten years. The first 15 days of 2016 only supply
+history.
+
+**A buy-only pass** allows one final check on September 9 to December 8, 2026, which
 has been kept unseen, and then at least eight weeks on the paper account. It
 does not allow real-money trading. **A fail** ends the idea for both versions.
 The rules are not adjusted and re-run.
@@ -150,9 +199,11 @@ The rules are not adjusted and re-run.
 - **A short sample.** The paper covers eight years. They include 2020 and
   2021, when small investors traded far more than usual. We add 2024 and 2025.
 - **Fills.** The published result needs every order filled at exactly its
-  price. Our rules lean the other way. They may be too harsh as well as too
-  kind. One-minute prices cannot settle it. In particular the "both in one
-  minute" rule may count many good trades as losses.
+  price. Our deciding rule buys one minute later, at whatever the price then
+  is. That is not the trade the paper describes: sometimes it is a better
+  price, often a worse one. One-minute prices cannot settle what a real order
+  would have got. The best case and the worst case are shown beside it.
+- **Costs are probably as large as the edge.** See the arithmetic above.
 - **Missing dead companies.** See the data check below. Companies that were
   bought or went bankrupt are partly missing. Those are often the busiest
   stocks on their biggest days. We do not know whether leaving them out makes
@@ -185,10 +236,27 @@ on a few days. It kept counts and times only, no prices.
   minute prices for all 21. But the broker's list of stocks, which is how we
   find candidates, contains only 10 of them. The other 11 would never be
   considered. The paper's stock list included them.
+- **Could the dead companies be added?** Probably, partly. Looked into, not
+  built. Free lists of delisted ticker symbols with dates exist from data
+  vendors (for example Alpha Vantage's listing-status file). The official
+  record, the SEC's delisting filings, names the company but not reliably its
+  ticker. Adding a vendor list would need one more file, frozen like the rest,
+  and one more decision by the owner. Gaps would remain: the lists cannot be
+  checked for completeness, and some tickers were later reused by other
+  companies. We did not check what the lists contain.
 - **The download is workable.** About 12,000 requests. The provider allows
   200 a minute and the running bot shares that allowance, so the program uses
   about half. That is 2 to 3 hours, best done while the market is closed.
   About half a gigabyte on disk. These figures are estimates.
+- **When the download is refused.** The program stops, and keeps nothing, if:
+  more than 1% of the stocks asked for fail to download in the monthly or
+  daily step; on any single day more than 1% of that day's 9:30–9:35 requests
+  fail, or fewer than 90% of the stocks asked for come back; more than 1% of
+  all orders have no minute-by-minute prices; or more than 1% of days have an
+  incomplete SPY record. One bad day cannot hide among 2,500 good ones.
+- **Memory.** The machine has little spare memory beside the running bot. The
+  step that picks the daily 20 was rewritten to use about a third of what it
+  did; on made-up data at full size it peaked at 515 MB.
 - **Why it is small.** We do not download every stock's whole day. Picking
   the 20 needs only each stock's first five minutes. Only the 20 picked each
   day need their minute-by-minute prices. That is about 2% of the full
@@ -198,11 +266,11 @@ on a few days. It kept counts and times only, no prices.
 
 | Point | Paper | This test |
 |---|---|---|
-| Fills | Exactly the order price | Pessimistic rules above, plus slippage |
+| Fills | Exactly the order price | Buy at the next minute's first price; stop measured from the price paid; slippage charged once on top |
 | Stock list | Research database including dead companies | Broker's list; many dead companies missing |
 | Short sales | Always possible | Skipped when probably not possible; "always" shown for information |
-| Version that counts | Buy and sell-short | Buy-only, because the account cannot short |
-| Size of a trade | "1% of the capital allocated to the position", up to 4 times | Read as 1% of one twentieth of the account, up to 4 times that slice |
+| Version that counts | Buy and sell-short | Buy-only, because the account cannot short; buy-and-sell-short permits nothing |
+| Size of a trade | "1% of the capital allocated to the position", up to 4 times | Read as 1% of one twentieth of the account, up to 4 times that slice; the other reading (every trade 20% of the account) shown for information |
 | Typical range (ATR) | "14-day ATR" | Plain average of the last 14 days |
 | Stock splits | Not mentioned | Stock left out for 15 days from a split |
 | Trading halts | Not mentioned | Closed at the last price less one day's range |
@@ -214,17 +282,33 @@ the commission are the paper's numbers, unchanged.
 ## Questions for the owner
 
 1. **Size of a trade.** The request said "1% of equity". The paper's words fit
-   "1% of the slice" better (see the table). Which is meant? It changes the
-   scale of results and which trades are capped.
-2. **Which version counts.** Buy-only (tradable today) or the published
-   buy-and-sell-short?
-3. **Slippage levels.** Are 0.05% / 0.10% / 0.025% the right base, double and
-   half?
-4. **The "both in one minute" rule.** It was asked for and it is strict. It
-   may decide the result on its own. Is that intended?
-5. **Missing dead companies.** Accept the gap with a warning label, or supply
-   a list of delisted ticker symbols from another source? The prices are
-   there if we know the names.
+   "1% of the slice" better (see the table). Which is meant? Both are now
+   reported; only the slice reading decides.
+2. **The cautious fill rule as a pass condition.** On prices with no edge it
+   still loses 0.1 to 0.2 of the planned loss per trade. A strategy with a
+   real but modest edge could fail on this test alone. Keep it as a
+   condition, or show it for information?
+3. **Cost levels.** 0.05% decides and 0.075% is the stress case. By our
+   arithmetic the base cost already equals the published return. Is the owner
+   content to run a test that is expected to fail?
+4. **Missing dead companies.** Accept the gap with a warning label, or add a
+   vendor's list of delisted tickers (see the data check)?
+5. **Two rules the paper does not have.** The trading-halt rule and the
+   short-sale restriction are ours. Approve or change them.
+
+## What changed after review
+
+- The deciding fill rule: was "worst case inside the minute", now "buy at the
+  next minute's first price". The old rule is kept as the worst case, for
+  information.
+- A cautious fill rule was added as a pass condition, and the paper's exact
+  fills as the best case.
+- The stress cost: was 0.10% each way, now 0.075%; 0.10% is shown only.
+- The download now checks every day on its own.
+- The step that picks the daily 20 uses far less memory.
+- A halted stock's closing price can no longer go below one cent.
+- Buy-and-sell-short passing alone now explicitly permits nothing.
+- A ticker spelled "NA" is no longer misread as a blank.
 
 ## Steps after approval
 
@@ -232,7 +316,7 @@ Each needs the owner's word.
 
 ```bash
 RUN="./venv/bin/python -m ai_trading.tools.opening_range_trial --repository-root . --contract config/opening_range_trial_campaign.json"
-# independent review; adopt an amendment; set status to registered; register the ledger
+# close the review's findings; adopt an amendment; set status to registered; register the ledger
 $RUN --acquire         # one download, 2 to 3 hours, market closed; needs credentials; never claims
 $RUN --support-audit   # days, names and times only; never reads prices or claims
 $RUN --preflight       # file hashes, date bounds, price validity, rebuilds the daily picks; never claims

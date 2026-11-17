@@ -3,9 +3,11 @@
 Each session the trial takes the US stocks that pass a price, volume and range filter, ranks them
 by the volume of their first five minutes against their own average for that window over the
 prior 14 sessions, and keeps the top 20 with at least average volume. A name whose first
-five-minute bar closed above its open gets a buy stop at that bar's high; below its open, a sell
-stop at its low. A filled order has a stop loss one tenth of the 14-session average true range
-away and is otherwise closed at the session's end. Every parameter comes from the contract. The
+five-minute bar closed above its open is bought once a later one-minute bar trades through that
+bar's high; below its open, it is sold short through its low. The deciding fill model enters at
+the next one-minute bar's open. A filled order has a stop loss one tenth of the 14-session
+average true range from the fill and is otherwise closed at the session's end. Three other fill
+models are scored beside it: one must also stay positive, two are reported as bounds. Every parameter comes from the contract. The
 scoring core is pure: it takes bar tables and a session calendar and returns one row per order.
 
 Modes. All but ``--probe`` refuse a draft contract, an unlisted campaign or a missing ledger
@@ -64,8 +66,12 @@ VERSIONS = ("long_only", "long_short")
 AS_PUBLISHED = "long_short_every_short_taken"  # reported only: no shortability rule, as the paper trades it
 PROBE_STATUSES = {"delisted_symbols_served": "none_detected_by_probe",
                   "delisted_symbols_missing_or_partial": "incomplete_direction_unknown"}
-FILL_RULES = {"stop_order_fill": "worse_of_trigger_and_next_bar_open", "bar_touches_entry_and_stop": "stop",
-              "gap_through": "bar_open", "session_end_exit": "last_bar_close"}
+FILL_MODELS = ("bar_executable", "conservative", "paper_exact", "lower_bound")
+DECIDING_MODEL, CONSERVATIVE_MODEL = FILL_MODELS[0], FILL_MODELS[1]
+FILL_RULES = {"deciding_model": DECIDING_MODEL, "required_positive_model": CONSERVATIVE_MODEL,
+              "reported_only_models": ["paper_exact", "lower_bound"], "session_end_exit": "last_bar_close"}
+EQUAL_NOTIONAL = "equal_notional_sizing"  # reported only: every fill at the leverage cap, the other reading of the paper
+MIN_PRICE = 0.01
 PRICE_COLUMNS = daily.PRICE_COLUMNS
 DAILY_COLUMNS = ["session", "symbol", *PRICE_COLUMNS]
 MINUTE_COLUMNS = ["session", "symbol", "time", *PRICE_COLUMNS]
@@ -82,6 +88,7 @@ PAGE_ROWS = 10_000  # bars per page of the provider's answer
 REQUEST_PAUSE_SECONDS = 0.6  # about 100 requests a minute: half the measured limit, which the running bot shares
 MAX_FAILED_FETCH_FRACTION = 0.01
 MAX_INCOMPLETE_SESSION_FRACTION = 0.01
+MIN_OPENING_COVERAGE = 0.90  # of the names asked for on one session; the probe returned 599 of 600 for current liquid names
 SPLIT_TOLERANCE = 0.01  # a raw/split-adjusted close ratio that moves by more than this marks a split
 
 
@@ -182,7 +189,7 @@ def contract_spec(contract: dict[str, Any]) -> OrbSpec:
     if trade.get("exit") != "session_close" or trade.get("early_close_sessions") != "trade_to_the_early_close":
         raise ValueError("trade must exit at the session close, early closes included")
     if any(fills.get(key) != value for key, value in FILL_RULES.items()):
-        raise ValueError(f"fills must be the pessimistic rules the runner implements:{FILL_RULES}")
+        raise ValueError(f"fills must name the fill models the runner implements:{FILL_RULES}")
     if shorts.get("require_current_shortable_and_easy_to_borrow") is not True:
         raise ValueError("shorts must require the shortable and easy-to-borrow flags")
     tiers = []
@@ -195,9 +202,10 @@ def contract_spec(contract: dict[str, Any]) -> OrbSpec:
     if len({t[0] for t in tiers}) != len(tiers) or roles["decision"] != 1 or roles[STRESS_ROLE] != 1:
         raise ValueError("cost tiers need unique names, one decision tier and one required stress tier")
     primary, stress = (next(t[1] for t in tiers if t[2] == role) for role in ("decision", STRESS_ROLE))
-    if primary != float(contract.get("primary_per_side_cost_bps", math.nan)) or stress < 2 * primary or primary <= 0:
-        raise ValueError("decision tier must equal primary_per_side_cost_bps and the stress tier must cost at least double")
+    if primary != float(contract.get("primary_per_side_cost_bps", math.nan)) or stress <= primary or primary <= 0:
+        raise ValueError("decision tier must equal primary_per_side_cost_bps and the stress tier must cost more")
     if not all(acceptance.get(k) is True for k in ("positive_lower_bound_vs_cash_at_primary", "positive_at_stress",
+                                                   "positive_under_conservative_fills_at_primary",
                                                    "long_only_positive_lower_bound_vs_exposure_matched_market_at_primary")):
         raise ValueError("acceptance criteria cannot be disabled")
     replicates = daily._int(bootstrap.get("replicates"), "bootstrap replicates")
@@ -337,34 +345,81 @@ def daily_features(bars: pd.DataFrame, sessions: list[str], splits: Iterable[tup
 
 # --- pure core: relative volume and the daily selection --------------------------------------------
 
-def build_selection(features: pd.DataFrame, opening: pd.DataFrame, sessions: list[str], not_shortable: frozenset[str],
-                    spec: OrbSpec) -> pd.DataFrame:
+def _symbol_codes(symbols: pd.Series, codes: dict[str, int], *, grow: bool) -> np.ndarray:
+    """An integer per row for the symbol, from a shared table; -1 for a symbol the table lacks when it may not grow."""
+    column = symbols.astype("category")
+    lookup = np.empty(len(column.cat.categories), dtype=np.int64)
+    for j, name in enumerate(column.cat.categories):
+        lookup[j] = codes.setdefault(str(name), len(codes)) if grow else codes.get(str(name), -1)
+    return np.asarray(lookup[column.cat.codes.to_numpy()], dtype=np.int64)
+
+
+def select_from_parts(features: pd.DataFrame, parts: Callable[[], Iterable[pd.DataFrame]], sessions: list[str],
+                      not_shortable: frozenset[str], spec: OrbSpec) -> pd.DataFrame:
     """The names ordered each session: the top ``top_names`` by relative volume among filtered names.
 
+    ``parts`` yields the opening five-minute bars in pieces (one month each at full scale) and is
+    called twice, so memory holds one piece plus three numbers per bar, never the whole table.
+
     Relative volume for session t is the volume of the first five-minute bar of t divided by the
-    mean volume of that bar over sessions t-14..t-1, all 14 of which must have the bar. It uses
-    nothing after 09:35 of t. Names below ``min_rel_volume`` are dropped; ties break by symbol.
-    The direction is the sign of the bar's close minus its open; zero (a doji) keeps its rank
-    and places no order. ``short_ok`` is the shortability rule for the long-short version.
+    mean volume of that bar over sessions t-14..t-1, all 14 of which must have the bar; until
+    they do, the name is unranked. It uses nothing after 09:35 of t. Names below
+    ``min_rel_volume`` are dropped; ties break by symbol. The direction is the sign of the bar's
+    close minus its open; zero (a doji) keeps its rank and places no order. ``short_ok`` is the
+    shortability rule for the long-short version.
     """
-    if features.empty or opening.empty:
-        return pd.DataFrame(columns=SELECTION_COLUMNS)
     index = {session: i for i, session in enumerate(sessions)}
-    opening = opening.assign(idx=opening.session.map(index), symbol=opening.symbol.astype(str))
-    opening = opening[opening.idx.notna()].astype({"idx": int})
-    volume = opening.pivot(index="idx", columns="symbol", values="volume").reindex(range(len(sessions)))
-    relative = volume / volume.rolling(spec.lookback).mean().shift(1)
-    column = {symbol: j for j, symbol in enumerate(relative.columns)}
-    known = features.symbol.isin(column)
-    rows = features[known].reset_index(drop=True)
-    table = relative.to_numpy()
-    rows["rel_volume"] = table[rows.idx.to_numpy(dtype=int), rows.symbol.map(column).to_numpy(dtype=int)]
-    rows = rows[np.isfinite(rows.rel_volume) & (rows.rel_volume >= spec.min_rel_volume)]
+    window = spec.lookback
+    stride = len(sessions) + window + 1  # wider than any session difference, so equal key gaps mean the same symbol
+    codes: dict[str, int] = {}
+
+    def keyed(part: pd.DataFrame, *, grow: bool) -> tuple[pd.DataFrame, np.ndarray]:
+        where = part.session.map(index).to_numpy(dtype=float)
+        code = _symbol_codes(part.symbol, codes, grow=grow)
+        keep = np.isfinite(where) & (code >= 0)
+        return part[keep], code[keep] * stride + where[keep].astype(np.int64)
+
+    key_parts, volume_parts = [], []
+    for part in parts():
+        kept, key = keyed(part, grow=True)
+        key_parts.append(key)
+        volume_parts.append(kept.volume.to_numpy(dtype=float))
+    if features.empty or not key_parts or not sum(len(k) for k in key_parts):
+        return pd.DataFrame(columns=SELECTION_COLUMNS)
+    keys, volumes = np.concatenate(key_parts), np.concatenate(volume_parts)
+    del key_parts, volume_parts
+    order = np.argsort(keys, kind="stable")
+    keys, volumes = keys[order], volumes[order]
+    del order
+    if (np.diff(keys) <= 0).any():
+        raise ValueError("duplicate opening bars")
+    # Sorted by symbol then session: the 14 rows before a row are its 14 prior sessions only if the row 14 back is 14 sessions back.
+    running = np.concatenate([[0.0], np.cumsum(volumes)])
+    relative = np.full(len(keys), np.nan)
+    if len(keys) > window:
+        complete = keys[window:] - keys[:-window] == window  # same symbol, exactly 14 sessions earlier
+        mean = (running[window:-1] - running[:-window - 1]) / window
+        with np.errstate(divide="ignore", invalid="ignore"):
+            relative[window:] = np.where(complete & (mean > 0), volumes[window:] / mean, np.nan)
+    del running, volumes
+    wanted = features.symbol.map(codes).to_numpy(dtype=float)
+    feature_key = np.where(np.isfinite(wanted), wanted, -1).astype(np.int64) * stride + features.idx.to_numpy(dtype=np.int64)
+    at = np.minimum(np.searchsorted(keys, feature_key), len(keys) - 1)
+    found = np.isfinite(wanted) & (keys[at] == feature_key)
+    value = np.where(found, relative[at], np.nan)
+    del relative, keys
+    passing = np.isfinite(value) & (value >= spec.min_rel_volume)
+    rows = features[passing].assign(rel_volume=value[passing], key=feature_key[passing])
     rows = rows.sort_values(["idx", "rel_volume", "symbol"], ascending=[True, False, True], kind="stable")
     rows = rows.groupby("idx", sort=False).head(spec.top_names).copy()
     rows["rank"] = rows.groupby("idx").cumcount() + 1
-    bar = opening.rename(columns={c: f"or_{c}" for c in ("open", "high", "low", "close")})
-    rows = rows.merge(bar[["idx", "symbol", "or_open", "or_high", "or_low", "or_close"]], on=["idx", "symbol"], how="left")
+    chosen = np.sort(rows.key.to_numpy())
+    bars = []
+    for part in parts():  # second pass: only the selected names' bars are kept
+        kept, key = keyed(part, grow=False)
+        hit = np.isin(key, chosen)
+        bars.append(pd.DataFrame(dict(key=key[hit], **{f"or_{c}": kept[c].to_numpy(dtype=float)[hit] for c in ("open", "high", "low", "close")})))
+    rows = rows.merge(pd.concat(bars, ignore_index=True), on="key", how="left")
     rows["session"] = [sessions[i] for i in rows.idx]
     rows["direction"] = np.sign(rows.or_close - rows.or_open).astype(int)
     rows["trigger"] = np.where(rows.direction > 0, rows.or_high, np.where(rows.direction < 0, rows.or_low, np.nan))
@@ -374,30 +429,43 @@ def build_selection(features: pd.DataFrame, opening: pd.DataFrame, sessions: lis
     return rows[SELECTION_COLUMNS].reset_index(drop=True)
 
 
+def build_selection(features: pd.DataFrame, opening: pd.DataFrame, sessions: list[str], not_shortable: frozenset[str],
+                    spec: OrbSpec) -> pd.DataFrame:
+    """``select_from_parts`` on one in-memory table of opening bars."""
+    return select_from_parts(features, lambda: [opening], sessions, not_shortable, spec)
+
+
 # --- pure core: one order ---------------------------------------------------------------------------
 
 def simulate_trade(times: list[str], opens: np.ndarray, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, *,
                    direction: int, trigger: float, stop_distance: float, close_stamp: str, stale_minutes: int,
-                   stale_adverse: float) -> dict[str, Any] | None:
-    """Entry and exit of one stop order from one-minute bars at or after 09:35; None if never triggered.
+                   stale_adverse: float, model: str = DECIDING_MODEL) -> dict[str, Any] | None:
+    """Entry and exit of one order from one-minute bars at or after 09:35; None if there is no fill.
 
-    Written for a buy; a sell runs the same logic on negated prices, so "worse" always means a
-    higher entry and a lower exit. Deliberately pessimistic:
+    Written for a buy; a sell runs the same logic on negated prices. The order triggers on the
+    first bar whose high reaches the trigger. What happens next depends on the fill model:
 
-    * The order triggers on the first bar whose high reaches the trigger. If that bar opened at or
-      beyond the trigger the fill is its open (a gap fills at the gapped price) and the stop loss
-      sits ``stop_distance`` below it; a low in that bar at or below the stop is a stop-out.
-    * Otherwise, if the trigger bar's low is ``stop_distance`` or more below the trigger, the bar
-      touched both the entry and the stop: the trade is filled at the trigger and stopped in that
-      bar, whichever came first inside the bar.
-    * Otherwise the fill is the worse of the trigger and the next bar's open, and the stop loss
-      sits ``stop_distance`` below that fill from the next bar on.
-    * A later bar that opens at or beyond the stop exits at its open. A bar whose low reaches the
-      stop exits at the worse of the stop and the next bar's open.
-    * Otherwise the trade exits at the close of the last bar. If that bar is more than
-      ``stale_minutes`` before the session close (a halt, or the record ends), the exit is moved
-      against the position by ``stale_adverse``.
+    * ``bar_executable`` (decides). Enter at the open of the NEXT bar, whatever it is; a trigger
+      on the session's last bar is no fill. The stop loss sits ``stop_distance`` below that fill.
+      A later bar that opens at or below the stop exits at its open; a bar whose low reaches the
+      stop exits at the stop price. Every price used is one a one-minute record can show in
+      order, so on a process with no edge the result averages zero before costs.
+    * ``conservative`` (must stay positive). The same entry; a bar whose low reaches the stop
+      exits at the worse of the stop and the next bar's open.
+    * ``paper_exact`` (reported, upper bound). Enter at exactly the trigger; the trigger bar
+      cannot stop the trade; a later low at the stop exits at exactly the stop, gaps included.
+    * ``lower_bound`` (reported). A gap through the trigger fills at the bar's open; a trigger
+      bar whose low is ``stop_distance`` below the trigger is a stop-out; otherwise the entry is
+      the worse of the trigger and the next open; stop exits are the worse of the stop and the
+      next open. It keeps the bad half of every minute's move and scores a no-edge process
+      well below zero.
+
+    In every model an unstopped trade exits at the close of the last bar. If that bar is more
+    than ``stale_minutes`` before the session close (a halt, or the record ends), the exit is
+    moved against the position by ``stale_adverse``, but never below one cent.
     """
+    if model not in FILL_MODELS:
+        raise ValueError("unknown fill model")
     n = len(times)
     side = 1.0 if direction > 0 else -1.0
     xo, xc = side * opens, side * closes
@@ -412,26 +480,45 @@ def simulate_trade(times: list[str], opens: np.ndarray, highs: np.ndarray, lows:
         return float(xo[i + 1]) if i + 1 < n else float(xc[i])
 
     gap = bool(xo[k] >= level)
-    entry = float(xo[k]) if gap else level
-    stop = entry - stop_distance
+    entry_index, at_open = k, False
     exit_index, exit_value, reason = n - 1, float(xc[-1]), "session_end"
-    if xl[k] <= stop:
-        exit_index, exit_value, reason = k, min(stop, after(k)), "stop_in_entry_bar"
+    if model == "lower_bound":
+        entry, at_open = (float(xo[k]) if gap else level), gap
+        stop = entry - stop_distance
+        if xl[k] <= stop:
+            exit_index, exit_value, reason = k, min(stop, after(k)), "stop_in_entry_bar"
+        else:
+            if not gap:  # alive at the end of the trigger bar: pay the worse price, and measure the stop from it
+                entry = max(level, after(k))
+                stop = entry - stop_distance
+            for m in range(k + 1, n):
+                if xo[m] <= stop:
+                    exit_index, exit_value, reason = m, float(xo[m]), "stop_gap"
+                    break
+                if xl[m] <= stop:
+                    exit_index, exit_value, reason = m, min(stop, after(m)), "stop"
+                    break
     else:
-        if not gap:  # alive at the end of the trigger bar: pay the worse price, and measure the stop from it
-            entry = max(level, after(k))
-            stop = entry - stop_distance
+        if model == "paper_exact":
+            entry = level
+        elif k + 1 >= n:
+            return None
+        else:
+            entry, entry_index, at_open = float(xo[k + 1]), k + 1, True
+        stop = entry - stop_distance
         for m in range(k + 1, n):
-            if xo[m] <= stop:
+            if model != "paper_exact" and m > entry_index and xo[m] <= stop:
                 exit_index, exit_value, reason = m, float(xo[m]), "stop_gap"
                 break
             if xl[m] <= stop:
-                exit_index, exit_value, reason = m, min(stop, after(m)), "stop"
+                exit_index, exit_value, reason = m, (min(stop, after(m)) if model == CONSERVATIVE_MODEL else stop), "stop"
                 break
+    exit_price = side * exit_value
     if reason == "session_end" and _minute(close_stamp) - 1 - _minute(times[-1]) > stale_minutes:
-        exit_value, reason = exit_value - stale_adverse, "stale_last_print"
-    return dict(entry_time=times[k], entry_price=side * entry, exit_time=times[exit_index], exit_price=side * exit_value,
-                exit_reason=reason, gap_entry=gap)
+        # A long marked down by a full range could go below zero; the floor touches no other exit.
+        exit_price, reason = max(side * (exit_value - stale_adverse), MIN_PRICE), "stale_last_print"
+    return dict(entry_time=times[entry_index], entry_price=side * entry, exit_time=times[exit_index], exit_price=exit_price,
+                exit_reason=reason, gap_entry=gap, entry_at_open=at_open)
 
 
 def shares_per_equity(trigger: float, stop_distance: float, spec: OrbSpec) -> float:
@@ -442,16 +529,19 @@ def shares_per_equity(trigger: float, stop_distance: float, spec: OrbSpec) -> fl
 
 
 def build_trades(selection: pd.DataFrame, minute: pd.DataFrame, market: pd.DataFrame, calendar: SessionCalendar,
-                 eligible: set[str], spec: OrbSpec) -> pd.DataFrame:
-    """One row per selected name on each eligible session, filled or not, with its accounting.
+                 eligible: set[str], spec: OrbSpec, *, model: str = DECIDING_MODEL) -> pd.DataFrame:
+    """One row per selected name on each eligible session, filled or not, with its accounting under one fill model.
 
     ``weight`` is the entry value as a fraction of equity. ``gross`` is the price move on the
     shares held; ``commission`` covers both sides; ``turnover`` is entry value plus exit value, on
     which each tier charges its per-side cost. ``matched_market`` is the market proxy's move from
-    the entry minute to the exit minute on the same signed weight.
+    the entry (its open of that minute for a fill at a bar's open, else its close) to its close
+    of the exit minute, on the same signed weight. ``cap_scale`` is how many times larger the
+    position would be at the leverage cap.
     """
     closes = dict(zip(calendar.sessions, calendar.closes))
     market_close = {(s, t): float(c) for s, t, c in zip(market.session, market.time, market.close)}
+    market_open = {(s, t): float(o) for s, t, o in zip(market.session, market.time, market.open)}
     paths = {key: group for key, group in minute.groupby(["session", "symbol"], observed=True, sort=False)}
     rows = []
     for order in selection.itertuples(index=False):
@@ -472,21 +562,23 @@ def build_trades(selection: pd.DataFrame, minute: pd.DataFrame, market: pd.DataF
         trade = simulate_trade(times, *(path[c].to_numpy(dtype=float) for c in PRICE_COLUMNS[:4]), direction=order.direction,
                                trigger=float(order.trigger), stop_distance=float(order.stop_distance),
                                close_stamp=closes[order.session], stale_minutes=spec.stale_minutes,
-                               stale_adverse=spec.stale_adverse_atr * float(order.atr))
+                               stale_adverse=spec.stale_adverse_atr * float(order.atr), model=model)
         if trade is None:
             rows.append(dict(row, status="not_triggered"))
             continue
         shares = shares_per_equity(float(order.trigger), float(order.stop_distance), spec)
         entry, exit_price = trade["entry_price"], trade["exit_price"]
         weight = shares * entry
-        market_move = market_close[(order.session, trade["exit_time"])] / market_close[(order.session, trade["entry_time"])] - 1
-        rows.append(dict(row, status="filled", **trade, shares=shares, weight=weight,
+        reference = (market_open if trade["entry_at_open"] else market_close)[(order.session, trade["entry_time"])]
+        market_move = market_close[(order.session, trade["exit_time"])] / reference - 1
+        cap = spec.max_leverage / spec.top_names / float(order.trigger)
+        rows.append(dict(row, status="filled", **trade, shares=shares, weight=weight, cap_scale=cap / shares,
                          gross=shares * order.direction * (exit_price - entry), commission=2 * shares * spec.commission,
                          turnover=shares * (entry + exit_price), matched_market=order.direction * weight * market_move,
                          r_multiple=order.direction * (exit_price - entry) / float(order.stop_distance)))
     columns = ["session", "year", "symbol", "rank", "rel_volume", "direction", "short_ok", "status", "entry_time", "entry_price",
-               "exit_time", "exit_price", "exit_reason", "gap_entry", "shares", "weight", "gross", "commission", "turnover",
-               "matched_market", "r_multiple"]
+               "exit_time", "exit_price", "exit_reason", "gap_entry", "entry_at_open", "shares", "weight", "cap_scale", "gross",
+               "commission", "turnover", "matched_market", "r_multiple"]
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -503,7 +595,7 @@ def validate_trades(trades: pd.DataFrame, calendar: SessionCalendar, spec: OrbSp
     if not ((filled.entry_time >= ORDER_TIME) & (filled.entry_time <= filled.exit_time)
             & (filled.exit_time < filled.session.map(closes))).all():
         raise ValueError("a trade outside 09:35 to the session close")
-    if (filled.exit_price <= 0).any() or (filled.groupby("session").weight.sum() > spec.max_leverage * 1.25).any():
+    if (filled.exit_price < MIN_PRICE).any() or (filled.groupby("session").weight.sum() > spec.max_leverage * 1.25).any():
         raise ValueError("nonpositive exit price or a session far above the leverage cap")
 
 
@@ -542,7 +634,16 @@ def _lower_bound(values: np.ndarray, spec: OrbSpec) -> float | None:
     return None if means is None else _bps(float(np.quantile(means, spec.lower_quantile)))
 
 
-def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *, version: str, decides: bool) -> dict[str, Any]:
+def equal_notional(trades: pd.DataFrame) -> pd.DataFrame:
+    """The same fills with every position at the leverage cap: the '1 percent of equity' reading of the paper."""
+    scaled = trades.copy()
+    for column in ("shares", "weight", "gross", "commission", "turnover", "matched_market"):
+        scaled[column] = scaled[column] * scaled.cap_scale
+    return scaled
+
+
+def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *, version: str, decides: bool,
+                    conservative: pd.DataFrame | None = None) -> dict[str, Any]:
     part = version_trades(trades, version)
     years = np.array([s[:4] for s in sessions])
     tiers: dict[str, dict[str, Any]] = {}
@@ -584,6 +685,9 @@ def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *,
                 "positive_lower_bound_vs_cash_at_primary": bounds["vs_cash_bps"] > 0,
                 "positive_at_stress": bool(stressed.mean() > 0),
                 "consistent_years": positive_years >= spec.min_positive_years}
+    if conservative is not None:
+        cautious, _ = day_returns(version_trades(conservative, version), sessions, primary[1])
+        criteria["positive_under_conservative_fills_at_primary"] = bool(cautious.mean() > 0)
     if version == "long_only":
         criteria["positive_lower_bound_vs_exposure_matched_market_at_primary"] = bounds["vs_matched_market_bps"] > 0
     decision = ("eligible_for_untouched_test_planning" if all(criteria.values())
@@ -592,14 +696,26 @@ def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *,
                 lower_quantile=spec.lower_quantile)
 
 
-def evaluate(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec) -> dict[str, Any]:
-    """Both versions; the ledger decision is the long-only (primary) decision."""
-    versions = {v: _version_report(trades, sessions, spec, version=v, decides=True) for v in VERSIONS}
+def evaluate(trades: dict[str, pd.DataFrame], sessions: list[str], spec: OrbSpec) -> dict[str, Any]:
+    """Both versions under the deciding fill model; the ledger decision is the long-only decision.
+
+    ``trades`` maps each fill model to its trade table. The conservative model supplies one
+    criterion; the other models, the every-short book and equal-notional sizing are reported only.
+    """
+    main = trades[DECIDING_MODEL]
+    versions = {v: _version_report(main, sessions, spec, version=v, decides=True, conservative=trades[CONSERVATIVE_MODEL])
+                for v in VERSIONS}
+    others = {model: {v: _version_report(table, sessions, spec, version=v, decides=False) for v in VERSIONS}
+              for model, table in trades.items() if model != DECIDING_MODEL}
+    sized = equal_notional(main)
     return dict(decision=versions["long_only"]["decision"], secondary_decision=versions["long_short"]["decision"],
-                decision_tier=spec.tier("decision")[0], versions=versions,
-                reported_only={AS_PUBLISHED: _version_report(trades, sessions, spec, version=AS_PUBLISHED, decides=False),
-                               "order_statuses": {str(k): int(v) for k, v in sorted(trades.status.value_counts().items())},
-                               "shorts_blocked_by_the_short_rule": int(((trades.direction < 0) & ~trades.short_ok.astype(bool)).sum())})
+                secondary_decision_permits="nothing; reported as information only",
+                decision_tier=spec.tier("decision")[0], deciding_fill_model=DECIDING_MODEL, versions=versions,
+                reported_only={"fill_models": others,
+                               AS_PUBLISHED: _version_report(main, sessions, spec, version=AS_PUBLISHED, decides=False),
+                               EQUAL_NOTIONAL: {v: _version_report(sized, sessions, spec, version=v, decides=False) for v in VERSIONS},
+                               "order_statuses": {str(k): int(v) for k, v in sorted(main.status.value_counts().items())},
+                               "shorts_blocked_by_the_short_rule": int(((main.direction < 0) & ~main.short_ok.astype(bool)).sum())})
 
 
 # --- acquisition and probe -------------------------------------------------------------------------
@@ -726,7 +842,7 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
     if not shortlist:
         raise ValueError("no candidate could pass the filters")
 
-    features, splits, opening_parts = [], [], []
+    features, splits = [], []
     failed["daily"] = {}
     for part, offset in enumerate(range(0, len(shortlist), DAILY_CHUNK)):
         batch = shortlist[offset:offset + DAILY_CHUNK]
@@ -737,6 +853,10 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
         if raw.duplicated(["symbol", "session"]).any():
             raise ValueError("duplicate daily bars")
         daily.check_development_sessions({"daily": raw.session.unique().tolist()}, contract)
+        adjusted = adjusted[~adjusted.symbol.isin(failed["daily"])].sort_values(["symbol", "session"], ignore_index=True)
+        if not raw[["symbol", "session"]].equals(adjusted[["symbol", "session"]]):
+            # A split on a session the adjusted series lacks would go unseen and the split guard would not fire.
+            raise ValueError(f"split-adjusted daily bars do not cover the raw bars:part={part}")
         events = split_events(raw, adjusted)
         splits += events
         sources[f"daily/part_{part:03d}"] = _write_table(root, directory / "daily" / f"part_{part:03d}.csv.gz", raw)
@@ -755,36 +875,43 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
     for ahead in range(1, spec.lookback + 1):  # the next 14 sessions need this session's opening volume as history
         wanted[:-ahead] |= passing[ahead:]
     failed["opening"], failed["minute"] = {}, {}
-    asked = 0
+    asked, opening_bars = 0, 0
+    coverage: dict[str, list[int]] = {}
     month_rows: list[pd.DataFrame] = []
 
-    def flush(kind: str, month: str, columns: list[str]) -> None:
-        if month_rows:
-            table = pd.concat(month_rows, ignore_index=True)[columns]
-            sources[f"{kind}/{month}"] = _write_table(root, directory / kind / f"{month}.csv.gz", table)
-            if kind == "opening":
-                opening_parts.append(table)
-            month_rows.clear()
+    def flush(kind: str, month: str, columns: list[str]) -> int:
+        if not month_rows:
+            return 0
+        table = pd.concat(month_rows, ignore_index=True)[columns]
+        sources[f"{kind}/{month}"] = _write_table(root, directory / kind / f"{month}.csv.gz", table)
+        month_rows.clear()
+        return len(table)
 
     for i, session in enumerate(sessions):
         if i and session[:7] != sessions[i - 1][:7]:
-            flush("opening", sessions[i - 1][:7], DAILY_COLUMNS)
+            opening_bars += flush("opening", sessions[i - 1][:7], DAILY_COLUMNS)
         needed = [names[j] for j in np.flatnonzero(wanted[i])]
+        returned, lost_here = 0, 0
         for offset in range(0, len(needed), OPENING_CHUNK):
             batch = needed[offset:offset + OPENING_CHUNK]
             frame, lost = fetch_frame(clients.data, batch, _at(session, REGULAR_OPEN), _at(session, ORDER_TIME, seconds_before=1), unit="opening")
-            asked += len(batch)
             failed["opening"].update({f"{session}:{symbol}": error for symbol, error in lost.items()})
-            month_rows.append(frame[(frame.session == session) & (frame.time == REGULAR_OPEN)])
-    flush("opening", sessions[-1][:7], DAILY_COLUMNS)
-    if len(failed["opening"]) > MAX_FAILED_FETCH_FRACTION * max(asked, 1):
-        raise ValueError(f"too many opening-bar fetch failures:{len(failed['opening'])}:asked={asked}")
-    opening = pd.concat(opening_parts, ignore_index=True) if opening_parts else pd.DataFrame(columns=DAILY_COLUMNS)
-    if opening.duplicated(["session", "symbol"]).any():
-        raise ValueError("duplicate opening bars")
+            frame = frame[(frame.session == session) & (frame.time == REGULAR_OPEN)]
+            returned, lost_here = returned + int(frame.symbol.nunique()), lost_here + len(lost)
+            month_rows.append(frame)
+        asked += len(needed)
+        if needed:
+            coverage[session] = [len(needed), returned, lost_here]
+            # Every name asked for has a daily bar that session, so a missing opening bar means no trade in five minutes.
+            # One outage must not pass because the other 2,513 sessions were fine: each session is checked on its own.
+            if lost_here > MAX_FAILED_FETCH_FRACTION * len(needed):
+                raise ValueError(f"too many opening-bar fetch failures:{session}:failed={lost_here}:asked={len(needed)}")
+            if len(needed) - returned > max(1.0, (1 - MIN_OPENING_COVERAGE) * len(needed)):
+                raise ValueError(f"opening bars cover too few names:{session}:returned={returned}:asked={len(needed)}")
+    opening_bars += flush("opening", sessions[-1][:7], DAILY_COLUMNS)
 
     not_shortable = frozenset(row["symbol"] for row in assets if not (row["shortable"] and row["easy_to_borrow"]))
-    selection = build_selection(feature, opening[daily.valid_daily(opening)], sessions, not_shortable, spec)
+    selection = select_from_parts(feature, lambda: _opening_parts(root, sources), sessions, not_shortable, spec)
     if selection.empty:
         raise ValueError("no name was selected on any session")
     orders = selection[selection.direction != 0]
@@ -827,13 +954,14 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
     counts_out = dict(assets=len(assets), inactive_assets=sum(row["status"] == "inactive" for row in assets),
                       candidates=len(candidates), **exclusions, shortlist=len(shortlist), split_events=len(splits),
                       names_ever_passing_daily_filters=len(names), name_days_passing_daily_filters=len(feature),
-                      opening_bars_requested=asked, opening_bars=len(opening), selected_name_days=len(selection),
+                      opening_bars_requested=asked, opening_bars=opening_bars, selected_name_days=len(selection),
                       orders=len(orders), orders_without_minute_bars=without_bars, market_bars=market_parts,
                       incomplete_market_sessions=incomplete,
                       selected_inactive_symbols=len({row["symbol"] for row in assets if row["status"] == "inactive"} & set(selection.symbol)))
     manifest = dict(campaign_id=contract["campaign_id"], contract_hash=canonical, feed="sip", adjustment="raw",
                     request=dict(start=start, end=end), fetched_at=datetime.now(NEW_YORK).isoformat(), sources=sources,
-                    frozen=frozen, counts=counts_out, failed=failed, prices_read_for_analysis=False, quality_passed=True)
+                    frozen=frozen, counts=counts_out, failed=failed, opening_coverage=coverage, prices_read_for_analysis=False,
+                    quality_passed=True)
     write_json(manifest_path, manifest)
     return dict(status="acquisition_written", manifest=str(manifest_path), counts=counts_out, trial_claimed=False)
 
@@ -878,16 +1006,32 @@ def probe(contract: dict[str, Any], *, client_factory: Callable[[], Clients]) ->
 
 # --- reading ---------------------------------------------------------------------------------------
 
-def _read(root: Path, source: dict[str, Any], columns: list[str]) -> pd.DataFrame:
-    """A hash-verified table; symbols are read as a category so 18 million minute rows stay small."""
+def _read(root: Path, source: dict[str, Any], columns: list[str], *, compact_sessions: bool = False) -> pd.DataFrame:
+    """A hash-verified table. Symbols are read as a category so 18 million minute rows stay small.
+
+    Only an empty field in a number column is missing: the tickers ``NA``, ``NAN`` and ``NULL``
+    are text, not gaps.
+    """
     path = root / source["path"]
     if digest(path) != source["sha256"]:
         raise ValueError(f"source changed before read:{source['path']}")
-    types = {"session": str, "time": str, "symbol": "category"}
-    frame = pd.read_csv(path, usecols=columns, dtype={k: v for k, v in types.items() if k in columns})
+    types = {"session": "category" if compact_sessions else str, "time": str, "symbol": "category"}
+    frame = pd.read_csv(path, usecols=columns, dtype={k: v for k, v in types.items() if k in columns}, keep_default_na=False,
+                        na_values={c: [""] for c in columns if c not in types})
     if digest(path) != source["sha256"]:
         raise ValueError(f"source changed during read:{source['path']}")
     return frame[columns]
+
+
+def _opening_parts(root: Path, sources: dict[str, dict[str, Any]], rejected: Counter[str] | None = None) -> Iterable[pd.DataFrame]:
+    """The valid opening bars one month at a time; invalid bars are counted once if a counter is given."""
+    for name, source in sorted(sources.items()):
+        if name.startswith("opening/"):
+            frame = _read(root, source, DAILY_COLUMNS, compact_sessions=True)
+            valid = daily.valid_daily(frame)
+            if rejected is not None:
+                rejected["invalid_opening_bars"] += int((~valid).sum())
+            yield frame[valid]
 
 
 def _group(manifest: dict[str, Any], kind: str) -> list[tuple[str, dict[str, Any]]]:
@@ -906,7 +1050,7 @@ def load_stamps(root: Path, manifest: dict[str, Any]) -> tuple[Counter[str], Cou
         if frame.duplicated().any():
             raise ValueError("duplicate market bars in source")
         market.update(frame.session)
-    selection = daily._verified_read(root, manifest["frozen"]["selection"], ["session", "symbol"])
+    selection = _read(root, manifest["frozen"]["selection"], ["session", "symbol"])
     with_minutes: Counter[str] = Counter()
     for _, source in _group(manifest, "minute"):
         frame = _read(root, source, ["session", "symbol"]).drop_duplicates()
@@ -936,14 +1080,13 @@ def rebuild_selection(root: Path, manifest: dict[str, Any], sessions: list[str],
         rejected["invalid_daily_bars"] += int((~valid).sum())
         symbols = set(frame.symbol.astype(str))
         features.append(daily_features(frame[valid], sessions, [event for event in splits if event[0] in symbols], spec))
-    openings = []
-    for _, source in _group(manifest, "opening"):
-        frame = _read(root, source, DAILY_COLUMNS)
-        valid = daily.valid_daily(frame)
-        rejected["invalid_opening_bars"] += int((~valid).sum())
-        openings.append(frame[valid].astype({"symbol": str}))
-    selection = build_selection(pd.concat(features, ignore_index=True), pd.concat(openings, ignore_index=True), sessions, not_shortable, spec)
-    stored = daily._verified_read(root, manifest["frozen"]["selection"], SELECTION_COLUMNS)
+    counted: list[Counter[str] | None] = [rejected]  # the bars are read twice; invalid ones are counted on the first pass only
+
+    def parts() -> Iterable[pd.DataFrame]:
+        return _opening_parts(root, manifest["sources"], counted.pop() if counted else None)
+
+    selection = select_from_parts(pd.concat(features, ignore_index=True), parts, sessions, not_shortable, spec)
+    stored = _read(root, manifest["frozen"]["selection"], SELECTION_COLUMNS).astype({"symbol": str})
     same = (len(stored) == len(selection) and stored[["session", "symbol", "rank", "direction"]].astype(str).equals(
         selection[["session", "symbol", "rank", "direction"]].astype(str))
             and np.allclose(stored[["rel_volume", "atr"]].to_numpy(dtype=float), selection[["rel_volume", "atr"]].to_numpy(dtype=float)))
@@ -1034,22 +1177,27 @@ def run(root: Path, *, mode: str, contract_path: Path, client_factory: Callable[
                          quality_passed=True)
     # A crash after the claim intentionally prevents automatic re-evaluation.
     eligible = [s for s, status in zip(sessions, statuses) if status == ELIGIBLE]
-    parts = []
+    tables: dict[str, list[pd.DataFrame]] = {model: [] for model in FILL_MODELS}
     for month in months:
         minute, market, _ = load_month(root, manifest, month)
-        parts.append(build_trades(selection[selection.session.str[:7] == month], minute, market, calendar, set(eligible), spec))
-    trades = pd.concat(parts, ignore_index=True)
-    validate_trades(trades, calendar, spec)
-    trades_path = directory / "trades.csv"
-    atomic_write_text(trades_path, trades.to_csv(index=False))
+        chosen = selection[selection.session.str[:7] == month]
+        for model in FILL_MODELS:
+            tables[model].append(build_trades(chosen, minute, market, calendar, set(eligible), spec, model=model))
+    trades, hashes = {}, {}
+    for model in FILL_MODELS:
+        trades[model] = pd.concat(tables[model], ignore_index=True)
+        validate_trades(trades[model], calendar, spec)
+        path = directory / f"trades_{model}.csv"
+        atomic_write_text(path, trades[model].to_csv(index=False))
+        hashes[path.name] = digest(path)
     report = evaluate(trades, eligible, spec)
     survivorship = contract["survivorship"]
-    report.update(signature=signature, contract_hash=canonical, output_sha256={trades_path.name: digest(trades_path)},
+    report.update(signature=signature, contract_hash=canonical, output_sha256=hashes,
                   rejection_counts=rejected, skipped_sessions=dict(sorted(Counter(s for s in statuses if s != ELIGIBLE).items())),
                   acquisition_counts=manifest.get("counts", {}), survivorship_probe_status=survivorship.get("probe_status"),
                   survivorship_label=PROBE_STATUSES[survivorship["probe_status"]], holdout_evaluated=False,
                   promotion_authority=False, runtime_authority=False, orders_sent=0, models_fitted=0,
-                  evidence_type="historical_one_minute_bar_stop_order_simulation_not_executable_fills")
+                  evidence_type="historical_one_minute_bar_order_simulation_not_executable_fills")
     report_path = directory / "report.json"
     write_json(report_path, report)
     finish_campaign_trial(state_path, evidence_signature=signature, decision=report["decision"], report_path=report_path)
