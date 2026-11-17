@@ -130,10 +130,6 @@ def rolling_mean(arr, window: int):
 _portfolio_optimizer = None
 _transaction_cost_calculator = None
 _regime_detector = None
-from ai_trading.position.intelligent_manager import (
-    IntelligentPositionManager,
-    PositionAction,
-)
 
 
 def _finite_float(value: Any) -> float | None:
@@ -374,81 +370,3 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
                 extra={"cause": e.__class__.__name__, "detail": str(e), "path": str(cache_path)},
             )
     return data
-
-
-def generate_position_hold_signals(ctx, current_positions: list) -> dict:
-    """Generate hold signals for existing positions to reduce churn."""
-    try:
-        if IntelligentPositionManager is None:
-            logger.warning("IntelligentPositionManager not available - no hold signals generated")
-            return {}
-        if not hasattr(ctx, "position_manager"):
-            ctx.position_manager = IntelligentPositionManager(ctx)
-        hold_signals: dict[str, str] = {}
-        for position in current_positions:
-            symbol = getattr(position, "symbol", "")
-            if not symbol:
-                continue
-            rec = ctx.position_manager.analyze_position(symbol, position, current_positions)
-            if rec.action == PositionAction.HOLD:
-                hold_signals[symbol] = "hold"
-            elif rec.action in (
-                PositionAction.FULL_SELL,
-                PositionAction.PARTIAL_SELL,
-                PositionAction.REDUCE_SIZE,
-            ):
-                hold_signals[symbol] = "sell"
-            else:
-                hold_signals[symbol] = "neutral"
-        logger.info(
-            "POSITION_HOLD_SIGNALS_GENERATED",
-            extra={
-                "signals_count": len(hold_signals),
-                "hold_count": sum(1 for s in hold_signals.values() if s == "hold"),
-                "sell_count": sum(1 for s in hold_signals.values() if s == "sell"),
-                "neutral_count": sum(1 for s in hold_signals.values() if s == "neutral"),
-            },
-        )
-        return hold_signals
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
-        logger.error(
-            "SIGNAL_PROCESSING_FAILED",
-            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-        )
-        return {}
-
-
-def enhance_signals_with_position_logic(signals: list, ctx, hold_signals: dict = None) -> list:
-    """Enhance trading signals with position holding logic."""
-    try:
-        if hold_signals is None:
-            hold_signals = {}
-        enhanced_signals = []
-        for signal in signals:
-            symbol = getattr(signal, "symbol", "")
-            side = getattr(signal, "side", "")
-            if not symbol:
-                enhanced_signals.append(signal)
-                continue
-            if symbol in hold_signals:
-                hold_action = hold_signals[symbol]
-                if hold_action == "hold" and side == "sell":
-                    logger.info("SIGNAL_CONVERTED_HOLD | %s sell->hold", symbol)
-                    continue
-                elif hold_action == "sell" and side == "buy":
-                    logger.info("SIGNAL_SKIP_BUY_SELL_PENDING | %s buy skipped, sell pending", symbol)
-                    continue
-            enhanced_signals.append(signal)
-        logger.info(
-            "SIGNALS_ENHANCED",
-            extra={
-                "original_count": len(signals),
-                "enhanced_count": len(enhanced_signals),
-                "filtered_count": len(signals) - len(enhanced_signals),
-            },
-        )
-        return enhanced_signals
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
-        logger.error("SIGNAL_PROCESSING_FAILED", extra={"cause": exc.__class__.__name__, "detail": str(exc)})
-        return signals
-

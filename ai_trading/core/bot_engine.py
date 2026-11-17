@@ -47,8 +47,6 @@ from ai_trading.data.fetch import (
     last_minute_bar_age_seconds,
     _sip_configured,
     build_fetcher,
-    should_skip_symbol,
-    fetch_daily_backup,
 )
 from ai_trading.data.fetch.metrics import backup_provider_used_total
 from ai_trading.data import price_quote_feed
@@ -80,7 +78,6 @@ from ai_trading.data.timeutils import (
     ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
     previous_business_day as _prev_bus_day,  # AI-AGENT-REF: default previous session
 )
-from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.utils.env import alpaca_credential_status, get_alpaca_data_v2_base
 from ai_trading.logging import (
@@ -220,10 +217,6 @@ from ai_trading.services.signal import (
 )
 
 
-class CycleAbortSafeMode(RuntimeError):
-    """Raised when provider safe mode requires aborting the active cycle."""
-
-
 def calibrate_cost_model_from_tca(**kwargs: Any) -> dict[str, Any]:
     """
     Lazily resolve TCA cost calibration helper.
@@ -337,7 +330,6 @@ from ai_trading.config.management import (
 try:
     from ai_trading.execution.guards import (
         STATE as EXEC_GUARD_STATE,
-        begin_cycle as guard_begin_cycle,
         end_cycle as guard_end_cycle,
         mark_symbol_stale as guard_mark_symbol_stale,
         shadow_active as guard_shadow_active,
@@ -348,10 +340,6 @@ except (ImportError, ModuleNotFoundError, AttributeError):
     from types import SimpleNamespace as _SimpleNamespace
 
     EXEC_GUARD_STATE = cast(Any, _SimpleNamespace(active=False))
-
-    def guard_begin_cycle(universe_size: int, degraded: bool) -> None:
-        _ = universe_size, degraded
-        return None
 
     def guard_end_cycle(stale_threshold_ratio: float = 0.0) -> None:
         _ = stale_threshold_ratio
@@ -1241,7 +1229,6 @@ __all__ = [
     "prediction_executor",
     "ctx",
     "check_alpaca_available",
-    "to_trade_signal",
     "set_cycle_budget_context",
     "get_cycle_budget_context",
     "emit_cycle_budget_summary",
@@ -1261,30 +1248,6 @@ COMMON_EXC = COMMON_EXC + (DataFetchError,)  # AI-AGENT-REF: broaden common exce
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
-
-
-def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
-    """Validate that Alpaca returns data for benchmark and sample symbols."""
-    symbols = ["SPY"] + list(universe[:5])
-    errors: list[str] = []
-    for sym in symbols:
-        try:
-            df = get_bars_df(
-                sym,
-                bars.TimeFrame.Day,
-                feed=get_execution_feed(),
-            )  # AI-AGENT-REF: derive window & feed
-            if df is None or df.empty:
-                errors.append(f"{sym}:empty")
-        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow catch
-            errors.append(f"{sym}:{exc}")
-    if errors:
-        feed = get_execution_feed()
-        logger.critical(
-            "DATA_HEALTH_FAIL",
-            extra={"endpoint": "alpaca/bars", "feed": feed, "symbols": symbols, "errors": errors},
-        )
-        raise DataFetchError("data health check failed")
 
 
 import asyncio
@@ -1340,10 +1303,6 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
 
 logger = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
-_DATA_RETRY_SETTINGS_CACHE: tuple[int, float] | None = None
-_DATA_RETRY_SETTINGS_LOCK = Lock()
-_DATA_RETRY_SETTINGS_LOGGED = False
-
 
 def _warmup_data_only_mode_active() -> bool:
     """Return ``True`` when startup warm-up should avoid trade submission paths."""
@@ -1361,20 +1320,6 @@ def _warmup_data_only_mode_active() -> bool:
     return not allow_orders
 
 
-def _warmup_symbol_limit() -> int:
-    """Return max symbols to process during warm-up data-only cycles."""
-
-    try:
-        raw_limit = get_env("AI_TRADING_WARMUP_SYMBOL_LIMIT", 5, cast=int)
-    except BOT_ENGINE_FALLBACK_EXC:
-        raw_limit = 5
-    try:
-        limit = int(raw_limit)
-    except (TypeError, ValueError):
-        limit = 5
-    return max(1, min(limit, 100))
-
-
 def _resolve_execution_candidate_top_n() -> int | None:
     """Return optional top-N execution candidate cap after pre-ranking."""
 
@@ -1389,31 +1334,6 @@ def _resolve_execution_candidate_top_n() -> int | None:
     if top_n <= 0:
         return None
     return max(1, min(top_n, 500))
-
-
-def _resolve_prepare_symbol_limit() -> int | None:
-    """Return optional symbol cap for expensive pre-execution preparation work."""
-
-    try:
-        raw_limit = get_env("AI_TRADING_PREPARE_SYMBOL_LIMIT", 0, cast=int)
-    except BOT_ENGINE_FALLBACK_EXC:
-        raw_limit = 0
-    try:
-        limit = int(raw_limit)
-    except (TypeError, ValueError):
-        limit = 0
-    if limit <= 0:
-        try:
-            fallback_limit = get_env("MAX_SYMBOLS_PER_CYCLE", 0, cast=int)
-        except BOT_ENGINE_FALLBACK_EXC:
-            fallback_limit = 0
-        try:
-            limit = int(fallback_limit)
-        except (TypeError, ValueError):
-            limit = 0
-    if limit <= 0:
-        return None
-    return max(1, min(limit, 500))
 
 
 def _acceptance_rate_governor_enabled() -> bool:
@@ -1457,16 +1377,6 @@ def _acceptance_rate_governor_recover_streak() -> int:
     except BOT_ENGINE_FALLBACK_EXC:
         raw = 2
     return max(1, min(raw, 100))
-
-
-def _acceptance_rate_governor_symbol_cap() -> int | None:
-    try:
-        raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_SYMBOL_CAP", 25, cast=int))
-    except BOT_ENGINE_FALLBACK_EXC:
-        raw = 25
-    if raw <= 0:
-        return None
-    return max(1, min(raw, 500))
 
 
 def _update_acceptance_rate_governor_state(
@@ -1530,36 +1440,6 @@ def _update_acceptance_rate_governor_state(
                 "recover_streak": int(recover_streak),
             },
         )
-
-
-def _apply_acceptance_rate_governor_symbol_cap(
-    state: BotState,
-    symbols: Sequence[str],
-) -> list[str]:
-    bounded_symbols = [str(symbol).strip() for symbol in symbols if str(symbol).strip()]
-    if not bounded_symbols:
-        return []
-    if not _acceptance_rate_governor_enabled():
-        return bounded_symbols
-    if not bool(getattr(state, "acceptance_rate_governor_active", False)):
-        return bounded_symbols
-    cap = _acceptance_rate_governor_symbol_cap()
-    if cap is None or len(bounded_symbols) <= cap:
-        return bounded_symbols
-    capped = bounded_symbols[:cap]
-    logger.warning(
-        "ACCEPTANCE_RATE_GOVERNOR_SYMBOL_CAP_APPLIED",
-        extra={
-            "before": len(bounded_symbols),
-            "after": len(capped),
-            "cap": int(cap),
-            "acceptance_rate": getattr(state, "acceptance_rate_governor_last_rate", None),
-            "records_total": int(getattr(state, "acceptance_rate_governor_last_records", 0) or 0),
-            "streak": int(getattr(state, "acceptance_rate_governor_streak", 0) or 0),
-            "sample": capped[:10],
-        },
-    )
-    return capped
 
 
 def _mean_std(values: Sequence[float]) -> tuple[float, float, int]:
@@ -2837,98 +2717,6 @@ def _select_symbols_with_budget_rotation(
     return selected_symbols, held_cursor_start, len(held_symbols_unrotated)
 
 
-def _resolve_data_retry_settings() -> tuple[int, float]:
-    """Resolve retry attempts and delay from environment with clamping."""
-
-    global _DATA_RETRY_SETTINGS_CACHE, _DATA_RETRY_SETTINGS_LOGGED
-    with _DATA_RETRY_SETTINGS_LOCK:
-        if _DATA_RETRY_SETTINGS_CACHE is not None:
-            return _DATA_RETRY_SETTINGS_CACHE
-        try:
-            attempts_raw = get_env("DATA_SOURCE_RETRY_ATTEMPTS", 2, cast=int)
-        except BOT_ENGINE_FALLBACK_EXC:
-            attempts_raw = 2
-        try:
-            delay_raw = get_env("DATA_SOURCE_RETRY_DELAY_SECONDS", 0.5, cast=float)
-        except BOT_ENGINE_FALLBACK_EXC:
-            delay_raw = 0.5
-        try:
-            attempts = int(attempts_raw)
-        except (TypeError, ValueError):
-            attempts = 2
-        attempts = max(0, min(5, attempts))
-        try:
-            delay = float(delay_raw)
-        except (TypeError, ValueError):
-            delay = 0.5
-        delay = max(0.0, min(5.0, delay))
-        flatten_enabled = False
-        try:
-            flatten_enabled = bool(
-                get_env("AI_TRADING_DATA_RETRY_FLATTEN_ENABLED", False, cast=bool)
-            )
-        except BOT_ENGINE_FALLBACK_EXC:
-            flatten_enabled = False
-        if flatten_enabled:
-            try:
-                flatten_attempts_raw = get_env(
-                    "AI_TRADING_DATA_RETRY_FLATTEN_MAX_ATTEMPTS",
-                    1,
-                    cast=int,
-                )
-            except BOT_ENGINE_FALLBACK_EXC:
-                flatten_attempts_raw = 1
-            try:
-                flatten_attempts = int(flatten_attempts_raw)
-            except (TypeError, ValueError):
-                flatten_attempts = 1
-            flatten_attempts = max(1, min(flatten_attempts, 3))
-            attempts = min(max(1, attempts), flatten_attempts)
-            try:
-                flatten_delay_raw = get_env(
-                    "AI_TRADING_DATA_RETRY_FLATTEN_MAX_DELAY_SECONDS",
-                    0.0,
-                    cast=float,
-                )
-            except BOT_ENGINE_FALLBACK_EXC:
-                flatten_delay_raw = 0.0
-            try:
-                flatten_delay = float(flatten_delay_raw)
-            except (TypeError, ValueError):
-                flatten_delay = 0.0
-            flatten_delay = max(0.0, min(flatten_delay, 2.0))
-            delay = min(delay, flatten_delay)
-        _DATA_RETRY_SETTINGS_CACHE = (attempts, delay)
-        if not _DATA_RETRY_SETTINGS_LOGGED:
-            get_logger(__name__).info(
-                "DATA_RETRY_SETTINGS",
-                extra={
-                    "attempts": attempts,
-                    "delay_seconds": delay,
-                    "flattened": flatten_enabled,
-                },
-            )
-            _DATA_RETRY_SETTINGS_LOGGED = True
-        return _DATA_RETRY_SETTINGS_CACHE
-
-
-def _short_circuit_retry_budget(
-    *,
-    prefer_backup: bool,
-    primary_disabled: bool,
-    attempts: int,
-    delay: float,
-) -> tuple[int, float, str | None]:
-    """Return adjusted retry plan when primary data is unavailable."""
-
-    normalized_attempts = max(1, int(attempts))
-    if primary_disabled:
-        return 1, 0.0, "primary_disabled"
-    if prefer_backup:
-        return 1, 0.0, "prefer_backup_quotes"
-    return normalized_attempts, max(0.0, float(delay)), None
-
-
 def _resolve_adaptive_order_cap(
     *,
     cycle_budget: Any | None,
@@ -3683,20 +3471,6 @@ def _is_primary_price_source(source: str) -> bool:
     if normalized.startswith("alpaca"):
         return True
     return normalized in _PRIMARY_PRICE_SOURCES
-
-
-def _normalize_price_source_label(source: Any) -> str:
-    """Normalize a price-source token for fallback inference."""
-
-    if source in (None, ""):
-        return ""
-    try:
-        normalized = str(source).strip().lower()
-    except BOT_ENGINE_FALLBACK_EXC:
-        return ""
-    if normalized in {"", "unknown", "none", "null", "n/a", "na"}:
-        return ""
-    return normalized
 
 
 def _load_execution_settings():
@@ -7888,9 +7662,6 @@ S = CFG
 WEEKLY_DRAWDOWN_LIMIT = 0.10
 SEED = 42
 
-
-from ai_trading.market.calendars import ensure_final_bar
-
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 from ai_trading.utils.timefmt import (
@@ -8072,10 +7843,6 @@ from datetime import datetime as dt_
 from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
 from zoneinfo import ZoneInfo
-
-# AI-AGENT-REF: throttle SKIP_COOLDOWN logs
-_LAST_SKIP_CD_TIME = 0.0
-_LAST_SKIP_SYMBOLS: frozenset[str] = frozenset()
 
 
 # AI-AGENT-REF: optional heavy dependencies loaded lazily
@@ -8311,18 +8078,6 @@ def _reload_rl_agent_from_runtime_path(
     return True
 
 
-def _maybe_hot_reload_runtime_models(runtime: Any | None = None) -> None:
-    path = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
-    if path and not _required_model_cache_matches(path, ""):
-        _refresh_required_model_cache_from_path(path, reason="cycle")
-        if runtime is not None and _MODEL_CACHE is not None:
-            try:
-                runtime.model = _MODEL_CACHE
-            except COMMON_EXC:
-                logger.debug("MODEL_HOT_RELOAD_RUNTIME_ASSIGN_FAILED", exc_info=True)
-    _reload_rl_agent_from_runtime_path(reason="cycle", force=False)
-
-
 _rl_path = _secret_to_str(getattr(S, "rl_model_path", None))
 RL_MODEL_PATH = _resolve_rl_model_path(_rl_path)  # AI-AGENT-REF: resolve RL model path
 RL_AGENT: Any | None = None
@@ -8528,7 +8283,6 @@ from ai_trading.utils.retry import (
     stop_after_attempt,
     wait_exponential,
     wait_random,
-    RetryError,
 )
 
 # AI-AGENT-REF: lazy ichimoku setup to avoid pandas_ta import in tests
@@ -9255,30 +9009,6 @@ def _cleanup_ml_model_cache():
 
 
 logger = get_logger(__name__)
-
-
-# AI-AGENT-REF: helper for throttled SKIP_COOLDOWN logging
-def log_skip_cooldown(
-    symbols: Sequence[str] | str,
-    state: BotState | None = None,
-    *,
-    reason: str | None = None,
-) -> None:
-    """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
-    global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
-    now = monotonic_time()
-    sym_set = frozenset([symbols]) if isinstance(symbols, str) else frozenset(symbols)
-    if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
-        if reason:
-            logger.info(
-                "SKIP_COOLDOWN | %s",
-                ", ".join(sorted(sym_set)),
-                extra={"reason": reason},
-            )
-        else:
-            logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
-        _LAST_SKIP_CD_TIME = now
-        _LAST_SKIP_SYMBOLS = sym_set
 
 
 def market_is_open(now: datetime | None = None) -> bool:
@@ -11952,7 +11682,6 @@ class BotState:
     _last_capacity_throttle_adaptive_signature: (
         tuple[str, float, float, float, float, float] | None
     ) = None
-    _strategies_loaded: bool = False
 
     # Intraday price reliability metadata populated from fetch_minute_df_safe
     price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
@@ -12883,190 +12612,8 @@ def asset_class_for(symbol: str) -> str:
     return "equity"
 
 
-def to_trade_signal(sig: Any):
-    """Return a :class:`TradeSignal` for ``sig``.
-
-    Converts strategy-level signal objects into the risk-engine
-    :class:`TradeSignal` dataclass so that risk checks can operate on a
-    consistent schema.
-    """
-    from ai_trading.risk.engine import TradeSignal as RiskTradeSignal
-
-    if isinstance(sig, RiskTradeSignal):
-        return sig
-    return RiskTradeSignal(
-        symbol=getattr(sig, "symbol", ""),
-        side=str(getattr(sig, "side", "")).lower(),
-        confidence=float(getattr(sig, "confidence", 0.0)),
-        strategy=getattr(sig, "strategy", ""),
-        weight=float(getattr(sig, "weight", 0.0)),
-        asset_class=getattr(
-            sig,
-            "asset_class",
-            asset_class_for(getattr(sig, "symbol", "")),
-        ),
-        strength=float(getattr(sig, "strength", 1.0)),
-    )
-
-
-def _signal_strength_threshold(ctx: Any) -> float:
-    """Resolve the minimum absolute signal strength required for execution."""
-
-    try:
-        if get_env("PYTEST_RUNNING") or get_env("PYTEST_CURRENT_TEST"):
-            return 0.0
-    except BOT_ENGINE_FALLBACK_EXC:
-        logger.debug("PYTEST_ENV_DETECT_FAILED", exc_info=True)
-    candidates: list[Any] = []
-    params_obj = getattr(ctx, "params", None)
-    if isinstance(params_obj, MappingABC):
-        candidates.append(params_obj.get("MIN_SIGNAL_STRENGTH"))
-    cfg_obj = getattr(ctx, "cfg", None)
-    if cfg_obj is not None:
-        candidates.append(getattr(cfg_obj, "min_signal_strength", None))
-    candidates.append(getattr(ctx, "min_signal_strength", None))
-    candidates.append(MIN_SIGNAL_STRENGTH)
-    for candidate in candidates:
-        if candidate in (None, ""):
-            continue
-        try:
-            value = float(candidate)
-        except (TypeError, ValueError):
-            continue
-        if value >= 0:
-            return value
-    return 0.0
-
-
-MAX_VOL_FETCH_RETRIES = 3
 # Default lookback for daily bar requests (~1.5 years to cover 252 trading days)
 DEFAULT_DAILY_LOOKBACK_DAYS = 400
-
-
-def compute_spy_vol_stats(runtime) -> None:
-    """Compute daily ATR mean/std on SPY for the past 1 year."""
-    today = date.today()
-    with vol_lock:
-        if _VOL_STATS["last_update"] == today:
-            return
-
-    symbol = REGIME_SYMBOLS[0]
-    required_rows = 252 + ATR_LENGTH
-    df = None
-
-    fetcher = getattr(runtime, "data_fetcher", None)
-    cached = None
-    if fetcher is not None:
-        with cache_lock:
-            entry = getattr(fetcher, "_daily_cache", {}).get(symbol)
-            if entry:
-                cached = entry[1]
-    if cached is not None and len(cached) >= required_rows:
-        df = cached
-        logger.info(
-            "SPY_VOL_FETCH_SKIP",
-            extra={"symbol": symbol, "reason": "cache", "rows": len(cached)},
-        )
-    else:
-        logger.info("SPY_VOL_FETCH_REQUEST", extra={"symbol": symbol})
-        backoff = 1
-        manual_backfill_hint = "historical data not available; manual backfill required"
-        for attempt in range(1, MAX_VOL_FETCH_RETRIES + 1):
-            try:
-                df = runtime.data_fetcher.get_daily_df(runtime, symbol)
-                row_count = 0 if df is None else len(df)
-                if row_count == 0:
-                    logger.warning(
-                        "SPY_VOL_FETCH_ABORT",
-                        extra={
-                            "symbol": symbol,
-                            "attempt": attempt,
-                            "hint": manual_backfill_hint,
-                        },
-                    )
-                    break
-                if row_count < required_rows:
-                    logger.error(
-                        "SPY_VOL_FETCH_INSUFFICIENT",
-                        extra={
-                            "symbol": symbol,
-                            "required": required_rows,
-                            "received": row_count,
-                        },
-                    )
-                    break
-                break
-            except DataFetchError as e:
-                message = str(e).strip()
-                warn_extra: dict[str, Any] = {"attempt": attempt, "symbol": symbol}
-                if message.upper() == "DATA_FETCHER_UNAVAILABLE":
-                    warn_extra["hint"] = manual_backfill_hint
-                    logger.warning("SPY_VOL_FETCH_ABORT", extra=warn_extra)
-                    break
-                if message:
-                    warn_extra["cause"] = message
-                else:
-                    warn_extra["hint"] = manual_backfill_hint
-                logger.warning("SPY_VOL_FETCH_RETRY", extra=warn_extra)
-                if attempt == MAX_VOL_FETCH_RETRIES:
-                    logger.error(
-                        "SPY_VOL_DATA_UNAVAILABLE",
-                        extra={
-                            "symbol": symbol,
-                            "attempts": attempt,
-                            "hint": "acquire more historical data",
-                        },
-                    )
-                    halt_mgr = getattr(runtime, "halt_manager", None)
-                    if halt_mgr is not None:
-                        try:
-                            halt_mgr.manual_halt_trading("volatility data unavailable")
-                        except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
-                            logger.error(
-                                "HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)}
-                            )
-                    with vol_lock:
-                        if _VOL_STATS["mean"] is None:
-                            _VOL_STATS["mean"] = 0.0
-                        if _VOL_STATS["std"] is None:
-                            _VOL_STATS["std"] = 0.0
-                        if _VOL_STATS["last"] is None:
-                            _VOL_STATS["last"] = 0.0
-                    return
-                time.sleep(backoff)
-                backoff *= 2
-
-    row_count = 0 if df is None else len(df)
-    logger.info(
-        "SPY_VOL_ROW_COUNTS",
-        extra={"symbol": symbol, "required": required_rows, "received": row_count},
-    )
-    if row_count < required_rows:
-        raise DataFetchError(
-            f"insufficient data for SPY volatility stats; have {row_count} rows, need {required_rows}. "
-            "Acquire more historical data manually."
-        )
-
-    # Compute ATR series for last 252 trading days
-    atr_series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH).dropna()
-    if len(atr_series) < 252:
-        raise DataFetchError("insufficient ATR series for SPY")
-
-    recent = atr_series.iloc[-252:]
-    mean_val = float(recent.mean())
-    std_val = float(recent.std())
-    last_val = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
-
-    with vol_lock:
-        _VOL_STATS["mean"] = mean_val
-        _VOL_STATS["std"] = std_val
-        _VOL_STATS["last_update"] = today
-        _VOL_STATS["last"] = last_val
-
-    logger.info(
-        "SPY_VOL_STATS_UPDATED",
-        extra={"mean": mean_val, "std": std_val, "atr": last_val},
-    )
 
 
 def is_high_vol_thr_spy() -> bool:
@@ -17809,132 +17356,6 @@ def get_allocator():
     return allocator
 
 
-def _strategies_netting_pipeline_enabled() -> bool:
-    """Return whether the live netting pipeline governs decisions."""
-    try:
-        cfg = get_trading_config()
-    except BOT_ENGINE_FALLBACK_EXC:
-        return False
-    return bool(getattr(cfg, "netting_enabled", False))
-
-
-def get_strategies():
-    """Load configured strategies with safe defaults.
-
-    ``STRATEGIES`` only feeds the legacy non-netting path
-    (``run_multi_strategy``). Under ``AI_TRADING_NETTING_ENABLED=1`` the
-    instances are created but never consulted by the live decision path.
-    """  # AI-AGENT-REF: robust strategy selection
-    wanted: list[str] | None = None  # AI-AGENT-REF: ensure variable always defined
-    explicit_request = True
-    try:
-        from ai_trading.config.settings import get_settings
-
-        S = get_settings()
-        raw = getattr(S, "STRATEGIES_WANTED", None) or getattr(
-            S, "strategies_wanted", None
-        )
-        if raw:
-            if isinstance(raw, str):
-                wanted = [raw.lower()]
-            else:
-                try:
-                    wanted = [str(s).lower() for s in raw]
-                except TypeError:  # not iterable
-                    wanted = [str(raw).lower()]
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):
-        wanted = None
-
-    if not wanted:
-        env_raw = get_env("STRATEGIES")
-        if env_raw:
-            wanted = [
-                part.strip().lower() for part in env_raw.split(",") if part.strip()
-            ]
-    if not wanted:
-        wanted = ["momentum"]
-        explicit_request = False
-
-    try:
-        from ai_trading.strategies import (
-            REGISTRY,  # type: ignore  # AI-AGENT-REF: lazy import avoids cycles
-        )
-    except COMMON_EXC as e:  # noqa: BLE001 - best-effort import
-        REGISTRY = {}
-        logger.error("Failed to import strategy registry: %s", e)
-
-    selected: list[object] = []
-    names: list[str] = []
-    unknown: list[str] = []
-    for name in wanted:
-        cls = REGISTRY.get(name)
-        if cls is None:
-            unknown.append(name)
-            if explicit_request:
-                logger.warning("Unknown strategy %s; skipping.", name)
-            continue
-        try:
-            inst = cls()
-            selected.append(inst)
-            names.append(cls.__name__)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:
-            logger.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
-
-    if explicit_request and unknown and len(unknown) == len(wanted):
-        logger.error(
-            "STRATEGIES_NONE_RESOLVED",
-            extra={
-                "requested": list(wanted),
-                "unknown": list(unknown),
-                "registry_keys": sorted(str(key) for key in REGISTRY),
-                "loaded": 0,
-            },
-        )
-        return []
-
-    if names:
-        _strategies = ", ".join(sorted(names))
-        logger_once.info(
-            f"Loaded strategies: {_strategies}",
-            key="loaded_strategies_once",
-        )  # AI-AGENT-REF: pre-format and provide key for logger_once
-        if _strategies_netting_pipeline_enabled():
-            logger_once.warning(
-                "STRATEGIES_NOT_CONSUMED_UNDER_NETTING",
-                key="strategies_not_consumed_under_netting",
-                extra={
-                    "strategies": sorted(names),
-                    "governing_flag": "AI_TRADING_NETTING_ENABLED",
-                    "detail": (
-                        "STRATEGIES instances are created but the live netting "
-                        "decision path never calls them; they only apply when "
-                        "AI_TRADING_NETTING_ENABLED=0 (legacy path). Leave "
-                        "STRATEGIES unset under netting."
-                    ),
-                },
-            )
-
-    return selected
-
-
 # AI-AGENT-REF: Defer credential validation to runtime instead of import-time
 # This prevents crashes during import when environment variables are missing
 stream = None
@@ -18162,7 +17583,6 @@ class LazyBotContext:
             rebalance_buys={},
             risk_engine=get_risk_engine(),
             allocator=get_allocator(),
-            strategies=get_strategies(),
             # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
             drawdown_circuit_breaker=(
                 DrawdownCircuitBreaker(
@@ -20178,33 +19598,6 @@ def vol_target_position_size(
     return max(qty, 1)
 
 
-def compute_kelly_scale(vol: float, sentiment: float) -> float:
-    """Return basic Kelly scaling factor."""
-    base = 1.0
-    if vol > 0.05:
-        base *= 0.5
-    if sentiment < 0:
-        base *= 0.5
-    return max(base, 0.1)
-
-
-def adjust_position_size(position, scale: float) -> None:
-    """Placeholder for adjusting position quantity."""
-    try:
-        position.qty = str(int(int(position.qty) * scale))
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        logger.debug("adjust_position_size no-op")
-
-
 def submit_order(
     ctx: BotContext,
     symbol: str,
@@ -20968,96 +20361,6 @@ def should_exit(
         return True, abs(current_qty), "trailing_stop"
 
     return False, 0, ""
-
-
-def _safe_trade(
-    ctx: BotContext,
-    state: BotState,
-    symbol: str,
-    balance: float,
-    model: Any,
-    regime_ok: bool,
-    side: Any | None = None,
-    *,
-    price_df: pd.DataFrame | None = None,
-) -> bool:
-    try:
-        try:
-            # Real-time position check to prevent buy/sell flip-flops
-            if side is not None:
-                try:
-                    live_positions = {
-                        p.symbol: int(p.qty) for p in ctx.api.list_positions()
-                    }
-                    if side == OrderSide.BUY and symbol in live_positions:
-                        logger.info(f"REALTIME_SKIP | {symbol} already held. Skipping BUY.")
-                        return False
-                    elif side == OrderSide.SELL and symbol not in live_positions:
-                        logger.info(f"REALTIME_SKIP | {symbol} not held. Skipping SELL.")
-                        return False
-                except (
-                    APIError,
-                    TimeoutError,
-                    ConnectionError,
-                ) as e:  # AI-AGENT-REF: tighten live position check errors
-                    logger.warning(
-                        "REALTIME_CHECK_FAIL",
-                        extra={
-                            "symbol": symbol,
-                            "cause": e.__class__.__name__,
-                            "detail": str(e),
-                        },
-                    )
-            return trade_logic(
-                ctx,
-                state,
-                symbol,
-                balance,
-                model,
-                regime_ok,
-                price_df=price_df,
-            )
-        except BOT_ENGINE_FALLBACK_EXC as exc:
-            if _is_alpaca_auth_error(exc):
-                logger.error(
-                    "SKIP_TRADE_ALPACA_AUTH",
-                    extra={"symbol": symbol, "detail": str(exc)},
-                )
-                auth_skipped = getattr(state, "auth_skipped_symbols", None)
-                if isinstance(auth_skipped, set):
-                    auth_skipped.add(symbol)
-                return False
-            raise
-    except RetryError as e:
-        logger.warning(
-            f"[trade_logic] retries exhausted for {symbol}: {e}",
-            extra={"symbol": symbol},
-        )
-        return False
-    except APIError as e:
-        msg = str(e).lower()
-        if "insufficient buying power" in msg or "potential wash trade" in msg:
-            logger.warning(
-                f"[trade_logic] skipping {symbol} due to APIError: {e}",
-                extra={"symbol": symbol},
-            )
-            return False
-        else:
-            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
-            return False
-    except (
-        APIError,
-        TimeoutError,
-        ConnectionError,
-        ValueError,
-        KeyError,
-        TypeError,
-    ) as e:  # AI-AGENT-REF: tighten trade_logic errors
-        logger.exception(
-            "[trade_logic] unhandled exception",
-            extra={"symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)},
-        )
-        return False
 
 
 def _ensure_data_quality_bucket(state: BotState | None) -> dict[str, dict[str, Any]]:
@@ -23371,16 +22674,8 @@ _TRANSIENT_FALLBACK_REASONS = frozenset(
         "quote_timestamp_missing",
     }
 )
-_FALLBACK_PRICE_PROVIDERS = frozenset({"yahoo", "bars"})
-_PRIMARY_PRICE_PROVIDERS = frozenset(
-    {
-        "alpaca_trade",
-        "alpaca_quote",
-        "alpaca_ask",
-        "alpaca_bid",
-        "alpaca_minute_close",
-    }
-)
+
+
 _MAX_PRICE_DEVIATION = 0.15
 
 
@@ -26470,38 +25765,6 @@ def _current_qty(ctx, symbol: str) -> int:
     return parsed_qty
 
 
-def _delta_quantity(
-    order_side: str | None,
-    target_qty: int,
-    position_qty: int,
-    open_buy_qty: float,
-    open_sell_qty: float,
-) -> int:
-    """Return delta order quantity accounting for open orders."""
-
-    if target_qty <= 0:
-        return 0
-
-    side = (order_side or "").strip().lower()
-    long_position = max(position_qty, 0)
-    short_position = max(-position_qty, 0)
-    open_buy = max(open_buy_qty, 0)
-    open_sell = max(open_sell_qty, 0)
-
-    if side in {"buy", "cover"}:
-        delta = target_qty - (long_position + open_buy - open_sell)
-    elif side == "sell_short":
-        delta = target_qty - (short_position + open_sell - open_buy)
-    else:  # sell to reduce or exit longs
-        effective_open = max(open_sell - open_buy, 0)
-        available = long_position
-        delta = min(target_qty - effective_open, available)
-    try:
-        return max(int(round(delta)), 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | None) -> None:
     """Update execution metrics from *snapshot* and emit structured log."""
 
@@ -26577,31 +25840,6 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
             "positions": positions_count,
             "fresh": snapshot_fresh,
             "failed_components": list(failed_components),
-        },
-    )
-
-
-def _log_execution_summary(metrics: "ExecutionCycleMetrics") -> None:
-    """Emit consolidated execution summary for the active cycle."""
-
-    submitted = getattr(metrics, "submitted", 0)
-    open_orders = getattr(metrics, "open_orders", 0)
-    positions = getattr(metrics, "positions", 0)
-    exposure_pct = getattr(metrics, "exposure_pct", 0.0)
-    provider_mode = getattr(metrics, "provider_mode", "alpaca") or "alpaca"
-    try:
-        exposure_value = round(float(exposure_pct), 2)
-    except BOT_ENGINE_FALLBACK_EXC:
-        exposure_value = 0.0
-
-    logger.info(
-        "EXEC_SUMMARY",
-        extra={
-            "submitted": int(submitted),
-            "open": int(open_orders),
-            "positions": int(positions),
-            "exposure_pct": exposure_value,
-            "provider": provider_mode,
         },
     )
 
@@ -27458,9 +26696,6 @@ def check_market_regime(runtime: BotContext, state: BotState) -> bool:
         return False
 
 
-_SCREEN_CACHE: dict[str, float] = {}
-
-
 def _safe_env_int(key: str, default: int) -> int:
     try:
         value = int(get_env(key, str(default), cast=int))
@@ -27469,283 +26704,12 @@ def _safe_env_int(key: str, default: int) -> int:
     return value if value > 0 else default
 
 
-def _safe_env_non_negative_int(key: str, default: int) -> int:
-    try:
-        value = int(get_env(key, str(default), cast=int))
-    except COMMON_EXC:
-        return default
-    return value if value >= 0 else default
-
-
-def _safe_env_float(key: str, default: float, *, min_value: float | None = None) -> float:
-    try:
-        value = float(get_env(key, str(default), cast=float))
-    except COMMON_EXC:
-        return default
-    if min_value is not None and value < min_value:
-        return min_value
-    return value
-
-
-def _safe_env_bool(key: str, default: bool) -> bool:
-    try:
-        return bool(get_env(key, default, cast=bool))
-    except COMMON_EXC:
-        return default
-
-
-_SCREEN_BATCH_SIZE = max(1, _safe_env_int("SCREEN_BATCH_SIZE", 25))
-_SCREEN_TOPN = max(1, _safe_env_int("SCREEN_TOPN", 20))
-_SCREEN_MIN_REFETCH_SEC = _safe_env_non_negative_int("SCREEN_MIN_REFETCH_SEC", 900)
-_SCREEN_ROTATE_UNSEEN_ENABLED = _safe_env_bool("AI_TRADING_SCREEN_ROTATE_UNSEEN_ENABLED", False)
-_SCREEN_CYCLE_BUDGET_MS = _safe_env_non_negative_int("AI_TRADING_SCREEN_CYCLE_BUDGET_MS", 12_000)
-_SCREEN_INTER_SYMBOL_SLEEP_SEC = _safe_env_float(
-    "AI_TRADING_SCREEN_INTER_SYMBOL_SLEEP_SEC",
-    0.0,
-    min_value=0.0,
-)
-_LAST_SCREEN_FETCH: dict[str, float] = {}
 _MINUTE_STALE_TOLERANCE_OVERRIDE = max(0, _safe_env_int("MINUTE_STALE_TOLERANCE_SEC", 420))
 _SKIP_MINUTE_CHECK_WHEN = str(
     get_env("SKIP_MINUTE_CHECK_WHEN", "market_closed") or "market_closed"
 ).strip().lower()
 
 
-def _should_refetch_screen_symbol(symbol: str, now_ts: float | None = None) -> bool:
-    now_value = now_ts if now_ts is not None else time.time()
-    last = _LAST_SCREEN_FETCH.get(symbol)
-    if last is None or now_value - last >= _SCREEN_MIN_REFETCH_SEC:
-        _LAST_SCREEN_FETCH[symbol] = now_value
-        return True
-    return False
-
-
-def _screen_pause(multiplier: float = 1.0) -> None:
-    try:
-        scale = max(0.0, float(multiplier))
-    except (TypeError, ValueError):
-        scale = 1.0
-    delay_s = _SCREEN_INTER_SYMBOL_SLEEP_SEC * scale
-    if delay_s > 0:
-        time.sleep(delay_s)
-
-
-def _prefilter_screen_symbols(candidates: Sequence[str]) -> tuple[list[str], list[str]]:
-    now_ts = time.time()
-    filtered: list[str] = []
-    throttled: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        symbol = str(candidate).strip().upper()
-        if not symbol or symbol in seen:
-            continue
-        seen.add(symbol)
-        if len(filtered) >= _SCREEN_TOPN:
-            throttled.append(symbol)
-            continue
-        if not _should_refetch_screen_symbol(symbol, now_ts):
-            throttled.append(symbol)
-            continue
-        filtered.append(symbol)
-    return filtered, throttled
-
-
-def _iter_screen_batches(symbols: Sequence[str]) -> Iterable[list[str]]:
-    size = max(1, _SCREEN_BATCH_SIZE)
-    for idx in range(0, len(symbols), size):
-        yield list(symbols[idx : idx + size])
-
-
-def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
-    """
-    Comprehensive market data validation to prevent trading with insufficient or poor quality data.
-
-    AI-AGENT-REF: Critical fix for market data validation problems from problem statement.
-    Implements circuit breakers for poor data conditions and minimum data requirements.
-
-    Returns:
-        dict: Validation result with valid flag, reason, and detailed message
-    """
-    try:
-        # Basic existence check
-        if df is None:
-            return {
-                "valid": False,
-                "reason": "no_data",
-                "message": "No data available",
-                "details": {"symbol": symbol, "data_source": "missing"},
-            }
-
-        # Minimum rows requirement
-        min_rows_required = max(
-            ATR_LENGTH, 20
-        )  # Ensure enough for technical indicators
-        if len(df) < min_rows_required:
-            return {
-                "valid": False,
-                "reason": f"insufficient_data_{len(df)}_rows",
-                "message": f"Insufficient data ({len(df)} rows, need {min_rows_required})",
-                "details": {
-                    "symbol": symbol,
-                    "rows_available": len(df),
-                    "rows_required": min_rows_required,
-                },
-            }
-
-        # Data completeness checks
-        required_columns = ["open", "high", "low", "close", "volume"]
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            return {
-                "valid": False,
-                "reason": "missing_columns",
-                "message": f"Missing required columns: {missing_columns}",
-                "details": {
-                    "symbol": symbol,
-                    "missing_columns": missing_columns,
-                    "available_columns": list(df.columns),
-                },
-            }
-
-        # Data quality checks
-        recent_data = df.tail(min(50, len(df)))  # Check last 50 rows or all available
-
-        # Check for excessive NaN values
-        for col in required_columns:
-            nan_count = recent_data[col].isna().sum()
-            if 0 < nan_count < len(recent_data):
-                nan_percentage = (nan_count / len(recent_data)) * 100
-                if nan_percentage > 10:  # More than 10% NaN values
-                    return {
-                        "valid": False,
-                        "reason": f"excessive_nan_{col}",
-                        "message": f"Excessive NaN values in {col} column ({nan_percentage:.1f}%)",
-                        "details": {
-                            "symbol": symbol,
-                            "column": col,
-                            "nan_percentage": nan_percentage,
-                        },
-                    }
-
-        # Check for price data anomalies
-        close_prices = recent_data["close"].dropna()
-        if 0 < len(close_prices) < 5:
-            return {
-                "valid": False,
-                "reason": "insufficient_price_data",
-                "message": "Less than 5 valid close prices in recent data",
-                "details": {"symbol": symbol, "valid_close_prices": len(close_prices)},
-            }
-
-        # Check for zero or negative prices
-        if len(close_prices) > 0 and (close_prices <= 0).any():
-            return {
-                "valid": False,
-                "reason": "invalid_prices",
-                "message": "Found zero or negative prices",
-                "details": {"symbol": symbol, "min_price": float(close_prices.min())},
-            }
-
-        # Check for unrealistic price volatility (circuit breaker)
-        price_changes = close_prices.pct_change().dropna()
-        if len(price_changes) > 0:
-            extreme_moves = (abs(price_changes) > 0.5).sum()  # 50%+ single-day moves
-            if (
-                extreme_moves > len(price_changes) * 0.1
-            ):  # More than 10% of days have extreme moves
-                logger.warning(
-                    "DATA_QUALITY_EXTREME_VOLATILITY",
-                    extra={
-                        "symbol": symbol,
-                        "extreme_moves": extreme_moves,
-                        "total_days": len(price_changes),
-                        "percentage": round(
-                            (extreme_moves / len(price_changes)) * 100, 1
-                        ),
-                        "note": "Potential data quality issue - consider excluding from trading",
-                    },
-                )
-
-        # Check volume data quality
-        volume_data = recent_data["volume"].dropna()
-        if len(volume_data) > 0:
-            # Check for suspiciously low volume
-            median_volume = volume_data.median()
-            if median_volume < 10000:  # Very low liquidity threshold
-                return {
-                    "valid": False,
-                    "reason": "low_liquidity",
-                    "message": f"Median volume too low ({median_volume:,.0f})",
-                    "details": {
-                        "symbol": symbol,
-                        "median_volume": median_volume,
-                        "threshold": 10000,
-                    },
-                }
-
-            # Check for zero volume days
-            zero_volume_days = (volume_data == 0).sum()
-            if (
-                zero_volume_days > len(volume_data) * 0.2
-            ):  # More than 20% zero volume days
-                return {
-                    "valid": False,
-                    "reason": "excessive_zero_volume",
-                    "message": f"Too many zero volume days ({zero_volume_days}/{len(volume_data)})",
-                    "details": {
-                        "symbol": symbol,
-                        "zero_volume_days": zero_volume_days,
-                        "total_days": len(volume_data),
-                    },
-                }
-
-        # All checks passed
-        return {
-            "valid": True,
-            "reason": "passed_validation",
-            "message": "Data quality validation passed",
-            "details": {
-                "symbol": symbol,
-                "rows_validated": len(df),
-                "recent_rows_checked": len(recent_data),
-                "validation_checks": [
-                    "existence",
-                    "completeness",
-                    "quality",
-                    "anomalies",
-                    "volume",
-                ],
-            },
-        }
-
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error(
-            "DATA_VALIDATION_ERROR",
-            extra={"symbol": symbol, "error": str(e), "error_type": type(e).__name__},
-        )
-        return {
-            "valid": False,
-            "reason": "validation_error",
-            "message": f"Data validation failed with error: {e}",
-            "details": {"symbol": symbol, "error": str(e)},
-        }
-
-_screen_lock = Lock()
-_screening_in_progress = False
-
-# Hard-coded fallback symbols when no watchlist is provided
-FALLBACK_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
-
-_SCREEN_SCHEMA_CACHE_TTL = 60.0
 _SCREEN_SCHEMA_CACHE_MAX = 512
 _SCREEN_SCHEMA_CACHE: "OrderedDict[tuple[str, str, str], tuple[float, str | None]]" = OrderedDict()
 _SCREEN_SCHEMA_CACHE_LOCK = Lock()
@@ -27795,402 +26759,6 @@ def _update_screen_schema_cache(symbol: str, timeframe: str, feed: str, frame: A
         _SCREEN_SCHEMA_CACHE.move_to_end(key)
         while len(_SCREEN_SCHEMA_CACHE) > _SCREEN_SCHEMA_CACHE_MAX:
             _SCREEN_SCHEMA_CACHE.popitem(last=False)
-
-
-def _screen_schema_recent(symbol: str, timeframe: str, feed: str) -> bool:
-    key = _screen_schema_cache_key(symbol, timeframe, feed)
-    now = time.monotonic()
-    with _SCREEN_SCHEMA_CACHE_LOCK:
-        entry = _SCREEN_SCHEMA_CACHE.get(key)
-        if not entry:
-            return False
-        stamp, _ = entry
-        if now - stamp > _SCREEN_SCHEMA_CACHE_TTL:
-            _SCREEN_SCHEMA_CACHE.pop(key, None)
-            return False
-        return True
-
-
-def screen_universe(
-    candidates: Sequence[str],
-    runtime,
-) -> list[str]:
-    global _screening_in_progress
-    if not _screen_lock.acquire(blocking=False):
-        logger.info("SCREENER_SKIP_REENTRANT")
-        return []
-    try:
-        if _screening_in_progress:
-            logger.info("SCREENER_SKIP_ALREADY_RUNNING")
-            return []
-        _screening_in_progress = True
-        try:
-            ordered_candidates = list(dict.fromkeys(candidates))
-            normalized_candidates = [
-                sym.strip().upper() for sym in ordered_candidates if str(sym).strip()
-            ]
-            filtered_candidates, throttled_candidates = _prefilter_screen_symbols(ordered_candidates)
-            cached_candidates = [sym for sym in normalized_candidates if sym in _SCREEN_CACHE]
-            if not filtered_candidates and cached_candidates:
-                filtered_candidates = cached_candidates[:_SCREEN_TOPN]
-                logger.info(
-                    "SCREEN_CACHE_REUSED",
-                    extra={
-                        "cached_candidates": len(cached_candidates),
-                        "selected": len(filtered_candidates),
-                    },
-                )
-            elif (
-                not filtered_candidates
-                and normalized_candidates
-                and _SCREEN_ROTATE_UNSEEN_ENABLED
-            ):
-                filtered_candidates = normalized_candidates[:_SCREEN_TOPN]
-                logger.info(
-                    "SCREEN_ROTATE_UNSEEN_FALLBACK",
-                    extra={"selected": len(filtered_candidates)},
-                )
-            cand_set = set(filtered_candidates)
-            if not cand_set:
-                logger.info(
-                    "SCREEN_NO_ELIGIBLE_CANDIDATES",
-                    extra={
-                        "candidates": len(normalized_candidates),
-                        "top_n": _SCREEN_TOPN,
-                        "rotate_unseen": _SCREEN_ROTATE_UNSEEN_ENABLED,
-                    },
-                )
-                return []
-            top_n = min(_SCREEN_TOPN, max(len(cand_set), 1))
-            logger.info(
-                f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
-            )
-
-            spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
-            if spy_df is None or spy_df.empty:
-                _screen_pause(multiplier=2.5)
-                spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
-            if spy_df is None or spy_df.empty:
-                if not is_market_open():
-                    logger.info(
-                        "DATA_FEED_UNAVAILABLE",
-                        extra={
-                            "provider": "alpaca",
-                            "status": "empty",
-                            "context": "market closed; health check deferred",
-                        },
-                    )
-                else:
-                    logger.warning(
-                        "DATA_FEED_UNAVAILABLE",
-                        extra={"provider": "alpaca", "status": "empty"},
-                    )
-                return []
-
-            try:
-                screen_settings = get_settings()
-            except COMMON_EXC:
-                screen_settings = None
-            try:
-                raw_min_signal = getattr(screen_settings, "screen_min_signal_strength", None)
-            except COMMON_EXC:
-                raw_min_signal = None
-            if raw_min_signal in (None, ""):
-                min_signal_strength = 0.0
-            else:
-                try:
-                    min_signal_strength = float(raw_min_signal)
-                except (TypeError, ValueError):
-                    min_signal_strength = float(MIN_SIGNAL_STRENGTH)
-            try:
-                min_liquidity = float(getattr(screen_settings, "screen_min_avg_volume", 150_000))
-            except (TypeError, ValueError):
-                min_liquidity = 150_000.0
-            min_signal_strength = max(0.0, min_signal_strength)
-            min_liquidity = max(0.0, min_liquidity)
-
-            for sym in list(_SCREEN_CACHE):
-                if sym not in cand_set:
-                    _SCREEN_CACHE.pop(sym, None)
-
-            throttled = set(throttled_candidates) - cand_set
-            filtered_out = {sym: "throttled" for sym in throttled}
-            new_syms = [sym for sym in filtered_candidates if sym not in _SCREEN_CACHE]
-            tried = len(filtered_candidates)
-            valid = sum(1 for sym in filtered_candidates if sym in _SCREEN_CACHE)
-            empty = failed = 0
-            budget_ms = _SCREEN_CYCLE_BUDGET_MS
-            screening_started = time.monotonic()
-            processed_new_symbols = 0
-            budget_exhausted = False
-
-            minute_fetcher = getattr(runtime, "data_fetcher", None)
-            minute_loader = (
-                getattr(minute_fetcher, "get_minute_df", None)
-                if minute_fetcher is not None
-                else None
-            )
-
-            def _calc_atr(df_in: pd.DataFrame) -> pd.Series:
-                ser: pd.Series | None = None
-                ta_available = hasattr(ta, "atr") and not getattr(ta, "_failed", False)
-                if ta_available:
-                    try:
-                        ser = ta.atr(
-                            df_in["high"], df_in["low"], df_in["close"], length=ATR_LENGTH
-                        )
-                    except (ValueError, TypeError):  # pragma: no cover - fall back below
-                        ser = None
-                if ser is None or not hasattr(ser, "empty") or ser.empty:
-                    try:
-                        from ai_trading.indicators import atr as _atr
-
-                        ser = _atr(
-                            df_in["high"], df_in["low"], df_in["close"], period=ATR_LENGTH
-                        )
-                    except (ValueError, TypeError):
-                        ser = pd.Series()
-                return ser if isinstance(ser, pd.Series) else pd.Series()
-
-            for batch in _iter_screen_batches(new_syms):
-                if budget_ms > 0:
-                    elapsed_ms = int((time.monotonic() - screening_started) * 1000)
-                    if elapsed_ms >= budget_ms:
-                        budget_exhausted = True
-                        logger.info(
-                            "SCREEN_CYCLE_BUDGET_REACHED",
-                            extra={
-                                "elapsed_ms": elapsed_ms,
-                                "budget_ms": budget_ms,
-                                "remaining_new_symbols": max(0, len(new_syms) - processed_new_symbols),
-                            },
-                        )
-                        break
-                primary_frames: dict[str, pd.DataFrame | None] = {}
-                missing_symbols: list[str] = []
-                for sym in batch:
-                    if budget_ms > 0:
-                        elapsed_ms = int((time.monotonic() - screening_started) * 1000)
-                        if elapsed_ms >= budget_ms:
-                            budget_exhausted = True
-                            break
-                    processed_new_symbols += 1
-                    if callable(minute_loader) and not _screen_schema_recent(sym, "1Min", "alpaca_iex"):
-                        try:
-                            minute_frame = minute_loader(runtime, sym, lookback_minutes=5)
-                        except COMMON_EXC as exc:  # pragma: no cover - warm-up best effort
-                            _update_screen_schema_cache(sym, "1Min", "alpaca_iex", None)
-                            logger.debug(
-                                "MINUTE_SCHEMA_WARMUP_FAILED",
-                                extra={"symbol": sym, "reason": str(exc)},
-                            )
-                        else:
-                            _update_screen_schema_cache(sym, "1Min", "alpaca_iex", minute_frame)
-                    df_primary = runtime.data_fetcher.get_daily_df(runtime, sym)
-                    primary_frames[sym] = df_primary
-                    if not is_valid_ohlcv(df_primary):
-                        missing_symbols.append(sym)
-                if budget_exhausted:
-                    break
-
-                backup_frames: dict[str, pd.DataFrame] = {}
-                if missing_symbols:
-                    try:
-                        backup_frames = fetch_daily_backup(missing_symbols)
-                    except COMMON_EXC as exc:  # pragma: no cover - network surface
-                        logger.debug(
-                            "YF_BACKUP_BATCH_FAILED",
-                            extra={"count": len(missing_symbols), "error": str(exc)},
-                        )
-
-                for sym in batch:
-                    df = primary_frames.get(sym)
-                    if not is_valid_ohlcv(df):
-                        df = backup_frames.get(sym)
-                    if not is_valid_ohlcv(df):
-                        empty += 1
-                        filtered_out[sym] = "no_data"
-                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe (post-backup)")
-                        _screen_pause()
-                        continue
-
-                    validation_result = _validate_market_data_quality(df, sym)
-                    if not validation_result["valid"]:
-                        failed += 1
-                        filtered_out[sym] = validation_result["reason"]
-                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
-                        _screen_pause()
-                        continue
-
-                    original_len = len(df)
-                    df = df[df["volume"] > 100_000]
-                    if df.empty:
-                        failed += 1
-                        filtered_out[sym] = "low_volume"
-                        logger.debug(
-                            f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
-                        )
-                        _screen_pause()
-                        continue
-
-                    try:
-                        avg_volume = float(
-                            pd.to_numeric(df["volume"].tail(20), errors="coerce").dropna().mean() or 0.0
-                        )
-                    except (TypeError, ValueError, KeyError, AttributeError):
-                        avg_volume = 0.0
-                    if avg_volume < min_liquidity:
-                        failed += 1
-                        filtered_out[sym] = "liquidity_below_threshold"
-                        log_data_quality_event(
-                            "screen_filter",
-                            provider="alpaca",
-                            severity="info",
-                            reason="liquidity_below_threshold",
-                            symbols=[sym],
-                            context={"avg_volume": avg_volume, "threshold": min_liquidity},
-                        )
-                        logger.debug(
-                            "[SCREEN_UNIVERSE] %s: avg volume %.0f below threshold %.0f",
-                            sym,
-                            avg_volume,
-                            min_liquidity,
-                        )
-                        _screen_pause()
-                        continue
-
-                    series = _calc_atr(df)
-                    if series.empty or series.dropna().empty:
-                        try:
-                            from datetime import UTC, datetime, timedelta
-                            from ai_trading.data.fetch import get_daily_df as _fetch_daily_df
-
-                            end = datetime.now(UTC)
-                            start = end - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS * 2)
-                            df2 = _fetch_daily_df(sym, start, end)
-                            df2 = df2[df2["volume"] > 100_000]
-                            series = _calc_atr(df2)
-                            if series.empty or series.dropna().empty:
-                                failed += 1
-                                filtered_out[sym] = "atr_insufficient_data"
-                                logger.warning(
-                                    f"[SCREEN_UNIVERSE] {sym}: ATR unavailable after extended fetch"
-                                )
-                                _screen_pause(multiplier=2.5)
-                                continue
-                            df = df2
-                        except (ValueError, TypeError, OSError):
-                            failed += 1
-                            filtered_out[sym] = "atr_fetch_failed"
-                            logger.warning(
-                                f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
-                            )
-                            _screen_pause(multiplier=2.5)
-                            continue
-
-                    atr_val = series.iloc[-1]
-                    signal_strength = 0.0
-                    try:
-                        signal_strength = float(df["close"].pct_change(5, fill_method=None).iloc[-1])
-                    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
-                        signal_strength = 0.0
-                    signal_weak = abs(signal_strength) < min_signal_strength
-                    if signal_weak:
-                        atr_available = not series.dropna().empty
-                        validation_valid = bool(validation_result.get("valid"))
-                        if not (validation_valid and atr_available):
-                            failed += 1
-                            filtered_out[sym] = "signal_weak"
-                            log_data_quality_event(
-                                "screen_filter",
-                                provider="alpaca",
-                                severity="info",
-                                reason="signal_weak",
-                                symbols=[sym],
-                                context={
-                                    "signal_strength": signal_strength,
-                                    "threshold": min_signal_strength,
-                                },
-                            )
-                            logger.debug(
-                                "[SCREEN_UNIVERSE] %s: signal %.4f below threshold %.4f",
-                                sym,
-                                signal_strength,
-                                min_signal_strength,
-                            )
-                            _screen_pause()
-                            continue
-                    if not pd.isna(atr_val):
-                        _SCREEN_CACHE[sym] = float(atr_val)
-                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
-                        valid += 1
-                        logger.info("SCREEN_TAG", extra={"symbol": sym, "tag": "VALID"})
-                    else:
-                        failed += 1
-                        filtered_out[sym] = "atr_nan"
-                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
-                    _screen_pause(multiplier=2.5)
-                if budget_exhausted:
-                    break
-
-            atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
-            ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
-            selected = [sym for sym, _ in ranked[:top_n]]
-
-            logger.info(
-                f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
-                f"Selected: {selected}. "
-                f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
-            )
-            total_failed = failed + empty
-            summary_message = (
-                f"SCREEN_SUMMARY | symbols={tried} passed={valid} failed={total_failed}"
-            )
-            logger.info(
-                summary_message,
-                extra={
-                    "tried": tried,
-                    "valid": valid,
-                    "empty": empty,
-                    "failed": failed,
-                    "failed_total": total_failed,
-                    "budget_ms": budget_ms,
-                    "budget_exhausted": budget_exhausted,
-                    "new_symbols_considered": len(new_syms),
-                    "new_symbols_processed": processed_new_symbols,
-                },
-            )
-
-            return selected
-        except (KeyError, ValueError, TypeError) as e:
-            logger.error(
-                "SCREENING_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-            raise
-        finally:
-            _screening_in_progress = False
-    finally:
-        _screen_lock.release()
-
-
-def screen_candidates(runtime, candidates, *, fallback_symbols=None) -> list[str]:
-    """Run screening on provided candidate tickers using runtime."""
-    try:
-        if not candidates:
-            symbols = list(fallback_symbols or FALLBACK_SYMBOLS)
-            logger.info(
-                "SCREEN_FALLBACK_USED",
-                extra={"tickers": symbols},
-            )
-            return symbols
-        return screen_universe(candidates, runtime)
-    except (KeyError, ValueError, TypeError) as e:
-        logger.error(
-            "SCREENING_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        raise
 
 
 # Fix for handling missing tickers.csv file
@@ -29216,33 +27784,6 @@ def _quote_timestamp(quote: Any | None) -> datetime | None:
     return None
 
 
-def _apply_slippage_limit(
-    side: str,
-    mid: float,
-    bid: float | None,
-    ask: float | None,
-    slippage_bps: float,
-) -> float:
-    """Apply side-aware slippage bounds to ``mid`` price."""
-
-    slip = max(0.0, float(slippage_bps)) / 10000.0
-    safety_pip = 0.0008
-    normalized_side = side.lower()
-
-    if normalized_side == "buy":
-        base = mid * (1.0 + slip)
-        limit = round(base, 4) + safety_pip
-        if ask and ask > 0:
-            limit = min(limit, float(ask))
-        return max(limit, 0.0)
-
-    base = mid * (1.0 - slip)
-    limit = round(base, 4) - safety_pip
-    if bid and bid > 0:
-        limit = max(limit, float(bid))
-    return max(limit, 0.0)
-
-
 def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | None:
     """Fetch the latest quote using the configured data client."""
 
@@ -30043,630 +28584,6 @@ def _slippage_setting_bps() -> float:
     return 10.0
 
 
-def _format_price_component(value: float | None) -> str:
-    if value is None:
-        return "na"
-    try:
-        return f"{float(value):.6f}"
-    except (TypeError, ValueError):
-        return "na"
-
-
-def _log_price_source(
-    symbol: str,
-    source: str,
-    *,
-    limit_price: float,
-    side: str,
-    slippage_bps: float,
-    reason: str,
-    bid: float | None = None,
-    ask: float | None = None,
-    mid: float | None = None,
-) -> None:
-    payload = {
-        "symbol": symbol,
-        "source": source,
-        "reason": reason,
-        "limit_price": float(limit_price),
-        "bid": _format_price_component(bid),
-        "ask": _format_price_component(ask),
-        "mid": _format_price_component(mid),
-        "side": side,
-        "slippage_bps": float(slippage_bps),
-    }
-    message = (
-        f"ORDER_PRICE_SOURCE symbol={symbol} side={side} source={source} "
-        f"reason={reason} limit_price={float(limit_price):.4f}"
-    )
-    log_throttled_event(
-        logger,
-        f"ORDER_PRICE_SOURCE:{symbol}:{side}:{source}",
-        level=logging.INFO,
-        extra=payload,
-        message=message,
-    )
-
-
-def _resolve_limit_price(
-    ctx: Any,
-    symbol: str,
-    side: str,
-    minute_df: pd.DataFrame | None,
-    last_close: float | None,
-) -> tuple[float | None, str | None]:
-    """Determine a limit price using deterministic priority with slippage."""
-
-    def _reason_summary(reasons: list[str]) -> str:
-        return "ok" if not reasons else ";".join(reasons)
-
-    slippage_bps = _slippage_setting_bps()
-    failure_reasons: list[str] = []
-    last_trade_price: float | None = None
-    execution_mode = str(
-        getattr(ctx, "execution_mode", get_env("EXECUTION_MODE", "paper", cast=str))
-        or "paper"
-    ).strip().lower()
-    try:
-        cfg = get_trading_config()
-    except COMMON_EXC:
-        cfg = None
-    (
-        _require_realtime_nbbo,
-        _market_on_degraded,
-        _allow_fallback_price,
-        require_nbbo,
-    ) = _execution_quote_policy_flags(cfg, execution_mode=execution_mode)
-    if minute_df is not None:
-        try:
-            if "close" in minute_df:
-                close_series = minute_df["close"]
-            else:
-                close_series = minute_df.get("close")
-        except (KeyError, TypeError, AttributeError):
-            close_series = None
-        if close_series is not None:
-            try:
-                last_trade_price = float(close_series.dropna().iloc[-1])
-            except (IndexError, TypeError, ValueError, AttributeError):
-                last_trade_price = None
-
-    nbbo_quote = _fetch_quote(ctx, symbol)
-    mid, bid, ask = _quote_to_mid(nbbo_quote)
-    if mid is not None:
-        limit = _apply_slippage_limit(side, mid, bid, ask, slippage_bps)
-        _log_price_source(
-            symbol,
-            "broker_nbbo",
-            limit_price=limit,
-            side=side,
-            slippage_bps=slippage_bps,
-            reason=_reason_summary(failure_reasons),
-            bid=bid,
-            ask=ask,
-            mid=mid,
-        )
-        return limit, "broker_nbbo"
-    if nbbo_quote is None:
-        failure_reasons.append("broker_nbbo:unavailable")
-    elif bid <= 0 and ask <= 0:
-        failure_reasons.append("broker_nbbo:no_bid_ask")
-    else:
-        failure_reasons.append("broker_nbbo:no_mid")
-
-    if require_nbbo:
-        logger.info(
-            "QUOTE_SOURCE_NBBO_REQUIRED",
-            extra={"symbol": symbol, "reason": _reason_summary(failure_reasons)},
-        )
-        return None, None
-
-    primary_feed = DATA_FEED_INTRADAY or "iex"
-    primary_quote = _fetch_quote(ctx, symbol, feed=primary_feed)
-    mid, bid, ask = _quote_to_mid(primary_quote)
-    if mid is not None:
-        limit = _apply_slippage_limit(side, mid, bid, ask, slippage_bps)
-        _log_price_source(
-            symbol,
-            "primary_mid",
-            limit_price=limit,
-            side=side,
-            slippage_bps=slippage_bps,
-            reason=_reason_summary(failure_reasons),
-            bid=bid,
-            ask=ask,
-            mid=mid,
-        )
-        return limit, "primary_mid"
-    if primary_quote is None:
-        failure_reasons.append(f"primary_mid:{primary_feed}:unavailable")
-    elif bid <= 0 and ask <= 0:
-        failure_reasons.append(f"primary_mid:{primary_feed}:no_bid_ask")
-    else:
-        failure_reasons.append(f"primary_mid:{primary_feed}:no_mid")
-
-    backup_feed = None
-    if primary_feed != "sip" and data_fetcher_module._sip_configured():
-        backup_feed = "sip"
-    elif primary_feed != "iex":
-        backup_feed = "iex"
-    if backup_feed and backup_feed != primary_feed:
-        backup_quote = _fetch_quote(ctx, symbol, feed=backup_feed)
-        mid, bid, ask = _quote_to_mid(backup_quote)
-        if mid is not None:
-            limit = _apply_slippage_limit(side, mid, bid, ask, slippage_bps)
-            _log_price_source(
-                symbol,
-                "backup_mid",
-                limit_price=limit,
-                side=side,
-                slippage_bps=slippage_bps,
-                reason=_reason_summary(failure_reasons),
-                bid=bid,
-                ask=ask,
-                mid=mid,
-            )
-            return limit, "backup_mid"
-        if backup_quote is None:
-            failure_reasons.append(f"backup_mid:{backup_feed}:unavailable")
-        elif bid <= 0 and ask <= 0:
-            failure_reasons.append(f"backup_mid:{backup_feed}:no_bid_ask")
-        else:
-            failure_reasons.append(f"backup_mid:{backup_feed}:no_mid")
-
-    if last_trade_price and last_trade_price > 0:
-        limit = _apply_slippage_limit(side, last_trade_price, last_trade_price, last_trade_price, slippage_bps)
-        _log_price_source(
-            symbol,
-            "last_trade",
-            limit_price=limit,
-            side=side,
-            slippage_bps=slippage_bps,
-            reason=_reason_summary(failure_reasons),
-            bid=last_trade_price,
-            ask=last_trade_price,
-            mid=last_trade_price,
-        )
-        return limit, "last_trade"
-
-    fallback_base: float | None = None
-    derived_from_last_close = False
-    if last_trade_price and last_trade_price > 0:
-        fallback_base = last_trade_price
-    elif last_close and last_close > 0:
-        fallback_base = float(last_close)
-        derived_from_last_close = True
-
-    if fallback_base and fallback_base > 0:
-        block_last_close = False
-        if derived_from_last_close and not _allow_last_close_execution():
-            degraded_now, _, _ = _degrade_state(_resolve_data_provider_degraded())
-            if degraded_now:
-                block_last_close = True
-                failure_reasons.append("last_close:disabled")
-        if not block_last_close:
-            limit = _apply_slippage_limit(side, float(fallback_base), None, None, slippage_bps)
-            source_label = "last_close" if derived_from_last_close else "last_trade"
-            _log_price_source(
-                symbol,
-                source_label,
-                limit_price=limit,
-                side=side,
-                slippage_bps=slippage_bps,
-                reason=_reason_summary(failure_reasons),
-                bid=None,
-                ask=None,
-                mid=float(fallback_base),
-            )
-            return limit, source_label
-
-    return None, None
-
-
-def _is_reliable_quote(price: float | None, source: str | None) -> bool:
-    """Return ``True`` when a quote price/source pair is usable without minute data."""
-
-    if price is None:
-        return False
-    try:
-        value = float(price)
-    except (TypeError, ValueError):
-        return False
-    if not math.isfinite(value) or value <= 0:
-        return False
-    if not source:
-        return False
-    normalized = str(source).strip().lower()
-    if not normalized:
-        return False
-    if normalized in {
-        _ALPACA_DISABLED_SENTINEL,
-        "alpaca_skipped",
-        "alpaca_auth_failed",
-    }:
-        return False
-    if normalized in _FALLBACK_PRICE_PROVIDERS:
-        return False
-    if normalized.startswith(("alpaca", "iex", "sip")):
-        return True
-    return normalized in _PRIMARY_PRICE_PROVIDERS
-
-
-def _intent_rank_score(candidate: Any) -> float:
-    for attr in ("score", "strength", "confidence", "weight"):
-        raw = getattr(candidate, attr, None)
-        if raw in (None, ""):
-            continue
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(value):
-            return value
-    return 0.0
-
-
-def _intent_rank_notional(candidate: Any) -> float:
-    for attr in ("notional", "target_notional", "dollar_notional"):
-        raw = getattr(candidate, attr, None)
-        if raw in (None, ""):
-            continue
-        try:
-            value = abs(float(raw))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(value):
-            return value
-    raw_weight = getattr(candidate, "weight", 0.0)
-    try:
-        value = abs(float(raw_weight))
-    except (TypeError, ValueError):
-        return 0.0
-    return value if math.isfinite(value) else 0.0
-
-
-def _intent_candidate_id(candidate: Any, index: int) -> str:
-    for attr in ("candidate_id", "id", "client_order_id", "strategy"):
-        raw = getattr(candidate, attr, None)
-        if raw in (None, ""):
-            continue
-        token = str(raw).strip()
-        if token:
-            return token
-    return f"idx-{index}"
-
-
-def _should_replace_deduped_intent(
-    *,
-    current_score: float,
-    current_notional: float,
-    current_candidate_id: str,
-    existing_score: float,
-    existing_notional: float,
-    existing_candidate_id: str,
-) -> bool:
-    if current_score > existing_score:
-        return True
-    if current_score < existing_score:
-        return False
-    if current_notional > existing_notional:
-        return True
-    if current_notional < existing_notional:
-        return False
-    return (current_candidate_id or "") < (existing_candidate_id or "")
-
-
-def _dedupe_cycle_intents(candidates: list[Any]) -> tuple[list[Any], dict[str, Any]]:
-    """Deduplicate execution intents by (symbol, side) with deterministic ranking."""
-
-    deduped: list[Any] = []
-    metadata: list[dict[str, Any]] = []
-    key_to_index: dict[tuple[str, str], int] = {}
-    dropped_examples: list[dict[str, Any]] = []
-    dropped_count = 0
-
-    for idx, candidate in enumerate(candidates):
-        symbol = str(getattr(candidate, "symbol", "") or "").strip().upper()
-        side = _normalize_order_side_value(getattr(candidate, "side", None))
-        if side not in {"buy", "sell", "sell_short"}:
-            deduped.append(candidate)
-            metadata.append({})
-            continue
-        key = (symbol, side)
-        score = _intent_rank_score(candidate)
-        notional = _intent_rank_notional(candidate)
-        candidate_id = _intent_candidate_id(candidate, idx)
-
-        existing_pos = key_to_index.get(key)
-        if existing_pos is None:
-            key_to_index[key] = len(deduped)
-            deduped.append(candidate)
-            metadata.append(
-                {
-                    "score": score,
-                    "notional": notional,
-                    "candidate_id": candidate_id,
-                }
-            )
-            continue
-
-        existing_meta = metadata[existing_pos]
-        existing_score = float(existing_meta.get("score", 0.0) or 0.0)
-        existing_notional = float(existing_meta.get("notional", 0.0) or 0.0)
-        existing_candidate_id = str(existing_meta.get("candidate_id") or "")
-        replace_existing = _should_replace_deduped_intent(
-            current_score=score,
-            current_notional=notional,
-            current_candidate_id=candidate_id,
-            existing_score=existing_score,
-            existing_notional=existing_notional,
-            existing_candidate_id=existing_candidate_id,
-        )
-        dropped_count += 1
-        if len(dropped_examples) < 3:
-            dropped_examples.append(
-                {
-                    "symbol": symbol,
-                    "side": side,
-                    "dropped_candidate_id": (
-                        existing_candidate_id if replace_existing else candidate_id
-                    ),
-                    "kept_candidate_id": (
-                        candidate_id if replace_existing else existing_candidate_id
-                    ),
-                }
-            )
-        if replace_existing:
-            deduped[existing_pos] = candidate
-            metadata[existing_pos] = {
-                "score": score,
-                "notional": notional,
-                "candidate_id": candidate_id,
-            }
-
-    summary = {
-        "kept_count": len(deduped),
-        "dropped_count": int(dropped_count),
-        "dropped_examples": dropped_examples,
-    }
-    return deduped, summary
-
-
-def _resolve_rl_symbol_limit() -> int:
-    rl_symbol_limit = int(get_env("AI_TRADING_RL_MAX_SYMBOLS", 64, cast=int))
-    if rl_symbol_limit < 1:
-        return 1
-    if rl_symbol_limit > 512:
-        return 512
-    return rl_symbol_limit
-
-
-def _resolve_rl_candidate_symbols(
-    ctx: Any,
-    signals_by_strategy: Mapping[str, Sequence[Any]],
-) -> tuple[list[str], dict[str, Any]]:
-    symbols: list[str] = []
-    seen: set[str] = set()
-
-    def _add_symbol(raw_symbol: Any) -> None:
-        normalized = str(raw_symbol or "").strip().upper()
-        if not normalized or normalized in seen:
-            return
-        seen.add(normalized)
-        symbols.append(normalized)
-
-    for sigs in signals_by_strategy.values():
-        for sig in sigs:
-            _add_symbol(getattr(sig, "symbol", None))
-    source = "strategy_signals" if symbols else "none"
-
-    if not symbols:
-        for attr_name in ("universe_tickers", "tickers"):
-            raw_symbols = getattr(ctx, attr_name, None)
-            if raw_symbols is None:
-                continue
-            for raw_symbol in raw_symbols:
-                _add_symbol(raw_symbol)
-            if symbols:
-                source = f"ctx.{attr_name}"
-                break
-
-    if not symbols:
-        try:
-            for raw_symbol in load_universe():
-                _add_symbol(raw_symbol)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-            RuntimeError,
-        ) as exc:
-            logger.debug("RL_UNIVERSE_LOAD_FAILED", extra={"error": str(exc)})
-        else:
-            if symbols:
-                source = "packaged_universe"
-
-    symbol_limit = _resolve_rl_symbol_limit()
-    selected = symbols[:symbol_limit]
-    metadata = {
-        "source": source,
-        "requested_count": len(symbols),
-        "selected_count": len(selected),
-        "symbol_limit": symbol_limit,
-        "truncated": len(symbols) > len(selected),
-    }
-    return selected, metadata
-
-
-def _increment_counter_safe(counter: Any, amount: float = 1.0) -> None:
-    if not counter:
-        return
-    try:
-        if amount == 1.0:
-            counter.inc()
-        else:
-            counter.inc(amount)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):
-        logger.debug("METRIC_INCREMENT_FAILED", exc_info=True)
-
-
-def run_multi_strategy(ctx) -> None:
-    from ai_trading.core.strategy_cycle import run_multi_strategy_cycle
-
-    run_multi_strategy_cycle(ctx)
-
-
-def _param(runtime, key, default):
-    """Pull from runtime.params first, then cfg, else default."""
-    if runtime and getattr(runtime, "params", None) and key in runtime.params:
-        return runtime.params[key]
-    if runtime and hasattr(runtime, "cfg") and runtime.cfg:
-        return float(getattr(runtime.cfg, key.lower(), default))
-    return default
-
-
-def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
-    """Return ``(degraded, reason, fatal)`` from telemetry and provider monitor state."""
-
-    reason: str | None = None
-    fatal = False
-    degraded = False
-
-    try:
-        snapshot = runtime_state.observe_data_provider_state()
-    except BOT_ENGINE_FALLBACK_EXC:
-        snapshot = {}
-
-    intraday_backup_detected = False
-    backup_detected = False
-
-    if snapshot:
-        status_raw = snapshot.get("status")
-        status = str(status_raw).strip().lower() if status_raw else ""
-        if snapshot.get("reason") is not None:
-            reason = snapshot.get("reason")
-        timeframe_state = snapshot.get("timeframes")
-        if isinstance(timeframe_state, MappingABC):
-            for tf_key, tf_flag in timeframe_state.items():
-                try:
-                    normalized_tf = str(tf_key).strip().lower()
-                except BOT_ENGINE_FALLBACK_EXC:
-                    normalized_tf = str(tf_key)
-                if not normalized_tf:
-                    continue
-                try:
-                    flag = bool(tf_flag)
-                except BOT_ENGINE_FALLBACK_EXC:
-                    flag = False
-                if not flag:
-                    continue
-                backup_detected = True
-                if (
-                    normalized_tf.endswith("min")
-                    or "minute" in normalized_tf
-                    or normalized_tf in {"1m", "1min", "intraday"}
-                ):
-                    intraday_backup_detected = True
-        using_backup = bool(snapshot.get("using_backup"))
-        if using_backup and not backup_detected:
-            backup_detected = True
-            intraday_backup_detected = True
-        if status and status not in {"healthy", "ok", "unknown"}:
-            degraded = True
-            if reason is None:
-                reason = str(status_raw) if isinstance(status_raw, str) else status
-            fatal = status in {"down", "offline", "halted", "disabled"}
-        if intraday_backup_detected:
-            degraded = True
-            if reason is None:
-                reason = snapshot.get("reason") or "using_backup_provider"
-        elif backup_detected and reason is None:
-            reason = snapshot.get("reason") or "using_backup_provider"
-
-        reason_lower = str(reason).lower() if isinstance(reason, str) else ""
-        if not fatal and reason_lower:
-            if any(token in reason_lower for token in ("kill_switch", "safe_mode", "halt", "disabled")):
-                fatal = True
-
-    safe_reason = safe_mode_reason()
-    if safe_reason:
-        fatal_reason = False
-        try:
-            reason_lower = str(safe_reason).strip().lower()
-        except BOT_ENGINE_FALLBACK_EXC:
-            reason_lower = ""
-        kill_tokens = ("kill_switch", "halt", "disabled", "offline")
-        if reason_lower and any(token in reason_lower for token in kill_tokens):
-            fatal_reason = True
-        elif reason_lower in {"minute_gap"} or reason_lower.startswith("data_quality:minute_gap"):
-            fatal_reason = False
-        else:
-            fatal_reason = _reason_implies_fatal(safe_reason)
-        return True, safe_reason, fatal_reason
-
-    disabled_check = getattr(provider_monitor, "is_disabled", None)
-    if callable(disabled_check):
-        try:
-            if disabled_check("alpaca"):
-                return True, "provider_disabled", True
-        except BOT_ENGINE_FALLBACK_EXC:
-            logger.debug("PROVIDER_DISABLED_CHECK_FAILED", exc_info=True)
-
-    if degraded and reason is None:
-        reason = "provider_degraded"
-
-    return degraded, reason, fatal
-
-
-def _degrade_state(result: Any) -> tuple[bool, str | None, bool]:
-    """Normalize degraded-state tuples patched by tests or helpers."""
-
-    degraded = False
-    reason: str | None = None
-    fatal = False
-    if isinstance(result, tuple):
-        if result:
-            degraded = bool(result[0])
-        if len(result) >= 2:
-            reason = cast(str | None, result[1])
-        if len(result) >= 3:
-            fatal = bool(result[2])
-        else:
-            fatal = _reason_implies_fatal(reason)
-    else:
-        degraded = bool(result)
-        fatal = False
-    return degraded, reason, fatal
-
-
-def _reason_implies_fatal(reason: str | None) -> bool:
-    if reason is None:
-        return False
-    try:
-        reason_lower = str(reason).strip().lower()
-    except BOT_ENGINE_FALLBACK_EXC:
-        logger.debug("FATAL_REASON_NORMALIZE_FAILED", exc_info=True)
-        return False
-    if not reason_lower:
-        return False
-    fatal_tokens = ("kill_switch", "safe_mode", "provider_disabled", "halt", "offline")
-    return any(token in reason_lower for token in fatal_tokens)
-
-
 def _fallback_active_for_timeframes(
     provider_state: Mapping[str, Any] | None,
     *,
@@ -30956,105 +28873,6 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
     }
 
 
-def _pre_trade_gate() -> bool:
-    """Return True when execution should be blocked before strategy evaluation."""
-
-    pytest_flag = str(get_env("PYTEST_RUNNING", "")).strip().lower()
-    pytest_mode = pytest_flag in {"1", "true", "yes"}
-
-    if _sip_lockout_active():
-        logger.warning(
-            "EXECUTION_BLOCKED_UNAUTHORIZED_SIP",
-            extra={"reason": "unauthorized_sip"},
-        )
-        return True
-
-    try:
-        provider_state = runtime_state.observe_data_provider_state()
-    except BOT_ENGINE_FALLBACK_EXC:
-        provider_state = {}
-    safe_mode_active = provider_monitor.is_safe_mode_active()
-    safe_mode_reason_text = safe_mode_reason()
-    provider_status = ""
-    provider_reason = None
-    if isinstance(provider_state, MappingABC):
-        provider_status = str(provider_state.get("status") or "").lower()
-        provider_reason = provider_state.get("reason")
-    provider_disabled = provider_status in {"down", "offline", "halted", "disabled"}
-    disabled_check = getattr(provider_monitor, "is_disabled", None)
-    if not provider_disabled and callable(disabled_check):
-        try:
-            provider_disabled = bool(disabled_check("alpaca"))
-        except BOT_ENGINE_FALLBACK_EXC:
-            provider_disabled = False
-    fallback_active = _minute_fallback_active(provider_state)
-    try:
-        allow_fallback_quotes = bool(get_env("ALLOW_EXECUTION_ON_FALLBACK_QUOTES", False, cast=bool))
-    except BOT_ENGINE_FALLBACK_EXC:
-        allow_fallback_quotes = False
-    failsoft_active = _failsoft_mode_active(provider_state)
-    if failsoft_active:
-        allow_fallback_quotes = True
-
-    try:
-        quote_state = runtime_state.observe_quote_status()
-    except BOT_ENGINE_FALLBACK_EXC:
-        quote_state = {}
-    quote_age_ms = _quote_age_ms_from_state(quote_state)
-    max_age_ms = _quote_age_limit_ms()
-    synthetic_quote = bool(quote_state.get("synthetic"))
-    stale_quote = quote_age_ms is not None and quote_age_ms > max_age_ms
-    if pytest_mode and fallback_active and quote_age_ms is None:
-        allow_fallback_quotes = True
-
-    block_reasons: list[str] = []
-    provider_guard = safe_mode_active or provider_disabled
-    policy_blocks = _safe_mode_blocks_trading()
-    if provider_guard:
-        reason_text = (
-            safe_mode_reason_text
-            or (provider_reason if isinstance(provider_reason, str) else None)
-            or "provider_disabled"
-        )
-        ctx = get_ctx()
-        _mark_ctx_degraded(ctx, reason_text)
-        _log_safe_mode_continue(ctx, stage="pre_trade_gate", reason=reason_text)
-    if provider_guard and policy_blocks and not failsoft_active:
-        block_reasons.append("provider_disabled")
-    if fallback_active and not (allow_fallback_quotes or failsoft_active):
-        block_reasons.append("fallback_minute_data")
-    if synthetic_quote:
-        block_reasons.append("synthetic_quote")
-    if stale_quote:
-        block_reasons.append("stale_quote")
-
-    if not block_reasons:
-        return False
-
-    extra = {
-        "block_reason": block_reasons,
-        "safe_mode": safe_mode_active,
-        "safe_mode_reason": safe_mode_reason_text,
-        "provider_status": provider_status or None,
-        "provider_reason": provider_reason,
-        "fallback_active": fallback_active,
-        "quote_age_ms": quote_age_ms,
-        "quote_max_age_ms": max_age_ms,
-        "quote_source": quote_state.get("source"),
-        "bid": quote_state.get("bid"),
-        "ask": quote_state.get("ask"),
-        "last_price": quote_state.get("last_price"),
-    }
-    logger.warning("EXECUTION_BLOCKED_UNSAFE_QUOTES", extra=extra)
-    return True
-
-
-def _truncate_degraded_candidates(symbols: list[str], runtime, *, reason: str | None = None) -> list[str]:
-    from ai_trading.core.prepare_run_runtime import truncate_degraded_candidates
-
-    return truncate_degraded_candidates(symbols, runtime, reason=reason)
-
-
 def ensure_data_fetcher(runtime) -> DataFetcher:
     """Ensure a market data fetcher is attached to ``runtime``.
 
@@ -31089,34 +28907,6 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     return cast(DataFetcher, fetcher)
 
 
-def _prepare_run(
-    runtime, state: BotState, tickers: list[str] | None
-) -> tuple[float, bool, list[str]]:
-    from ai_trading.core.prepare_run_runtime import prepare_run
-
-    return prepare_run(runtime, state, tickers)
-
-
-def _process_symbols(
-    symbols: list[str],
-    current_cash: float,
-    model,
-    regime_ok: bool,
-    close_shorts: bool = False,
-    skip_duplicates: bool = False,
-) -> tuple[list[str], dict[str, int], int]:
-    from ai_trading.core.strategy_cycle import process_symbols_cycle
-
-    return process_symbols_cycle(
-        symbols,
-        current_cash,
-        model,
-        regime_ok,
-        close_shorts=close_shorts,
-        skip_duplicates=skip_duplicates,
-    )
-
-
 def _log_loop_heartbeat(loop_id: str, start: float) -> None:
     duration = monotonic_time() - start
     logger.info(
@@ -31127,35 +28917,6 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
             "duration": duration,
         },
     )
-
-
-def manage_position_risk(ctx, position) -> None:
-    """Adjust trailing stops and position size while halted."""
-
-    from ai_trading.core.position_risk_runtime import manage_position_risk_runtime
-
-    manage_position_risk_runtime(ctx=ctx, position=position)
-
-
-def pyramid_add_position(
-    ctx: BotContext, symbol: str, fraction: float, side: str
-) -> None:
-    current_qty = _current_qty(ctx, symbol)
-    add_qty = max(1, int(abs(current_qty) * fraction))
-    # Try to use a recent price for better simulation fills
-    try:
-        raw = fetch_minute_df_safe(symbol)
-        px = get_latest_close(raw) if raw is not None else None
-    except DataFetchError:
-        px = None
-    submit_order(
-        ctx,
-        symbol,
-        add_qty,
-        "buy" if side == "long" else "sell_short",
-        price=px,
-    )
-    logger.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
 
 
 def _ensure_execution_engine(runtime) -> None:
@@ -32056,11 +29817,6 @@ def _resolve_trading_config(runtime) -> TradingConfig:
     if cfg is None or not isinstance(cfg, TradingConfig):
         cfg = get_trading_config()
     return cast(TradingConfig, cfg)
-
-
-def _netting_pipeline_enabled(runtime) -> bool:
-    cfg = _resolve_trading_config(runtime)
-    return bool(getattr(cfg, "netting_enabled", False))
 
 
 def _enforce_dependency_preflight(runtime) -> None:
@@ -40447,21 +38203,6 @@ def simple_calculate_macd(
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.error(f"Exception in MACD calculation: {e}", exc_info=True)
         return None, None, None
-
-
-def _trade_limit_reached(state: BotState, current_time: datetime) -> bool:
-    """Return True when the rolling hourly trade quota has been exhausted."""
-
-    if not hasattr(state, "trade_history"):
-        state.trade_history = []
-        return False
-
-    hour_ago = current_time - timedelta(hours=TRADE_FREQUENCY_WINDOW_HOURS)
-    total_trades_hour = sum(1 for _, ts in state.trade_history if ts > hour_ago)
-    max_trades_hour, _max_trades_day, _symbol_hourly_limit, _paper_override = (
-        _effective_trade_frequency_limits()
-    )
-    return total_trades_hour >= max_trades_hour
 
 
 def _alpha_decay_entry_guard(

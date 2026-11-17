@@ -160,37 +160,6 @@ def test_build_runtime_respects_mode_presets(monkeypatch):
         assert runtime.params["MAX_POSITION_SIZE"] == pytest.approx(expected["max_position_size"])
 
 
-def test_param_helper_fallback_logic():
-    """Test that _param helper function provides proper fallback logic."""
-    from ai_trading.config.management import TradingConfig
-    from ai_trading.core.runtime import build_runtime
-
-    # Create a runtime with params
-    cfg = TradingConfig(capital_cap=0.08)
-    runtime = build_runtime(cfg)
-
-    # Simulate the _param helper function logic
-    def _param(runtime, key, default):
-        if runtime and hasattr(runtime, 'params') and runtime.params and key in runtime.params:
-            return runtime.params[key]
-        if runtime and hasattr(runtime, 'cfg') and runtime.cfg:
-            return float(getattr(runtime.cfg, key.lower(), default))
-        return default
-
-    # Test parameter access
-    assert _param(runtime, 'CAPITAL_CAP', 0.25) == 0.08
-    assert _param(runtime, 'MISSING_KEY', 999.0) == 999.0
-
-    # Test with runtime that has no params
-    class MockRuntime:
-        def __init__(self, cfg):
-            self.cfg = cfg
-
-    mock_runtime = MockRuntime(cfg)
-    assert _param(mock_runtime, 'CAPITAL_CAP', 0.25) == 0.08  # Falls back to cfg
-    assert _param(mock_runtime, 'MISSING_KEY', 999.0) == 999.0  # Falls back to default
-
-
 def test_no_missing_parameters_validation():
     """Test that validation finds no missing parameters when properly configured."""
     from ai_trading.config.management import TradingConfig

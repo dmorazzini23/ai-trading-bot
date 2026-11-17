@@ -67,11 +67,9 @@ def _rollback_started_cycle_state(
     *,
     state: Any,
     previous_last_run_at: datetime | None,
-    previous_strategies_loaded: bool,
 ) -> None:
     state.running = False
     state.last_run_at = previous_last_run_at
-    state._strategies_loaded = previous_strategies_loaded
 
 
 def prepare_run_all_trades_cycle(
@@ -112,7 +110,6 @@ def prepare_run_all_trades_cycle(
     safe_mode_reason_func: Callable[[], str | None],
     cancel_all_open_orders_func: Callable[[Any], Any],
     reset_cycle_cache_func: Callable[[], None],
-    get_strategies_func: Callable[[], Any],
     log_loop_heartbeat_func: Callable[[str, float], None],
     emit_test_capture_func: Callable[[str, int], None],
     common_exceptions: tuple[type[BaseException], ...],
@@ -339,7 +336,6 @@ def prepare_run_all_trades_cycle(
         state.minute_feed_cache = {}
     reset_cycle_cache_func()
     previous_last_run_at = state.last_run_at
-    previous_strategies_loaded = bool(getattr(state, "_strategies_loaded", False))
     try:
         state.running = True
         state.last_run_at = now
@@ -353,14 +349,10 @@ def prepare_run_all_trades_cycle(
             submit_compaction.clear()
         else:
             state.cycle_submit_compaction = set()
-        if not getattr(state, "_strategies_loaded", False):
-            runtime.strategies = get_strategies_func()
-            state._strategies_loaded = True
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         _rollback_started_cycle_state(
             state=state,
             previous_last_run_at=previous_last_run_at,
-            previous_strategies_loaded=previous_strategies_loaded,
         )
         raise
 

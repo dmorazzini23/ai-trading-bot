@@ -99,7 +99,6 @@ def _finalize_run_all_trades_cycle(
         last_loop_duration = getattr(state, "last_loop_duration", 0.0)
 
     state.running = False
-    state._strategies_loaded = False
     state.last_loop_duration = last_loop_duration
 
     stale_ratio = _resolve_stale_ratio(be)
@@ -198,7 +197,6 @@ def run_all_trades_worker_cycle(state: Any, runtime: Any) -> None:
             safe_mode_reason_func=be.safe_mode_reason,
             cancel_all_open_orders_func=be.cancel_all_open_orders,
             reset_cycle_cache_func=be._reset_cycle_cache,
-            get_strategies_func=be.get_strategies,
             log_loop_heartbeat_func=be._log_loop_heartbeat,
             emit_test_capture_func=be._emit_test_capture,
             common_exceptions=be.COMMON_EXC,
@@ -223,10 +221,6 @@ def run_all_trades_worker_cycle(state: Any, runtime: Any) -> None:
                 loop_id=loop_id,
                 loop_start=loop_start,
                 api=api,
-                restore_last_run_timestamp=lambda: _restore_last_run_timestamp(
-                    state,
-                    prelude.previous_last_run_at,
-                ),
             )
         except be.APIError as exc:
             be.logger.warning(

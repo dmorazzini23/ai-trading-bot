@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from ai_trading import main
-from ai_trading.core import bot_engine
 
 
 def test_startup_rejects_netting_disabled_outside_tests(monkeypatch, caplog):
@@ -40,7 +40,7 @@ def test_startup_accepts_netting_enabled_outside_tests(monkeypatch, caplog):
     ]
 
 
-def test_startup_allows_explicit_legacy_opt_in_under_tests(monkeypatch):
+def test_startup_guard_is_exempt_in_test_mode(monkeypatch):
     monkeypatch.setattr(main, "_is_test_mode", lambda: True)
 
     main._require_netting_pipeline(SimpleNamespace(netting_enabled=False))
@@ -79,14 +79,44 @@ def test_fail_fast_env_exits_when_netting_disabled_outside_tests(monkeypatch):
     assert calls["count"] == 2
 
 
-def test_netting_pipeline_enabled_by_default_without_runtime_cfg(monkeypatch):
-    monkeypatch.delenv("AI_TRADING_NETTING_ENABLED", raising=False)
+def _stub_run_trade_startup(monkeypatch, cli):
+    monkeypatch.setattr(sys, "argv", ["ai_trading", "--paper", "--once", "--interval", "1"])
+    monkeypatch.setattr(cli, "register_signal_handlers", lambda: None)
+    monkeypatch.setattr(cli, "_set_execution_mode", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_validate_startup_config", lambda: None)
+    monkeypatch.setattr("ai_trading.env.ensure_dotenv_loaded", lambda: None)
+    loops: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli, "_run_loop", lambda *args: loops.append(args))
+    return loops
 
-    assert bot_engine._pytest_running() is True
-    assert bot_engine._netting_pipeline_enabled(SimpleNamespace(cfg=None)) is True
 
+def test_run_trade_rejects_netting_disabled_before_any_cycle(monkeypatch):
+    from ai_trading import __main__ as cli
 
-def test_netting_pipeline_follows_explicit_legacy_opt_in(monkeypatch):
+    loops = _stub_run_trade_startup(monkeypatch, cli)
+    monkeypatch.setattr(main, "_is_test_mode", lambda: False)
+    monkeypatch.setattr(
+        main,
+        "preflight_import_health",
+        lambda: pytest.fail("the netting check must run before the import preflight"),
+    )
     monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
 
-    assert bot_engine._netting_pipeline_enabled(SimpleNamespace(cfg=None)) is False
+    with pytest.raises(SystemExit, match="AI_TRADING_NETTING_ENABLED"):
+        cli.run_trade()
+
+    assert loops == []
+
+
+def test_run_trade_starts_the_loop_when_netting_enabled(monkeypatch):
+    from ai_trading import __main__ as cli
+
+    loops = _stub_run_trade_startup(monkeypatch, cli)
+    monkeypatch.setattr(main, "_is_test_mode", lambda: False)
+    monkeypatch.setattr(main, "preflight_import_health", lambda: True)
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "1")
+
+    cli.run_trade()
+
+    assert len(loops) == 1
+    assert loops[0][0] is main.run_cycle

@@ -178,12 +178,6 @@ def test_malformed_empty_csv_logs_and_returns_empty(tmp_path: Path, monkeypatch:
     assert called and called[0][0] == "TICKERS_FILE_READ_FAILED"
 
 
-def test_screen_candidates_empty_watchlist_returns_fallback():
-    """screen_candidates returns fallback symbols when watchlist is empty."""
-    runtime = types.SimpleNamespace()
-    assert bot_engine.screen_candidates(runtime, []) == bot_engine.FALLBACK_SYMBOLS
-
-
 def test_load_candidate_universe_loads_when_none(monkeypatch: pytest.MonkeyPatch):
     """load_candidate_universe loads tickers when input is None."""
 

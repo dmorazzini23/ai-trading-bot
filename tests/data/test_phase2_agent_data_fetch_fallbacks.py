@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,24 +12,6 @@ from ai_trading.data import bars as bars_mod
 from ai_trading.data import fetch as fetch_mod
 from ai_trading.data import fetch_yf
 from ai_trading.data.fallback import concurrency
-
-
-def _ohlcv_frame(
-    symbol: str = "AAPL",
-    *,
-    timestamp: datetime = datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-) -> pd.DataFrame:
-    del symbol
-    return pd.DataFrame(
-        {
-            "timestamp": [timestamp],
-            "open": [100.0],
-            "high": [101.0],
-            "low": [99.0],
-            "close": [100.5],
-            "volume": [1000],
-        }
-    )
 
 
 def _yf_multiindex_frame(symbols: list[str]) -> pd.DataFrame:
@@ -161,31 +142,6 @@ def test_safe_backup_get_bars_returns_empty_frame_when_provider_hook_fails(
 
     assert isinstance(frame, pd.DataFrame)
     assert frame.empty
-
-
-def test_fetch_daily_backup_blocks_filtered_data_when_fallback_not_allowed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    kills: list[dict[str, Any]] = []
-    monkeypatch.setattr(fetch_mod, "fetch_yf_batched", lambda *_args, **_kwargs: {"AAPL": _ohlcv_frame()})
-    monkeypatch.setattr(fetch_mod, "_data_fallback_allowed", lambda: False)
-    monkeypatch.setattr(fetch_mod, "_current_settings", lambda: SimpleNamespace(backup_data_provider="yahoo"))
-    monkeypatch.setattr(
-        fetch_mod,
-        "activate_data_kill_switch",
-        lambda reason, **kwargs: kills.append({"reason": reason, **kwargs}),
-    )
-
-    result = fetch_mod.fetch_daily_backup(["AAPL"], period="5d")
-
-    assert result == {}
-    assert kills == [
-        {
-            "reason": "backup_provider_blocked",
-            "provider": "yahoo",
-            "metadata": {"symbols": ["AAPL"]},
-        }
-    ]
 
 
 def test_get_cached_or_primary_discards_invalid_and_unauthorized_cached_feeds(

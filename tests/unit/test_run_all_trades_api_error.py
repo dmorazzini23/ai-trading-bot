@@ -96,7 +96,6 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _rt: None)
-    monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(eng.CFG, "log_market_fetch", False, raising=False)
 
@@ -112,15 +111,14 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     def raise_api_error(*_a, **_k):
         raise eng.APIError("boom")
 
-    # _prepare_run is only reached on the legacy non-netting path; opt in explicitly.
-    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
-    monkeypatch.setattr(eng, "_prepare_run", raise_api_error)
+    monkeypatch.setattr(eng, "_run_netting_cycle", raise_api_error)
 
     caplog.set_level("WARNING")
     eng.run_all_trades_worker(state, runtime)
 
-    assert any(str(r.msg).startswith("PREP") for r in caplog.records)
+    assert any(str(r.msg) == "TRADING_CYCLE_API_ERROR" for r in caplog.records)
     assert state.running is False
+    assert state.last_run_at is None
     assert api.called_with is not None
     assert "filter" in api.called_with
     assert getattr(api.called_with["filter"], "status", None) in (

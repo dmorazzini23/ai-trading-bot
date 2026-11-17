@@ -76,7 +76,6 @@ def _base_kwargs() -> dict[str, Any]:
         "safe_mode_reason_func": lambda: None,
         "cancel_all_open_orders_func": lambda runtime: None,
         "reset_cycle_cache_func": lambda: None,
-        "get_strategies_func": lambda: ["s1"],
         "log_loop_heartbeat_func": lambda loop_id, loop_start: None,
         "emit_test_capture_func": lambda message, level: None,
         "common_exceptions": (RuntimeError, ValueError),
@@ -144,8 +143,6 @@ def test_prepare_run_all_trades_cycle_initializes_cycle_state(monkeypatch) -> No
     assert state.minute_feed_cache == {}
     assert state.cycle_order_intents == {}
     assert state.cycle_submit_compaction == set()
-    assert state._strategies_loaded is True
-    assert runtime.strategies == ["s1"]
 
 
 def test_prepare_run_all_trades_cycle_rolls_back_active_state_on_late_failure(
@@ -159,10 +156,12 @@ def test_prepare_run_all_trades_cycle_rolls_back_active_state_on_late_failure(
     state.last_run_at = previous_last_run_at
     state.minute_feed_cache = {"AAPL": 1}
     state.cycle_order_intents = {"x": 1}
-    state.cycle_submit_compaction = {"y"}
-    kwargs["get_strategies_func"] = lambda: (_ for _ in ()).throw(
-        RuntimeError("strategy load failed")
-    )
+
+    class _FailingCompaction(set):
+        def clear(self) -> None:
+            raise RuntimeError("compaction reset failed")
+
+    state.cycle_submit_compaction = _FailingCompaction({"y"})
 
     try:
         prepare_run_all_trades_cycle(
@@ -172,10 +171,9 @@ def test_prepare_run_all_trades_cycle_rolls_back_active_state_on_late_failure(
             **kwargs,
         )
     except RuntimeError as exc:
-        assert str(exc) == "strategy load failed"
+        assert str(exc) == "compaction reset failed"
     else:
-        raise AssertionError("expected strategy load failure")
+        raise AssertionError("expected compaction reset failure")
 
     assert state.running is False
     assert state.last_run_at == previous_last_run_at
-    assert state._strategies_loaded is False

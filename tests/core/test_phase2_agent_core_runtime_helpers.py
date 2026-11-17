@@ -278,7 +278,6 @@ def test_netting_cycle_always_ends_started_cycle_when_run_raises(
     monkeypatch.setattr(bot_engine, "_decision_log_runtime_path", lambda: "runtime/test-decisions.jsonl")
     monkeypatch.setattr(bot_engine, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda _orders, _runtime: False)
-    monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda _runtime: True)
 
     calls: list[str] = []
 
@@ -306,7 +305,6 @@ def test_netting_cycle_always_ends_started_cycle_when_run_raises(
             loop_id="loop-netting-raises",
             loop_start=0.0,
             api=SimpleNamespace(list_orders=lambda: []),
-            restore_last_run_timestamp=lambda: None,
         )
 
     assert calls == ["start", "run", "end"]
@@ -321,7 +319,6 @@ def test_netting_cycle_preserves_down_provider_state_without_healthy_update(
     monkeypatch.setattr(bot_engine, "_decision_log_runtime_path", lambda: "runtime/test-decisions.jsonl")
     monkeypatch.setattr(bot_engine, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda _orders, _runtime: False)
-    monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda _runtime: True)
     monkeypatch.setattr(bot_engine, "_run_netting_cycle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: {"status": "down"})
     updates: list[dict[str, Any]] = []
@@ -338,7 +335,6 @@ def test_netting_cycle_preserves_down_provider_state_without_healthy_update(
         loop_id="loop-provider-down",
         loop_start=0.0,
         api=SimpleNamespace(list_orders=lambda: []),
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert updates == []
