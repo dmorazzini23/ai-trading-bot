@@ -19,15 +19,10 @@ isolation for unit tests without pulling in the entire ``fetch`` module.
 import importlib
 import sys
 import types
-from datetime import datetime
 from typing import Any
 
-from ai_trading.utils.env import get_alpaca_data_base_url, get_alpaca_http_headers
-from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import get_logger
-from .fallback_order import demote_provider, promote_high_resolution
-from .metrics import inc_empty_payload, mark_skipped, inc_unauthorized_sip
 
 # Import shared state from the package's ``__init__``.  These variables are
 # defined there and are re-used across modules.

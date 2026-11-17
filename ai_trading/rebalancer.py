@@ -2,8 +2,6 @@
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
 import math
-import threading
-import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 import numpy as np
@@ -38,7 +36,6 @@ def compute_portfolio_weights(*args, **kwargs):
     return _compute_portfolio_weights(*args, **kwargs)
 from ai_trading.settings import get_rebalance_interval_min
 from ai_trading.utils.time import safe_utcnow
-from ai_trading.config.management import get_env
 
 logger = get_logger(__name__)
 

@@ -4,7 +4,7 @@ Trading constants for institutional-grade trading platform.
 Contains configuration constants, market parameters, and system limits
 used throughout the trading platform.
 """
-from datetime import UTC, datetime, time
+from datetime import time
 from typing import Any
 from zoneinfo import ZoneInfo
 

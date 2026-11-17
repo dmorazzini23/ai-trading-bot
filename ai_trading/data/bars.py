@@ -3,12 +3,10 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
-from zoneinfo import ZoneInfo
 
-from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
 from ai_trading.data.fetch import get_bars, get_minute_df
 from ai_trading.data.fetch import get_bars as _raw_http_get_bars
@@ -29,7 +27,7 @@ from ai_trading.utils.time import now_utc
 from ._alpaca_guard import should_import_alpaca_sdk
 from .fetch.sip_disallowed import sip_disallowed, sip_credentials_missing  # noqa: F401
 from .models import StockBarsRequest, TimeFrame
-from .timeutils import ensure_utc_datetime, expected_regular_minutes
+from .timeutils import ensure_utc_datetime
 
 if TYPE_CHECKING:
     from pandas import DataFrame

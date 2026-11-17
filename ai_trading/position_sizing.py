@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from json import JSONDecodeError
 from math import floor, isclose
-from types import SimpleNamespace
 from typing import Any
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_api_error_cls, get_trading_client_cls

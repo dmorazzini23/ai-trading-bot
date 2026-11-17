@@ -30,7 +30,6 @@ from .runtime import (
     TradingConfig,
     config_snapshot_hash,
     ensure_trading_config_current,
-    generate_config_schema,
     get_trading_config,
     reload_trading_config,
 )

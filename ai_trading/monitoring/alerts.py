@@ -12,7 +12,6 @@ from enum import Enum
 from ai_trading.logging import logger
 from ai_trading.utils.time import safe_utcnow
 from ai_trading.utils.timing import sleep as psleep
-from ..core.constants import PERFORMANCE_THRESHOLDS, RISK_PARAMETERS
 
 class AlertSeverity(Enum):
     """Alert severity levels."""

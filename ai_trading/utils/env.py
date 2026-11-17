@@ -1,11 +1,9 @@
 """Environment variable helpers for broker configuration."""
 from __future__ import annotations
 
-from typing import Mapping
 from urllib.parse import urlparse
 
 from ai_trading.broker.alpaca_credentials import (
-    AlpacaCredentials,
     alpaca_auth_headers,
     resolve_alpaca_credentials,
     resolve_alpaca_credentials_with_base,

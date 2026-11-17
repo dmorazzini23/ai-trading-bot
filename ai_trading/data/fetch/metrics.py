@@ -9,7 +9,6 @@ from ai_trading.config.management import get_env
 from ai_trading.data.metrics import (
     backup_provider_used as _backup_provider_used_counter,
     metrics as _metrics,
-    provider_disable_total as _provider_disable_total_counter,
     provider_disabled as _provider_disabled_gauge,
     provider_fallback as _provider_fallback_counter,
 )

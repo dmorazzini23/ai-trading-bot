@@ -6,7 +6,7 @@ import importlib
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 
 _reconcile_warned = False

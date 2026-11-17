@@ -15,14 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
-import json
 
-import joblib
 from ai_trading.models.artifacts import (
     load_artifact_manifest,
     load_verified_joblib_artifact,
     verify_artifact,
-    write_artifact_manifest,
 )
 from ai_trading.models.contracts import DAY_SLEEVE_ML_BAR_TIMEFRAME, DAY_SLEEVE_ML_FEATURE_COLUMNS, DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION, normalize_bar_timeframe, model_feature_contract_hash
 

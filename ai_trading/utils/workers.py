@@ -1,6 +1,6 @@
 import atexit
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 from ai_trading.config.management import get_env
 
