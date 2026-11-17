@@ -1,0 +1,350 @@
+{
+  "campaign_id": "opening_range_trial_20261117",
+  "status": "draft_not_registered",
+  "draft_notice": "DRAFT for owner review. Nothing here is registered, no ledger exists, no trial has been claimed and no strategy return has been computed on real data. The only provider calls made were the data probe recorded under survivorship and data_feasibility: bar counts and time stamps for a few symbols and sessions. The runner refuses --acquire, --support-audit, --preflight and --fit while status is not 'registered'.",
+  "max_trials": 1,
+  "hypotheses": [
+    "five_minute_opening_range_breakout_top20_relative_volume_long_only_primary_long_short_secondary_v1"
+  ],
+  "versions": {
+    "long_only": "PRIMARY. Places only the buy stops: the selected names whose first five-minute bar closed above its open. Names whose first bar closed lower are skipped and their slots stay in cash. It must pass on its own, because the paper account has shorting disabled. Its decision is the ledger decision.",
+    "long_short": "SECONDARY. The published strategy: the same buy stops plus a sell stop (a short sale) on the selected names whose first bar closed lower, where the short rule under 'shorts' allows it. Its decision is reported as secondary_decision and cannot rescue a failed long-only version."
+  },
+  "ledger_note": "The experiment ledger permits exactly one hypothesis id per campaign, so the two versions are one registered trial with one claim. Both are scored in the same run from the same frozen data.",
+  "hypothesis": "Each session, among US stocks with an opening price above 5 dollars, a 14-session average volume of at least 1,000,000 shares and a 14-session average true range above 0.50 dollars, the 20 with the highest first-five-minute volume relative to their own 14-session average for that window (at least 100 percent), traded by a stop order at the first five-minute bar's high (buy, bar closed up) or low (sell, bar closed down), with a stop loss 10 percent of the average true range from the fill and an exit at the session close, earn more than cash after commission and 5 bps per side under pessimistic fill rules (both versions), and the long-only version earns more than a market position of the same size over the same minutes.",
+  "source": {
+    "paper": "Zarattini, Barbon and Aziz, 'A Profitable Day Trading Strategy For The U.S. Equity Market', Swiss Finance Institute Research Paper 24-98, SSRN 4729284 (2024). Read in full on 2026-11-17 from the University of St. Gallen repository copy; the rule below is taken from its sections 2, 2.1, 3 and 4.",
+    "published_rule": "Filters: opening price above $5; average volume over the previous 14 days at least 1,000,000 shares a day; ATR over the previous 14 days above $0.50; Relative Volume at least 100 percent, where Relative Volume is the volume of the first 5 minutes divided by the mean first-5-minute volume of the previous 14 days; trade the top 20 by Relative Volume. If the first 5-minute candle closed above its open, a stop order to buy at the 5-minute high; below its open, a stop order to sell at the 5-minute low; a doji (open = close) places no order. A stop loss 10 percent of the 14-day ATR from the executed entry price. Positions not stopped are closed at 4:00 pm. Sized so that a stop-out loses 1 percent of the capital allocated to that position, with maximum leverage 4x. Commission $0.0035 per share; starting capital $25,000; January 2016 to December 2023.",
+    "published_result": "Top-20 version: total return 1,637 percent, 41.6 percent a year, volatility 14.8 percent, Sharpe ratio 2.81, hit ratio 48.4 percent, worst day -1.61 percent, alpha 35.8 percent a year, beta 0.00 against the S&P 500. The same rule on every filtered stock without the relative-volume step: 3.2 percent a year, Sharpe 0.48.",
+    "published_data": "Stock list from CRSP, stated free of survivorship bias; intraday data from IQFeed, unadjusted for splits and dividends. The paper states no slippage, no spread, no fill model beyond the stop price, and no borrow or short-sale constraint.",
+    "authors_interest": "One author group. The first author runs Concretum Group, which sells research and trading tools; the third founded Bear Bull Traders, a day-trading education business, and Peak Capital Trading. No independent replication with realistic fills is known to us."
+  },
+  "departures_from_the_paper": [
+    "Fills. The paper fills a stop order at its stop price. Here a stop order fills at the worse of its trigger and the next one-minute bar's open, a bar that touches both the entry and the stop loss is counted as a stop-out, a gap through a level fills at the gapped price, and each side pays a further cost in basis points. This is the largest departure and it is deliberate.",
+    "Sizing. The paper's sentence is 'the loss on the capital allocated to that position would not exceed 1%' with 4x maximum leverage, and its footnote says the cap binds 'in some trades'. Read here as: each of the 20 names gets one twentieth of equity; a stop-out loses 1 percent of that slice (0.05 percent of equity); the position is capped at 4 times the slice. The owner's summary said 1 percent of equity; with 20 names and a 4x cap that reading would make the cap bind on every trade, which the footnote contradicts.",
+    "Universe. The paper uses the CRSP list including delisted stocks. Here the list is the broker's asset list (active and inactive), common stocks by an exchange-and-name proxy. The probe shows that list omits many delisted companies.",
+    "Shorts. The paper shorts every name. The long-short version here skips a short when the stock is under the short-sale price test or the broker's current flags say it cannot be borrowed easily; the paper's every-short version is reported only.",
+    "Primary version. The paper's strategy is long-short. Long-only is primary here because the account cannot short.",
+    "ATR. The paper says '14-day ATR' without the smoothing. Here it is the plain mean of the true range over the previous 14 sessions, which needs no earlier history.",
+    "Splits. Raw prices and volumes do not compare across a split. A name is not eligible from the split session through the next 14 sessions. The paper does not say how it handled this.",
+    "Halts. A position whose price record ends more than 30 minutes before the close is closed at the last print less one full average true range. The paper does not mention halts.",
+    "Window. 2016-01-04 to 2025-12-31, two years longer than the paper. The first 15 sessions only supply history.",
+    "Relative volume threshold. The paper says both 'at least 100%' and 'exceeded 100%'; 'at least' is used."
+  ],
+  "economic_motivation": "A stock with unusually heavy volume at the open usually has company news. The paper argues that the direction of the first five minutes then shows which way large investors are leaning, and that the move tends to continue for the rest of the day. A tight stop keeps losses small on the days it does not.",
+  "distinct_from_consumed": "An intraday breakout rule on a daily-changing set of single stocks chosen by opening volume. The consumed campaigns were an intraday model on three stocks (model_replacement_20260921, day_sleeve_horizon_trial_20261018), a 60-session price filter on six ETFs (research_reset_trend_20260908), a 63-session relative-strength rule on six ETFs (cross_sectional_momentum_trial_20261018), an SPY volatility target (volatility_target_core_trial_20261025), a 5-session sector-relative reversal in 300 stocks (swing_reversal_trial_20261115) and an SPY first-half-hour to last-half-hour rule (intraday_momentum_trial_20261115).",
+  "development_start": "2016-01-04",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "symbols": {
+    "market": "SPY"
+  },
+  "feed": "sip",
+  "adjustment": "raw",
+  "timeframes": {
+    "opening_range": "5Min",
+    "path": "1Min",
+    "filters": "1Day"
+  },
+  "annualization": 252,
+  "universe": {
+    "exchanges": [
+      "NYSE",
+      "NASDAQ",
+      "AMEX"
+    ],
+    "excluded_name_pattern": "\\b(ETF|ETN|Fund|iShares|SPDR|ProShares|Direxion|Vanguard|Invesco|PowerShares|VanEck|WisdomTree|Select Sector|Index|Depositary|ADR|ADS|Warrants?|Units?|Rights?|Preferred|Notes)\\b",
+    "minimum_open_price": 5.0,
+    "minimum_average_volume": 1000000,
+    "minimum_atr": 0.5,
+    "lookback_sessions": 14,
+    "rule": "A candidate is a symbol of one to five letters on NYSE, NASDAQ or NYSE American in the broker's asset list (active or inactive) whose name does not match excluded_name_pattern: the swing trial's common-stock proxy. On session t a candidate passes if its raw daily open on t is above 5 dollars, its mean raw daily volume over sessions t-14 to t-1 is at least 1,000,000 shares, and the mean of its true range over sessions t-14 to t-1 is above 0.50 dollars. True range is the largest of high minus low, high minus the previous close, and the previous close minus low. All 15 daily bars from t-15 to t-1 must exist. Nothing from t except the open is used.",
+    "split_guard": "A name is not eligible on any session from a split's first session through the 14 sessions after it. Splits are found at acquisition as the sessions where the ratio of the raw close to the split-adjusted close changes by more than 1 percent, and frozen with a hash.",
+    "shortlist": "To avoid downloading daily bars for every symbol, daily bars are fetched only for candidates with at least one calendar month of raw volume of 7,000,000 shares or more and at least one monthly high above 5 dollars. A 14-session window averaging 1,000,000 shares lies inside at most two calendar months, so one of them has at least 7,000,000: no name that could pass is dropped.",
+    "fidelity": "These are the paper's three filters with the paper's numbers. The differences are the source of the stock list (see survivorship) and the common-stock proxy, which uses today's names and can misclassify in both directions."
+  },
+  "signal": {
+    "opening_range_minutes": 5,
+    "minimum_relative_volume": 1.0,
+    "top_names": 20,
+    "doji": "no_order",
+    "rule": "The opening range is the provider's five-minute bar stamped 09:30 New York time (09:30:00 to 09:34:59). Relative volume on session t is that bar's volume on t divided by the mean of that bar's volume over sessions t-14 to t-1; the bar must exist on all 14. Among the names that pass the universe filters on t, those with relative volume of at least 1.0 are ranked highest first, ties by symbol, and the top 20 are selected. Direction: bar close above bar open is a buy; below is a sell; equal (a doji) keeps its rank and places no order. The selection uses nothing after 09:35 on t.",
+    "computed_at_acquisition": "The selection is computed once at acquisition from raw volumes and the opening bars, frozen with a hash, and rebuilt and compared before scoring. It decides which minute bars are downloaded. It contains no outcome."
+  },
+  "trade": {
+    "stop_atr_fraction": 0.1,
+    "exit": "session_close",
+    "early_close_sessions": "trade_to_the_early_close",
+    "rule": "At 09:35 a stop order is placed at the opening bar's high (buy) or low (sell). It can trigger on any one-minute bar from the one stamped 09:35 to the last of the regular session. When filled, a stop loss is set 10 percent of the 14-session average true range away from the fill price. If the stop loss is not reached the position is closed at the close of the last one-minute bar of the regular session (stamped 15:59, or 12:59 on an early close). One order per name per session; no re-entry; nothing is held overnight."
+  },
+  "sizing": {
+    "risk_fraction_of_slot": 0.01,
+    "max_leverage": 4.0,
+    "rule": "Equity is divided into 20 equal slots, one per selected name. Shares = the smaller of (1 percent of the slot) / (stop distance in dollars) and (4 times the slot) / (trigger price), fixed when the order is placed. So a stop-out at exactly the stop price loses 0.05 percent of equity, a position is at most 20 percent of equity, and the whole book is at most 4 times equity. Unused slots stay in cash. Fractional shares are allowed, so the result does not depend on account size.",
+    "return_unit": "Each session's return is the sum of that session's trade results divided by the equity at that morning. One observation per eligible session; a session with no fill is zero."
+  },
+  "fills": {
+    "stop_order_fill": "worse_of_trigger_and_next_bar_open",
+    "bar_touches_entry_and_stop": "stop",
+    "gap_through": "bar_open",
+    "session_end_exit": "last_bar_close",
+    "stale_exit_minutes": 30,
+    "stale_exit_adverse_atr": 1.0,
+    "commission_per_share": 0.0035,
+    "rule": "Written for a buy; a sell is the mirror image. Entry: the order triggers on the first one-minute bar whose high reaches the trigger. (a) If that bar opened at or beyond the trigger, the fill is that bar's open, and if the same bar's low is at or below the fill minus the stop distance the trade is stopped in that bar. (b) Otherwise, if that bar's low is at or below the trigger minus the stop distance, the bar touched both the entry and the stop: the trade is counted as filled at the trigger and stopped in that bar, whichever happened first inside the bar. (c) Otherwise the fill is the worse of the trigger price and the next bar's open (the close of the trigger bar if it is the last bar), and the stop loss is measured from that fill. A stop-out inside the trigger bar exits at the worse of the stop price and the next bar's open. On a later bar, an open at or beyond the stop exits at that open; a low that reaches the stop exits at the worse of the stop price and the next bar's open. Session end: the close of the last bar. If a position's last bar is more than 30 minutes before the session close (a halt, or the record ends), it is closed at that last price moved against it by one full 14-session average true range, ten times the planned loss. Every fill then pays commission per share and the tier's per-side cost.",
+    "commission_note": "$0.0035 per share per side, as in the paper. The broker's per-order minimum (about $0.35) is not charged, because results are stated per dollar of equity; on a $25,000 account it would add roughly 1 to 2 bps to small positions."
+  },
+  "shorts": {
+    "require_current_shortable_and_easy_to_borrow": true,
+    "short_sale_restriction_decline": 0.1,
+    "account_note": "The paper account runs with shorting disabled, so the long-short version cannot be traded as configured today.",
+    "rule": "A sell stop is taken in the long-short version only if all hold: (1) the frozen asset list marks the symbol shortable and easy to borrow (today's flags; an inactive symbol has neither, so delisted names are never shorted); (2) the stock did not fall 10 percent or more below its previous close on the prior session (the short-sale price test would still be in force); (3) the sell trigger is above 90 percent of the prior close (below that the price test would be in force before the order could fill). A blocked short leaves its slot in cash.",
+    "borrow_cost": "None is charged: the position is opened and closed the same day, and stock-loan fees accrue on positions held overnight. Whether shares could have been located that morning is unknown.",
+    "reported_only": "The same book with every sell stop taken, as the paper trades it, is reported and decides nothing."
+  },
+  "data_probe": {
+    "coverage_symbols": [
+      "SPY",
+      "AAPL",
+      "BLDR",
+      "PLUG",
+      "KBH"
+    ],
+    "coverage_sessions": [
+      "2016-01-04",
+      "2016-01-05",
+      "2019-06-12",
+      "2019-11-29",
+      "2024-03-13"
+    ],
+    "delisted": [
+      {
+        "symbol": "TWTR",
+        "session": "2018-02-08"
+      },
+      {
+        "symbol": "YHOO",
+        "session": "2016-07-19"
+      },
+      {
+        "symbol": "LNKD",
+        "session": "2016-02-05"
+      },
+      {
+        "symbol": "MON",
+        "session": "2017-06-01"
+      },
+      {
+        "symbol": "CELG",
+        "session": "2019-01-03"
+      },
+      {
+        "symbol": "TWX",
+        "session": "2018-06-12"
+      },
+      {
+        "symbol": "AGN",
+        "session": "2019-06-25"
+      },
+      {
+        "symbol": "RTN",
+        "session": "2019-06-10"
+      },
+      {
+        "symbol": "XLNX",
+        "session": "2020-10-27"
+      },
+      {
+        "symbol": "ALXN",
+        "session": "2020-12-14"
+      },
+      {
+        "symbol": "TIF",
+        "session": "2019-10-28"
+      },
+      {
+        "symbol": "CERN",
+        "session": "2021-12-20"
+      },
+      {
+        "symbol": "EMC",
+        "session": "2016-06-10"
+      },
+      {
+        "symbol": "SHLD",
+        "session": "2018-10-10"
+      },
+      {
+        "symbol": "FTR",
+        "session": "2019-08-07"
+      },
+      {
+        "symbol": "MNK",
+        "session": "2019-08-06"
+      },
+      {
+        "symbol": "BBBY",
+        "session": "2023-01-06"
+      },
+      {
+        "symbol": "SIVB",
+        "session": "2023-03-09"
+      },
+      {
+        "symbol": "FRC",
+        "session": "2023-03-13"
+      },
+      {
+        "symbol": "WLL",
+        "session": "2020-03-09"
+      },
+      {
+        "symbol": "CHK",
+        "session": "2020-03-09"
+      }
+    ],
+    "note": "`--probe` asks for one-minute, five-minute and daily bars for each listed symbol and session and records bar counts and stamps only. The delisted list is large US companies acquired, merged or bankrupt between 2016 and 2023, each with a session on which it was trading."
+  },
+  "survivorship": {
+    "probe_status": "delisted_symbols_missing_or_partial",
+    "probe_finding": "Probe run 2026-11-17 (artifacts/opening_range_trial_20261117/data_probe.json, bar counts and stamps only). For 21 large companies delisted between 2016 and 2023, each on a session when it was trading, the provider returned one-minute bars for all 21 and the opening five-minute bar for 20 (CERN did not trade in the first five minutes of that session). But only 10 of the 21 are in the broker's asset list (AGN, ALXN, CELG, CERN, EMC, RTN, SHLD, TIF, WLL, XLNX). BBBY, CHK, FRC, FTR, LNKD, MNK, MON, SIVB, TWTR, TWX and YHOO are absent, so a candidate list built from the asset list cannot include them. The bars exist; the names cannot be discovered. Symbols are also reused: EMC is listed as active, SHLD as both active and inactive, and a separate one-off check found daily bars for MON, EMC, SHLD and MNK a year after each stopped trading.",
+    "label": "incomplete_direction_unknown",
+    "probe_status_values": "Before registration set probe_status to 'delisted_symbols_served' or 'delisted_symbols_missing_or_partial'. The runner refuses any other value. With the second value the report labels every result 'incomplete_direction_unknown'.",
+    "limits": "A delisted company missing from the asset list never enters the candidate list, so its days are missing from the test, including the days around a takeover or a failure, when a stock is most 'in play'. Unlike a buy-the-losers rule, the direction of the resulting error is not known for a same-day breakout rule. No stress can cover names that never enter."
+  },
+  "primary_per_side_cost_bps": 5,
+  "cost_tiers": [
+    {
+      "name": "base",
+      "per_side_bps": 5,
+      "role": "decision"
+    },
+    {
+      "name": "double",
+      "per_side_bps": 10,
+      "role": "required_positive_at_stress"
+    },
+    {
+      "name": "half",
+      "per_side_bps": 2.5,
+      "role": "reported_only",
+      "caveat": "A result that holds at 2.5 bps but not at 5 bps is not established."
+    },
+    {
+      "name": "commission_only_as_published",
+      "per_side_bps": 0,
+      "role": "reported_only",
+      "caveat": "The paper's cost assumption applied to this runner's pessimistic fills. Shows how much of any shortfall is the fill rules and how much is the per-side charge. Decides nothing."
+    }
+  ],
+  "cost_basis": "The per-side cost stands for half the quoted spread plus the slip of a stop order that becomes a market order in a fast stock. The bot's own fills (research note 'measured_costs_from_fills', 2026-11-15: 124 marketable one-to-two-share paper fills in AAPL, AMZN and MSFT, almost all midday) cost 0.9 bps on average against the mid, with a 90th percentile of 6 bps. The names traded here are not three giant stocks at midday: they are whichever stocks have the most unusual volume that morning, many priced between 5 and 30 dollars where one cent is 3 to 20 bps, in the first minutes after the open when spreads are widest, entered in the direction the price is already running. 5 bps per side is about the 90th percentile of the measured midday giant-stock cost, taken as the typical cost here; 10 bps doubles it; 2.5 bps halves it. None of these is measured for these stocks at this time of day.",
+  "cost_scale": "The stop loss is 10 percent of the average true range. For a stock whose daily range is 4 percent of its price that is 0.4 percent of price, or 40 bps. A round trip at the base level costs 10 bps of price plus commission, about a quarter of the planned loss on every trade, win or lose. The paper reports an average gain of 0.08 planned losses per trade when relative volume is above 100 percent.",
+  "cost_accounting": "Each fill pays $0.0035 per share and per_side_bps of its value. A trade has two fills. Orders that never trigger cost nothing. No borrow fee. Cash earns nothing.",
+  "cost_status": "fixed_scenarios_not_calibrated_execution_costs",
+  "controls": {
+    "cash": "Zero return. Both versions.",
+    "exposure_matched_market": "For every fill: the SPY one-minute close at the exit minute over the SPY one-minute close at the entry minute, minus 1, times the position's signed weight. Summed per session. Charged no cost. The long-only comparison: it is what the same dollars would have earned in the market over the same minutes."
+  },
+  "paired_difference": "Per eligible session: the version's net return minus its exposure-matched market return.",
+  "observation_unit": "One observation per eligible session, in calendar order for the block bootstrap.",
+  "session_rules": {
+    "timezone": "America/New_York (stdlib zoneinfo)",
+    "calendar": "The exchange calendar is required; the runner refuses the rule-based fallback.",
+    "eligible_session": "A session is scored when it has 15 earlier sessions in the window and SPY has a one-minute bar for every minute of that session's regular hours. SPY trades every minute, so a gap means the provider's record of that session is incomplete; the session is skipped and counted.",
+    "early_closes": "Traded like any other session, with the exit at the early close (the bar stamped 12:59). Bars stamped at or after the session's close are discarded.",
+    "sparse_bars": "A stock has no one-minute bar for a minute with no trade. That is normal and is not a gap. A selected name with no bar at all from 09:35 on gets no order.",
+    "first_sessions": "2016-01-04 to 2016-01-25 (15 sessions) only supply history."
+  },
+  "folds": "calendar_year_of_session",
+  "support_thresholds": {
+    "minimum_eligible_days": 2300,
+    "minimum_supported_years": 9,
+    "minimum_eligible_days_per_year": 230,
+    "minimum_filled_trades": 5000,
+    "minimum_median_selected_names": 10
+  },
+  "support_rationale": "The exchange calendar has 2,514 development sessions; less the first 15 that leaves at most 2,499 eligible days, 237 in 2016 and 250 to 252 in later years. The thresholds allow about 8 percent of days to be lost and one thin year. The median eligible day must have at least 10 selected names, half the 20 slots. Each version must also fill at least 5,000 trades (about two a day); this depends on prices, so it is checked only after the claim.",
+  "support_audit": {
+    "required_before_claim": true,
+    "kind": "session_symbol_and_bar_time_only",
+    "rule": "`--support-audit` reads sessions, symbols and bar times only and writes artifacts/opening_range_trial_20261117/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial."
+  },
+  "acceptance": {
+    "positive_lower_bound_vs_cash_at_primary": true,
+    "positive_at_stress": true,
+    "long_only_positive_lower_bound_vs_exposure_matched_market_at_primary": true,
+    "minimum_positive_years": 6,
+    "long_only_summary": "All of: adequate support; the bootstrap lower bound of the mean net return per eligible session at 5 bps per side is above zero; the mean net return is above zero at 10 bps per side; the mean net return at 5 bps is above zero in at least 6 of the 10 calendar years; the bootstrap lower bound of the mean paired difference against the exposure-matched market at 5 bps is above zero.",
+    "long_short_summary": "All of: adequate support; the bootstrap lower bound of the mean net return per eligible session at 5 bps per side is above zero; the mean net return is above zero at 10 bps per side; the mean net return at 5 bps is above zero in at least 6 of the 10 calendar years. The paired difference against the exposure-matched market is reported.",
+    "reported_only": "The 2.5 bps and commission-only tiers, the every-short-taken book, the paired difference for long-short, Sharpe ratio, maximum drawdown, annualized percent, hit ratio, average result in planned losses, exit reasons, gap entries, order statuses, shorts blocked, commission per day, turnover and per-year figures.",
+    "pass_means": "Long-only pass: in 2016-2025, under the pessimistic fill rules and after commission and 5 bps per side, the buy side of the rule made money by a margin a block bootstrap separates from zero, in most years, still made money at 10 bps, and beat the same dollars held in SPY over the same minutes by a margin the bootstrap also separates from zero. It permits one check on the untouched holdout and, if that agrees, at least eight weeks on the paper account. It does not permit real-money trading. Long-short pass: the same against cash; it cannot be traded while shorting is disabled.",
+    "fail_means": "Retired: the data were adequate and at least one criterion failed. Both versions end; no tuning of filters, the opening range length, the number of names, the stop, sizing, fills, costs or acceptance follows. Inconclusive: support was inadequate after the claim; the budget is still consumed."
+  },
+  "multiple_testing": "This contract tests two hypotheses, so each bootstrap lower bound is the 1.25th percentile (a 97.5 percent two-sided interval) instead of the 2.5th. By the intraday contract's count nine earlier hypotheses were tested and none passed, so a pass here would be the first in eleven attempts on overlapping data; at this threshold the chance of at least one false pass in eleven is roughly 13 percent. That is why a pass leads to one untouched holdout check and paper trading, not to real money.",
+  "bootstrap": {
+    "unit": "circular_blocks_of_eligible_days",
+    "block_days": 21,
+    "replicates": 10000,
+    "seed": 20261117,
+    "lower_quantile": 0.0125
+  },
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "parameter_justifications": {
+    "universe filters = 5 dollars, 1,000,000 shares, 0.50 dollars, 14 sessions": "The paper's numbers, unchanged.",
+    "signal.opening_range_minutes=5": "The paper's headline version; it also reports 15, 30 and 60 minutes, which are not tested here.",
+    "signal.minimum_relative_volume=1.0, top_names=20": "The paper's numbers, unchanged.",
+    "trade.stop_atr_fraction=0.10": "The paper's number, unchanged.",
+    "sizing.risk_fraction_of_slot=0.01, max_leverage=4": "The paper's numbers under the slot reading; see departures_from_the_paper.",
+    "fills.commission_per_share=0.0035": "The paper's number.",
+    "fills = worse of trigger and next bar's open; both touched is a stop": "One-minute bars cannot show the order of prices inside a bar or the price a stop order would get in a fast move. Each ambiguity is resolved against the strategy.",
+    "fills.stale_exit_minutes=30, stale_exit_adverse_atr=1.0": "Thirty minutes without a print near the close in a stock chosen for heavy volume means a halt or a broken record. One average true range is ten times the planned loss and about the size of a normal day's range; halts on news can move more.",
+    "shorts.short_sale_restriction_decline=0.10": "Rule 201 of Regulation SHO: after a 10 percent fall from the prior close, short sales may not hit the bid for the rest of that day and the next.",
+    "cost_tiers=5/10/2.5/0 bps per side": "See cost_basis.",
+    "adjustment=raw": "The paper uses unadjusted intraday data. The 5 dollar and 1,000,000 share filters only mean what they say on the prices and volumes of the day; split-adjusted data would shrink past prices of stocks that later split. Within a session raw and adjusted returns are identical.",
+    "acceptance.minimum_positive_years=6": "A majority of ten years, as in the earlier contracts.",
+    "support_thresholds": "About 92 percent of the possible days and nine of ten years, as in the intraday contract; see support_rationale.",
+    "bootstrap.block_days=21": "One trading month of daily observations, as in the intraday contract: bursts of news-driven volume (earnings seasons, 2020, 2021) cluster for weeks.",
+    "bootstrap.replicates=10000, lower_quantile=0.0125": "The earlier contracts' values: Bonferroni for two hypotheses at a 5 percent two-sided level."
+  },
+  "data_feasibility": {
+    "probe_date": "2026-11-17",
+    "measured": "Run 2026-11-17 against the provider; counts, stamps and timings only. (1) One-minute and five-minute raw SIP bars exist from the first session of the window, 2016-01-04, for all 5 coverage symbols on all 5 probed sessions. SPY and AAPL had a bar for every regular minute (390, or 210 on the 2019-11-29 early close). BLDR, KBH and PLUG had 335 to 390 of 390, because a minute with no trade has no bar. (2) The 09:30 five-minute bar equalled its one-minute bars (volume, high, low) in all 25 cases. (3) Bars stamped after an early close exist and must be discarded. (4) One request returned the 09:30 bar for 300 symbols in 0.4 seconds and for 757 symbols in 0.65 seconds; one request returned a full session of minute bars for 20 symbols (7,627 bars) in 0.24 seconds; a month of SPY minute bars (15,936 including extended hours) took 0.3 to 0.6 seconds. (5) The provider's rate-limit header reads 200 requests a minute, and the running bot draws on the same allowance. (6) A five-minute request spanning several days returns every bar, not just the 09:30 one, so opening bars are requested one session at a time.",
+    "plan": "From Alpaca, SIP feed, raw: (1) the asset list; (2) monthly bars for every candidate, to shortlist; (3) daily bars for the shortlist, raw and split-adjusted; (4) the 09:30 five-minute bar, one request per session per 500 names, for every name that passes the daily filters that session or in the next 14; (5) one-minute bars from 09:35 to the close for the selected names, one request per session; (6) SPY one-minute bars, one request per month.",
+    "estimate": "Inferred, not measured. Sizes come from the swing trial's frozen monthly bars: 6,294 candidates; about 4,600 shortlisted; about 700 to 1,450 names a month pass the price and volume filters before the range filter (median about 960). Requests: about 110 for monthly bars, about 1,700 pages of daily bars (about 8.4 million rows, fetched raw and split-adjusted), about 7,500 for opening bars (2 to 3 per session), about 2,500 for minute bars, about 240 pages for SPY: about 12,000 in all. At the runner's pace of about 100 a minute that is 2 to 3 hours. Rows kept: about 8.4 million daily, 2.5 to 3.5 million opening bars, at most 19 million stock minute bars (20 names x 385 minutes x 2,499 sessions; fewer in practice), 0.98 million SPY minute bars. Disk: roughly 0.4 to 0.6 GB as gzip CSV (70 GB are free). Memory: the machine has 3 GB with about 1 GB free while the bot runs; the runner works one symbol chunk and one month at a time to stay inside that, which has been exercised on synthetic data only.",
+    "why_not_everything": "One-minute bars for every filtered stock on every day would be about 1,000 names x 390 bars x 2,514 sessions, about a billion rows. The selection needs only the first five-minute bar, and only the 20 selected names need their minute path, which cuts the download to about 2 percent of that without changing a single trade."
+  },
+  "acquisition": "Not done. After registration and on the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, pauses 0.6 seconds per page so it uses about half the shared rate limit, retries a transient error up to four times, refuses any row dated outside development or in 2026, refuses if more than 1 percent of symbols fail in any step, if more than 1 percent of orders have no minute bars, or if more than 1 percent of sessions have an incomplete SPY record, and refuses to overwrite an existing acquisition. It should be run outside market hours, because the running bot uses the same rate limit.",
+  "acquisition_manifest": "artifacts/opening_range_trial_20261117/data/acquisition.json",
+  "availability_check": "data probe only (2026-11-17): bar counts and stamps for 5 symbols on 5 sessions and 21 delisted symbols on one session each; no price was kept and no return was computed",
+  "preconditions": [
+    "owner approves these written rules before any result exists",
+    "an independent review of the runner and of the fill rules finds no scoring defect",
+    "owner adopts a research-reset amendment and config/research_reset.json registered_trials cites this campaign_id",
+    "status set to registered, draft_notice removed, and the contract registered under artifacts/opening_range_trial_20261117/campaign_state.json before any price is read for scoring",
+    "owner approves the one-time acquisition; manifest written with source hashes",
+    "session-and-stamp-only support audit passes",
+    "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 row, price validity, the frozen selection equals the selection rebuilt from the frozen bars"
+  ],
+  "stop_rule": "Claim once immediately before scoring; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires both versions and authorizes no tuning of any parameter, fill rule, cost or acceptance rule.",
+  "holdout_policy": "2026-09-09 to 2026-12-08 is not read during development. It is reserved as the single final check if the long-only version passes: about 60 sessions, scored once with these rules unchanged, as a consistency check that cannot establish significance. If it agrees, at least eight weeks on the paper account follow before any further decision.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "A simulation of stop orders on one-minute bars with fixed pessimistic rules and fixed costs. It is not a record of fills. Order-book depth, queue position, the bot's own effect on price, trading halts shorter than the stale rule, and whether shares could be borrowed are not modelled.",
+  "limitations": [
+    "One author group with a commercial interest in day-trading tools and education; no independent replication with realistic fills is known to us.",
+    "The published sample is eight years, 2016 to 2023, which contains the 2020-2021 retail-trading boom. Two more years are added here.",
+    "The published result assumes every stop order fills exactly at its price with no spread, and a stop only 10 percent of a day's range from entry. The result is therefore very sensitive to fills: at the base cost a round trip takes about a quarter of the planned loss from every trade. A fail under these rules is a realistic outcome and would mean the edge does not survive plausible trading costs, not that the paper's arithmetic was wrong.",
+    "One-minute bars cannot show what happened inside a minute. The rules here resolve every doubt against the strategy, which may understate a real result as well as overstate one.",
+    "The stock list comes from the broker's asset list, which omits many delisted companies; see survivorship. The paper's list included them.",
+    "The common-stock proxy uses today's names and exchanges. Shortable flags are today's.",
+    "Results are per dollar of equity with fractional shares. On a small account, minimum commissions and whole shares would cost more; on a large one, the bot's own orders would move these stocks.",
+    "The 4x intraday leverage in the sizing rule needs a margin account with pattern-day-trader status (at least $25,000).",
+    "Earlier research viewed SPY for 2016-2025 and three of these stocks for 2024-2025; the window is not untouched."
+  ],
+  "runner": "ai_trading/tools/opening_range_trial.py"
+}
