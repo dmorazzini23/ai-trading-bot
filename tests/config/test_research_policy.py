@@ -33,6 +33,17 @@ def test_checked_in_policy_keeps_pause_through_holdout():
     assert policy.training_block_reason(holdout) == "research_reset_active"
 
 
+def test_checked_in_policy_blocks_training_after_early_review():
+    """The November 14 review allowed new work but not scheduled training."""
+    raw = json.loads(policy.POLICY_PATH.read_text())
+    assert raw["enabled"] is True
+    assert "scheduled_training" in raw["paused_work"]
+    assert "scheduled_training" not in raw["allowed_work"]
+    assert (policy.POLICY_PATH.parents[1] / raw["review_record"]).is_file()
+    for now in (datetime(2026, 11, 14, tzinfo=UTC), datetime(2027, 6, 1, tzinfo=UTC)):
+        assert policy.training_block_reason(now) == "research_reset_active"
+
+
 def test_after_hours_reset_precedes_data_and_env(monkeypatch):
     from ai_trading.training import after_hours
 

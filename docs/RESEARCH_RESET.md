@@ -18,6 +18,15 @@ the holdout; the next explicit review is December 9, 2026. Its decision rules
 were fixed in advance on October 25 in the
 [December 9 review plan](RESEARCH_RESET_REVIEW_20261209_PLAN.md).
 
+**Current state (November 14, 2026).** The owner held the review early. The
+[November 14 review](RESEARCH_RESET_REVIEW_20261114.md) ended the pause on new
+work: portfolio manager mode may be built, and new strategy research may run
+under pre-registered contracts. The policy file stays `enabled: true`, so
+scheduled training stays blocked and research automation keeps running only
+the three reset steps described above. The holdout stays unscored and
+reserved, and consumed budgets stay consumed. Where that review and the
+paragraphs below differ on what work is paused, the review governs.
+
 Discretionary features, new models, and unregistered parameter searches are paused.
 Correctness fixes and work that resolves a named evidence blocker remain in scope.
 The September 30 [five-item follow-through](TRADING_IMPROVEMENTS_20260930.md)

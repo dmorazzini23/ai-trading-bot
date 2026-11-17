@@ -2,15 +2,15 @@
   "enabled": true,
   "start_date": "2026-09-08",
   "review_date": "2026-12-09",
-  "last_review_date": "2026-10-14",
-  "last_review_decision": "continue_pause_evidence_gaps_only",
-  "review_record": "docs/RESEARCH_RESET_REVIEW_20261014.md",
+  "last_review_date": "2026-11-14",
+  "last_review_decision": "pause_on_new_work_ended_training_blocked_holdout_reserved",
+  "review_record": "docs/RESEARCH_RESET_REVIEW_20261114.md",
   "resume_policy": "explicit_review_required",
   "holdout_start": "2026-09-09",
   "holdout_end": "2026-12-08",
-  "allowed_work": ["evidence_reconciliation", "correctness_fixes", "weekly_scorecard", "registered_development_trial"],
-  "paused_work": ["unregistered_search", "scheduled_training", "new_models", "discretionary_features"],
-  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025"],
+  "allowed_work": ["evidence_reconciliation", "correctness_fixes", "weekly_scorecard", "registered_development_trial", "portfolio_manager_mode_build", "registered_strategy_research"],
+  "paused_work": ["unregistered_search", "scheduled_training", "day_sleeve_retraining", "holdout_evaluation"],
+  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025", "swing_reversal_trial_20261115", "intraday_momentum_trial_20261115"],
   "amendments": [
     {
       "date": "2026-10-18",
@@ -35,6 +35,22 @@
       "contract": "config/volatility_target_core_trial_campaign.json",
       "ledger": "artifacts/volatility_target_core_trial_20261025/campaign_state.json",
       "scope": "one registered development trial of a volatility-targeted SPY/BIL core on 2016-2025 daily data; pause, holdout, gates and review date unchanged"
+    },
+    {
+      "date": "2026-11-15",
+      "record": "docs/RESEARCH_RESET_AMENDMENT_20261115_SWING_REVERSAL.md",
+      "campaign_id": "swing_reversal_trial_20261115",
+      "contract": "config/swing_reversal_trial_campaign.json",
+      "ledger": "artifacts/swing_reversal_trial_20261115/campaign_state.json",
+      "scope": "one registered development trial of a sector-relative 5-session reversal among the 300 most liquid US stocks on 2016-2025 daily data, long-only primary and long-short secondary; training block, holdout and real-money gate unchanged"
+    },
+    {
+      "date": "2026-11-15",
+      "record": "docs/RESEARCH_RESET_AMENDMENT_20261115_INTRADAY_MOMENTUM.md",
+      "campaign_id": "intraday_momentum_trial_20261115",
+      "contract": "config/intraday_momentum_trial_campaign.json",
+      "ledger": "artifacts/intraday_momentum_trial_20261115/campaign_state.json",
+      "scope": "one registered development trial of SPY end-of-day intraday momentum on 2016-2025 half-hour bars, long-only primary and long-short secondary; training block, holdout and real-money gate unchanged"
     }
   ],
   "promotion_authority": false

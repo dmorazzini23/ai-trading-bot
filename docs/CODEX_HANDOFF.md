@@ -25,6 +25,47 @@ Branch `claude/legacy-path-phase1` (on top of `claude/unreachable-module-cleanup
 - **Next:** phase 2 (delete the legacy cycle) needs the owner's go-ahead and
   an offline replay before and after.
 
+## November 15: two registered strategy trials run once each; both retired
+
+Branch `claude/research-candidates`. Each trial was registered with the
+owner's approval of plain-language rules, reviewed independently before its
+single fit, and claimed once. Holdout unread; no orders; service untouched.
+- `swing_reversal_trial_20261115`: retired. Long-only +12.0 bps per period
+  over matched SPY at 5 bps, bootstrap lower bound -6.8, ahead in 5 of 10
+  years. Record: `docs/RESEARCH_RESET_AMENDMENT_20261115_SWING_REVERSAL.md`.
+- `intraday_momentum_trial_20261115` (SPY last half hour): retired. Long-only
+  -1.55 bps per eligible day at 1 bp per side, negative before costs,
+  positive in 1 of 10 years. Record:
+  `docs/RESEARCH_RESET_AMENDMENT_20261115_INTRADAY_MOMENTUM.md`.
+- Six strategies tested since the reset; none has a confident after-cost edge.
+
+## November 14: research reset reviewed early; pause on new work ended
+
+Governance record only, on branch `claude/reset-early-review` (not merged, not
+deployed). No runtime code changed.
+- **Decision:** [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). The
+  owner held the December 9 review early. Allowed now: portfolio manager mode
+  build per `docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md` (offline, then
+  paper), and new strategy research under one pre-registered contract per
+  hypothesis. It supersedes branch rules B and C of the December 9 plan.
+- **Unchanged:** holdout September 9–December 8 unscored and reserved;
+  consumed budgets; real-money gate; scheduled training blocked; the
+  day-sleeve model is to be retired from runtime in a separate change, not
+  retrained.
+- **Do not set `enabled: false`** in `config/research_reset.json`. That flag
+  is the only thing `training_block_reason()` checks; turning it off would
+  restart after-hours training on the live service and return research
+  automation to its full daily/weekly/monthly step lists.
+- **Changed:** `config/research_reset.json` (`last_review_*`, `review_record`,
+  `allowed_work`, `paused_work`; no code reads those fields), `AGENTS.md`
+  section 8, `docs/RESEARCH_RESET.md`, the December 9 plan (amendment), this
+  file, and one test pinning the checked-in policy.
+- **Release identity:** `resolved_config_hash` is not affected; it hashes the
+  sanitized `TradingConfig` snapshot only. A deploy still needs the new commit
+  SHA in the release spec, as for any commit.
+- **Next:** merge when the owner agrees. No restart is needed for the policy
+  file: readers load it on each call.
+
 ## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`)
 
 Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,
