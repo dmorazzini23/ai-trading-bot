@@ -1,6 +1,50 @@
 # Current handoff
 
-## November 16: legacy-path removal phase 1 deployed (`98f7b9d3b`) (start here)
+## November 17: legacy-path removal phase 2 built, not deployed (`4e9d951a1`) (start here)
+
+Branch `claude/legacy-path-phase2` from main `783ec7d6f`. Not pushed, not
+merged, not deployed; the running service is still `98f7b9d3b`.
+- **Change:** `execute_run_all_trades_cycle` always runs the netting pipeline
+  and no longer reads `netting_enabled`; the 509-line legacy tail is gone.
+  Deleted with it: `core/strategy_cycle.py`, `core/prepare_run_runtime.py`,
+  `core/position_risk_runtime.py`, `data/dynamic_universe.py`,
+  `data/alpaca_screener.py`, and the legacy-only helpers in `bot_engine`
+  (screening, legacy pricing, intent de-duplication, `_prepare_run`,
+  `_process_symbols`, `run_multi_strategy`, `get_strategies`), `data/fetch`,
+  `signals`, `utils/base`, `rl_trading/features`, `market/calendars`.
+  Source: 17 files, 6,482 lines removed; tests: 56 files, 4,679 lines removed
+  (25 test files deleted, 136 fewer collected tests in the changed files).
+- **`run_trade()`** (`ai_trading/__main__.py`) now applies
+  `_require_netting_pipeline` before its first cycle. It has a non-test
+  caller, `scripts/runtime_artifacts_reset.sh`, so it was kept.
+- **`STRATEGIES`** is no longer read and no strategy classes are loaded;
+  `.env.example` and `docs/OPERATIONS.md` say so. Fifteen `.env.example` keys
+  whose only reader was deleted were removed (screener, prepare/warm-up
+  symbol limits, data-retry flatten, RL feature window, governor symbol cap).
+- **Decision parity:** harness in `/home/aiuser/ai-trading-baselines/phase2_baseline`.
+  `pre_phase2_783ec7d6f` and `post_phase2_4e9d951a1` both give
+  `COMBINED_DECISIONS 5bd1a138...dbdf0b192` and `COMBINED_FULL 2ecc5ccd...32e877bb`,
+  identical to `baseline_98f7b9d3b_run1` (372 cycles, 1,884 decision records,
+  413 stub orders). The harness drives `_run_netting_cycle`; the cycle wrapper
+  is covered by `tests/test_run_all_trades_execution.py`, including a new test
+  that the cycle runs netting when the config says `netting_enabled=False`.
+- **Validation (market open, so no full suite):** 1,161 targeted tests in 180
+  files passed with the editable finder stripped; `ruff`, `mypy` on changed
+  files, `scripts/typecheck_strict.sh`, `vulture --min-confidence 80`,
+  `py_compile`, import of all 454 `ai_trading` modules from the worktree, and
+  `scripts/agent_validate_changed.sh --market-hours` passed. No `CONFIG_SPECS`
+  change; the resolved config hash is the same on both commits.
+- **Kept, now without a runtime caller:** `ai_trading/position/` (2,589 lines,
+  its only importer was a deleted legacy helper), `bot_engine.trade_logic`
+  (bridge to the phase 3 chain), the allocator wiring, `guards.begin_cycle`,
+  and the methods only the legacy cycle called (`DrawdownCircuitBreaker.update_equity`
+  among them: the netting path never scored the drawdown breaker).
+- **Not covered:** full `pytest` (run after the close); no service restart.
+- **Next:** owner review and the full suite, then a deploy decision; decide
+  on `ai_trading/position/`; phase 3 (`trade_cycle`, `services/execution`);
+  phase 4 (the `netting_enabled` ConfigSpec, which changes the config hash).
+
+## November 16: legacy-path removal phase 1 deployed (`98f7b9d3b`)
 
 Branch `claude/legacy-path-phase1` (on top of `claude/unreachable-module-cleanup`).
 - **Change:** `_fail_fast_env()` in `ai_trading/main.py` exits with
