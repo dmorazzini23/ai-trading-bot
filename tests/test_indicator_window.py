@@ -24,11 +24,6 @@ sys.modules.setdefault("flask", flask_stub)
 from ai_trading.core import bot_engine as be
 
 
-def test_macd_insufficient_history_defers():
-    df = pd.DataFrame({"close": range(10)})
-    be._add_macd(df, "TST", None)
-    assert df["macd"].isna().all()
-    assert df["macds"].isna().all()
 
 
 def test_signal_manager_skips_nan_indicators():

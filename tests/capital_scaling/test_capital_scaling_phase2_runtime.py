@@ -63,14 +63,3 @@ def test_update_if_present_handles_result_current_scale_and_failure_paths() -> N
     assert capital_scaling.capital_scale(runtime) == 1.0
 
 
-def test_standalone_scaling_helpers_cover_risk_guards() -> None:
-    assert capital_scaling.volatility_parity_position(0.0, 2.0) == 0.01
-    assert capital_scaling.volatility_parity_position(1_000.0, 20.0) == 50.0
-    assert capital_scaling.dynamic_fractional_kelly(0.1, drawdown=0.2, volatility_spike=True) == pytest.approx(0.035)
-    assert capital_scaling.drawdown_adjusted_kelly(50_000.0, 100_000.0, 0.2) == pytest.approx(0.1)
-    assert capital_scaling.drawdown_adjusted_kelly(50_000.0, 0.0, 0.2) == 0.2
-    assert capital_scaling.kelly_fraction(0.6, 2.0) == pytest.approx(0.2)
-    assert capital_scaling.kelly_fraction(0.4, 1.0) == 0.0
-    assert capital_scaling.pyramiding_add(100.0, profit_atr=1.5, base_size=100.0) == 125.0
-    assert capital_scaling.pyramiding_add(200.0, profit_atr=1.5, base_size=100.0) == 200.0
-    assert capital_scaling.pyramiding_add(100.0, profit_atr=0.5, base_size=100.0) == 100.0

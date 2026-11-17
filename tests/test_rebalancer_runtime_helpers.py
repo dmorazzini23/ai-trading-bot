@@ -26,29 +26,8 @@ def _tax_rebalancer(portfolio_settings) -> rebalancer.TaxAwareRebalancer:
     return rebalancer.TaxAwareRebalancer(tax_rate_short=0.37, tax_rate_long=0.20)
 
 
-def test_apply_no_trade_bands_uses_symbol_overrides_and_invalid_fallback() -> None:
-    current = {"AAPL": 0.10, "MSFT": 0.20, "GOOG": 0.30}
-    target = {"AAPL": 0.1001, "MSFT": 0.2020, "GOOG": 0.3050}
-
-    adjusted = rebalancer.apply_no_trade_bands(
-        current,
-        target,
-        band_bps=cast(dict[str, float], {"AAPL": 25.0, "MSFT": cast(Any, "bad")}),
-    )
-
-    assert adjusted["AAPL"] == 0.10
-    assert adjusted["MSFT"] == 0.20
-    assert adjusted["GOOG"] == 0.3050
 
 
-def test_init_rebalancer_caches_instance(monkeypatch, portfolio_settings) -> None:
-    portfolio_settings.ENABLE_PORTFOLIO_FEATURES = False
-    monkeypatch.setattr(rebalancer, "_rebalancer", None)
-
-    first = rebalancer.init_rebalancer()
-    second = rebalancer.init_rebalancer()
-
-    assert first is second
 
 
 def test_lazy_optimizer_and_regime_detector_properties(monkeypatch, portfolio_settings) -> None:
@@ -315,141 +294,20 @@ def test_rebalance_portfolio_attaches_tax_aware_plan(monkeypatch, portfolio_sett
     assert ctx.rebalance_plan is expected_plan
 
 
-def test_enhanced_maybe_rebalance_falls_back_on_analysis_error(monkeypatch, portfolio_settings) -> None:
-    rebalancer._last_rebalance = datetime.now(UTC) - timedelta(minutes=10)
-    monkeypatch.setattr(rebalancer, "rebalance_interval_min", lambda: 1)
-    monkeypatch.setattr(
-        rebalancer,
-        "compute_portfolio_weights",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad weights")),
-    )
-    calls: list[object] = []
-    monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda ctx: calls.append(ctx))
-    ctx = SimpleNamespace(portfolio_weights={"AAPL": 0.5})
-
-    rebalancer.enhanced_maybe_rebalance(ctx)
-
-    assert calls == [ctx]
 
 
-def test_portfolio_first_rebalance_requires_initialized_rebalancer(monkeypatch) -> None:
-    monkeypatch.setattr(rebalancer, "_rebalancer", None)
-
-    with pytest.raises(RuntimeError, match="init_rebalancer"):
-        rebalancer.portfolio_first_rebalance(SimpleNamespace())
 
 
-def test_portfolio_first_rebalance_uses_fallback_when_disabled(
-    monkeypatch,
-    portfolio_settings,
-) -> None:
-    portfolio_settings.ENABLE_PORTFOLIO_FEATURES = False
-    monkeypatch.setattr(rebalancer, "_rebalancer", object())
-    calls: list[object] = []
-    monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda ctx: calls.append(ctx))
-    ctx = SimpleNamespace()
-
-    rebalancer.portfolio_first_rebalance(ctx)
-
-    assert calls == [ctx]
 
 
-def test_portfolio_first_rebalance_fails_closed_without_target_evidence(
-    monkeypatch,
-    portfolio_settings,
-) -> None:
-    portfolio_settings.ENABLE_PORTFOLIO_FEATURES = True
-    monkeypatch.setattr(rebalancer, "_rebalancer", object())
-    calls: list[object] = []
-    monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda ctx: calls.append(ctx))
-    ctx = SimpleNamespace(portfolio_positions={"AAPL": 2}, current_prices={"AAPL": 100.0})
-
-    rebalancer.portfolio_first_rebalance(ctx)
-
-    assert calls == []
-    assert ctx.rebalance_plan == {"error": "missing_rebalance_evidence", "rebalance_trades": []}
 
 
-def test_check_portfolio_first_rebalancing_reasons(monkeypatch) -> None:
-    assert rebalancer._check_portfolio_first_rebalancing(SimpleNamespace(), 0.20, 0.10)[0] is True  # noqa: SLF001
-    assert rebalancer._check_portfolio_first_rebalancing(SimpleNamespace(), 0.01, 0.10) == (  # noqa: SLF001
-        True,
-        "No previous rebalancing recorded",
-    )
-
-    old_ctx = SimpleNamespace(last_portfolio_rebalance=datetime.now(UTC) - timedelta(days=95))
-    due, reason = rebalancer._check_portfolio_first_rebalancing(old_ctx, 0.01, 0.10)  # noqa: SLF001
-    assert due is True
-    assert "Quarterly rebalance due" in reason
 
 
-def test_check_portfolio_first_rebalancing_uses_regime_signals(monkeypatch) -> None:
-    class _Detector:
-        def detect_current_regime(self, _market_data):
-            return SimpleNamespace(value="normal"), SimpleNamespace(
-                volatility_regime=SimpleNamespace(value="extremely_high"),
-                regime_confidence=0.95,
-            )
-
-    monkeypatch.setattr(
-        rebalancer,
-        "_rebalancer",
-        SimpleNamespace(regime_detector=_Detector()),
-    )
-    monkeypatch.setattr(rebalancer, "_prepare_rebalancing_market_data", lambda _ctx: {"prices": {"SPY": 1}})
-    ctx = SimpleNamespace(last_portfolio_rebalance=datetime.now(UTC) - timedelta(days=10))
-
-    assert rebalancer._check_portfolio_first_rebalancing(ctx, 0.01, 0.10) == (  # noqa: SLF001
-        True,
-        "Extreme volatility regime: extremely_high",
-    )
 
 
-def test_rebalancing_position_and_target_helpers() -> None:
-    ctx = SimpleNamespace(
-        portfolio_positions={
-            "AAPL": "2",
-            "SHORT": {"qty": "-3"},
-            "OBJECT": SimpleNamespace(quantity=4),
-            "ZERO": "0",
-            "BAD": "nan",
-            "TINY": "0.0001",
-        }
-    )
-
-    assert rebalancer._get_current_positions_for_rebalancing(ctx) == {  # noqa: SLF001
-        "AAPL": 2.0,
-        "SHORT": -3.0,
-        "OBJECT": 4.0,
-    }
-    assert rebalancer._get_target_weights_for_rebalancing(ctx) == {}  # noqa: SLF001
-    assert rebalancer._get_target_weights_for_rebalancing(  # noqa: SLF001
-        SimpleNamespace(target_weights={"AAPL": "0.25", 7: 0.75})
-    ) == {"AAPL": 0.25, "7": 0.75}
-    assert rebalancer._get_target_weights_for_rebalancing(  # noqa: SLF001
-        SimpleNamespace(target_weights=["bad"])
-    ) == {}
 
 
-def test_prepare_rebalancing_market_data_collects_prices_returns_and_volumes() -> None:
-    class _Fetcher:
-        def get_daily_df(self, _ctx, symbol):
-            if symbol == "BAD":
-                raise OSError("provider down")
-            return pd.DataFrame({"close": [100.0, 105.0, 110.0], "volume": [10, 20, 30]})
-
-    ctx = SimpleNamespace(
-        current_positions={"AAPL": 2, "BAD": 1},
-        data_fetcher=_Fetcher(),
-    )
-
-    data = rebalancer._prepare_rebalancing_market_data(ctx)  # noqa: SLF001
-
-    assert data["prices"]["AAPL"] == 110.0
-    assert data["returns"]["AAPL"] == pytest.approx([0.05, 0.047619047619047616])
-    assert data["volumes"]["AAPL"] == pytest.approx(20.0)
-    assert "BAD" not in data["prices"]
-    assert "SPY" in data["prices"]
 
 
 def test_maybe_rebalance_uses_drift_threshold(monkeypatch, portfolio_settings) -> None:

@@ -1,6 +1,176 @@
 # Current handoff
 
-## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed, deployed (`9242f77e9`) (start here)
+## November 16: legacy-path removal phase 1 deployed (`98f7b9d3b`) (start here)
+
+Branch `claude/legacy-path-phase1` (on top of `claude/unreachable-module-cleanup`).
+- **Change:** `_fail_fast_env()` in `ai_trading/main.py` exits with
+  `NETTING_DISABLED_UNSUPPORTED` when `netting_enabled` is false outside test
+  mode; `_netting_pipeline_enabled()` and the root `conftest.py` no longer
+  route tests to the legacy path by default. Seven legacy-path tests opt in
+  with `AI_TRADING_NETTING_ENABLED=0`. No `CONFIG_SPECS` change; no legacy
+  code deleted.
+- **Monday session check of `fb2df3aee` (14:25-15:17 UTC):** normal; no new
+  errors against Nov 12.
+- **Validation:** full `pytest` 6,626 passed, 2 skipped, 1 failed
+  (`tests/test_idempotency_cache_fallback.py::test_order_idempotency_cache_fallback`,
+  the known frozen-clock failure, identical on `fb2df3aee`).
+  `scripts/agent_validate_changed.sh --market-hours` passed.
+- **Deployed** Mon 21:27 UTC (closed, flat), owner-approved. `release_identity`
+  passed both phases with the unchanged config hash. Spec backup
+  `runtime/release_spec.fb2df3aee.bak.json`. First start: `IMPORT_PREFLIGHT_OK`,
+  `ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, NRestarts=0.
+- **Rollback:** checkout `fb2df3aee`, restore that backup, restart.
+- **Not covered:** `ai_trading/__main__.py::run_trade()` does not call the
+  startup check (no non-test caller); handle in phase 2.
+- **Next:** phase 2 (delete the legacy cycle) needs the owner's go-ahead and
+  an offline replay before and after.
+
+## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`)
+
+Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,
+about 29,700 lines removed (14,700 in `ai_trading/`); no `CONFIG_SPECS` or
+trading-decision change.
+- **Method:** name-based call graph over `ai_trading`, `scripts`, `tools`,
+  `plugins`. A top-level definition was removed only if no non-test code
+  mentions its name anywhere (identifier, attribute or string). Largest cuts:
+  `core/bot_engine.py` (~3,450 lines, including standalone
+  `safe_submit_order`), `signals/__init__.py`, `data/fallback/concurrency.py`,
+  `portfolio/sizing.py`, `core/interfaces.py`.
+- **Modules removed (left empty or orphaned):** `audit`, `trade_logic`,
+  `health_monitor`, `execution/algorithms`, `utils/capital_scaling`,
+  `utils/ohlcv`, `data/fetch/empty_handling`, `core/order_ids`.
+- **Kept on purpose:** module `__getattr__`/`__dir__` hooks, 29 test-reset
+  helpers (`reset_*`, `clear_*`, `*_for_tests`), everything under
+  `ai_trading/tools/`, `strategies/`, `research/`, `health.py`,
+  `runtime/equity_risk.py`. About 135 imports left unused by the deletion
+  remain because other modules or tests may reach them as attributes.
+- **Tests:** 65 test files deleted, 134 trimmed (6,623 tests remain).
+- **Validation:** full `pytest` 6,619 passed, 2 skipped, 4 failed; three of
+  the failures tested deleted entry points and were removed afterwards (their
+  files re-run green). The fourth,
+  `tests/test_idempotency_cache_fallback.py::test_order_idempotency_cache_fallback`,
+  is order-dependent (frozen clock) and fails identically on `6a81aedb5` when
+  run alone. `ruff check`, `mypy`, `scripts/typecheck_strict.sh`, import of
+  every module, lazy-export resolution and startup imports pass with the
+  editable finder stripped. `release_identity` (both modes) passes for
+  `fb2df3aee` with the unchanged config hash.
+  `scripts/agent_validate_changed.sh` stops at its broad-exception scan on a
+  pre-existing `except BaseException` in `ai_trading/http/pooling.py:710`.
+- **Deploy:** live checkout detached at `fb2df3aee`, restarted 03:43:46 UTC
+  Sat Nov 14 (market closed). `IMPORT_PREFLIGHT_OK`, `ExecutionEngine
+  initialized`, 3 `BROKER_SYNC`, 0 errors or warnings, `NRestarts=0`;
+  `/healthz` 503 with only `required_model_stale` and
+  `replay_live_parity_gate_failed` (unchanged). No market-hours session has
+  run on this or the two November 12 commits yet.
+- **Next:** watch Monday's session, then the legacy (non-netting) path removal, phase 1 first. The
+  phase 0 lists are in `artifacts/phase0_legacy_path/` (gitignored).
+- **Rollback:** checkout `6a81aedb5`, restore
+  `/var/lib/ai-trading-bot/runtime/release_spec.6a81aedb5.bak.json`, restart.
+
+## November 12: second unreachable-module batch removed; deployed (`6a81aedb5`)
+
+Follow-on to `192123ebc`, same branch `claude/unreachable-module-cleanup`.
+124 files, about 12,100 lines removed; no trading decision or `CONFIG_SPECS`
+change.
+- **Package modules (53 files):** `training/{train_ml,stacking}`,
+  `evaluation/`, `strategies/{backtest,signals,imports}`,
+  `execution/{microstructure,slippage}`, `features/pipeline`, `data/labels`,
+  `data/yfinance`, `data/fetch/{backoff,http,heartbeat}`,
+  `rl_trading/inference`, `rl/`, `core/{context,run_all_trades,
+  config_autofix}`, `runner`, `talib/`, `price_snapshot/`, `regime/`, `ml/`,
+  `prediction/`, `meta/`, `startup/`, `plotting/`, `shadow_mode/`,
+  `institutional/`, `sentiment/`, `metrics/registry`, `models/registry`,
+  `utils/{benchmark,safe_pickle}`, `portfolio/correlation`,
+  `analytics/peak_equity`, `runtime/{params,max_position_size}`,
+  `risk/parameters`. `ai_trading.runtime` no longer lazily exports
+  `build_runtime`/`get_max_position_size` (the used one is
+  `ai_trading.core.runtime.build_runtime`).
+- **Docs:** `docs/ALPHA_UPGRADE.md`, `docs/TECHNICAL_ANALYSIS.md` and
+  `docs/slippage.md` described only deleted code and are gone.
+- **Tests:** 41 test files deleted, 18 trimmed.
+- **Kept on purpose:** `ai_trading.simple_models` (the live env sets
+  `AI_TRADING_ML_SHADOW_MODEL_MODULE=ai_trading.simple_models`; module names
+  in env vars are invisible to import tracing, so check the live process
+  environment before deleting), `replay/replay_engine` (in
+  `ci/scripts/institutional_gates.sh` and acceptance matrix AC-13),
+  `ai_trading/health.py` (its tests cover the canonical health app),
+  `research/focused_cycle`, `runtime/equity_risk`, `scripts/self_check`.
+- **Validation:** full `pytest` 7209 passed, 2 skipped; `ruff check`, `mypy`,
+  `typecheck_strict.sh` clean; every module imports and every `__all__`/lazy
+  export resolves, with the editable-install fallback disabled.
+- **Open for owner:** netting is on live (`AI_TRADING_NETTING_ENABLED=1`) and
+  non-netting live execution is blocked, so `ai_trading/strategies/*`
+  (about 4,000 lines), the two allocators and the legacy branch in
+  `bot_engine.py` cannot run live. Removing them touches the trading path and
+  the registered-trial tooling; not started.
+- **Deployed** Thu 05:30 UTC (closed, flat), owner-approved. Identity
+  pre-check from the new commit passed both phases. Spec backup
+  `runtime/release_spec.192123ebc.bak.json` (SHA only). First start
+  succeeded: `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` x3 (0
+  positions, 0 open orders), 0 errors, 0 warnings, NRestarts=0 after four
+  minutes. `/healthz` 503 with only the two preserved flags. Rollback:
+  checkout `192123ebc`, restore that spec, restart.
+- Not yet observed: a market-hours session on either cleanup commit.
+
+## November 12: unreachable modules, archival scripts and dead root files removed; deployed (`192123ebc`)
+
+Owner-requested audit ("delete over simplify"). Branch
+`claude/unreachable-module-cleanup` (worktree
+`.claude/worktrees/unreachable-module-cleanup`), on top of `9242f77e9`. 191
+files, about 25,500 lines removed; no trading decision changes and no
+`CONFIG_SPECS` change (config hash unaffected).
+- **Method:** import reachability from real entry points (`ai_trading.main`,
+  `__main__`, `app`, every `ai_trading.tools.*` CLI, systemd units, referenced
+  scripts, string/dynamic imports). Only modules reachable from tests alone
+  were deleted.
+- **Package modules (46 files):** the unwired "production system" cluster
+  (`production_system`, `production/`, `execution/production_engine`,
+  `monitoring/alerting`, `monitoring/performance_dashboard`,
+  `monitoring/dashboard`, `strategies/multi_timeframe`,
+  `strategies/regime_detection`, `risk/pre_trade_validation`,
+  `shutdown_handler`, `safety/`, `security`, `algorithm_optimizer`,
+  `core/parameter_validator`, `execution/simulator`), the retired
+  `database/` SQLAlchemy manager, `integrations/rate_limit`,
+  `data/{daily_cache,fallback_cache,retry_handler,rate_limiter}`,
+  `data/fetch/core`, `diagnostics/http_diag`, `monitoring/drift`,
+  `portfolio/{risk_controls,short_close}`, `utils/{determinism,performance,
+  pickle_safe,ids}`, `core/hyperparams_schema`, `config/scaling`,
+  `scheduler/`, `backtesting/`, `pipeline/basic`,
+  `meta_learning/conversion`, `execution/order_slicer`, `main_extended`,
+  `main_trade_log_path`.
+- **Scripts/tools/root:** 39 archival demo/validate scripts and
+  `scripts/legacy_guard.py` (with the tests that only quarantined them), 24
+  unreferenced one-shot `tools/` codemods, and root `deploy.sh` (ssh as root,
+  `git reset --hard`, wrong unit name, bypassed the release spec), `run.py`,
+  `run_checks`, `run_checks.sh`, `cleanup_pycache.sh`,
+  `cache_config_example.env`, `DEPLOYMENT.md`.
+- **Tests:** 44 test files deleted, 18 trimmed. `tests/public_api/
+  test_exports.py` asserts the production-system files stay gone.
+- **Validation:** full `pytest` 7400 passed, 4 skipped (26 min); `ruff check`,
+  `mypy`, `typecheck_strict.sh`, `py_compile` clean; every remaining
+  `ai_trading` module imports.
+- **Worktree trap:** the venv is an editable install of the live checkout, so
+  in a worktree a deleted module silently resolves from
+  `/home/aiuser/ai-trading-bot`. Validation here removed `_EditableFinder`
+  from `sys.meta_path` first.
+- **Left for owner decision (still unreachable, about 10,900 lines):**
+  `strategies/backtest` + `execution/microstructure`, `evaluation/walkforward`
+  + `training/{train_ml,stacking}`, `replay/replay_engine`, `rl/module` +
+  `rl_trading/inference`, `features/pipeline`, `strategies/signals`,
+  `data/labels`, `data/fetch/backoff`, `research/focused_cycle`,
+  `runtime/equity_risk`, `runner`, `simple_models`.
+- **Deployed** Thu 04:48 UTC (closed, flat), owner-approved. Pre-check: the
+  service's `release_identity` run from the new commit with the live env
+  against a scratch spec passed both phases (config hash unchanged). Spec
+  backup `runtime/release_spec.9242f77e9.bak.json` (SHA only). First start
+  succeeded: identity `pass`, `IMPORT_PREFLIGHT_OK`, engine init,
+  `BROKER_SYNC` x3 (0 positions, 0 open orders), 0 errors, NRestarts=0 after
+  four minutes. `/healthz` still 503 with only the preserved
+  `required_model_stale` and `replay_live_parity_gate_failed` flags.
+  Rollback: checkout `9242f77e9`, restore that spec, restart.
+- Not yet observed: a market-hours session on this commit.
+
+## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed, deployed (`9242f77e9`)
 
 Owner-approved cleanup of the two audit items left in place on `829b5f5e2`,
 following a read-only Fable 5.2 plan. Commits `21d41deb6` and `9242f77e9`,

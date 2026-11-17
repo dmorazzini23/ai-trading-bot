@@ -25,16 +25,6 @@ def test_daily_fallback_parallel(monkeypatch):
     # We can't assert true parallelism, but we can ensure all fallbacks executed.
     assert set(calls["single"]) == {"A","B","C","D"}
 
-def test_intraday_fallback_parallel(monkeypatch):
-    calls: dict[str, list[str]] = {"single": []}
-    monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
-    def fake_single(sym, *a, **k):
-        calls["single"].append(sym)
-        return _mk_df()
-    monkeypatch.setattr(be, "get_minute_df", fake_single)
-    out = be._fetch_intraday_bars_chunked(["X","Y","Z"], "2024-01-01 09:30", "2024-01-01 10:30", None)
-    assert set(out.keys()) == {"X","Y","Z"}
-    assert set(calls["single"]) == {"X","Y","Z"}
 
 def test_parallel_execution_timing(monkeypatch):
     """Test that parallel execution provides performance benefit."""
@@ -105,40 +95,3 @@ def test_bounded_concurrency_respects_limit(monkeypatch):
     assert max_concurrent <= 2, f"Max concurrent workers {max_concurrent} exceeded limit of 2"
 
 
-def test_intraday_bounded_concurrency_respects_limit(monkeypatch):
-    """Intraday fallback should honor worker limits and return all results."""
-
-    active_workers: list[int] = []
-    max_concurrent = 0
-
-    def mock_get_settings():
-        class Settings:
-            batch_fallback_workers = 2
-
-        return Settings()
-
-    monkeypatch.setattr(be, "get_settings", mock_get_settings)
-    monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
-
-    def track_concurrent(sym, *a, **k):
-        thread_id = threading.current_thread().ident
-        active_workers.append(thread_id)
-
-        nonlocal max_concurrent
-        current_count = len(set(active_workers))
-        max_concurrent = max(max_concurrent, current_count)
-
-        time.sleep(0.1)
-        return _mk_df()
-
-    monkeypatch.setattr(be, "get_minute_df", track_concurrent)
-
-    out = be._fetch_intraday_bars_chunked(
-        ["A", "B", "C", "D", "E", "F"],
-        "2024-01-01 09:30",
-        "2024-01-01 10:30",
-        None,
-    )
-
-    assert len(out) == 6
-    assert max_concurrent <= 2, f"Max concurrent workers {max_concurrent} exceeded limit of 2"

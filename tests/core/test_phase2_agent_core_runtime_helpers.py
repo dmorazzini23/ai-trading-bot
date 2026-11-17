@@ -230,35 +230,6 @@ def test_process_symbol_quarantine_zero_targets_flattens_without_blocking() -> N
     assert records[0]["net_target"].target_shares == 0
 
 
-def test_send_exit_order_skips_symbol_absent_from_position_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: None)
-    monkeypatch.setattr(bot_engine, "MarketOrderRequest", SimpleNamespace)
-    monkeypatch.setattr(bot_engine, "LimitOrderRequest", SimpleNamespace)
-    monkeypatch.setattr(bot_engine, "OrderSide", SimpleNamespace(SELL="sell"))
-    monkeypatch.setattr(bot_engine, "TimeInForce", SimpleNamespace(DAY="day"))
-    monkeypatch.setattr(
-        bot_engine,
-        "safe_submit_order",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not submit")),
-    )
-    ctx = SimpleNamespace(
-        api=SimpleNamespace(
-            get_position=lambda _symbol: (_ for _ in ()).throw(
-                AssertionError("snapshot should short-circuit lookup")
-            )
-        )
-    )
-
-    execution_flow.send_exit_order(
-        ctx,
-        "AAPL",
-        3,
-        0.0,
-        "manual_exit",
-        raw_positions=[SimpleNamespace(symbol="MSFT", qty="3")],
-    )
 
 
 def test_pov_submit_continues_after_none_submission_and_fills_next_slice(

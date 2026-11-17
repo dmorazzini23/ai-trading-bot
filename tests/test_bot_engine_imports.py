@@ -35,7 +35,6 @@ class TestBotEngineImports:
                             sys.modules[name] = module
                     for missing in (
                         "ai_trading.pipeline",
-                        "ai_trading.pipeline.basic",
                         "sklearn",
                         "sklearn.pipeline",
                         "sklearn.linear_model",

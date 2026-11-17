@@ -4,10 +4,6 @@ pd = pytest.importorskip("pandas")
 from ai_trading.core import bot_engine as bot
 
 
-def test_compute_time_range():
-    """compute_time_range should span the requested minutes."""
-    start, end = bot.compute_time_range(5)
-    assert (end - start).total_seconds() == 300
 
 
 def test_get_latest_close_edge_cases():

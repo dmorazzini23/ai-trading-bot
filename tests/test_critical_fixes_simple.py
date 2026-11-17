@@ -5,20 +5,8 @@ Tests the specific issues identified in production logs.
 """
 from datetime import UTC, datetime
 
-from ai_trading.utils.timefmt import isoformat_z
 
 
-def test_timestamp_format_includes_timezone():
-    """Test that timestamps include proper timezone information for RFC3339 compliance."""
-    test_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
-
-    # Use helper from ai_trading.utils.timefmt for proper RFC3339 formatting
-    result = isoformat_z(test_dt)
-
-
-    # The fix should include 'Z' suffix for RFC3339 compliance
-    assert result.endswith('Z'), f"Timestamp {result} should end with 'Z' for RFC3339 compliance"
-    assert 'T' in result, f"Timestamp {result} should contain 'T' separator"
 
 
 def test_position_sizing_minimum_viable():
@@ -123,28 +111,5 @@ def test_stale_data_bypass_startup():
     assert not trading_allowed, "Should block trading when stale data bypass is disabled"
 
 
-def test_rfc3339_timestamp_api_format():
-    """Test that the actual API timestamp format is RFC3339 compliant."""
-    start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
-    end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=UTC)
-
-    # Apply the fix from ai_trading.data.fetch using isoformat_z helper
-    start_param = isoformat_z(start_dt)
-    end_param = isoformat_z(end_dt)
 
 
-    # Verify RFC3339 compliance
-    assert start_param.endswith('Z'), "Start timestamp should end with 'Z'"
-    assert end_param.endswith('Z'), "End timestamp should end with 'Z'"
-    assert 'T' in start_param, "Should contain ISO datetime separator 'T'"
-    assert '+00:00' not in start_param, "Should not contain +00:00 offset"
-
-
-if __name__ == "__main__":
-
-    test_timestamp_format_includes_timezone()
-    test_position_sizing_minimum_viable()
-    test_meta_learning_price_conversion()
-    test_liquidity_minimum_position()
-    test_stale_data_bypass_startup()
-    test_rfc3339_timestamp_api_format()

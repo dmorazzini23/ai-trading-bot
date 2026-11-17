@@ -29,13 +29,6 @@ def test_execution_feed_explicit_overrides_legacy_data_feed(monkeypatch):
     assert feed_roles.get_execution_feed() == "sip"
 
 
-def test_price_quote_feed_cache_separates_execution_and_reference(monkeypatch):
-    price_quote_feed.clear()
-    monkeypatch.setattr(price_quote_feed, "resolve_alpaca_feed", lambda *_args, **_kwargs: "iex")
-    assert price_quote_feed.resolve("AAPL", "iex", role="execution") == "iex"
-    assert price_quote_feed.resolve("AAPL", "delayed_sip", role="reference") == "delayed_sip"
-    assert price_quote_feed.get_cached("AAPL", role="execution") == "iex"
-    assert price_quote_feed.get_cached("AAPL", role="reference") == "delayed_sip"
 
 
 def test_reference_bars_feed_prefers_sip_when_entitled(monkeypatch):

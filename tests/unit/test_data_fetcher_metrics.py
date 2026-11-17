@@ -7,7 +7,6 @@ from datetime import UTC
 import pytest
 
 import ai_trading.data.fetch as df
-from ai_trading.utils.timefmt import isoformat_z
 
 pd = pytest.importorskip("pandas")
 
@@ -31,10 +30,6 @@ def capmetrics(monkeypatch: pytest.MonkeyPatch):
     return bucket
 
 
-def _bars_payload(ts: dt.datetime) -> dict:
-    # Format timestamp with ai_trading.utils.timefmt helper
-    ts_s = isoformat_z(ts)
-    return {"bars": [{"t": ts_s, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]}
 
 
 class Resp:
@@ -59,46 +54,6 @@ def _force_window(monkeypatch):
     monkeypatch.setattr(df, "_window_has_trading_session", lambda *a, **k: True)
 
 
-def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
-    monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
-    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
-    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
-    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
-    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
-    start, end = _ts_window()
-    responses: dict[str, list[Resp]] = {
-        "iex": [Resp(429, {}), Resp(429, {})],
-        "sip": [Resp(200, _bars_payload(start))],
-    }
-
-    def fake_get(*args, **kwargs):
-        params = kwargs.get("params") or {}
-        feed = params.get("feed", "iex")
-        queue = responses.get(feed)
-        if not queue:
-            raise AssertionError(f"unexpected feed request: {feed}")
-        return queue.pop(0)
-
-    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
-    out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert not out.empty
-    names = [r.name for r in capmetrics]
-    assert names == [
-        "data.fetch.rate_limited",
-        "data.fetch.fallback_attempt",
-        "data.fetch.fallback_success",
-        "data.fetch.success",
-    ]
-    idx_attempt = names.index("data.fetch.fallback_attempt")
-    idx_fb_success = names.index("data.fetch.fallback_success")
-    idx_success = names.index("data.fetch.success")
-    assert idx_attempt < idx_fb_success < idx_success
-    assert capmetrics[0].tags["feed"] == "iex"
-    assert capmetrics[idx_attempt].tags["feed"] == "sip"
-    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
-    assert capmetrics[idx_success].tags["feed"] == "sip"
 
 
 def test_rate_limit_no_retry_when_sip_unauthorized(
@@ -124,49 +79,6 @@ def test_rate_limit_no_retry_when_sip_unauthorized(
     assert capmetrics[0].tags["feed"] == "iex"
 
 
-def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
-    monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
-    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
-    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
-    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
-    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
-    start, end = _ts_window()
-    events: dict[str, list[object]] = {
-        "iex": [df.Timeout("boom"), df.Timeout("boom")],
-        "sip": [Resp(200, _bars_payload(start))],
-    }
-
-    def fake_get(*args, **kwargs):
-        params = kwargs.get("params") or {}
-        feed = params.get("feed", "iex")
-        queue = events.get(feed)
-        if not queue:
-            raise AssertionError(f"unexpected feed request: {feed}")
-        ev = queue.pop(0)
-        if isinstance(ev, Exception):
-            raise ev
-        return ev
-
-    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
-    out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert not out.empty
-    names = [r.name for r in capmetrics]
-    assert names == [
-        "data.fetch.timeout",
-        "data.fetch.fallback_attempt",
-        "data.fetch.fallback_success",
-        "data.fetch.success",
-    ]
-    idx_attempt = names.index("data.fetch.fallback_attempt")
-    idx_fb_success = names.index("data.fetch.fallback_success")
-    idx_success = names.index("data.fetch.success")
-    assert idx_attempt < idx_fb_success < idx_success
-    assert capmetrics[0].tags["feed"] == "iex"
-    assert capmetrics[idx_attempt].tags["feed"] == "sip"
-    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
-    assert capmetrics[idx_success].tags["feed"] == "sip"
 
 
 def test_requests_exception_aliases_catch_real_requests_classes() -> None:
@@ -207,48 +119,6 @@ def test_unauthorized_sip_returns_empty(
     assert df._SIP_UNAUTHORIZED is True
 
 
-def test_empty_payload_fallback_success(
-    monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]
-):
-    monkeypatch.setenv("PYTEST_RUNNING", "1")
-    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
-    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
-    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
-    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
-    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
-    start, end = _ts_window()
-    responses: dict[str, list[Resp]] = {
-        "iex": [Resp(200, {"bars": []}), Resp(200, {"bars": []})],
-        "sip": [Resp(200, _bars_payload(start))],
-    }
-
-    def fake_get(*args, **kwargs):
-        params = kwargs.get("params") or {}
-        feed = params.get("feed", "iex")
-        queue = responses.get(feed)
-        if not queue:
-            raise AssertionError(f"unexpected feed request: {feed}")
-        return queue.pop(0)
-
-    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
-    out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert not out.empty
-    names = [r.name for r in capmetrics]
-    assert names == [
-        "data.fetch.empty",
-        "data.fetch.fallback_attempt",
-        "data.fetch.fallback_success",
-        "data.fetch.success",
-    ]
-    idx_attempt = names.index("data.fetch.fallback_attempt")
-    idx_fb_success = names.index("data.fetch.fallback_success")
-    idx_success = names.index("data.fetch.success")
-    assert idx_attempt < idx_fb_success < idx_success
-    assert capmetrics[0].tags["feed"] == "iex"
-    assert capmetrics[idx_attempt].tags["feed"] == "sip"
-    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
-    assert capmetrics[idx_success].tags["feed"] == "sip"
 
 
 def test_window_no_session_metrics(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):

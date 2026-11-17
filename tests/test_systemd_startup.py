@@ -389,53 +389,6 @@ print("✓ ALPACA schema with .env file works")
         finally:
             os.unlink(alpaca_env_path)
 
-    def test_utc_timestamp_no_double_z(self):
-        """Test that UTC timestamps don't have double Z suffix."""
-        test_script = '''
-from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc, ensure_utc_format
-from datetime import datetime, timezone
-
-# Test utc_now_iso
-timestamp = utc_now_iso()
-assert timestamp.endswith('Z')
-assert timestamp.count('Z') == 1
-print(f"✓ utc_now_iso: {timestamp}")
-
-# Test format_datetime_utc
-dt = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-formatted = format_datetime_utc(dt)
-assert formatted == "2024-01-01T12:00:00Z"
-assert formatted.count('Z') == 1
-print(f"✓ format_datetime_utc: {formatted}")
-
-# Test ensure_utc_format fixes double Z
-fixed = ensure_utc_format("2024-01-01T12:00:00ZZ")
-assert fixed == "2024-01-01T12:00:00Z"
-assert fixed.count('Z') == 1
-print(f"✓ ensure_utc_format: {fixed}")
-
-print("✓ All UTC timestamp functions work correctly")
-'''
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(test_script)
-            script_path = f.name
-
-        try:
-            result = subprocess.run(
-                [sys.executable, script_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=True,  # AI-AGENT-REF: Added timeout and check for security
-                env=_subprocess_env(),
-            )
-            if result.stderr:
-                pass
-            assert result.returncode == 0, f"UTC test failed: {result.stderr}"
-
-        finally:
-            os.unlink(script_path)
 
     def test_lazy_import_behavior(self):
         """Test that lazy imports work correctly."""

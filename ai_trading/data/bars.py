@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass
-import hashlib
 from datetime import UTC, date, datetime, timedelta
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
@@ -217,42 +216,6 @@ def _env_explicit_false(name: str) -> bool:
         return False
     return str(raw).strip().lower() in _FALSEY
 
-
-def _default_sip_entitled() -> bool:
-    explicit = _env_bool("ALPACA_SIP_ENTITLED")
-    if explicit is not None:
-        return explicit
-    legacy = _env_bool("ALPACA_HAS_SIP")
-    if legacy is not None:
-        return legacy
-    return False
-
-
-def get_alpaca_feed(prefer_sip: bool, *, sip_entitled: bool | None = None) -> str:
-    """Return the Alpaca feed name to use given SIP entitlement state."""
-
-    entitled = sip_entitled
-    if entitled is None:
-        entitled = _default_sip_entitled()
-    return "sip" if prefer_sip and entitled else "iex"
-
-def _format_fallback_payload(tf_str: str, feed_str: str, start_utc: datetime, end_utc: datetime) -> list[str]:
-    s = start_utc.astimezone(UTC).isoformat()
-    e = end_utc.astimezone(UTC).isoformat()
-    return [tf_str, feed_str, s, e]
-
-def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_utc: datetime) -> None:
-    try:
-        logger.debug(
-            'DATA_FALLBACK_WINDOW_DEBUG',
-            extra={
-                'et_day': day_et.isoformat(),
-                'rth_et': '09:30-16:00',
-                'rth_utc': f'{start_utc.astimezone(UTC).isoformat()}..{end_utc.astimezone(UTC).isoformat()}',
-            },
-        )
-    except (ValueError, TypeError):
-        pass
 
 # Fallback adapters removed: TimeFrame and StockBarsRequest now come from alpaca.data
 COMMON_EXC = (ValueError, KeyError, AttributeError, TypeError, RuntimeError, ImportError, OSError, ConnectionError, TimeoutError)
@@ -607,103 +570,6 @@ def _cache_entry_feeds(entry) -> set[str]:
     return set()
 
 
-def _resolve_account_identifier(account: Any) -> str:
-    for attr in ("id", "account_number", "account_id", "number"):
-        value = getattr(account, attr, None)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        if isinstance(value, (int, float)):
-            try:
-                return str(int(value))
-            except (TypeError, ValueError):
-                continue
-    return "default"
-
-
-def _resolve_client_token(client: Any) -> str | None:
-    for attr in ("api_key", "api_key_id", "key_id", "key"):
-        token = getattr(client, attr, None)
-        if isinstance(token, str) and token.strip():
-            return token.strip()
-    for env_key in ("ALPACA_API_KEY",):
-        try:
-            candidate = get_env(env_key)  # type: ignore[arg-type]
-        except RuntimeError:
-            continue
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    return None
-
-
-def _entitlement_cache_key(
-    account_id: str | None,
-    generation: float | None,
-    token: str | None,
-) -> tuple[str, str, str]:
-    normalized_id = account_id.strip() if isinstance(account_id, str) and account_id.strip() else "default"
-    normalized_generation = "0"
-    if isinstance(generation, (int, float)):
-        try:
-            normalized_generation = str(int(generation))
-        except (TypeError, ValueError):
-            normalized_generation = "0"
-    token_hash = "none"
-    if isinstance(token, str) and token:
-        digest = hashlib.sha256(token.encode("utf-8", "ignore"))
-        token_hash = digest.hexdigest()
-    return normalized_id, normalized_generation, token_hash
-
-
-def _coerce_generation(value: Any) -> float | None:
-    if isinstance(value, (int, float)):
-        try:
-            return float(value)
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            return None
-    if isinstance(value, datetime):
-        try:
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=UTC)
-            return float(value.astimezone(UTC).timestamp())
-        except (AttributeError, OSError, ValueError):  # pragma: no cover - defensive
-            return None
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        if text.endswith("Z"):
-            text = f"{text[:-1]}+00:00"
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:  # pragma: no cover - defensive
-            return None
-        try:
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC).timestamp()
-        except (AttributeError, OSError, ValueError):  # pragma: no cover - defensive
-            return None
-    return None
-
-
-def _extract_snapshot_generation(snapshot: Any, default: float) -> float:
-    for attr in (
-        "updated_at",
-        "generated_at",
-        "timestamp",
-        "last_updated",
-        "created_at",
-        "modified_at",
-    ):
-        value = getattr(snapshot, attr, None)
-        if value is None:
-            continue
-        coerced = _coerce_generation(value)
-        if coerced is not None:
-            return coerced
-    return default
-
-
 def _get_entitled_feeds(client: Any) -> set[str]:
     """
     Return the *set* of entitled feeds, while maintaining a legacy cache entry
@@ -1056,41 +922,6 @@ def safe_get_stock_bars(client: Any, request: Any, symbol: str, context: str='')
         df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
         return _coerce_http_bars(df)
 
-def _fetch_daily_bars(client, symbol, start, end, **kwargs):
-    symbol = _canon_symbol(symbol)
-    start = ensure_utc_datetime(start)
-    end = ensure_utc_datetime(end)
-    get_bars_fn = getattr(client, 'get_bars', None)
-    if not callable(get_bars_fn):
-        raise RuntimeError('Alpaca client missing get_bars()')
-    try:
-        return get_bars_fn(symbol, timeframe='1Day', start=start, end=end, **kwargs)
-    except (ValueError, TypeError) as e:
-        _log.exception('ALPACA_DAILY_FAILED', extra={'symbol': symbol, 'error': str(e)})
-        raise
-
-def _get_minute_bars(
-    symbol: str,
-    start_dt: datetime,
-    end_dt: datetime,
-    feed: str,
-    adjustment: str | None = None,
-) -> DataFrame:
-    symbol = _canon_symbol(symbol)
-    try:
-        df = get_bars(
-            symbol=symbol,
-            timeframe='1Min',
-            start=start_dt,
-            end=end_dt,
-            feed=feed,
-            adjustment=adjustment,
-        )
-    except (ValueError, TypeError):
-        df = None
-    if df is None or not hasattr(df, 'empty') or getattr(df, 'empty', True):
-        return empty_bars_dataframe()
-    return _normalize_bars_frame(df)
 
 def _resample_minutes_to_daily(df, tz='America/New_York'):
     """Resample minute bars to daily OHLCV over regular trading hours."""
@@ -1114,112 +945,6 @@ def _resample_minutes_to_daily(df, tz='America/New_York'):
     except (ValueError, TypeError) as e:
         _log.warning('RESAMPLE_DAILY_FAILED', extra={'error': str(e)})
         return df
-
-def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: str | None=None):
-    """Fetch daily bars; fallback to alternate feed then resampled minutes."""
-    symbol = _canon_symbol(symbol)
-    S = get_settings()
-    if feed is None:
-        feed = S.alpaca_data_feed
-    adjustment = S.alpaca_adjustment
-    start = ensure_utc_datetime(start)
-    end = ensure_utc_datetime(end)
-    df = _fetch_daily_bars(client, symbol, start, end, feed=feed, adjustment=adjustment)
-    if df is not None and (not df.empty):
-        return _normalize_bars_frame(df)
-    alt = 'iex' if feed == 'sip' else 'sip'
-    try:
-        df = _fetch_daily_bars(client, symbol, start, end, feed=alt, adjustment=adjustment)
-    except _BAR_FETCH_EXCEPTIONS as e:
-        status = _extract_status_code(e)
-        if status not in (401, 403):
-            raise
-        _log.warning(
-            'ALPACA_DAILY_ALT_FEED_UNAUTHORIZED',
-            extra={'symbol': symbol, 'feed': alt, 'error': str(e), 'status': status},
-        )
-        df = empty_bars_dataframe()
-    if df is not None and (not df.empty):
-        return _normalize_bars_frame(df)
-    try:
-        minutes_start = end - timedelta(days=5)
-        mdf = _get_minute_bars(symbol, minutes_start, end, feed=feed, adjustment=adjustment)
-        if mdf is not None and (not mdf.empty):
-            rdf = _resample_minutes_to_daily(mdf)
-            if rdf is not None and (not rdf.empty):
-                _log.info('DAILY_FALLBACK_RESAMPLED', extra={'symbol': symbol, 'rows': len(rdf)})
-                return _normalize_bars_frame(rdf)
-    except (ValueError, TypeError) as e:
-        _log.warning('DAILY_MINUTE_RESAMPLE_FAILED', extra={'symbol': symbol, 'error': str(e)})
-    raise ValueError('empty_bars')
-
-def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
-    """Compute NYSE session for the current or previous trading day."""
-    today_ny = now_utc.astimezone(ZoneInfo('America/New_York')).date()
-    try:
-        start_u, end_u = rth_session_utc(today_ny)
-    except RuntimeError:
-        end_u = now_utc
-        start_u = end_u - timedelta(minutes=20)
-        return (start_u, end_u)
-    if now_utc < start_u or now_utc > end_u:
-        try:
-            prev_day = previous_trading_session(today_ny)
-            start_u, end_u = rth_session_utc(prev_day)
-        except RuntimeError:
-            end_u = now_utc
-            start_u = end_u - timedelta(minutes=20)
-    return (start_u, end_u)
-
-def fetch_minute_fallback(client, symbol, now_utc: datetime) -> DataFrame:
-    symbol = _canon_symbol(symbol)
-    now_utc = ensure_utc_datetime(now_utc)
-    try:
-        start_u, end_u = _minute_fallback_window(now_utc)
-    except RuntimeError:
-        _log.debug("MINUTE_FALLBACK_NO_SESSION", extra={"symbol": symbol})
-        return empty_bars_dataframe()
-    day_et = start_u.astimezone(ZoneInfo('America/New_York')).date()
-    _log_fallback_window_debug(_log, day_et, start_u, end_u)
-    feed_str = 'iex'
-    try:
-        df = _get_minute_bars(symbol, start_u, end_u, feed=feed_str)
-    except (KeyError, ValueError):
-        df = empty_bars_dataframe()
-    rows = len(df)
-    if rows < 300:
-        _log.warning('DATA_HEALTH_MINUTE_INCOMPLETE', extra={'rows': rows, 'expected': expected_regular_minutes(), 'start': start_u.astimezone(UTC).isoformat(), 'end': end_u.astimezone(UTC).isoformat(), 'feed': feed_str})
-        try:
-            df_sip = _get_minute_bars(symbol, start_u, end_u, feed='sip')
-        except (KeyError, ValueError):
-            df_sip = empty_bars_dataframe()
-        if len(df_sip) > rows:
-            df = df_sip
-            feed_str = 'sip'
-            rows = len(df)
-    payload = _format_fallback_payload('1Min', feed_str, start_u, end_u)
-    _log.info('DATA_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
-    if rows >= 300:
-        _log.info('DATA_HEALTH: minute fallback ok', extra={'rows': rows})
-    return _normalize_bars_frame(df)
-
-def _parse_bars(payload: Any, symbol: str, tz: str) -> DataFrame:
-    if payload is None:
-        return empty_bars_dataframe()
-    if isinstance(payload, pd.DataFrame):
-        return _normalize_bars_frame(payload)
-    if not payload:
-        return empty_bars_dataframe()
-    if isinstance(payload, dict):
-        bars = payload.get('bars') or payload.get('data') or payload.get('results')
-        if not bars:
-            return empty_bars_dataframe()
-        try:
-            frame = pd.DataFrame(bars)
-        except (ValueError, TypeError):
-            return empty_bars_dataframe()
-        return _normalize_bars_frame(frame)
-    return empty_bars_dataframe()
 
 
 # === TEST-COMPAT HELPERS FOR ENTITLEMENTS ===

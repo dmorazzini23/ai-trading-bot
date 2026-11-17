@@ -11,47 +11,6 @@ from ai_trading import model_registry as mr
 from ai_trading.models.artifacts import write_artifact_manifest
 
 
-def test_legacy_registry_helpers_handle_activation_and_malformed_payload(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    registry_path = tmp_path / "registry.json"
-    models_dir = tmp_path / "models"
-    eval_dir = tmp_path / "eval"
-    monkeypatch.setattr(mr, "MODELS_DIR", models_dir)
-    monkeypatch.setattr(mr, "_REGISTRY_PATH", registry_path)
-    monkeypatch.setattr(mr, "_EVAL_DIR", eval_dir)
-
-    registry_path.write_text(json.dumps(["not", "a", "dict"]))
-    assert mr._load_registry() == {}
-
-    mr.register_model("AAPL", "v1", tmp_path / "model-v1.json", {"score": 1}, activate=False)
-    assert mr.get_active_model_meta("AAPL") is None
-
-    mr.set_active_model("AAPL", "missing")
-    assert mr.get_active_model_meta("AAPL") is None
-
-    mr.set_active_model("AAPL", "v1")
-    active = mr.get_active_model_meta("AAPL")
-    assert active is not None
-    assert active["meta"] == {"score": 1}
-
-    payload = json.loads(registry_path.read_text())
-    payload["MSFT"] = {"active": "v1", "versions": []}
-    payload["TSLA"] = {"active": "v1", "versions": {"v1": []}}
-    registry_path.write_text(json.dumps(payload))
-
-    assert mr.get_active_model_meta("missing") is None
-    assert mr.get_active_model_meta("MSFT") is None
-    assert mr.get_active_model_meta("TSLA") is None
-
-    mr.record_evaluation("AAPL", {"sharpe": 1.2})
-    mr.record_evaluation("AAPL", {"sharpe": 1.3})
-
-    assert [row["sharpe"] for row in mr.list_evaluations("AAPL", limit=1)] == [1.3]
-    assert mr.list_evaluations("MSFT") == []
-
-    (eval_dir / "BAD.jsonl").write_text("{not-json}\n")
-    assert mr.list_evaluations("BAD") == []
 
 
 def test_model_registry_external_artifacts_metadata_and_production_paths(tmp_path: Path) -> None:

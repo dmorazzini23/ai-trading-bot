@@ -581,122 +581,14 @@ def test_position_and_order_limit_gates() -> None:
     assert engine.get_current_exposure() == engine.exposure
 
 
-def test_module_position_sizing_and_drawdown_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeEngine:
-        def __init__(self, _cfg):
-            pass
-
-        def position_size(self, signal, cash, price, api=None):
-            assert cash == 1_000.0
-            assert price == 100.0
-            assert hasattr(signal, "symbol")
-            return 42
-
-    monkeypatch.setattr(risk_engine, "RiskEngine", FakeEngine)
-    monkeypatch.setattr(risk_engine, "get_trading_config", lambda: object())
-
-    assert risk_engine.calculate_position_size(1_000.0, 100.0) == 42
-    assert risk_engine.calculate_position_size(_signal(), 1_000.0, 100.0) == 42
-    assert risk_engine.calculate_position_size(-1.0, 100.0) == 0
-    assert risk_engine.calculate_position_size(1_000.0, -1.0) == 0
-    assert risk_engine.calculate_position_size(_signal(), -1.0, 100.0) == 0
-    assert risk_engine.calculate_position_size(_signal(), 1_000.0, -1.0) == 0
-    assert risk_engine.calculate_position_size(SimpleNamespace(), 1_000.0, 100.0) == 0
-
-    with pytest.raises(TypeError):
-        risk_engine.calculate_position_size(1.0)
-
-    assert risk_engine.check_max_drawdown({"current_drawdown": 0.2, "max_drawdown": 0.1}) is True
-    assert risk_engine.check_max_drawdown({"current_drawdown": 0.1, "max_drawdown": 0.2}) is False
-    assert risk_engine.check_max_drawdown([]) is False
-    assert risk_engine.check_max_drawdown({"current_drawdown": -1, "max_drawdown": 0.2}) is False
-    assert risk_engine.check_max_drawdown({"current_drawdown": 0.1, "max_drawdown": 0}) is False
 
 
-def test_standalone_risk_helpers_and_trailing_stop(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert risk_engine.dynamic_position_size(0, 0.2, 0.0) == 0.0
-    assert risk_engine.dynamic_position_size(1_000, 0.2, 0.2) == pytest.approx(500.0)
-    assert risk_engine.can_trade(SimpleNamespace(current_trades=1, max_trades=2)) is True
-    assert risk_engine.can_trade(SimpleNamespace(current_trades=2, max_trades=2)) is False
-    assert risk_engine.register_trade(SimpleNamespace(acquire_trade_slot=lambda: True), 10) == {"size": 10}
-    assert risk_engine.register_trade(SimpleNamespace(acquire_trade_slot=lambda: False), 10) is None
-    assert risk_engine.register_trade(SimpleNamespace(acquire_trade_slot=lambda: True), 0) is None
-
-    portfolio = SimpleNamespace(positions={"AAPL": SimpleNamespace(quantity=1), "MSFT": SimpleNamespace(quantity=0)})
-    assert risk_engine.check_exposure_caps(portfolio, {"AAPL": 0.6, "MSFT": 0.8}, 0.5) is False
-    assert risk_engine.check_exposure_caps(portfolio, {"AAPL": 0.1, "MSFT": 0.8}, 0.5) is None
-    short_portfolio = SimpleNamespace(positions={"TSLA": SimpleNamespace(quantity=-2)})
-    assert risk_engine.check_exposure_caps(short_portfolio, {"TSLA": -0.6}, 0.5) is False
-
-    df = pd.DataFrame({"High": [10.0, 10.0, 10.0], "Low": [9.0, 9.0, 9.0], "Close": [7.0, 7.0, 7.0]})
-    scheduled: list[tuple[str, int]] = []
-    import ai_trading.indicators as indicators
-
-    monkeypatch.setattr(risk_engine, "load_pandas_ta", lambda: None)
-    monkeypatch.setattr(indicators, "atr", lambda *_args: pd.Series([1.0, 1.0, 1.0]))
-    monkeypatch.setattr(risk_engine, "schedule_reentry_check", lambda symbol, lookahead_days: scheduled.append((symbol, lookahead_days)))
-    risk_engine.apply_trailing_atr_stop(df, 10.0, symbol="AAPL")
-    assert scheduled == [("AAPL", 2)]
-
-    risk_engine.apply_trailing_atr_stop(df, -1.0, symbol="AAPL")
-    nan_df = pd.DataFrame({"High": [10.0], "Low": [9.0], "Close": [float("nan")]})
-    risk_engine.apply_trailing_atr_stop(nan_df, 10.0, symbol="AAPL")
 
 
-def test_trailing_stop_sends_exit_when_position_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-    df = pd.DataFrame({"High": [10.0, 10.0, 10.0], "Low": [9.0, 9.0, 9.0], "Close": [7.0, 7.0, 7.0]})
-    sent: list[tuple[Any, ...]] = []
-    bot_mod = SimpleNamespace(send_exit_order=lambda *args: sent.append(args))
-    context = SimpleNamespace(
-        api=object(),
-        risk_engine=SimpleNamespace(position_exists=lambda _api, _symbol: True),
-    )
-    import ai_trading.indicators as indicators
-
-    monkeypatch.setattr(risk_engine, "load_pandas_ta", lambda: None)
-    monkeypatch.setattr(indicators, "atr", lambda *_args: pd.Series([1.0, 1.0, 1.0]))
-    monkeypatch.setattr(risk_engine.importlib, "import_module", lambda _name: bot_mod)
-    monkeypatch.setattr(risk_engine, "schedule_reentry_check", lambda *_args, **_kwargs: None)
-
-    risk_engine.apply_trailing_atr_stop(df, 10.0, context=context, symbol="AAPL", qty=-3)
-
-    assert sent == [(context, "AAPL", 3, 7.0, "atr_stop")]
 
 
-def test_trailing_stop_skips_missing_position_and_handles_exit_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    df = pd.DataFrame({"High": [10.0, 10.0, 10.0], "Low": [9.0, 9.0, 9.0], "Close": [7.0, 7.0, 7.0]})
-    import ai_trading.indicators as indicators
-
-    monkeypatch.setattr(risk_engine, "load_pandas_ta", lambda: None)
-    monkeypatch.setattr(indicators, "atr", lambda *_args: pd.Series([1.0, 1.0, 1.0]))
-    monkeypatch.setattr(risk_engine, "schedule_reentry_check", lambda *_args, **_kwargs: None)
-    missing_context = SimpleNamespace(
-        api=object(),
-        risk_engine=SimpleNamespace(position_exists=lambda _api, _symbol: False),
-    )
-    risk_engine.apply_trailing_atr_stop(df, 10.0, context=missing_context, symbol="AAPL", qty=3)
-
-    error_context = SimpleNamespace(api=object())
-    monkeypatch.setattr(risk_engine.importlib, "import_module", lambda _name: (_ for _ in ()).throw(ValueError("send bad")))
-    risk_engine.apply_trailing_atr_stop(df, 10.0, context=error_context, symbol="AAPL", qty=3)
-    risk_engine.apply_trailing_atr_stop(pd.DataFrame({"High": ["bad"], "Low": [1.0], "Close": [1.0]}), 10.0)
 
 
-def test_stop_level_correlation_and_filter_helpers() -> None:
-    corr = pd.DataFrame({"AAPL": [1.0, 0.5], "MSFT": [0.5, 1.0]})
-    weights = risk_engine.correlation_position_weights(corr, {"AAPL": 0.6, "GOOG": 0.4})
-    assert weights["AAPL"] == pytest.approx(0.6 / 1.75)
-    assert weights["GOOG"] == pytest.approx(0.4)
-    assert risk_engine.compute_stop_levels(100.0, 2.0) == (98.0, 104.0)
-    assert risk_engine.calculate_bollinger_stop(100.0, 110.0, 90.0, direction="long") == 100.0
-    assert risk_engine.calculate_bollinger_stop(95.0, 110.0, 90.0, direction="short") == 100.0
-    assert risk_engine.dynamic_stop_price(100.0, upper_band=110.0, lower_band=90.0) == 100.0
-    assert risk_engine.dynamic_stop_price(100.0) == 100.0
-    assert risk_engine.drawdown_circuit([-0.05, -0.25], limit=0.2) is True
-    assert risk_engine.drawdown_circuit([], limit=0.2) is False
-    assert risk_engine.volatility_filter(2.0, 0.0) is True
-    assert risk_engine.volatility_filter(2.0, 100.0, threshold=0.05) is True
-    assert risk_engine.volatility_filter(10.0, 100.0, threshold=0.05) is False
 
 
 def test_circuit_breaker_error_and_recovery_branches(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,6 @@ import pytest
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 sklearn_pkg = pytest.importorskip("sklearn")
-import sklearn.linear_model
 from ai_trading import meta_learning
 from ai_trading.meta_learning import core as meta_learning_core
 
@@ -23,17 +22,6 @@ def _stub_ridge(*args, **kwargs):
     return types.SimpleNamespace(fit=fit, predict=predict)
 
 
-def test_load_weights_save_fail(monkeypatch, tmp_path, caplog):
-    """Failure to write default weights is logged and default returned."""
-    p = tmp_path / "w.csv"
-    monkeypatch.setattr(meta_learning.Path, "exists", lambda self: False)
-    def fail(*a, **k):
-        raise OSError("fail")
-    monkeypatch.setattr(np, "savetxt", fail)
-    caplog.set_level("ERROR")
-    arr = meta_learning.load_weights(str(p), default=np.array([1.0]))
-    assert arr.tolist() == [1.0]
-    assert "Failed initializing" in caplog.text
 
 
 def test_update_signal_weights_edge_cases():
@@ -52,15 +40,6 @@ def test_save_and_load_checkpoint(tmp_path):
     assert obj == {"x": 1}
 
 
-def test_load_checkpoint_roundtrip(tmp_path):
-    """`load_checkpoint` returns the stored mapping."""
-    path = tmp_path / "chk.json"
-    data = {"foo": 1}
-    from ai_trading.meta import checkpoint
-
-    checkpoint.save_checkpoint(data, str(path))
-    loaded = checkpoint.load_checkpoint(str(path))
-    assert loaded == data
 
 
 def test_retrain_meta_learner(monkeypatch, tmp_path):

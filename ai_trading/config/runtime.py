@@ -2470,13 +2470,6 @@ def _resolve_mode_selection(
     return "balanced", "default", precedence
 
 
-def _selected_mode(env_map: Mapping[str, Any] | None = None) -> str:
-    """Return the trading mode name derived from env snapshot and precedence."""
-
-    mode_name, _, _ = _resolve_mode_selection(env_map)
-    return mode_name
-
-
 def _apply_mode_overlays(
     values: dict[str, Any],
     env_map: Mapping[str, Any] | None,

@@ -8,14 +8,7 @@ pd = pytest.importorskip("pandas")
 from tests.vendor_stubs import alpaca as _alpaca  # noqa: F401
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with proper imports from core module
-from ai_trading.core.bot_engine import (
-    execute_trades,
-    generate_signals,
-    health_check,
-    initialize_bot,
-    load_model,
-    run_trading_cycle,
-)
+from ai_trading.core.bot_engine import generate_signals, health_check, load_model
 
 
 # Helper dummy classes
@@ -41,12 +34,6 @@ def dummy_loader():
 
 # --- initialize_bot ---------------------------------------------------------
 
-def test_initialize_bot_returns_ctx_and_state():
-    api = DummyAPI()
-    ctx, state = initialize_bot(api, dummy_loader)
-    assert hasattr(ctx, "api") and ctx.api is api
-    assert hasattr(ctx, "data_loader")
-    assert state is not None
 
 
 # --- generate_signals -------------------------------------------------------
@@ -71,31 +58,10 @@ def test_generate_signals_missing_column_raises():
 
 # --- execute_trades ---------------------------------------------------------
 
-def test_execute_trades_sends_orders(monkeypatch):
-    api = DummyAPI()
-    ctx = types.SimpleNamespace(api=api)
-    sig = pd.Series([1, 0, -1], index=["A", "B", "C"])
-    monkeypatch.setattr(
-        "ai_trading.services.execution.ExecutionService.submit_order",
-        lambda _self, ctx_, symbol, qty, side, **_kwargs: ctx_.api.submit_order(symbol, qty, side),
-    )
-    orders = execute_trades(ctx, sig)
-    assert orders == [("A", "buy"), ("C", "sell")]
-    assert api.calls == [("A", 1.0, "buy"), ("C", 1.0, "sell")]
 
 
 # --- run_trading_cycle ------------------------------------------------------
 
-def test_run_trading_cycle_integration(monkeypatch):
-    api = DummyAPI()
-    ctx = types.SimpleNamespace(api=api)
-    df = pd.DataFrame({"price": [1, 3, 2]}, index=["A", "B", "C"])
-    monkeypatch.setattr(
-        "ai_trading.services.execution.ExecutionService.submit_order",
-        lambda _self, ctx_, symbol, qty, side, **_kwargs: ctx_.api.submit_order(symbol, qty, side),
-    )
-    orders = run_trading_cycle(ctx, df)
-    assert orders == [("B", "buy"), ("C", "sell")]
 
 
 # --- load_model -------------------------------------------------------------
@@ -132,7 +98,3 @@ def test_health_check_various(monkeypatch, rows, expected):
 
 # --- robustness -------------------------------------------------------------
 
-def test_run_trading_cycle_empty_df_returns_no_orders():
-    ctx = types.SimpleNamespace(api=None)
-    df = pd.DataFrame({"price": []})
-    assert run_trading_cycle(ctx, df) == []

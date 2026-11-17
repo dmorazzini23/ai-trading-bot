@@ -7,7 +7,6 @@ within the local ``models`` directory.
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-import hashlib
 import importlib
 import importlib.util
 import logging
@@ -68,120 +67,6 @@ def _require_sklearn_linear_regression():
     return LinearRegression
 
 
-def _mean_squared_error(y_true: Any, y_pred: Any) -> float:
-    try:
-        from sklearn.metrics import mean_squared_error
-    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # pragma: no cover - optional dependency
-        raise ImportError("scikit-learn is required for model evaluation") from exc
-    return float(mean_squared_error(y_true, y_pred))
-
-
-class MLModel:
-    """Wrapper around an sklearn Pipeline with extra safety checks."""
-
-    def __init__(self, pipeline: Any) -> None:
-        self.pipeline: Any = pipeline
-        self.logger = logger
-
-    # ------------------------------------------------------------------
-    # Validation helpers
-    # ------------------------------------------------------------------
-    def _validate_inputs(self, X: Any) -> None:
-        pd = _require_pandas()
-
-        if not isinstance(X, pd.DataFrame):
-            raise TypeError("X must be a DataFrame")
-        if X.empty:
-            raise ValueError("Input DataFrame is empty")
-        if X.isna().any().any():
-            self.logger.error("NaN values detected in input")
-            raise ValueError("Input contains NaN values")
-        if not all((pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes)):
-            raise TypeError("All input columns must be numeric")
-
-    # ------------------------------------------------------------------
-    # Model training and prediction
-    # ------------------------------------------------------------------
-    def fit(self, X: Any, y: Sequence[float] | Any) -> float:
-        self._validate_inputs(X)
-        start = time.time()
-        self.logger.info("MODEL_TRAIN_START", extra={"rows": len(X)})
-        try:
-            self.pipeline.fit(X, y)
-            dur = time.time() - start
-            preds = self.pipeline.predict(X)
-            mse = _mean_squared_error(y, preds)
-            self.logger.info(
-                "MODEL_TRAIN_END", extra={"duration": round(dur, 2), "mse": mse}
-            )
-            return mse
-        except (ValueError, RuntimeError) as exc:  # pragma: no cover - defensive
-            self.logger.exception("MODEL_TRAIN_FAILED: %s", exc)
-            raise
-
-    def predict(self, X: Any) -> Any:
-        self._validate_inputs(X)
-        try:
-            preds = self.pipeline.predict(X)
-        except (ValueError, RuntimeError, AttributeError) as exc:  # pragma: no cover
-            self.logger.exception("MODEL_PREDICT_FAILED: %s", exc)
-            raise
-        self.logger.info("MODEL_PREDICT", extra={"rows": len(X)})
-        return preds
-
-    # ------------------------------------------------------------------
-    # Persistence helpers
-    # ------------------------------------------------------------------
-    def save(self, path: str | None = None) -> str:
-        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        model_dir = (Path(__file__).parent / "models").resolve()
-        target_path = Path(path) if path is not None else model_dir / f"model_{ts}.pkl"
-        abs_path = target_path.resolve()
-        if not abs_path.is_relative_to(model_dir):
-            raise RuntimeError(f"Model path outside allowed directory: {abs_path}")
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            _require_joblib().dump(self.pipeline, abs_path)
-            write_artifact_manifest(
-                model_path=abs_path,
-                model_version=str(getattr(self.pipeline, "version", "ml-model-save-v1")),
-                metadata={"source": "MLModel.save"},
-            )
-            self.logger.info("MODEL_SAVED", extra={"path": str(abs_path)})
-        except (OSError, ValueError) as exc:  # pragma: no cover - defensive
-            self.logger.exception("MODEL_SAVE_FAILED: %s", exc)
-            raise
-        return str(abs_path)
-
-    @classmethod
-    def load(cls, path: str) -> MLModel:
-        """Deserialize a saved model from ``path`` and return an ``MLModel``."""
-
-        model_dir = (Path(__file__).parent / "models").resolve()
-        abs_path = Path(path).resolve()
-        if not abs_path.is_relative_to(model_dir):
-            raise RuntimeError(f"Model path outside allowed directory: {abs_path}")
-        if not abs_path.exists():
-            raise FileNotFoundError(abs_path)
-        try:
-            with abs_path.open("rb") as f:
-                data = f.read()
-            digest = hashlib.sha256(data).hexdigest()
-            pipeline = load_verified_joblib_artifact(abs_path)
-            logger.info(
-                "MODEL_LOADED",
-                extra={
-                    "path": str(abs_path),
-                    "sha256": digest,
-                    "version": getattr(pipeline, "version", "n/a"),
-                },
-            )
-        except (OSError, RuntimeError, ValueError) as exc:  # pragma: no cover
-            logger.exception("MODEL_LOAD_FAILED: %s", exc)
-            raise
-        return cls(pipeline)
-
-
 def train_model(
     X: Sequence[float] | Any,
     y: Sequence[float] | Any,
@@ -196,20 +81,6 @@ def train_model(
     model = _require_sklearn_linear_regression()()
     model.fit([[v] for v in X], y)
     return model
-
-
-def predict_model(model: Any, X: Sequence[Any] | Any) -> list[float]:
-    """Return predictions from a fitted model."""
-
-    if model is None:
-        raise ValueError("Model cannot be None")
-    if X is None:
-        raise ValueError("Invalid input")
-    try:
-        return list(model.predict(X))
-    except (ValueError, TypeError) as exc:  # pragma: no cover - defensive
-        logger.error("Model prediction failed: %s", exc)
-        raise
 
 
 def save_model(model: Any, path: str) -> None:
@@ -240,118 +111,8 @@ def load_model(path: str) -> Any:
     return load_verified_joblib_artifact(p)
 
 
-def train_xgboost_with_optuna(
-    X_train: Any, y_train: Any, X_val: Any, y_val: Any
-) -> Any:  # pragma: no cover - heavy optional
-    """Hyperparameter search for an XGBoost model using Optuna."""
-    _ = (X_val, y_val)  # Reserved for future holdout scoring; currently CV-only.
-
-    import optuna
-    import xgboost as xgb
-
-    def objective(trial: optuna.trial.Trial) -> float:
-        params = {
-            "max_depth": trial.suggest_int("max_depth", 3, 10),
-            "eta": trial.suggest_float("eta", 0.01, 0.3),
-            "objective": "binary:logistic",
-        }
-        dtrain = xgb.DMatrix(X_train, label=y_train)
-        cv = xgb.cv(
-            params, dtrain, num_boost_round=100, nfold=3, metrics="logloss"
-        )
-        test_logloss = cv["test-logloss-mean"]
-        if hasattr(test_logloss, "iloc"):
-            return float(test_logloss.iloc[-1])
-        return float(cast(Any, test_logloss)[-1])
-
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=50)
-    best_params = study.best_params
-    model = xgb.XGBClassifier(**best_params)
-    model.fit(X_train, y_train)
-    return model
-
-
-def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
-    """Ensure research/test/shadow default model files exist.
-
-    If a model file for a symbol is missing, this attempts to download a
-    pre-trained model from ``DEFAULT_MODEL_URL``. If the download fails or no
-    URL is configured, a lightweight fallback model is trained and persisted via
-    :func:`ai_trading.model_loader.train_and_save_model`.
-    """
-
-    from ai_trading.config import management as config
-    from ai_trading.model_loader import train_and_save_model
-
-    mode = str(
-        config.get_env("AI_TRADING_DEFAULT_MODEL_PROVISIONING_MODE", "", cast=str) or ""
-    ).strip().lower()
-    if mode not in {"research", "test", "shadow"}:
-        logger.warning(
-            "DEFAULT_MODEL_PROVISIONING_QUARANTINED",
-            extra={"mode": mode or "unset", "allowed_modes": ("research", "test", "shadow")},
-        )
-        return
-
-    models_dir = paths.MODELS_DIR
-    syms = list(symbols or getattr(config, "SYMBOLS", [])) or ["SPY"]
-    url = config.get_env("DEFAULT_MODEL_URL", "")
-    models_dir.mkdir(parents=True, exist_ok=True)
-
-    for sym in syms:
-        path = models_dir / f"{sym}.pkl"
-        if path.exists():
-            continue
-        downloaded = False
-        if url:
-            try:  # pragma: no cover - network best effort
-                from urllib.request import Request, urlopen
-
-                req = Request(url, headers={"User-Agent": "ai-trading-bot"})
-                with urlopen(req, timeout=10) as resp:
-                    path.write_bytes(resp.read())
-                write_artifact_manifest(
-                    model_path=path,
-                    model_version=f"{sym}-downloaded",
-                    metadata={"source": "DEFAULT_MODEL_URL", "symbol": sym, "url": url},
-                )
-                downloaded = True
-                logger.info(
-                    "MODEL_DOWNLOADED",
-                    extra={"symbol": sym, "url": url, "path": str(path)},
-                )
-            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001 - network errors vary
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning(
-                        "MODEL_DOWNLOAD_CLEANUP_FAILED",
-                        extra={"symbol": sym, "path": str(path)},
-                    )
-                logger.warning(
-                    "MODEL_DOWNLOAD_FAILED",
-                    extra={"symbol": sym, "url": url, "error": str(exc)},
-                )
-        if not downloaded:
-            logger.warning(
-                "MODEL_FILE_MISSING", extra={"symbol": sym, "path": str(path)}
-            )
-            try:
-                train_and_save_model(sym, models_dir)
-            except AI_TRADING_FALLBACK_EXCEPTIONS as exc:  # noqa: BLE001
-                logger.error(
-                    "MODEL_TRAIN_FAILED",
-                    extra={"symbol": sym, "error": str(exc)},
-                )
-
-
 __all__ = [
-    "MLModel",
     "train_model",
-    "predict_model",
     "save_model",
     "load_model",
-    "train_xgboost_with_optuna",
-    "ensure_default_models",
 ]

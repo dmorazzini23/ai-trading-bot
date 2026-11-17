@@ -591,24 +591,6 @@ def test_quantity_tracking_fix():
     engine.logger.removeHandler(handler)
 
 
-def test_risk_management_sector_exposure_logging():
-    """Test that sector exposure rejections include clear reasoning."""
-    # This is a minimal test - full test would require bot_engine context
-    # Testing the structure exists for enhanced logging
-    from ai_trading.core.bot_engine import sector_exposure_ok
-
-    # Mock BotContext
-    mock_ctx = Mock()
-    mock_ctx.api = Mock()
-
-    # Mock account with zero portfolio value
-    mock_account = Mock()
-    mock_account.portfolio_value = 0
-    mock_ctx.api.get_account.return_value = mock_account
-
-    # Test empty portfolio logic
-    result = sector_exposure_ok(mock_ctx, "AAPL", 10, 150.0)
-    assert result is True  # Should allow initial positions
 
 
 def test_sector_exposure_handles_non_iterable_positions():

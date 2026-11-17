@@ -452,17 +452,3 @@ def get_symbol_costs(symbol: str) -> SymbolCosts:
     model = get_cost_model()
     return model.get_costs(symbol)
 
-def calculate_execution_cost(symbol: str, position_value: float, volume_ratio: float=1.0) -> dict[str, float]:
-    """
-    Convenience function to calculate execution costs.
-
-    Args:
-        symbol: Trading symbol
-        position_value: Position value in dollars
-        volume_ratio: Trade volume / typical volume
-
-    Returns:
-        Dict with cost breakdown
-    """
-    model = get_cost_model()
-    return model.calculate_position_impact(symbol, position_value, volume_ratio)

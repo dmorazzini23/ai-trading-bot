@@ -7,7 +7,6 @@ import sys
 
 HOTPATHS = [
     "ai_trading/risk/circuit_breakers.py",
-    "ai_trading/monitoring/performance_dashboard.py",
     "ai_trading/portfolio/sizing.py",
     "ai_trading/meta_learning.py",
 ]

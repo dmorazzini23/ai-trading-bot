@@ -47,8 +47,6 @@ Current canonical routes from `create_app()`:
 - `ai_trading.strategies.backtester` is the fast research backtest path.
 - `ai_trading.tools.offline_replay` is the production-faithful historical
   replay path.
-- `ai_trading.strategies.regime_detection` is the broader pandas/DataFrame
-  market-regime analysis module used for rich analysis outputs.
 - `ai_trading.strategies.regime_detector` is the dynamic-threshold and
   canonical `MarketRegime` module used by live-ish portfolio and signal flows.
 - `ai_trading.tools.seed_trade_history` uses the packaged JSON seed file

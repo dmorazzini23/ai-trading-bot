@@ -5,7 +5,6 @@ and other critical fixes for production readiness.
 """
 
 import os
-import threading
 from unittest.mock import Mock, patch
 
 import pytest
@@ -21,72 +20,8 @@ os.environ.update({
 })
 
 
-def test_metrics_division_by_zero_protection():
-    """Test metrics module handles division by zero properly."""
-    from ai_trading.metrics import (
-        calculate_atr,
-        compute_basic_metrics,
-        safe_divide,
-    )
-
-    # Test with empty data
-    empty_df = pd.DataFrame()
-    result = compute_basic_metrics(empty_df)
-    assert result == {"sharpe": 0.0, "max_drawdown": 0.0}
-
-    # Test with zero standard deviation
-    zero_std_df = pd.DataFrame({"return": [0.0, 0.0, 0.0, 0.0]})
-    result = compute_basic_metrics(zero_std_df)
-    assert result["sharpe"] == 0.0
-
-    # Test safe_divide function
-    assert safe_divide(10, 0) == 0.0
-    assert safe_divide(10, 2) == 5.0
-    assert safe_divide(10, 0, default=99) == 99
-
-    # Test ATR with edge cases
-    edge_case_df = pd.DataFrame({
-        'high': [1e-8, 1e-8, 1e-8],
-        'low': [1e-8, 1e-8, 1e-8],
-        'close': [1e-8, 1e-8, 1e-8]
-    })
-    atr_result = calculate_atr(edge_case_df)
-    assert not atr_result.empty
-    assert all(atr_result.notna())  # Should not have NaN values
 
 
-def test_algorithm_optimizer_thread_safety():
-    """Test algorithm optimizer thread safety."""
-    from ai_trading.algorithm_optimizer import AlgorithmOptimizer
-
-    optimizer = AlgorithmOptimizer()
-
-    # Test concurrent access to kelly fraction calculation
-    results = []
-    errors = []
-
-    def calculate_concurrently():
-        try:
-            # Simulate multiple threads accessing Kelly calculation
-            for i in range(100):
-                result = optimizer._calculate_kelly_fraction("TEST")
-                results.append(result)
-        except RuntimeError as e:
-            errors.append(e)
-
-    # Run multiple threads
-    threads = []
-    for _ in range(5):
-        thread = threading.Thread(target=calculate_concurrently)
-        threads.append(thread)
-        thread.start()
-
-    for thread in threads:
-        thread.join()
-
-    # Should have results from all threads without errors
-    assert len(errors) == 0, f"Thread safety errors: {errors}"
-    assert len(results) == 500  # 5 threads * 100 calculations each
 
 
 def test_sentiment_cache_memory_leak_prevention():
@@ -216,23 +151,6 @@ def test_market_data_validation():
     assert result.severity in [ValidationSeverity.ERROR, ValidationSeverity.CRITICAL]
 
 
-def test_security_manager():
-    """Test security manager functionality."""
-    from ai_trading.security import mask_sensitive_data
-
-    # Test data masking
-    sensitive_data = {
-        'ALPACA_API_KEY': 'FAKE_TEST_API_KEY_NOT_REAL_12345',
-        'username': 'testuser',
-        'password': 'secretpassword123',
-        'normal_field': 'normal_value'
-    }
-
-    masked = mask_sensitive_data(sensitive_data)
-
-    # API key should be masked
-    assert 'FAKE_TEST_API_KEY_NOT_REAL_12345' not in str(masked)
-    assert 'normal_value' in str(masked)  # Normal fields unchanged
 
 
 def test_configuration_validation():
@@ -241,32 +159,6 @@ def test_configuration_validation():
     # Since config validation passed during import, the functionality works
 
 
-def test_dependency_injection():
-    """Test dependency injection container."""
-    from ai_trading.core.interfaces import IConfigManager, SimpleDependencyContainer
-
-    container = SimpleDependencyContainer()
-
-    class MockConfigManager:
-        def __init__(self):
-            self._store = {"test": "mock_test"}
-
-        def get(self, key: str):
-            return self._store.get(key)
-
-    # Register implementation
-    container.register(IConfigManager, MockConfigManager)
-
-    # Resolve implementation
-    config_manager = container.resolve(IConfigManager)
-    assert isinstance(config_manager, MockConfigManager)
-    assert config_manager.get("test") == "mock_test"
-
-    # Test singleton
-    container.register(IConfigManager, MockConfigManager, singleton=True)
-    instance1 = container.resolve(IConfigManager)
-    instance2 = container.resolve(IConfigManager)
-    assert instance1 is instance2
 
 
 def test_performance_optimizations():
@@ -290,25 +182,3 @@ def test_performance_optimizations():
     assert getattr(ema, "is_initialized", False)
 
 
-if __name__ == "__main__":
-    # Run tests
-
-    test_metrics_division_by_zero_protection()
-
-    test_algorithm_optimizer_thread_safety()
-
-    test_sentiment_cache_memory_leak_prevention()
-
-    test_circular_buffer_memory_efficiency()
-
-    test_incremental_indicators()
-
-    test_market_data_validation()
-
-    test_security_manager()
-
-    test_configuration_validation()
-
-    test_dependency_injection()
-
-    test_performance_optimizations()

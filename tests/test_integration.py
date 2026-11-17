@@ -36,25 +36,5 @@ def test_money_execution_integration():
 
 
 
-def test_rate_limit_integration():
-    """Test rate limiting integration."""
-
-    # Test that the alpaca_api module uses rate limiting
-    try:
-        from ai_trading.integrations.rate_limit import get_limiter
-        limiter = get_limiter()
-
-        # Check that bars route is configured
-        limiter.get_status("bars")
-
-        # Check that orders route is configured
-        limiter.get_status("orders")
-
-    except ImportError:
-        pass
 
 
-if __name__ == "__main__":
-
-    test_money_execution_integration()
-    test_rate_limit_integration()

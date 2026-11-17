@@ -178,36 +178,6 @@ def test_daily_fetch_backup_logs_when_allowed(monkeypatch: pytest.MonkeyPatch) -
     assert events[0]["context"] == {"symbols": ["SPY"]}
 
 
-def test_concurrency_and_daily_memo_generator_branches(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fetch, "_time_now", lambda default=0.0: 100.0 if default is not None else 100.0)
-
-    async def good(value: int) -> int:
-        return value
-
-    async def bad() -> int:
-        raise ValueError("failed")
-
-    results, succeeded, failed = asyncio.run(
-        fetch.run_with_concurrency(2, [good(1), bad(), good(3)]),
-    )
-    assert results[0] == 1
-    assert isinstance(results[1], ValueError)
-    assert results[2] == 3
-    assert (succeeded, failed) == (2, 1)
-
-    def generator_factory():
-        yield "first"
-        yield "second"
-
-    assert fetch.daily_fetch_memo(("AAPL", "1Day"), generator_factory) == "first"
-    assert fetch.daily_fetch_memo(("AAPL", "1Day"), lambda: pytest.fail("memo should be fresh")) == "first"
-
-    def stopped_factory():
-        if False:
-            yield "never"
-        return
-
-    assert fetch.daily_fetch_memo(("MSFT", "1Day"), stopped_factory) is None
 
 
 def test_global_backup_skip_probe_and_alert_bookkeeping(

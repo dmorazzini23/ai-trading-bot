@@ -98,11 +98,6 @@ def load_sklearn_preprocessing() -> ModuleType | None:
     return _load_sklearn_submodule("preprocessing")
 
 
-def load_sklearn_model_selection() -> ModuleType | None:
-    """Return :mod:`sklearn.model_selection` lazily."""
-    return _load_sklearn_submodule("model_selection")
-
-
 def load_sklearn_ensemble() -> ModuleType | None:
     """Return :mod:`sklearn.ensemble` lazily."""
     return _load_sklearn_submodule("ensemble")

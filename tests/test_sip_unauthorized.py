@@ -33,19 +33,3 @@ def test_get_bars_unauthorized_sip_returns_empty(monkeypatch):
     assert df.empty
 
 
-def test_data_check_skips_unauthorized_symbols(monkeypatch):
-    """Symbols returning empty data are skipped during data_check."""
-    monkeypatch.setattr(data_fetcher, "_SIP_UNAUTHORIZED", False, raising=False)
-
-    if os.getenv("ALLOW_EXTERNAL_NETWORK", "0") != "1":
-        def fake_get_bars_df(symbol: str, timeframe: str | Any, *a, **k):  # noqa: ANN401
-            if symbol == "MSFT":
-                raise ValueError("unauthorized")
-            return pd.DataFrame({"v": [1]})
-
-        monkeypatch.setattr(bot_engine, "get_bars_df", fake_get_bars_df)
-
-    symbols = ["AAPL", "MSFT"]
-    result = bot_engine.data_check(symbols, feed="sip")
-    assert "AAPL" in result
-    assert "MSFT" not in result

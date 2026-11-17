@@ -175,28 +175,6 @@ def reset_host_limit_state() -> None:
         _HOST_LIMITERS.clear()
 
 
-def host_limit_snapshot(host: str | None = None) -> dict[str, int]:
-    """Return ``{"limit": int, "inflight": int, "peak": int}`` for *host*."""
-
-    host_key = (host or "default").strip().lower() or "default"
-    with _HOST_LIMIT_LOCK:
-        state = _HOST_LIMITERS.get(host_key)
-        if state is None:
-            limit = _resolve_host_limit()
-            return {"limit": limit, "inflight": 0, "peak": 0}
-        return {"limit": state.limit, "inflight": state.inflight, "peak": state.peak}
-
-
-def reload_host_limit() -> int:
-    """Refresh all host limiters using the latest environment configuration."""
-
-    new_limit = _resolve_host_limit()
-    with _HOST_LIMIT_LOCK:
-        for state in _HOST_LIMITERS.values():
-            state.set_limit(new_limit)
-    return new_limit
-
-
 def _get_session_timeout() -> float | int | None:
     try:
         from ai_trading.http.timeouts import get_session_timeout as _get
@@ -345,25 +323,6 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
         raise
 
 
-async def async_request(method: str, url: str, **kwargs) -> requests.Response:
-    """Asynchronously execute :func:`request` while honouring host limits."""
-
-    if not REQUESTS_AVAILABLE:
-        raise RuntimeError("requests library is required for HTTP operations")
-    try:
-        from ai_trading.http.pooling import AsyncHostLimiter
-    except ImportError:  # pragma: no cover - defensive fallback
-        async_host_limiter: Any | None = None
-    else:
-        async_host_limiter = AsyncHostLimiter
-
-    if async_host_limiter is None:
-        return await asyncio.to_thread(request, method, url, **kwargs)
-
-    async with async_host_limiter.from_url(url):
-        return await asyncio.to_thread(request, method, url, **kwargs)
-
-
 _ERROR_LOGGED: set[str] = set()
 
 
@@ -417,32 +376,16 @@ def get(url: str, **kwargs) -> requests.Response:
     return request("GET", url, **kwargs)
 
 
-async def async_get(url: str, **kwargs) -> requests.Response:
-    return await async_request("GET", url, **kwargs)
-
-
 def post(url: str, **kwargs) -> requests.Response:
     return request("POST", url, **kwargs)
-
-
-async def async_post(url: str, **kwargs) -> requests.Response:
-    return await async_request("POST", url, **kwargs)
 
 
 def put(url: str, **kwargs) -> requests.Response:
     return request("PUT", url, **kwargs)
 
 
-async def async_put(url: str, **kwargs) -> requests.Response:
-    return await async_request("PUT", url, **kwargs)
-
-
 def delete(url: str, **kwargs) -> requests.Response:
     return request("DELETE", url, **kwargs)
-
-
-async def async_delete(url: str, **kwargs) -> requests.Response:
-    return await async_request("DELETE", url, **kwargs)
 
 
 def pool_stats() -> dict:
@@ -484,21 +427,14 @@ def map_get(
 __all__ = [
     "HTTPSession",
     "request",
-    "async_request",
     "request_json",
     "get",
-    "async_get",
     "post",
-    "async_post",
     "put",
-    "async_put",
     "delete",
-    "async_delete",
     "pool_stats",
     "map_get",
     "clamp_request_timeout",
     "host_slot",
-    "host_limit_snapshot",
     "reset_host_limit_state",
-    "reload_host_limit",
 ]

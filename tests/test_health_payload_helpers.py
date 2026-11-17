@@ -87,101 +87,10 @@ def test_cached_background_snapshot_records_builder_error(monkeypatch) -> None:
     assert second["refreshing"] is False
 
 
-def test_build_health_json_response_handles_mapping_and_response_objects() -> None:
-    payload = {"ok": False}
-
-    assert health_payload.build_health_json_response(
-        payload,
-        200,
-        jsonify_fn=lambda body: dict(body),
-    ) == payload
-    assert health_payload.build_health_json_response(
-        payload,
-        503,
-        jsonify_fn=lambda body: dict(body),
-    ) == (payload, 503)
-
-    class _Response:
-        status_code = 200
-
-        @staticmethod
-        def get_json() -> dict[str, bool]:
-            return {"ok": False}
-
-    response = health_payload.build_health_json_response(
-        payload,
-        503,
-        jsonify_fn=lambda _body: _Response(),
-    )
-
-    assert response.status_code == 503
 
 
-def test_build_health_json_response_sanitizes_unserializable_payload() -> None:
-    bad_value = object()
-    payload = {
-        "ok": False,
-        "nested": {
-            "bad": bad_value,
-            "nan": float("nan"),
-            "inf": float("inf"),
-        },
-    }
-
-    response_payload = health_payload.build_health_json_response(
-        payload,
-        200,
-        jsonify_fn=lambda body: dict(body),
-    )
-
-    assert response_payload == {
-        "ok": False,
-        "nested": {
-            "bad": str(bad_value),
-            "nan": None,
-            "inf": None,
-        },
-    }
 
 
-def test_register_healthz_routes_returns_exception_payload() -> None:
-    calls: dict[str, Any] = {}
-
-    class _App:
-        def route(self, route: str, *, methods: list[str]):
-            calls["route"] = route
-            calls["methods"] = methods
-
-            def _decorator(func):
-                calls["handler"] = func
-                return func
-
-            return _decorator
-
-    class _Logger:
-        def __init__(self) -> None:
-            self.events: list[str] = []
-
-        def exception(self, event: str, exc_info: BaseException | None = None) -> None:
-            self.events.append(event)
-
-    logger = _Logger()
-    health_payload.register_healthz_routes(
-        _App(),
-        payload_builder=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
-        response_builder=lambda payload, status: (payload, status),
-        logger=logger,
-    )
-
-    payload, status = calls["handler"]()
-
-    assert calls["route"] == "/healthz"
-    assert calls["methods"] == ["GET"]
-    assert status == 503
-    assert payload["status"] == "degraded"
-    assert payload["ok"] is False
-    assert payload["error"] == "boom"
-    assert logger.events == ["HEALTH_CHECK_FAILED"]
 
 
 def test_register_health_routes_response_fallback_is_non_500() -> None:

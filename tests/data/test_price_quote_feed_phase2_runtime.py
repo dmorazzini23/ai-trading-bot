@@ -38,45 +38,8 @@ def test_pytest_and_sip_disabled_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert price_quote_feed._sip_disabled_env(py_mode=True) is True
 
 
-def test_reference_feed_resolution_cache_and_clear(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(price_quote_feed, "resolve_alpaca_feed", lambda _requested: "iex")
-    monkeypatch.setattr(
-        price_quote_feed,
-        "resolve_alpaca_reference_feed",
-        lambda _requested: "delayed_sip",
-    )
-
-    assert price_quote_feed.ensure_entitled_feed("sip", None, role="reference") == "delayed_sip"
-    assert price_quote_feed.ensure_entitled_feed("iex", None, role="reference") == "iex"
-    assert price_quote_feed.ensure_entitled_feed(None, "sip", role="reference") == "sip"
-    assert price_quote_feed.ensure_entitled_feed(None, None, role="reference") == "delayed_sip"
-    assert price_quote_feed.resolve("AAPL", "delayed", role="reference") == "delayed_sip"
-    assert price_quote_feed.get_cached("AAPL", role="reference") == "delayed_sip"
-    price_quote_feed.clear("AAPL", role="reference")
-    assert price_quote_feed.get_cached("AAPL", role="reference") is None
 
 
-def test_execution_feed_resolution_uses_cached_and_unauthorized_guards(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(price_quote_feed, "resolve_alpaca_feed", lambda _requested: "sip")
-    monkeypatch.setattr(price_quote_feed, "_sip_unauthorized", lambda: False)
-
-    assert price_quote_feed.ensure_entitled_feed("sip", None) == "sip"
-    assert price_quote_feed.ensure_entitled_feed("iex", None) == "iex"
-    assert price_quote_feed.cache("AAPL", "alpaca_sip") == "sip"
-    assert price_quote_feed.resolve("AAPL", None) == "sip"
-    assert price_quote_feed.get_cached("AAPL") == "sip"
-
-    monkeypatch.setattr(price_quote_feed, "resolve_alpaca_feed", lambda _requested: "iex")
-    assert price_quote_feed.ensure_entitled_feed("sip", None) == "iex"
-    assert price_quote_feed.ensure_entitled_feed(None, "sip") == "iex"
-    assert price_quote_feed._apply_sip_guard("iex") == "iex"
-    assert price_quote_feed._apply_sip_guard("sip") == "iex"
-    assert price_quote_feed._fallback_feed() == "iex"
-
-    price_quote_feed.clear()
-    assert price_quote_feed.get_cached("AAPL") is None
 
 
 def test_sip_unauthorized_fetch_state_and_import_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,10 +71,3 @@ def test_sip_unauthorized_fetch_state_and_import_failure(monkeypatch: pytest.Mon
     assert price_quote_feed._sip_unauthorized() is False
 
 
-def test_resolve_removes_cache_when_entitlement_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    price_quote_feed._FEED_CACHE_BY_ROLE["execution"]["AAPL"] = "iex"
-    monkeypatch.setattr(price_quote_feed, "ensure_entitled_feed", lambda *_args, **_kwargs: None)
-
-    assert price_quote_feed.resolve("AAPL", None) is None
-    assert price_quote_feed.cache("MSFT", None) is None
-    assert price_quote_feed.get_cached("AAPL") is None

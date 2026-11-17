@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -11,7 +10,6 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from ai_trading.risk import engine as risk_engine
-from ai_trading.risk import pre_trade_validation as ptv
 
 
 def _bare_risk_engine(**config_updates: Any) -> risk_engine.RiskEngine:
@@ -161,127 +159,15 @@ def test_compute_volatility_returns_stable_metrics_for_finite_returns() -> None:
     assert result["garch_vol"] >= 0
 
 
-def test_dynamic_stop_price_picks_tightest_stop_by_direction() -> None:
-    assert risk_engine.dynamic_stop_price(
-        100.0,
-        atr=2.0,
-        percent=0.04,
-        direction="long",
-    ) == pytest.approx(97.0)
-    assert risk_engine.dynamic_stop_price(
-        100.0,
-        atr=2.0,
-        percent=0.04,
-        direction="short",
-    ) == pytest.approx(103.0)
 
 
-def test_market_hours_validator_static_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ptv, "load_pandas_market_calendars", lambda: None)
-    validator = ptv.MarketHoursValidator()
-
-    open_result = validator.validate_market_hours(datetime(2026, 4, 21, 15, 0, tzinfo=ptv.UTC))
-    extended_result = validator.validate_market_hours(datetime(2026, 4, 21, 13, 0, tzinfo=ptv.UTC))
-    closed_result = validator.validate_market_hours(datetime(2026, 4, 21, 2, 0, tzinfo=ptv.UTC))
-
-    assert open_result.status is ptv.ValidationStatus.APPROVED
-    assert extended_result.status is ptv.ValidationStatus.WARNING
-    assert closed_result.status is ptv.ValidationStatus.REJECTED
 
 
-def test_market_hours_static_fallback_compares_in_eastern_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ptv, "load_pandas_market_calendars", lambda: None)
-    validator = ptv.MarketHoursValidator()
-
-    after_hours_result = validator.validate_market_hours(
-        datetime(2026, 4, 21, 20, 30, tzinfo=ptv.UTC)
-    )
-
-    assert after_hours_result.status is ptv.ValidationStatus.WARNING
 
 
-def test_liquidity_validator_error_and_low_liquidity_paths() -> None:
-    validator = ptv.LiquidityValidator()
-
-    bad = validator.validate_liquidity("AAPL", "not-a-number", {})
-    thin = validator.validate_liquidity(
-        "AAPL",
-        100,
-        {"avg_volume": 10, "current_volume": 10, "last_price": 100.0},
-    )
-
-    assert bad.status is ptv.ValidationStatus.REJECTED
-    assert "error" in bad.details
-    assert thin.status is ptv.ValidationStatus.REJECTED
-    assert thin.score == 0.0
 
 
-def test_portfolio_risk_warns_on_high_correlation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        ptv,
-        "safe_settings",
-        lambda: SimpleNamespace(ENABLE_PORTFOLIO_FEATURES=True),
-    )
-    validator = ptv.RiskValidator()
-
-    result = validator.validate_portfolio_risk(
-        {"symbol": "AAPL", "quantity": 100, "price": 100.0},
-        {
-            "account_equity": 100_000.0,
-            "current_positions": {"MSFT": {"notional_value": 10_000.0}},
-            "correlations": {"AAPL_MSFT": 0.90},
-        },
-    )
-
-    assert result.status is ptv.ValidationStatus.WARNING
-    assert result.category is ptv.ValidationCategory.CORRELATION
-    assert result.details["correlation_exposure"] == pytest.approx(0.45)
 
 
-def test_risk_validator_reads_broker_market_value_when_notional_missing() -> None:
-    validator = ptv.RiskValidator()
-
-    assert validator._notional_value({"market_value": "-2500.5"}) == pytest.approx(-2500.5)
-    assert validator._notional_value(SimpleNamespace(market_value="1250.25")) == pytest.approx(1250.25)
 
 
-def test_pretrade_validator_overall_result_status_matrix() -> None:
-    validator = object.__new__(ptv.PreTradeValidator)
-    validator.min_overall_score = 0.60
-    validator.warning_threshold = 0.80
-
-    approved = ptv.ValidationResult(
-        ptv.ValidationCategory.SYSTEM_HEALTH,
-        ptv.ValidationStatus.APPROVED,
-        "ok",
-        {},
-        0.95,
-        [],
-    )
-    warning = ptv.ValidationResult(
-        ptv.ValidationCategory.LIQUIDITY,
-        ptv.ValidationStatus.WARNING,
-        "watch",
-        {},
-        0.75,
-        [],
-    )
-    rejected = ptv.ValidationResult(
-        ptv.ValidationCategory.RISK_LIMITS,
-        ptv.ValidationStatus.REJECTED,
-        "no",
-        {},
-        1.0,
-        [],
-    )
-
-    assert validator._calculate_overall_result([]) == (ptv.ValidationStatus.REJECTED, 0.0)
-    assert validator._calculate_overall_result([approved]) == (
-        ptv.ValidationStatus.APPROVED,
-        pytest.approx(0.95),
-    )
-    assert validator._calculate_overall_result([approved, warning])[0] is ptv.ValidationStatus.WARNING
-    assert validator._calculate_overall_result([approved, rejected]) == (
-        ptv.ValidationStatus.REJECTED,
-        0.0,
-    )

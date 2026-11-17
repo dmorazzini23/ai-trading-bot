@@ -338,7 +338,6 @@ def _missing(mod: str) -> bool:
 def _seed_tests() -> None:
     """Ensure deterministic test execution."""
     os.environ["PYTEST_RUNNING"] = "1"
-    os.environ.setdefault("AI_TRADING_NETTING_ENABLED", "0")
     os.environ["PYTHONHASHSEED"] = "0"
     random.seed(0)
     if not _missing("numpy"):
@@ -1072,7 +1071,6 @@ _REBOUND_SYMBOL_MODULE_NAMES = {
 
 _REBOUND_MUTABLE_SYMBOLS: dict[str, set[str]] = {
     "ai_trading.data.fetch": {"_MINUTE_CACHE", "_IEX_EMPTY_COUNTS"},
-    "ai_trading.data.fetch.empty_handling": {"_RETRY_COUNTS"},
     "ai_trading.utils.timing": {"HTTP_TIMEOUT", "clamp_timeout"},
     "tests.vendor_stubs.alpaca.data.requests": {"StockBarsRequest"},
     "tests.vendor_stubs.alpaca.data.timeframe": {"TimeFrame", "TimeFrameUnit"},

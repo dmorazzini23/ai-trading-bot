@@ -8,28 +8,8 @@ import pytest
 from ai_trading.core import bot_engine as bot
 
 
-def test_daily_pca_adjustment_reduces_concentrated_loading_and_normalizes(monkeypatch):
-    monkeypatch.setattr(bot, 'SKLEARN_AVAILABLE', True)
-    returns = np.sin(np.arange(120) / 5) * .001
-    frames = {s: pd.DataFrame({'close': 100 * np.exp(np.cumsum(returns * multiplier))})
-              for s, multiplier in [('AAPL', 1), ('AMZN', 2), ('MSFT', 4)]}
-    weights = {'AAPL': 1/3, 'AMZN': 1/3, 'MSFT': 1/3}
-    ctx = NS(portfolio_weights=weights, data_fetcher=NS(get_daily_df=lambda ctx, symbol: frames[symbol]))
-    bot.run_daily_pca_adjustment(ctx)
-    assert weights['MSFT'] < weights['AAPL']
-    assert weights['AAPL'] == weights['AMZN']
-    assert sum(weights.values()) == pytest.approx(1., abs=.0002)
 
 
-def test_regime_features_allow_close_only_proxy_and_atr_fallback(monkeypatch):
-    prices = pd.DataFrame({'close': 100 + np.sin(np.arange(80) / 3)})
-    def fail(*a, **k):
-        raise ValueError('ATR unavailable')
-    monkeypatch.setattr(bot.ta, 'atr', fail)
-    result = bot._compute_regime_features(prices)
-    assert set(result.columns) == {'atr', 'rsi', 'macd', 'vol'}
-    assert (result.atr >= 0).all()
-    assert np.isfinite(result[['atr', 'vol']].iloc[-1].to_numpy(dtype=float)).all()
 
 
 @pytest.mark.parametrize('cached', [False, True])

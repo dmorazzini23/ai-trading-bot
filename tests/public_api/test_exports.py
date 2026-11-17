@@ -1,111 +1,11 @@
 import importlib
 from importlib import import_module
+from pathlib import Path
+
 import pytest
 
-EXPECTED = {
-    'ai_trading': [
-        'DataFetchError',
-        'ExecutionEngine',
-        'alpaca_api',
-        'app',
-        'audit',
-        'capital_scaling',
-        'config',
-        'core',
-        'data',
-        'data_validation',
-        'execution',
-        'indicator_manager',
-        'indicators',
-        'logging',
-        'main',
-        'meta_learning',
-        'ml_model',
-        'paths',
-        'portfolio',
-        'position_sizing',
-        'rebalancer',
-        'settings',
-        'signals',
-        'strategy_allocator',
-        'utils',
-    ],
-    'ai_trading.config': sorted([
-        '_require_env_vars',
-        'AlpacaConfig',
-        'get_max_drawdown_threshold',
-        'META_LEARNING_BOOTSTRAP_ENABLED',
-        'META_LEARNING_BOOTSTRAP_WIN_RATE',
-        'META_LEARNING_MIN_TRADES_REDUCED',
-        'MODE_PARAMETERS',
-        'ORDER_FILL_RATE_TARGET',
-        'SENTIMENT_API_KEY',
-        'SENTIMENT_API_URL',
-        'SENTIMENT_ENHANCED_CACHING',
-        'SENTIMENT_FALLBACK_SOURCES',
-        'SENTIMENT_RECOVERY_TIMEOUT_SECS',
-        'SENTIMENT_SUCCESS_RATE_TARGET',
-        'Settings',
-        'TradingConfig',
-        'broker_keys',
-        'derive_cap_from_settings',
-        'get_alpaca_config',
-        'get_env',
-        'get_settings',
-        'log_config',
-        'reload_env',
-        'require_env_vars',
-        'validate_alpaca_credentials',
-        'validate_environment',
-        'validate_env_vars',
-    ]),
-    'ai_trading.core': [
-        'AssetClass',
-        'OrderSide',
-        'OrderStatus',
-        'OrderType',
-        'RiskLevel',
-        'TRADING_CONSTANTS',
-        'TimeFrame',
-    ],
-    'ai_trading.utils': [
-        'EASTERN_TZ',
-        'HTTP_TIMEOUT',
-        'OptionalDependencyError',
-        'SUBPROCESS_TIMEOUT_DEFAULT',
-        'capital_scaling',
-        'clamp_request_timeout',
-        'clamp_timeout',
-        'datetime',
-        'device',
-        'ensure_utc',
-        'get_free_port',
-        'get_latest_close',
-        'get_pid_on_port',
-        'health_check',
-        'http',
-        'is_market_open',
-        'log_warning',
-        'market_open_between',
-        'model_lock',
-        'module_ok',
-        'paths',
-        'portfolio_lock',
-        'retry',
-        'safe_subprocess_run',
-        'safe_to_datetime',
-        'sleep',
-        'timing',
-        'validate_ohlcv',
-    ],
-}
 
 
-def test_exports_lists_are_stable():
-    for module_name, expected in EXPECTED.items():
-        mod = import_module(module_name)
-        assert hasattr(mod, '__all__')
-        assert sorted(mod.__all__) == expected
 
 
 def test_package_import_does_not_patch_runtime_override_helpers():
@@ -120,19 +20,6 @@ def test_package_import_does_not_patch_runtime_override_helpers():
     assert not hasattr(management, "_test_override_guard_installed")
 
 
-def test_legacy_live_api_exports_warn_as_research_only():
-    import ai_trading
-
-    importlib.reload(ai_trading)
-    vars(ai_trading).pop("predict", None)
-    vars(ai_trading).pop("trade_logic", None)
-    assert "predict" not in ai_trading.__all__
-    assert "trade_logic" not in ai_trading.__all__
-    with pytest.warns(DeprecationWarning, match="research utilities"):
-        assert ai_trading.predict is import_module("ai_trading.predict")
-    vars(ai_trading).pop("trade_logic", None)
-    with pytest.warns(DeprecationWarning, match="research utilities"):
-        assert ai_trading.trade_logic is import_module("ai_trading.trade_logic")
 
 
 def test_legacy_production_surfaces_are_not_package_exports():
@@ -148,11 +35,9 @@ def test_legacy_production_surfaces_are_not_package_exports():
     assert "ProductionExecutionCoordinator" not in execution_mod.__all__
     assert not hasattr(ai_trading, "production_system")
     assert not hasattr(execution_mod, "ProductionExecutionCoordinator")
-    production_system = import_module("ai_trading.production_system")
-    production_engine = import_module("ai_trading.execution.production_engine")
-    assert production_system.RESEARCH_ONLY is True
-    assert production_engine.RESEARCH_ONLY is True
-    assert production_engine.LIVE_EXECUTION_AUTHORITY == "canonical_oms_pretrade"
+    package_dir = Path(ai_trading.__file__).resolve().parent
+    assert not (package_dir / "production_system.py").exists()
+    assert not (package_dir / "execution" / "production_engine.py").exists()
 
 
 def test_root_execution_engine_export_uses_runtime_selector(monkeypatch):

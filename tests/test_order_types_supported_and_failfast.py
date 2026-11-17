@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ai_trading.oms.orders import build_bracket, validate_order_type_support
+from ai_trading.oms.orders import validate_order_type_support
 
 
 def test_order_types_supported_and_failfast_passes() -> None:
@@ -37,17 +37,3 @@ def test_order_types_failfast_when_unsupported() -> None:
         )
 
 
-def test_build_bracket_contains_exit_legs() -> None:
-    order = build_bracket(
-        symbol="AAPL",
-        side="buy",
-        qty=10,
-        entry_limit=100.0,
-        take_profit=110.0,
-        stop_loss=95.0,
-        client_order_id="cid-1",
-    )
-    assert order["type"] == "limit"
-    assert order["order_class"] == "bracket"
-    assert order["take_profit"] == {"limit_price": 110.0}
-    assert order["stop_loss"] == {"stop_price": 95.0}

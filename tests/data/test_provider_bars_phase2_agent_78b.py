@@ -242,45 +242,6 @@ def test_update_data_health_switches_to_backup_then_bias_recovers(
     assert state["primary_recovery_bias"]["required_passes"] == 1
 
 
-def test_http_get_bars_exception_and_payload_normalization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class RateLimit(RuntimeError):
-        status_code = 429
-
-    emitted: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        bars_mod,
-        "emit_once",
-        lambda _logger, key, level, event, **payload: emitted.append(
-            {"key": key, "level": level, "event": event, "payload": payload}
-        ),
-    )
-    monkeypatch.setattr(
-        bars_mod,
-        "_raw_http_get_bars",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RateLimit("slow down")),
-    )
-
-    failed = bars_mod.http_get_bars("msft", "1Min", object(), object(), feed="sip")
-
-    assert isinstance(failed, bars_mod.BarsFetchFailed)
-    assert failed.symbol == "MSFT"
-    assert failed.feed == "sip"
-    assert failed.status == 429
-    assert failed.error == "slow down"
-    assert emitted[0]["payload"]["status"] == 429
-    assert bars_mod._extract_status_code({"status": 418}) == 418
-
-    frame = _ohlcv_frame()
-    frame.attrs["source"] = "fixture"
-    normalized = bars_mod._normalize_bars_frame(frame)
-    assert normalized.attrs["source"] == "fixture"
-    assert list(normalized["close"]) == [100.5]
-    assert bars_mod._coerce_http_bars(failed).empty
-    assert bars_mod._ensure_df(SimpleNamespace(df=object())).empty
-    assert bars_mod._parse_bars(_ohlcv_frame(), "MSFT", "UTC").iloc[0]["close"] == 100.5
-    assert bars_mod._parse_bars(None, "MSFT", "UTC").empty
 
 
 def test_entitlement_cache_boundaries_and_test_aware_sip(
@@ -337,55 +298,3 @@ def test_entitlement_cache_boundaries_and_test_aware_sip(
     assert test_entry.resolved == "sip"
 
 
-def test_stale_empty_bar_fallback_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime(2026, 4, 25, 18, 0, tzinfo=UTC)
-    monkeypatch.setattr(bars_mod, "rth_session_utc", lambda _day: (_ for _ in ()).throw(RuntimeError("closed")))
-    assert bars_mod._minute_fallback_window(now) == (now - timedelta(minutes=20), now)
-
-    start = datetime(2026, 4, 24, 13, 30, tzinfo=UTC)
-    end = start + timedelta(hours=8)
-    monkeypatch.setattr(
-        bars_mod,
-        "get_settings",
-        lambda: SimpleNamespace(alpaca_data_feed="iex", alpaca_adjustment="raw"),
-    )
-    monkeypatch.setattr(bars_mod, "_fetch_daily_bars", lambda *_args, **_kwargs: _empty_frame())
-    monkeypatch.setattr(
-        bars_mod,
-        "_get_minute_bars",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("stale minute cache")),
-    )
-
-    with pytest.raises(ValueError, match="empty_bars"):
-        bars_mod.get_daily_bars("spy", object(), start, end)
-
-    request = SimpleNamespace(
-        symbol_or_symbols=["spy"],
-        timeframe="2Hour",
-        start=start,
-        end=end,
-        feed="iex",
-    )
-    calls = {"client": 0, "http": 0}
-
-    def fake_client_fetch(_client: Any, _request: Any) -> Any:
-        calls["client"] += 1
-        return _empty_frame()
-
-    def fake_http_get_bars(*_args: Any, **_kwargs: Any) -> Any:
-        calls["http"] += 1
-        return bars_mod.BarsFetchFailed("SPY", "iex", start, status=503, error="empty")
-
-    monkeypatch.setattr(bars_mod, "_client_fetch_stock_bars", fake_client_fetch)
-    monkeypatch.setattr(bars_mod, "http_get_bars", fake_http_get_bars)
-    monkeypatch.setattr(bars_mod, "_ensure_entitled_feed", lambda _client, requested: requested or "iex")
-    monkeypatch.setattr(bars_mod.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(bars_mod, "_empty_should_emit", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(bars_mod, "_empty_record", lambda *_args, **_kwargs: 1)
-    monkeypatch.setattr(bars_mod, "_empty_classify", lambda **_kwargs: 20)
-
-    recovered = bars_mod.safe_get_stock_bars(object(), request, "spy", context="empty-stale")
-
-    assert recovered.empty
-    assert calls == {"client": 2, "http": 1}
-    assert request.symbol_or_symbols == ["SPY"]

@@ -59,46 +59,6 @@ def _bool_from_record(record: Any, *names: str) -> bool | None:
     return None
 
 
-def borrowable_share_count(asset: Any) -> int | None:
-    raw = _read_attr(
-        asset,
-        "shortable_shares",
-        "easy_to_borrow_shares",
-        "borrowable_shares",
-        "available_borrow_shares",
-    )
-    if raw is None:
-        return None
-    try:
-        return max(0, int(float(raw)))
-    except (TypeError, ValueError):
-        return None
-
-
-def is_asset_borrowable(asset: Any, *, qty: float | None = None) -> bool:
-    shortable = _bool_from_record(asset, "shortable", "is_shortable", "shortable_flag")
-    if shortable is False:
-        return False
-    easy = _bool_from_record(
-        asset,
-        "easy_to_borrow",
-        "easy_to_borrow_flag",
-        "easy_to_borrow_shares",
-        "borrowable",
-    )
-    if easy is False:
-        return False
-    available = borrowable_share_count(asset)
-    if qty is not None and available is not None:
-        try:
-            requested = float(qty)
-        except (TypeError, ValueError):
-            return False
-        if requested > available:
-            return False
-    return shortable is True or easy is True or (available is not None and available > 0)
-
-
 def validate_short_selling(symbol: str, qty: float, price: float) -> bool:
     """Validate a proposed short sale.
 
@@ -124,8 +84,6 @@ def validate_short_selling(symbol: str, qty: float, price: float) -> bool:
 
 __all__ = [
     "SHORT_SIDE_ALIASES",
-    "borrowable_share_count",
-    "is_asset_borrowable",
     "is_short_side",
     "normalize_short_side",
     "validate_short_selling",

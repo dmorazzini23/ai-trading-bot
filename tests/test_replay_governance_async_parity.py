@@ -447,29 +447,6 @@ def test_replay_symbol_summary_metrics_aggregates_by_symbol() -> None:
     assert float(summary["MSFT"]["net_edge_bps"]) < 0.0
 
 
-def test_load_latest_replay_symbol_summary_reads_recent_file(tmp_path: Path) -> None:
-    payload = {
-        "ts": datetime(2026, 2, 18, 23, 0, tzinfo=UTC).isoformat(),
-        "replay_symbol_summary": {
-            "AAPL": {
-                "sample_count": 24,
-                "net_edge_bps": 3.1,
-                "win_rate": 0.62,
-                "profit_factor": 1.4,
-            }
-        },
-    }
-    path = tmp_path / "replay_hash_20260218.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    summary, context = bot_engine._load_latest_replay_symbol_summary(
-        tmp_path,
-        max_age_hours=365 * 24,
-    )
-    assert "AAPL" in summary
-    assert int(summary["AAPL"]["sample_count"]) == 24
-    assert float(summary["AAPL"]["net_edge_bps"]) == 3.1
-    assert context.get("path") == str(path)
 
 
 def test_replay_bucket_summary_metrics_aggregates_session_regime() -> None:

@@ -1555,41 +1555,6 @@ def create_app(
     return app
 
 
-def get_test_client():
-    """Return a Flask test client or ``None`` if unavailable.
-
-    Importing ``flask.testing`` can fail in environments that provide a
-    lightweight Flask stub. This helper guards the import and falls back
-    gracefully when the testing utilities are missing.
-    """
-    module_name = "flask.testing"
-    feature_name = "flask.testing"
-
-    if missing(module_name, feature_name):
-        return None
-
-    try:
-        flask_testing = import_module(module_name)
-    except ImportError:
-        # The dependency may have been removed after the cache was populated.
-        # Clear and repopulate the cache so future calls see the updated state.
-        try:
-            missing.cache_clear()
-        except AttributeError:
-            pass
-
-        if missing(module_name, feature_name):
-            return None
-
-        try:
-            flask_testing = import_module(module_name)
-        except ImportError:
-            return None
-
-    app = create_app()
-    return flask_testing.FlaskClient(app)
-
-
 def run_module_entrypoint() -> None:
     """Run the module entrypoint after loading canonical dotenv files."""
 

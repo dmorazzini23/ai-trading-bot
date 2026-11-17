@@ -14,10 +14,3 @@ COMMON_EXC = (
 )
 TRANSIENT_HTTP_EXC = (RequestException, HTTPError, TimeoutError, OSError, ConnectionError)
 
-
-class DataFeedUnavailable(RuntimeError):
-    """Raised when required market data is unavailable."""
-
-
-class InvalidBarsError(ValueError):
-    """Raised when bar data is invalid or missing."""

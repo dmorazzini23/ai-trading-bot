@@ -51,17 +51,6 @@ def test_execution_latest_price_rejects_stale_daily_close(monkeypatch):
     assert portfolio_core.get_execution_latest_price(ctx, "SPY") is None
 
 
-def test_analytics_latest_price_allows_explicit_stale_daily_fallback(monkeypatch):
-    stale_ts = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2)
-    ctx = SimpleNamespace(
-        data_fetcher=SimpleNamespace(
-            get_daily_df=lambda ctx, s: pd.DataFrame({"timestamp": [stale_ts], "close": [321.0]}),
-        ),
-    )
-
-    monkeypatch.setattr(portfolio_core, "fetch_reference_snapshot", lambda *a, **k: {})
-
-    assert portfolio_core.get_analytics_latest_price(ctx, "SPY") == 321.0
 
 
 def test_yahoo_minute_split_long_range(monkeypatch, caplog):
@@ -99,29 +88,3 @@ def test_yahoo_minute_split_long_range(monkeypatch, caplog):
     assert any("future_bar_timestamp" in str(r.msg) for r in caplog.records)
 
 
-def test_price_snapshot_minute_fallback_skips_none_and_provider_errors(monkeypatch):
-    from ai_trading.price_snapshot import minute_fallback
-
-    calls: list[tuple[dt.datetime, dt.datetime]] = []
-
-    def fake_backup(_symbol, start, end, interval):
-        calls.append((start, end))
-        if len(calls) == 1:
-            return None
-        if len(calls) == 2:
-            raise RuntimeError("provider down")
-        return pd.DataFrame(
-            {
-                "timestamp": [pd.Timestamp(start)],
-                "close": [123.0],
-            }
-        )
-
-    monkeypatch.setattr(data_fetcher, "_backup_get_bars", fake_backup)
-
-    start = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
-    end = dt.datetime(2024, 1, 20, tzinfo=dt.UTC)
-    df = minute_fallback.fetch("AAPL", start, end)
-
-    assert len(calls) == 3
-    assert list(df["close"]) == [123.0]

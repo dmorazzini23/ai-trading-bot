@@ -11,14 +11,8 @@ def test_calculate_position_size_negative_input():
     assert size == 0
 
 
-def test_check_max_drawdown_triggers_stop():
-    state = {"max_drawdown": 0.5, "current_drawdown": 0.6}
-    assert risk_engine.check_max_drawdown(state)
 
 
-def test_check_max_drawdown_ok():
-    state = {"max_drawdown": 0.5, "current_drawdown": 0.1}
-    assert not risk_engine.check_max_drawdown(state)
 
 
 def test_can_trade_limits():
@@ -29,9 +23,3 @@ def test_can_trade_limits():
     eng.current_trades = 0
 
 
-def test_register_and_position_size():
-    eng = risk_engine.RiskEngine()
-    eng.current_trades = 0
-    eng.max_trades = 10
-    res = risk_engine.register_trade(eng, 100)
-    assert res is not None

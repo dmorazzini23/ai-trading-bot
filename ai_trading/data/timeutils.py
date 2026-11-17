@@ -112,11 +112,6 @@ def ensure_utc_datetime(
         dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
     return dt
 
-def nyse_session_utc(for_day: date):
-    """Return (start_utc, end_utc) for regular 09:30–16:00 NY session converted to UTC."""
-    start_ny = datetime.datetime.combine(for_day, time(9, 30), tzinfo=NY)
-    end_ny = datetime.datetime.combine(for_day, time(16, 0), tzinfo=NY)
-    return (start_ny.astimezone(UTC), end_ny.astimezone(UTC))
 
 def previous_business_day(d: date) -> date:
     wd = d.weekday()
@@ -133,7 +128,6 @@ def expected_regular_minutes() -> int:
 __all__ = [
     'canonicalize_data_timeframe',
     'ensure_utc_datetime',
-    'nyse_session_utc',
     'previous_business_day',
     'expected_regular_minutes',
     'NY',

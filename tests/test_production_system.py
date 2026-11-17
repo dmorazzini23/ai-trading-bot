@@ -5,34 +5,7 @@ Tests the core functionality of risk management, circuit breakers,
 and execution coordination without requiring full dependencies.
 """
 
-import asyncio
 
-try:
-    from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
-    from ai_trading.execution.production_engine import (
-        ProductionExecutionCoordinator,
-        run,
-    )
-    from ai_trading.monitoring.alerting import AlertManager, AlertSeverity
-    from ai_trading.risk.circuit_breakers import (
-        DrawdownCircuitBreaker,
-        TradingHaltManager,
-    )
-    from ai_trading.risk.position_sizing import ATRPositionSizer, DynamicPositionSizer
-except ImportError:
-    # Create mock classes for testing
-    class _RiskLevel:
-        CONSERVATIVE = "conservative"
-        MODERATE = "moderate"
-        AGGRESSIVE = "aggressive"
-
-    class _OrderSide:
-        BUY = "buy"
-        SELL = "sell"
-
-    class _OrderType:
-        MARKET = "market"
-        LIMIT = "limit"
 
 
 
@@ -131,115 +104,7 @@ def test_trading_halt_manager():
         return True
 
 
-def test_alert_manager():
-    """Test alert management system."""
-    try:
-        from ai_trading.monitoring.alerting import AlertManager, AlertSeverity
-
-        alert_manager = AlertManager()
-
-        # Start processing
-        alert_manager.start_processing()
-
-        # Test sending alerts
-        alert_id = alert_manager.send_alert(
-            "Test Alert",
-            "This is a test alert message",
-            AlertSeverity.INFO,
-            "TestSystem"
-        )
-
-        assert alert_id != "", "Alert ID should not be empty"
-
-        # Test trading alert
-        trading_alert_id = alert_manager.send_trading_alert(
-            "Order Executed",
-            "AAPL",
-            {"quantity": 100, "price": 150.0},
-            AlertSeverity.INFO
-        )
-
-        assert trading_alert_id != "", "Trading alert ID should not be empty"
-
-        # Test alert stats
-        stats = alert_manager.get_alert_stats()
-        assert stats["total_alerts"] >= 2, "Should have at least 2 alerts"
-
-        # Stop processing
-        alert_manager.stop_processing()
-
-        return True
-
-    except ImportError:
-        return True
 
 
-async def test_production_execution_coordinator():
-    """Test production execution coordinator."""
-    try:
-        from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
-        from ai_trading.execution.production_engine import (
-            ProductionExecutionCoordinator,
-            run,
-        )
-
-        # Initialize coordinator via async run helper
-        coordinator = await run(
-            account_equity=100000,
-            risk_level=RiskLevel.MODERATE,
-        )
-        assert isinstance(coordinator, ProductionExecutionCoordinator)
-
-        # Test order submission
-        result = await coordinator.submit_order(
-            symbol="AAPL",
-            side=OrderSide.BUY,
-            quantity=100,
-            order_type=OrderType.MARKET,
-            strategy="test_strategy"
-        )
-
-        # Ensure ExecutionResult maintains attribute access for existing callers
-        assert result.status in ["success", "rejected"], f"Unexpected status: {result.status}"
-
-        # Mapping compatibility keeps dictionary-style access working for integrations
-        assert result["status"] == result.status
-        assert result["symbol"] == "AAPL"
-        assert result["is_successful"] == result.is_successful
-
-        # Test execution summary
-        summary = coordinator.get_execution_summary()
-        assert "execution_stats" in summary, "Summary should contain execution stats"
-        assert summary["execution_stats"]["total_orders"] >= 1, "Should have at least 1 order"
-
-        # Test position tracking
-        coordinator.get_current_positions()
-
-        return True
-
-    except ImportError:
-        return True
 
 
-async def run_all_tests():
-    """Run all tests and report results."""
-
-    test_results = []
-
-    # Synchronous tests
-    test_results.append(("ATR Position Sizer", test_atr_position_sizer()))
-    test_results.append(("Drawdown Circuit Breaker", test_drawdown_circuit_breaker()))
-    test_results.append(("Trading Halt Manager", test_trading_halt_manager()))
-    test_results.append(("Alert Manager", test_alert_manager()))
-
-    # Asynchronous tests
-    test_results.append(("Production Execution Coordinator", await test_production_execution_coordinator()))
-
-    passed = 0
-    total = len(test_results)
-
-    for test_name, result in test_results:
-        if result:
-            passed += 1
-
-    return passed == total

@@ -79,34 +79,5 @@ def test_metric_creation_reuses_existing_and_handles_registry_without_register(
     assert no_register._names_to_collectors["fills_total"] is metric
 
 
-def test_public_metric_helpers_and_compute_basic_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
-    registry = SimpleNamespace(_names_to_collectors={})
-    monkeypatch.setattr(metrics, "Counter", _Metric)
-    monkeypatch.setattr(metrics, "Gauge", _Metric)
-    monkeypatch.setattr(metrics, "Histogram", _Metric)
-    monkeypatch.setattr(metrics, "REGISTRY", registry)
-
-    assert metrics.get_counter("counter_total", "Counter").name == "counter_total"
-    assert metrics.get_gauge("gauge_value", "Gauge").name == "gauge_value"
-    assert metrics.get_histogram("latency_seconds", "Latency").name == "latency_seconds"
-    assert metrics.compute_basic_metrics([]) == {"sharpe": 0.0, "max_drawdown": 0.0}
 
 
-def test_lazy_metric_math_wrappers_cache_imported_functions(monkeypatch: pytest.MonkeyPatch) -> None:
-    metrics._calculate_atr = None
-    metrics._safe_divide = None
-
-    import pandas as pd
-
-    frame = pd.DataFrame(
-        {
-            "high": [11.0, 12.0, 13.0],
-            "low": [9.0, 10.0, 11.0],
-            "close": [10.0, 11.0, 12.0],
-        }
-    )
-
-    assert len(metrics.calculate_atr(frame, period=2)) == 3
-    assert metrics.safe_divide(6, 3) == 2
-    assert metrics._calculate_atr is not None
-    assert metrics._safe_divide is not None

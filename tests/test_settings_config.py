@@ -2,7 +2,7 @@ import pytest
 from types import SimpleNamespace
 from typing import Any, cast
 from ai_trading.logging import logger
-from ai_trading.settings import Settings, get_position_size_min_usd, get_settings
+from ai_trading.settings import Settings, get_settings
 from pydantic import ValidationError
 
 
@@ -10,25 +10,6 @@ def _new_settings(**kwargs: Any) -> Settings:
     return cast(Settings, Settings(**kwargs))
 
 
-def test_settings_defaults(monkeypatch):
-    """Defaults should populate sane values."""  # AI-AGENT-REF
-    for key in [
-        "ALPACA_DATA_FEED",
-        "ALPACA_ADJUSTMENT",
-        "CAPITAL_CAP",
-        "AI_TRADING_CAPITAL_CAP",
-        "DOLLAR_RISK_LIMIT",
-        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
-    ]:
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.delenv("AI_TRADING_POSITION_SIZE_MIN_USD", raising=False)
-    s = _new_settings()
-    assert s.alpaca_data_feed == "iex"
-    assert s.alpaca_adjustment == "all"
-    assert s.capital_cap == 0.25
-    assert s.dollar_risk_limit == 0.05
-    assert s.position_size_min_usd == 25.0
-    assert get_position_size_min_usd() == 25.0
 
 
 def test_sip_feed_falls_back(monkeypatch):

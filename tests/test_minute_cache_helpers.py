@@ -1,12 +1,6 @@
 from datetime import UTC, datetime
 
-from ai_trading.data.fetch import (
-    _MINUTE_CACHE,  # type: ignore
-    age_cached_minute_timestamps,
-    clear_cached_minute_timestamp,
-    get_cached_minute_timestamp,
-    set_cached_minute_timestamp,
-)
+from ai_trading.data.fetch import _MINUTE_CACHE, clear_cached_minute_timestamp, get_cached_minute_timestamp, set_cached_minute_timestamp
 
 
 def setup_function() -> None:
@@ -21,15 +15,6 @@ def test_set_and_get() -> None:
     assert get_cached_minute_timestamp("AAPL") == ts
 
 
-def test_age_cached_minute_timestamps() -> None:
-    now = int(datetime.now(UTC).timestamp())
-    earlier = now - 30
-    set_cached_minute_timestamp("MSFT", earlier)
-    # simulate old insertion
-    _MINUTE_CACHE["MSFT"] = (earlier, now - 30)
-    removed = age_cached_minute_timestamps(max_age_seconds=10)
-    assert removed == 1
-    assert get_cached_minute_timestamp("MSFT") is None
 
 
 def test_clear_cached_timestamp() -> None:

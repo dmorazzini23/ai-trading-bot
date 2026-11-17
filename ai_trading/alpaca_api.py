@@ -699,12 +699,6 @@ def _to_utc(dtobj: dt.datetime) -> dt.datetime:
     return dtobj.astimezone(dt.timezone.utc)
 
 
-def _fmt_rfc3339_z(dtobj: dt.datetime) -> str:
-    """Format a UTC datetime to RFC3339 ``YYYY-MM-DDTHH:MM:SSZ``."""
-    d = _to_utc(dtobj).replace(microsecond=0)
-    return d.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _format_start_end_for_tradeapi(timeframe: str, start, end):
     """Return request datetimes plus canonical string forms for logging."""
     from ai_trading.utils.datetime import (
@@ -1279,47 +1273,6 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
-async def handle_trade_update(event: Any) -> None:
-    """Handle trade update events and log fill transitions."""
-
-    if event is None:
-        return
-    event_type = getattr(event, "event", None) or getattr(event, "event_type", None)
-    event_label = str(event_type or "").strip().lower()
-    if not event_label:
-        return
-    order = getattr(event, "order", None) or getattr(event, "order_data", None)
-    if order is None:
-        return
-    order_id = getattr(order, "id", None) or getattr(order, "order_id", None)
-    if not order_id:
-        return
-    order_key = str(order_id)
-    symbol = getattr(order, "symbol", None)
-    filled_qty = _coerce_float(getattr(order, "filled_qty", None))
-    filled_avg_price = _coerce_float(getattr(order, "filled_avg_price", None))
-    payload = {
-        "order_id": order_key,
-        "symbol": symbol,
-        "filled_qty": filled_qty,
-        "filled_avg_price": filled_avg_price,
-        "event": event_label,
-    }
-
-    if event_label in {"partial_fill", "partial_filled"}:
-        if order_key in partial_fill_tracker:
-            return
-        partial_fill_tracker[order_key] = monotonic_time()
-        partial_fills[order_key] = dict(payload)
-        _log.info("ORDER_PARTIAL_FILL", extra=payload)
-        return
-    if event_label in {"fill", "filled"}:
-        partial_fill_tracker.pop(order_key, None)
-        partial_fills.pop(order_key, None)
-        _log.info("ORDER_FILLED", extra=payload)
-        return
-
-
 def _stream_should_run(running: Any) -> bool:
     if running is None:
         return True
@@ -1568,7 +1521,6 @@ __all__ = [
     "start_trade_updates_stream",
     "partial_fill_tracker",
     "partial_fills",
-    "handle_trade_update",
     "initialize",
     "_pending_orders_lock",
     "_pending_orders",

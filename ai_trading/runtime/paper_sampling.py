@@ -158,16 +158,6 @@ def _cfg_int(cfg: Any, field: str, default: int) -> int:
     return max(0, value)
 
 
-def _state_count(state: Mapping[str, Any], key: str, bucket: str) -> int:
-    raw = state.get(key)
-    if not isinstance(raw, Mapping):
-        return 0
-    try:
-        return int(raw.get(bucket, 0) or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _count_map(state: Mapping[str, Any], key: str) -> dict[str, int]:
     raw = state.get(key)
     if not isinstance(raw, Mapping):

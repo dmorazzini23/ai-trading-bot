@@ -208,69 +208,6 @@ def test_live_backup_quote_and_broker_kwarg_helpers() -> None:
     assert not hasattr(holder, "_pending_order_kwargs")
 
 
-def test_live_status_payload_error_and_retry_helpers() -> None:
-    assert live_trading.apply_order_status(None, "OrderStatus.PENDING_NEW") == (
-        "pending_new",
-        True,
-    )
-    assert live_trading.apply_order_status("accepted", "partially_filled") == (
-        "partially_filled",
-        True,
-    )
-    assert live_trading.apply_order_status("filled", "accepted") == ("filled", False)
-    assert live_trading.apply_order_status("accepted", "acknowledged") == (
-        "acknowledged",
-        True,
-    )
-
-    order_obj, status, filled_qty, requested_qty, order_id, client_id = (
-        live_trading._normalize_order_payload(
-            {
-                "order_id": "ord-1",
-                "client_order_id": "cid-1",
-                "status": "filled",
-                "filled_quantity": "2.5",
-                "requested_quantity": "",
-                "symbol": "msft",
-                "side": "buy",
-            },
-            qty_fallback=7,
-        )
-    )
-    assert order_obj.id == "ord-1"
-    assert (status, filled_qty, requested_qty, order_id, client_id) == (
-        "filled",
-        2.5,
-        7.0,
-        "ord-1",
-        "cid-1",
-    )
-
-    err = SimpleNamespace(
-        __class__=RuntimeError,
-        message="client_order_id already exists",
-        code=42210000,
-        status_code=422,
-    )
-    metadata = live_trading._extract_api_error_metadata(err)
-    assert metadata["detail"] == "client_order_id already exists"
-    assert metadata["code"] == 42210000
-    assert live_trading._is_duplicate_client_order_id_error(err)
-    missing = SimpleNamespace(message="order not found", status_code=404)
-    assert live_trading._is_missing_order_lookup_error(missing)
-    assert live_trading._parse_retry_after_seconds("-3") == 0.0
-    assert live_trading._parse_retry_after_seconds("not a date") is None
-    assert live_trading._classify_rejection_reason("market is closed now") == (
-        "market_closed"
-    )
-    assert live_trading._should_retry_limit_as_market(
-        {"status_code": 422, "detail": "limit price outside price band"},
-        using_fallback_price=True,
-    )
-    assert not live_trading._should_retry_limit_as_market(
-        {"status_code": 422, "detail": "limit price outside price band"},
-        using_fallback_price=False,
-    )
 
 
 def test_live_short_sale_precheck_and_capacity_branches(monkeypatch: pytest.MonkeyPatch) -> None:

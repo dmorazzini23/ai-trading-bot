@@ -52,23 +52,3 @@ def log_metrics(record: Mapping[str, Any], filename: str='metrics/model_performa
             row['max_drawdown'] = ''
     _write_csv_row(filename, row)
 
-def log_volatility(value: float, filename: str | None=None) -> None:
-    if filename:
-        _write_csv_row(filename, {'volatility': value})
-    else:
-        logger.info('volatility=%s', value)
-
-def log_regime_toggle(tag: str, regime: str, filename: str | None=None) -> None:
-    row = {'tag': tag, 'regime': regime}
-    if filename:
-        _write_csv_row(filename, row)
-    else:
-        logger.info('regime_toggle tag=%s regime=%s', tag, regime)
-
-def log_atr_stop(symbol: str, stop: float) -> None:
-    """No-op stub for ATR stop telemetry."""
-    return None
-
-def log_pyramid_add(symbol: str, new_pos: float) -> None:
-    """No-op stub for pyramid add telemetry."""
-    return None

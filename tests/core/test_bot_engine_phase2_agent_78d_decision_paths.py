@@ -230,28 +230,6 @@ def test_capacity_throttle_adaptive_modes_and_exception_defaults(
     assert result[:5] == (10.0, 20.0, 0.1, 0.2, 0.5)
 
 
-def test_memo_is_fresh_accepts_mappings_tuples_and_stale_payloads() -> None:
-    payload = {"rows": 2}
-
-    assert bot_engine._memo_is_fresh(
-        {"timestamp": 100.0, "value": payload},
-        now=120.0,
-        ttl=30.0,
-    ) == (True, payload)
-    assert bot_engine._memo_is_fresh(
-        {"ts": 10.0, "data": payload},
-        now=120.0,
-        ttl=30.0,
-    ) == (False, payload)
-    assert bot_engine._memo_is_fresh((100.0, payload), now=120.0, ttl=30.0) == (
-        True,
-        payload,
-    )
-    assert bot_engine._memo_is_fresh((payload, 10.0), now=120.0, ttl=30.0) == (
-        False,
-        payload,
-    )
-    assert bot_engine._memo_is_fresh(None, now=120.0, ttl=30.0) == (False, None)
 
 
 def test_data_fetcher_daily_memo_paths_short_circuit_without_provider(
@@ -539,75 +517,10 @@ def _patch_safe_submit_basics(monkeypatch: pytest.MonkeyPatch, *, pytest_running
     monkeypatch.setattr(bot_engine.time, "sleep", lambda seconds: None)
 
 
-def test_safe_submit_order_generates_id_and_falls_back_to_order_data(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_safe_submit_basics(monkeypatch)
-
-    class Api:
-        client_order_ids: set[str] = set()
-
-        def submit_order(self, **kwargs: Any) -> Any:
-            if "order_data" not in kwargs:
-                raise TypeError("order_data required")
-            request = kwargs["order_data"]
-            return SimpleNamespace(
-                id="broker-id",
-                client_order_id=getattr(request, "client_order_id", None),
-                status="filled",
-                qty=None,
-                filled_qty="3",
-            )
-
-    req = SimpleNamespace(symbol="AAPL", qty="3", side="buy", time_in_force="day")
-    order = bot_engine.safe_submit_order(Api(), req)
-
-    assert order.status == "filled"
-    assert order.qty == 3.0
-    assert order.filled_qty == 3.0
-    assert req.client_order_id.startswith("AAPL-buy")
 
 
-def test_safe_submit_order_guard_returns_dummy_orders(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_safe_submit_basics(monkeypatch)
-    req = SimpleNamespace(symbol="AAPL", qty="5", side="buy", time_in_force="day", limit_price=100.0)
-
-    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (True, "manual"))
-    killed = bot_engine.safe_submit_order(SimpleNamespace(submit_order=lambda **kwargs: None), req)
-    assert killed.status == "kill_switch"
-
-    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
-    low_bp_api = SimpleNamespace(
-        get_account=lambda: SimpleNamespace(buying_power="100"),
-        submit_order=lambda **kwargs: pytest.fail("insufficient funds should not submit"),
-    )
-    insufficient = bot_engine.safe_submit_order(low_bp_api, req)
-    assert insufficient.status == "insufficient_funds"
-
-    sell_req = SimpleNamespace(symbol="AAPL", qty="5", side="sell", time_in_force="day")
-    low_pos_api = SimpleNamespace(
-        list_positions=lambda: [SimpleNamespace(symbol="AAPL", qty="2")],
-        submit_order=lambda **kwargs: pytest.fail("insufficient position should not submit"),
-    )
-    insufficient_pos = bot_engine.safe_submit_order(low_pos_api, sell_req)
-    assert insufficient_pos.status == "insufficient_position"
 
 
-def test_safe_submit_order_closed_market_skip(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_safe_submit_basics(monkeypatch, pytest_running=False)
-    monkeypatch.setattr(bot_engine.market_calendar, "is_trading_day", lambda day: False)
-    monkeypatch.setattr(bot_engine, "market_is_open", lambda: False)
-
-    req = SimpleNamespace(symbol="AAPL", qty="bad", side="buy", time_in_force="day")
-    order = bot_engine.safe_submit_order(
-        SimpleNamespace(submit_order=lambda **kwargs: pytest.fail("closed market should not submit")),
-        req,
-    )
-
-    assert order.status == "market_closed"
-    assert order.qty == 0.0
 
 
 def test_price_simple_primary_trade_and_invalid_feed_fallback(

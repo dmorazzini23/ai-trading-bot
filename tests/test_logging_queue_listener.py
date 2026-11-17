@@ -24,16 +24,3 @@ def test_asyncio_task_capture_disabled_for_runtime_stability():
     assert getattr(logging, "logAsyncioTasks", None) is False
 
 
-def test_bounded_queue_handler_counts_drops():
-    q = logging_module.queue.Queue(maxsize=1)
-    handler = logging_module.BoundedQueueHandler(q)
-    record = logging.LogRecord("test", logging.INFO, __file__, 1, "msg", (), None)
-    before = logging_module.get_logging_queue_stats()["dropped"]
-
-    handler.enqueue(record)
-    handler.enqueue(record)
-
-    stats = logging_module.get_logging_queue_stats()
-    assert q.qsize() == 1
-    assert stats["dropped"] == before + 1
-    assert stats["backpressure_events"] >= 1

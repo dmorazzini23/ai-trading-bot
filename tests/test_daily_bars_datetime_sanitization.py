@@ -201,40 +201,6 @@ def test_http_fallback_receives_iso_timestamps(monkeypatch):
     assert captured_http["end"] == req.end.isoformat()
 
 
-def test_get_daily_bars_unauthorized_alt_feed_uses_minute_resample(monkeypatch):
-    start = datetime(2024, 1, 2, tzinfo=UTC)
-    end = datetime(2024, 1, 2, 21, tzinfo=UTC)
-    minute_index = pd.date_range("2024-01-02T14:30:00Z", periods=2, freq="min")
-    minute_df = pd.DataFrame(
-        {
-            "open": [10.0, 11.0],
-            "high": [12.0, 13.0],
-            "low": [9.0, 10.0],
-            "close": [11.0, 12.0],
-            "volume": [100, 200],
-        },
-        index=minute_index,
-    )
-    calls: list[str] = []
-
-    def fake_fetch_daily(_client, _symbol, _start, _end, **kwargs):
-        feed = kwargs["feed"]
-        calls.append(feed)
-        if feed == "sip":
-            return pd.DataFrame()
-        exc = ValueError("forbidden")
-        exc.status_code = 403
-        raise exc
-
-    monkeypatch.setattr(bars_mod, "_fetch_daily_bars", fake_fetch_daily)
-    monkeypatch.setattr(bars_mod, "_get_minute_bars", lambda *_args, **_kwargs: minute_df)
-
-    result = bars_mod.get_daily_bars("SPY", object(), start, end, feed="sip")
-
-    assert calls == ["sip", "iex"]
-    assert not result.empty
-    assert float(result.iloc[0]["open"]) == 10.0
-    assert float(result.iloc[0]["close"]) == 12.0
 
 
 def test_window_has_trading_session_handles_missing_holiday_session(monkeypatch):

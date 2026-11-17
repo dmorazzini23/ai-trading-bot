@@ -831,21 +831,6 @@ def warning_kv(logger, msg: str, *, extra: dict | None = None):
     with_extra(logger, logging.WARNING, msg, extra=extra)
 
 
-def error_kv(logger, msg: str, *, extra: dict | None = None):
-    """Log at ERROR level with structured key-value fields."""
-    with_extra(logger, logging.ERROR, msg, extra=extra)
-
-
-def _get_config():
-    """Lazy import config management to avoid import-time dependencies.
-
-    Returns the imported module so callers can access attributes safely.
-    """
-    from ai_trading.config import management as config
-
-    return config
-
-
 def _get_metrics_logger():
     """Lazy import metrics_logger to avoid import-time dependencies.
 
@@ -878,12 +863,6 @@ def _mask_secret(value: str) -> str:
 # `freezegun` replaces `time.gmtime` with a Python function, so wrap it in
 # `staticmethod(...)` to keep the expected `converter(ts)` call signature.
 logging.Formatter.converter = staticmethod(time.gmtime)
-
-
-class UTCFormatter(logging.Formatter):
-    """Formatter with UTC timestamps and structured phase tags."""
-
-    converter = staticmethod(time.gmtime)
 
 
 class CompactJsonFormatter(JSONFormatter):
@@ -1020,21 +999,6 @@ class BoundedQueueHandler(QueueHandler):
             self.queue.put_nowait(record)
         except queue.Full:
             _record_log_queue_drop()
-
-
-def get_logging_queue_stats() -> dict[str, Any]:
-    """Return logging queue depth and backpressure counters."""
-
-    with _LOG_QUEUE_STATS_LOCK:
-        dropped = _LOG_QUEUE_DROPPED
-        backpressure = _LOG_QUEUE_BACKPRESSURE_EVENTS
-    return {
-        "queue_size": _log_queue.qsize() if _log_queue is not None else 0,
-        "queue_maxsize": getattr(_log_queue, "maxsize", 0) if _log_queue is not None else 0,
-        "dropped": dropped,
-        "backpressure_events": backpressure,
-        "listener_active": bool(_listener or _LOGGING_LISTENER),
-    }
 
 
 def ensure_logging_configured(level: int | None = None) -> None:
@@ -1531,404 +1495,21 @@ def get_phase_logger(name: str, phase: str | None = None) -> SanitizingLoggerAda
     return cast(SanitizingLoggerAdapter, logger)
 
 
-def init_logger(log_file: str) -> logging.Logger:
-    """Wrapper used by utilities to initialize logging."""
-    return setup_logging(log_file=log_file)
-
-
-def log_performance_metrics(
-    exposure_pct: float,
-    equity_curve: list[float],
-    regime: str,
-    filename: str | None = None,
-    *,
-    as_of: date | None = None,
-) -> None:
-    """Log daily performance metrics to ``filename``."""
-    import numpy as np
-    import pandas as pd
-
-    if not equity_curve:
-        return
-    as_of = as_of or date.today()
-    returns = pd.Series(equity_curve).pct_change().dropna()
-    roll = returns.tail(20)
-    if roll.empty:
-        sharpe = sortino = realized_vol = 0.0
-    else:
-        sharpe = roll.mean() / (roll.std(ddof=0) or 1e-09) * np.sqrt(252 / 20)
-        downside = roll[roll < 0]
-        sortino = roll.mean() / (downside.std(ddof=0) or 1e-09) * np.sqrt(252 / 20)
-        realized_vol = roll.std(ddof=0) * np.sqrt(252 / 20)
-    max_dd = _get_metrics_logger().compute_max_drawdown(equity_curve)
-    rec = {
-        "date": str(as_of),
-        "exposure_pct": exposure_pct,
-        "sharpe20": sharpe,
-        "sortino20": sortino,
-        "realized_vol": realized_vol,
-        "max_drawdown": max_dd,
-        "regime": regime,
-    }
-    if filename is None:
-        from ai_trading.paths import LOG_DIR
-
-        filename = str((LOG_DIR / "performance.csv").resolve())
-    try:
-        Path(os.path.dirname(filename)).mkdir(parents=True, exist_ok=True)
-    except PermissionError as exc:
-        logger.warning("Failed to log performance metrics: %s", exc)
-        return
-    try:
-        new = not os.path.exists(filename)
-        with open(filename, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=rec.keys())
-            if new:
-                writer.writeheader()
-            writer.writerow(rec)
-    except COMMON_EXC as exc:
-        logger.warning("Failed to log performance metrics: %s", exc)
-
-
-def log_trading_event(
-    event_type: str,
-    symbol: str,
-    details: dict[str, Any],
-    level: str = "INFO",
-    include_context: bool = True,
-) -> None:
-    """
-    Log structured trading events with comprehensive context information.
-
-    This function provides standardized logging for trading events with
-    optional context capture for debugging and audit purposes. It ensures
-    consistent formatting and includes relevant metadata for analysis.
-
-    Parameters
-    ----------
-    event_type : str
-        Type of trading event, such as:
-        - 'TRADE_EXECUTED': Order execution events
-        - 'SIGNAL_GENERATED': Signal generation events
-        - 'RISK_LIMIT_HIT': Risk management events
-        - 'DATA_FETCH_ERROR': Data retrieval issues
-        - 'API_ERROR': External API failures
-        - 'POSITION_UPDATE': Portfolio changes
-
-    symbol : str
-        Trading symbol associated with the event (e.g., 'AAPL', 'SPY')
-        Use 'SYSTEM' for system-wide events not tied to specific symbols
-
-    details : Dict[str, any]
-        Event-specific details containing relevant information:
-        - For trades: quantity, price, side, order_id
-        - For signals: confidence, strategy, timeframe
-        - For errors: error_code, retry_count, stack_trace
-
-    level : str, optional
-        Log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
-        Default is 'INFO' for standard events
-
-    include_context : bool, optional
-        Whether to include additional system context:
-        - Memory usage, CPU load
-        - Active positions count
-        - Market status
-        - Bot configuration state
-
-    Notes
-    -----
-    - Logs are automatically timestamped with UTC timezone
-    - Sensitive information (API keys, passwords) is automatically masked
-    - Large objects are truncated to prevent log bloat
-    - Context information is cached for performance
-    """
-    logger = get_logger(__name__)
-    if not isinstance(event_type, str) or not event_type.strip():
-        logger.error("Invalid event_type: %s", event_type)
-        return
-    if not isinstance(symbol, str) or not symbol.strip():
-        logger.error("Invalid symbol: %s", symbol)
-        return
-    if not isinstance(details, dict):
-        logger.error("Details must be a dictionary, got: %s", type(details))
-        return
-    sanitized_details = _sanitize_log_data(details.copy())
-    log_entry = {
-        "event_type": event_type.upper(),
-        "symbol": symbol.upper(),
-        "timestamp": datetime.now(UTC).isoformat(),
-        "details": sanitized_details,
-    }
-    if include_context:
-        log_entry["context"] = _get_system_context()
-    try:
-        json_message = json.dumps(log_entry, default=str, separators=(",", ":"), ensure_ascii=False)
-    except (TypeError, ValueError) as e:
-        logger.error("Failed to serialize log entry: %s", e)
-        json_message = f"SERIALIZATION_ERROR: {event_type} {symbol}"
-    base_logger = getattr(logger, "logger", logger)
-    log_method = getattr(base_logger, level.lower(), base_logger.info)
-    log_method("TRADING_EVENT: %s", json_message)
-
-
-def _sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
-    """
-    Remove or mask sensitive information from log data.
-
-    Parameters
-    ----------
-    data : Dict[str, any]
-        Raw data dictionary that may contain sensitive information
-
-    Returns
-    -------
-    Dict[str, any]
-        Sanitized data with sensitive fields masked or removed
-    """
-    sensitive_keys = {"api_key", "secret_key", "password", "token", "auth", "credentials", "private_key", "session_id"}
-    sanitized: dict[str, Any] = {}
-    for key, value in data.items():
-        key_lower = key.lower()
-        if any((sensitive in key_lower for sensitive in sensitive_keys)):
-            sanitized[key] = "***MASKED***"
-        elif isinstance(value, str):
-            sanitized[key] = value
-        elif isinstance(value, dict):
-            sanitized[key] = _sanitize_log_data(value)
-        else:
-            sanitized[key] = value
-    return sanitized
-
-
-def _get_system_context() -> dict[str, Any]:
-    """
-    Gather relevant system context for debugging purposes.
-
-    Returns
-    -------
-    Dict[str, any]
-        System context information including performance metrics
-    """
-    try:
-        import psutil
-    except COMMON_EXC as e:
-        return {"context_error": f"psutil missing: {e}"}
-    try:
-        context = {
-            "memory_usage_mb": round(psutil.virtual_memory().used / 1024 / 1024, 1),
-            "memory_percent": psutil.virtual_memory().percent,
-            "cpu_percent": psutil.cpu_percent(interval=None),
-            "disk_usage_percent": psutil.disk_usage("/").percent,
-        }
-        root = logging.getLogger()
-        handlers = getattr(root, "handlers", [])
-        try:
-            handler_count = len(handlers)
-        except TypeError:
-            handler_count = 0
-        context.update(
-            {
-                "python_version": sys.version.split()[0],
-                "log_level": root.level,
-                "handlers_count": handler_count,
-            }
-        )
-        return context
-    except COMMON_EXC as e:
-        return {"context_error": str(e)}
-
-
-def setup_enhanced_logging(
-    log_file: str = None,
-    level: str = "INFO",
-    enable_json_format: bool = False,
-    enable_performance_logging: bool = True,
-    max_file_size_mb: int = 100,
-    backup_count: int = 5,
-) -> None:
-    """
-    Setup enhanced logging configuration for the trading bot.
-
-    Configures multiple log handlers including file rotation, JSON formatting,
-    and performance monitoring to provide comprehensive logging capabilities.
-
-    Parameters
-    ----------
-    log_file : str, optional
-        Path to the main log file. If None, uses console logging only.
-    level : str, optional
-        Minimum log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
-    enable_json_format : bool, optional
-        Whether to use JSON formatting for structured logs
-    enable_performance_logging : bool, optional
-        Whether to enable performance and timing logs
-    max_file_size_mb : int, optional
-        Maximum size of log files before rotation (default: 100MB)
-    backup_count : int, optional
-        Number of backup log files to keep (default: 5)
-    """
-    global _LOGGING_CONFIGURED
-    with _LOGGING_LOCK:
-        if _LOGGING_CONFIGURED:
-            logging.getLogger(__name__).debug("Enhanced logging already configured, skipping duplicate setup")
-            return
-        root_logger = logging.getLogger()
-        root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-        root_logger.handlers.clear()
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_formatter = UTCFormatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%SZ",
-        )
-        console_handler.setFormatter(console_formatter)
-        from ai_trading.logging_filters import SecretFilter
-
-        secret_filter = SecretFilter()
-        console_handler.addFilter(secret_filter)
-        root_logger.addHandler(console_handler)
-        if log_file:
-            try:
-                Path(os.path.dirname(log_file)).mkdir(parents=True, exist_ok=True)
-                file_handler = RotatingFileHandler(
-                    log_file,
-                    maxBytes=max_file_size_mb * 1024 * 1024,
-                    backupCount=backup_count,
-                    encoding="utf-8",
-                )
-                file_formatter: logging.Formatter
-                if enable_json_format:
-                    file_formatter = JSONFormatter()
-                else:
-                    file_formatter = UTCFormatter(
-                        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                        datefmt="%Y-%m-%d %H:%M:%SZ",
-                    )
-                file_handler.setFormatter(file_formatter)
-                file_handler.addFilter(secret_filter)
-                root_logger.addHandler(file_handler)
-            except PermissionError as e:
-                logging.warning("Failed to setup file logging: %s", e)
-            except OSError as e:
-                logging.error("Failed to setup file logging: %s", e)
-        if enable_performance_logging:
-            _setup_performance_logging()
-        _LOGGING_CONFIGURED = True
-        logging.info(
-            "Enhanced logging configured - Level: %s, File: %s, JSON: %s",
-            level,
-            log_file or "console-only",
-            enable_json_format,
-        )
-
-
-def _setup_performance_logging():
-    """Setup performance-specific logging handlers."""
-    perf_logger = get_logger("performance")
-    perf_file = os.path.join(_runtime_env("BOT_LOG_DIR", "logs") or "logs", "performance.log")
-    try:
-        Path(os.path.dirname(perf_file)).mkdir(parents=True, exist_ok=True)
-    except PermissionError as e:
-        logging.warning("Could not setup performance logging: %s", e)
-        return
-    try:
-        perf_handler = RotatingFileHandler(perf_file, maxBytes=50 * 1024 * 1024, backupCount=3)
-        perf_formatter = UTCFormatter(
-            "%(asctime)s PERF %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%SZ",
-        )
-        perf_handler.setFormatter(perf_formatter)
-        from ai_trading.logging_filters import SecretFilter
-
-        perf_handler.addFilter(SecretFilter())
-        perf_logger.addHandler(perf_handler)
-        perf_logger.setLevel(logging.INFO)
-        perf_logger.propagate = False
-    except OSError as e:
-        logging.warning("Could not setup performance logging: %s", e)
-
-
-def dedupe_stream_handlers(log: logging.Logger) -> int:
-    """Public helper to dedupe duplicate ``StreamHandler`` instances on a logger.
-
-    Returns the final total number of handlers on the logger after dedupe.
-    """
-    before = len(log.handlers)
-    _ensure_single_handler(log)
-    after = len(log.handlers)
-    if after < before:
-        get_logger(__name__).info("LOGGING_SETUP_DEDUPED", extra={"before": before, "after": after})
-    return after
-
-
-def validate_logging_setup(logger: logging.Logger | None = None, *, dedupe: bool = False) -> dict[str, Any]:
-    """Validate logging configuration and (optionally) dedupe handlers.
-
-    Parameters
-    ----------
-    logger: Optional[logging.Logger]
-        Logger to validate; defaults to the root logger when ``None``.
-    dedupe: bool
-        When ``True``, duplicates are removed via :func:`dedupe_stream_handlers`.
-
-    Returns
-    -------
-    dict[str, Any]
-        Validation results including handler counts and issues.
-    """
-    log = logging.getLogger() if logger is None else logger
-    before_count = len(log.handlers)
-    if dedupe:
-        after_count = dedupe_stream_handlers(log)
-        did_dedupe = after_count < before_count
-    else:
-        after_count = before_count
-        did_dedupe = False
-    issues: list[str] = []
-    validation_result: dict[str, Any] = {
-        "handlers_count": after_count,
-        "before_handlers_count": before_count,
-        "deduped": did_dedupe,
-        "is_configured": _LOGGING_CONFIGURED,
-        "expected_max_handlers": 2,
-        "validation_passed": True,
-        "issues": issues,
-    }
-    if after_count > 2:
-        validation_result["validation_passed"] = False
-        validation_result["issues"].append(f"Too many handlers detected: {after_count} (expected ≤ 2)")
-        get_logger(__name__).warning("WARNING: %d handlers detected - possible duplicate logging setup", after_count)
-    if after_count == 0 and (not _LOGGING_CONFIGURED):
-        validation_result["validation_passed"] = False
-        validation_result["issues"].append("No logging handlers configured")
-    if validation_result["validation_passed"]:
-        get_logger(__name__).info("Logging validation passed - %d handlers configured", after_count)
-    else:
-        get_logger(__name__).error("Logging validation failed: %s", validation_result["issues"])
-    return validation_result
-
-
 __all__ = [
     "setup_logging",
     "configure_logging",
     "get_logger",
     "get_phase_logger",
-    "init_logger",
     "logger",
     "logger_once",
     "log_fetch_attempt",
     "log_backup_provider_used",
     "log_empty_retries_exhausted",
-    "log_performance_metrics",
-    "log_trading_event",
     "log_finnhub_disabled",
     "warn_finnhub_disabled_no_data",
     "log_data_quality_event",
     "log_compact_json",
     "log_market_fetch",
-    "setup_enhanced_logging",
-    "validate_logging_setup",
-    "dedupe_stream_handlers",
     "flush_log_throttle_summaries",
     "provider_log_deduper",
     "record_provider_log_suppressed",
@@ -1936,14 +1517,12 @@ __all__ = [
     "log_throttled_event",
     "reset_rate_limit_tracker",
     "shutdown_queue_listener",
-    "get_logging_queue_stats",
     "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",
     "with_extra",
     "info_kv",
     "warning_kv",
-    "error_kv",
     "SanitizingLoggerAdapter",
     "sanitize_extra",
 ]

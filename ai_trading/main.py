@@ -1088,15 +1088,6 @@ def _provider_fallback_active_for_timeframes(
     return bool(provider_state.get("using_backup"))
 
 
-def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
-    """Return ``True`` when provider telemetry indicates minute-data fallback."""
-
-    return _provider_fallback_active_for_timeframes(
-        provider_state,
-        include_daily=False,
-    )
-
-
 def _provider_family_token(raw_name: Any) -> str:
     """Collapse provider aliases into a stable family token for comparisons."""
 
@@ -2815,6 +2806,33 @@ def _install_signal_handlers() -> None:
             )
 
 
+def _require_netting_pipeline(trading_cfg: Any) -> None:
+    """Reject a resolved config that selects the legacy non-netting path.
+
+    The service only runs the netting pipeline. Tests may still opt in to the
+    legacy path explicitly while it is being removed.
+    """
+
+    if bool(getattr(trading_cfg, "netting_enabled", True)):
+        return
+    if _is_test_mode():
+        return
+    message = (
+        "AI_TRADING_NETTING_ENABLED=0 is no longer supported: the legacy "
+        "non-netting decision path cannot be run by the service. Set "
+        "AI_TRADING_NETTING_ENABLED=1 or leave it unset."
+    )
+    logger.critical(
+        "NETTING_DISABLED_UNSUPPORTED",
+        extra={
+            "governing_flag": "AI_TRADING_NETTING_ENABLED",
+            "netting_enabled": False,
+            "hint": "set AI_TRADING_NETTING_ENABLED=1 or leave it unset",
+        },
+    )
+    raise SystemExit(message)
+
+
 def _fail_fast_env() -> None:
     """Reload and validate mandatory environment variables early."""
 
@@ -2908,6 +2926,7 @@ def _fail_fast_env() -> None:
     except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
+    _require_netting_pipeline(trading_cfg)
     _log_config_effective_summary(trading_cfg)
 
     credential_warning_logged = False
@@ -3104,53 +3123,6 @@ def _interruptible_sleep(total_seconds: float) -> None:
         remaining -= slice_seconds
 
 
-def validate_environment() -> None:
-    """Ensure required environment variables are present and dependencies are available."""
-    from ai_trading.config.management import get_env, _resolve_alpaca_env
-
-    global config
-
-    missing: list[str] = []
-    key, secret, base_url = _resolve_alpaca_env()
-    if not key:
-        missing.append("ALPACA_API_KEY")
-    if not secret:
-        missing.append("ALPACA_SECRET_KEY")
-    if not base_url:
-        missing.append("ALPACA_TRADING_BASE_URL")
-
-    if hasattr(config, "WEBHOOK_SECRET"):
-        webhook_secret = getattr(config, "WEBHOOK_SECRET", "")
-    else:
-        webhook_secret = get_env("WEBHOOK_SECRET", "")
-    if not webhook_secret:
-        missing.append("WEBHOOK_SECRET")
-
-    for var in ("AI_TRADING_CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
-        if not get_env(var):
-            missing.append(var)
-
-    if missing:
-        raise RuntimeError(
-            "Missing required environment variables: " + ", ".join(missing)
-        )
-
-    _ = get_settings()
-    from ai_trading.paths import CACHE_DIR, DATA_DIR, LOG_DIR, MODELS_DIR, OUTPUT_DIR, ensure_runtime_paths
-
-    ensure_runtime_paths()
-    logger.info(
-        "RUNTIME_PATHS_READY",
-        extra={
-            "data": str(DATA_DIR),
-            "log": str(LOG_DIR),
-            "cache": str(CACHE_DIR),
-            "models": str(MODELS_DIR),
-            "output": str(OUTPUT_DIR),
-        },
-    )
-
-
 _TRADE_LOG_INITIALIZED = False
 
 
@@ -3269,57 +3241,6 @@ def _preflight_rl_runtime_model_path_permissions() -> bool:
         },
     )
     return False
-
-
-def run_bot(*_a, **_k) -> int:
-    """
-    Main entry point for the trading bot.
-
-    Sets up logging, validates configuration, and starts the bot.
-    """
-    initialize_runtime_environment()
-    global config
-    from ai_trading.logging import validate_logging_setup
-
-    validation_result = validate_logging_setup()
-    if not validation_result["validation_passed"]:
-        logger.error("Logging validation failed: %s", validation_result["issues"])
-    logger.info("Application startup - logging configured once")
-    try:
-        try:
-            reload_env(override=False)
-        except MAIN_FALLBACK_EXC as exc:  # noqa: BLE001
-            logger.critical("ENV_LOAD_FAILED", extra={"error": str(exc)})
-            return 1
-        config = get_settings()
-        if config is None:
-            logger.critical("SETTINGS_UNAVAILABLE")
-            return 1
-        validate_environment()
-        memory_optimizer = get_memory_optimizer()
-        if callable(memory_optimizer):
-            try:
-                memory_optimizer()
-            except MAIN_FALLBACK_EXC:
-                logger.debug("MEMORY_OPTIMIZER_DISABLED", exc_info=True)
-        elif memory_optimizer:
-            memory_optimizer.enable_low_memory_mode()
-            logger.info("Memory optimization enabled")
-        logger.info("Bot startup complete - entering main loop")
-        preflight_ok = preflight_import_health()
-        if not preflight_ok:
-            if should_enforce_strict_import_preflight():
-                logger.critical("IMPORT_PREFLIGHT_ABORT", extra={"strict": True})
-                raise SystemExit(1)
-            logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
-        if not _TRADE_LOG_INITIALIZED:
-            ensure_trade_log_path()
-        run_cycle()
-        _reset_warmup_cooldown_timestamp()
-        return 0
-    except (ValueError, TypeError, RuntimeError) as e:
-        logger.error("Bot startup failed: %s", e, exc_info=True)
-        return 1
 
 
 def run_flask_app(

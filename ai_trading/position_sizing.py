@@ -660,39 +660,4 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     )
 
 
-def get_max_position_size(
-    cfg: Any | None = None,
-    tcfg: Any | None = None,
-    *,
-    auto: bool = False,
-    force_refresh: bool = False,
-) -> float:
-    """Return only the resolved ``max_position_size`` value.
-
-    Parameters
-    ----------
-    cfg, tcfg:
-        Optional configuration objects. When ``tcfg`` is ``None`` it defaults
-        to ``cfg``. If both are ``None`` simple namespaces are used so the
-        resolver can still apply fallback logic.
-    auto:
-        When ``True`` the function overrides any ``max_position_mode`` on the
-        trading config and forces :func:`resolve_max_position_size` to operate
-        in automatic mode where the current equity is multiplied by
-        ``capital_cap``. If equity retrieval or ``capital_cap`` resolution
-        fails, the resolver falls back to default sizing.
-    force_refresh:
-        When ``True`` cached values are ignored.
-
-    """
-    cfg = cfg or SimpleNamespace()
-    tcfg = tcfg or cfg
-    if auto:
-        data = vars(tcfg).copy()
-        data["max_position_mode"] = "AUTO"
-        tcfg = SimpleNamespace(**data)
-    val, _ = resolve_max_position_size(cfg, tcfg, force_refresh=force_refresh)
-    return val
-
-
-__all__ = ["get_max_position_size", "resolve_max_position_size"]
+__all__ = ["resolve_max_position_size"]

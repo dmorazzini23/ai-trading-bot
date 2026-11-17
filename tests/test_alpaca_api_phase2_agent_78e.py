@@ -129,32 +129,6 @@ def test_cancel_order_request_constructor_variants(monkeypatch: pytest.MonkeyPat
     assert not hasattr(api, "TradingClientAdapter")
 
 
-def test_data_class_and_timeframe_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_import = builtins.__import__
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "alpaca.data":
-            raise ImportError(name)
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(api, "StockBarsRequest", object, raising=False)
-    monkeypatch.setattr(api, "TimeFrame", object, raising=False)
-    monkeypatch.setattr(api, "TimeFrameUnit", object, raising=False)
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
-        api._data_classes()
-
-    monkeypatch.setattr(api, "ALPACA_AVAILABLE", False)
-    with pytest.raises(RuntimeError, match="alpaca-py==0.42.1 is required"):
-        api.get_stock_bars_request_cls()
-    assert api.get_timeframe_unit_cls().__name__ == "object"
-
-    naive = dt.datetime(2024, 1, 2, 3, 4, 5, 999)
-    aware = dt.datetime(2024, 1, 2, 3, 4, 5, tzinfo=dt.timezone(dt.timedelta(hours=2)))
-    assert api._to_utc(naive).tzinfo is dt.timezone.utc
-    assert api._fmt_rfc3339_z(aware) == "2024-01-02T01:04:05Z"
-    with pytest.raises(ValueError, match="start and end"):
-        api._format_start_end_for_tradeapi("1Min", None, aware)
 
 
 def test_coerce_timeframe_edge_branches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -618,20 +592,3 @@ def test_alpaca_get_payload_shapes_and_metrics_failures(monkeypatch: pytest.Monk
     assert api.alpaca_get("/v2/account") == {"account_number": "acct-1"}
 
 
-def test_coerce_float_and_trade_update_state() -> None:
-    assert api._coerce_float("12.5") == 12.5
-    assert api._coerce_float("bad") is None
-    assert asyncio.iscoroutinefunction(api.start_trade_updates_stream)
-
-    asyncio.run(api.handle_trade_update(None))
-    asyncio.run(api.handle_trade_update(types.SimpleNamespace(event="", order=types.SimpleNamespace(id="o-0"))))
-    asyncio.run(api.handle_trade_update(types.SimpleNamespace(event="partial_fill", order=None)))
-    asyncio.run(api.handle_trade_update(types.SimpleNamespace(event="partial_fill", order=types.SimpleNamespace(symbol="AAPL"))))
-
-    order = types.SimpleNamespace(id="o-1", symbol="AAPL", filled_qty="1.5", filled_avg_price="100.25")
-    asyncio.run(api.handle_trade_update(types.SimpleNamespace(event="partial_fill", order=order)))
-    assert api.partial_fills["o-1"]["filled_qty"] == 1.5
-    asyncio.run(api.handle_trade_update(types.SimpleNamespace(event_type="partial_filled", order_data=order)))
-    assert "o-1" in api.partial_fills
-    asyncio.run(api.handle_trade_update(types.SimpleNamespace(event="fill", order=order)))
-    assert "o-1" not in api.partial_fills

@@ -108,21 +108,6 @@ def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
     assert not output_path.exists(), "Optimizer should return early without creating weights file"
 
 
-def test_weight_optimizer_logs_warning_on_empty_df(caplog):
-    """WeightOptimizer.optimize should warn when given an empty DataFrame."""
-
-    df = pd.DataFrame(
-        columns=["entry_price", "exit_price", "signal_tags", "side", "confidence"]
-    )
-    optimizer = meta_learning.WeightOptimizer()
-
-    with caplog.at_level(logging.WARNING):
-        optimizer.optimize(df)
-
-    assert any(
-        r.levelno == logging.WARNING and "WEIGHT_OPTIMIZER_EMPTY_DF" in r.getMessage()
-        for r in caplog.records
-    )
 
 
 def test_average_reward_debug(caplog, tmp_path, monkeypatch):

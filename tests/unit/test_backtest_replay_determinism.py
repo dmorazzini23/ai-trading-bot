@@ -1,52 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ai_trading.core.enums import RiskLevel
 from ai_trading.oms.event_store import EventStore
-from ai_trading.strategies.backtest import BacktestEngine as OmsBacktestEngine
 from ai_trading.strategies.backtester import BacktestEngine, DefaultExecutionModel
-from ai_trading.strategies.base import BaseStrategy, StrategySignal
 
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("sqlalchemy")
 
 
-class _AlwaysBuyStrategy(BaseStrategy):
-    def __init__(self) -> None:
-        super().__init__(
-            strategy_id="replay-determinism",
-            name="replay-determinism",
-            risk_level=RiskLevel.MODERATE,
-        )
-        self.symbols = ["AAPL"]
-
-    def generate_signals(self, market_data: dict[str, Any]) -> list[StrategySignal]:
-        _ = market_data
-        return [
-            StrategySignal(
-                symbol="AAPL",
-                side="buy",
-                strength=0.8,
-                confidence=0.9,
-            )
-        ]
-
-    def calculate_position_size(
-        self,
-        signal: StrategySignal,
-        portfolio_value: float,
-        current_position: float = 0,
-    ) -> int:
-        _ = signal
-        _ = portfolio_value
-        _ = current_position
-        return 1
 
 
 def _normalize_scalar(value: Any) -> Any:
@@ -150,62 +116,3 @@ def test_modern_backtester_replay_is_deterministic(
     assert _normalized_oms_rows(first_db) == _normalized_oms_rows(second_db)
 
 
-def test_backtest_replay_is_deterministic_without_input_timestamps(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("AI_TRADING_BACKTEST_OMS_EVENTS_ENABLED", "1")
-    monkeypatch.setenv("AI_TRADING_OMS_EVENT_JSONL_ENABLED", "0")
-    monkeypatch.setenv("AI_TRADING_LEGACY_BACKTEST_SEED", "17")
-
-    start = datetime(2025, 1, 1, tzinfo=UTC)
-    historical_data = {
-        "AAPL": [
-            {
-                "open": 100.0 + float(offset),
-                "high": 100.5 + float(offset),
-                "low": 99.5 + float(offset),
-                "close": 100.0 + float(offset),
-                "volume": 10_000.0,
-            }
-            for offset in range(8)
-        ]
-    }
-    strategy = _AlwaysBuyStrategy()
-    first_db = tmp_path / "backtest_replay_first.db"
-    second_db = tmp_path / "backtest_replay_second.db"
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{first_db}")
-    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(first_db))
-    first_engine = OmsBacktestEngine(
-        initial_capital=10_000.0,
-        commission_bps=1.0,
-        commission_flat=0.25,
-        enable_slippage=True,
-        enable_partial_fills=True,
-    )
-    first_result = first_engine.run_backtest(
-        strategy=strategy,
-        historical_data=historical_data,
-        start_date=start,
-        end_date=start + timedelta(days=7),
-    )
-
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{second_db}")
-    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(second_db))
-    second_engine = OmsBacktestEngine(
-        initial_capital=10_000.0,
-        commission_bps=1.0,
-        commission_flat=0.25,
-        enable_slippage=True,
-        enable_partial_fills=True,
-    )
-    second_result = second_engine.run_backtest(
-        strategy=strategy,
-        historical_data=historical_data,
-        start_date=start,
-        end_date=start + timedelta(days=7),
-    )
-
-    assert dict(first_result) == dict(second_result)
-    assert _normalized_oms_rows(first_db) == _normalized_oms_rows(second_db)

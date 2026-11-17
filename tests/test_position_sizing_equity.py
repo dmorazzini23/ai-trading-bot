@@ -75,36 +75,6 @@ def test_fetch_equity_sets_paper(monkeypatch):
 
     assert calls.get("paper") is True
 
-def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
-    # Ensure cache is clear
-    _reset_cache()
-    ps._once_logger._emitted_keys.clear()
-
-    # Stub equity fetcher to return a positive value
-    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
-
-    class Cfg:
-        capital_cap = 0.04
-        dollar_risk_limit = 0.05
-        max_position_size = None
-        max_position_mode = "STATIC"
-
-    cfg = Cfg()
-
-    # Runtime construction should not trigger broker IO for static default sizing.
-    rt.build_runtime(cfg)
-    assert getattr(cfg, "equity", None) is None
-
-    # Force recompute and ensure on-demand sizing fetches equity without
-    # logging a missing-equity warning.
-    cfg.max_position_size = None
-    caplog.set_level(logging.WARNING)
-    caplog.clear()
-    ps.get_max_position_size(cfg, force_refresh=True)
-    assert getattr(cfg, "equity", None) == 1000.0
-    assert not any(
-        r.msg == "EQUITY_MISSING" for r in caplog.records if r.name == "ai_trading.position_sizing"
-    )
 
 
 def test_build_runtime_uses_required_default_without_resolve_for_sparse_static_cfg(monkeypatch):
@@ -121,13 +91,6 @@ def test_build_runtime_uses_required_default_without_resolve_for_sparse_static_c
     assert runtime.params["MAX_POSITION_SIZE"] == 8000.0
 
 
-def test_get_max_position_size_auto_multiplies_equity(monkeypatch):
-    _reset_cache()
-    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
-
-    cfg = SimpleNamespace(capital_cap=0.05)
-    val = ps.get_max_position_size(cfg, auto=True, force_refresh=True)
-    assert val == 50.0
 
 
 def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, caplog):

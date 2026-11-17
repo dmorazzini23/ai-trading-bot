@@ -82,26 +82,6 @@ def mark_skipped(symbol: str, timeframe: str) -> int:
         return _SKIPPED_SYMBOLS[key]
 
 
-def inc_rate_limit(host: str) -> int:
-    """Increment rate-limit counter for ``host`` and return the total."""
-    with _RATE_LIMIT_LOCK:
-        _RATE_LIMITS[host] += 1
-        global rate_limit
-        rate_limit += 1
-        _metrics.rate_limit += 1
-        return _RATE_LIMITS[host]
-
-
-def inc_timeout(host: str) -> int:
-    """Increment timeout counter for ``host`` and return the total."""
-    with _TIMEOUT_LOCK:
-        _TIMEOUTS[host] += 1
-        global timeout
-        timeout += 1
-        _metrics.timeout += 1
-        return _TIMEOUTS[host]
-
-
 def inc_unauthorized_sip(host: str) -> int:
     """Increment unauthorized SIP counter for ``host`` and return the total."""
     with _UNAUTH_LOCK:
@@ -121,21 +101,6 @@ def inc_empty_payload(symbol: str, timeframe: str) -> int:
         empty_payload += 1
         _metrics.empty_payload += 1
         return _EMPTY[key]
-
-
-def inc_fetch_attempt(provider: str) -> int:
-    """Record a fetch attempt for ``provider`` and return the running total."""
-    with _FETCH_ATTEMPT_LOCK:
-        _FETCH_ATTEMPTS[provider] += 1
-        return _FETCH_ATTEMPTS[provider]
-
-
-def inc_alpaca_failed() -> int:
-    """Increment and return the Alpaca failure count."""
-    global _ALPACA_FAILED
-    with _ALPACA_FAILED_LOCK:
-        _ALPACA_FAILED += 1
-        return _ALPACA_FAILED
 
 
 def _current_value(metric: object) -> int:
@@ -206,19 +171,6 @@ def backup_provider_used_total(provider: str | None = None) -> int:
         return int(sum(_BACKUP_PROVIDER_USED_COUNTS.values()))
 
 
-def inc_provider_disable_total(provider: str) -> int:
-    """Increment provider-disable counter and return the current value."""
-
-    total = _PROVIDER_DISABLE_TOTALS.get(provider, 0) + 1
-    _PROVIDER_DISABLE_TOTALS[provider] = total
-    try:
-        metric = _provider_disable_total_counter.labels(provider=provider)
-        metric.inc()
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        logger.debug("PROVIDER_DISABLE_TOTAL_METRIC_INC_FAILED", extra={"provider": provider}, exc_info=True)
-    return total
-
-
 def provider_disabled(provider: str) -> int:
     """Return the current disabled gauge value for ``provider``."""
     metric = _provider_disabled_gauge.labels(provider=provider)
@@ -278,14 +230,11 @@ def reset() -> None:
 
 __all__ = [
     "mark_skipped",
-    "inc_rate_limit",
-    "inc_timeout",
     "inc_unauthorized_sip",
     "inc_empty_payload",
     "inc_provider_fallback",
     "inc_backup_provider_used",
     "backup_provider_used_total",
-    "inc_provider_disable_total",
     "provider_disabled",
     "snapshot",
     "reset",
@@ -302,6 +251,4 @@ __all__ = [
     "_EMPTY",
     "_FETCH_ATTEMPTS",
     "_ALPACA_FAILED",
-    "inc_fetch_attempt",
-    "inc_alpaca_failed",
 ]

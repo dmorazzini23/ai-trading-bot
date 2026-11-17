@@ -8,18 +8,11 @@ pd = pytest.importorskip("pandas")
 
 np.random.seed(0)
 
-from ai_trading.signals import GaussianHMM, detect_market_regime_hmm, prepare_indicators
+from ai_trading.signals import GaussianHMM, prepare_indicators
 import ai_trading.signals.indicators as ind
 import ai_trading.signals as signals_mod
 
 
-def test_hmm_regime_detection():
-    if GaussianHMM is None:
-        pytest.skip("hmmlearn not installed")
-    df = pd.DataFrame({"Close": np.random.rand(100) + 100})
-    regimes = detect_market_regime_hmm(df)
-    assert isinstance(regimes, np.ndarray)
-    assert regimes.shape[0] == len(df)
 
 
 @pytest.fixture

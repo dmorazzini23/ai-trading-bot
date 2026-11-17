@@ -131,7 +131,7 @@ When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
   runtime volume.
 - Generic pickle/cloudpickle/dill model deserialization is retired from the
   supported runtime/model-registry path.
-- `ai_trading.ml.model_io` and the rich model registry only accept JSON-safe
+- The rich model registry only accepts JSON-safe
   inline artifacts or explicit approved artifact paths.
-- The legacy database manager is retired outside tests; runtime durability uses
+- The legacy database manager has been removed; runtime durability uses
   OMS-backed persistence only.

@@ -2,7 +2,7 @@ from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from threading import Lock
 from typing import Any, cast
@@ -389,14 +389,6 @@ def reset_screener_cache() -> None:
         _LAST_GOOD_AT.clear()
 
 
-def snapshot_to_dict(snapshot: MarketMoversSnapshot | MostActivesSnapshot) -> dict[str, Any]:
-    payload = cast(dict[str, Any], asdict(snapshot))
-    last_updated = payload.get("last_updated")
-    if isinstance(last_updated, datetime):
-        payload["last_updated"] = last_updated.isoformat()
-    return payload
-
-
 __all__ = [
     "ActiveStock",
     "MarketMover",
@@ -405,5 +397,4 @@ __all__ = [
     "fetch_market_movers",
     "fetch_most_actives",
     "reset_screener_cache",
-    "snapshot_to_dict",
 ]

@@ -55,54 +55,5 @@ def test_registry_persists_sorts_and_filters_actions(tmp_path: Any) -> None:
     assert registry.get_actions("MSFT") == []
 
 
-def test_adjustment_factors_and_bars_use_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    registry = corp_actions.CorporateActionRegistry(str(tmp_path))
-    registry.add_action("AAPL", "2020-08-31", "split", 4.0)
-    monkeypatch.setattr(corp_actions, "_global_registry", registry)
-
-    price_factor, volume_factor = registry.get_adjustment_factors(
-        "AAPL",
-        reference_date=date(2020, 9, 2),
-        target_date=date(2020, 8, 28),
-    )
-    forward_price_factor, forward_volume_factor = registry.get_adjustment_factors(
-        "AAPL",
-        reference_date=date(2020, 8, 28),
-        target_date=date(2020, 9, 2),
-    )
-
-    assert (price_factor, volume_factor) == pytest.approx((0.25, 4.0))
-    assert (forward_price_factor, forward_volume_factor) == pytest.approx((4.0, 0.25))
-    assert registry.get_adjustment_factors("AAPL", date(2020, 9, 2), date(2020, 9, 2)) == (
-        1.0,
-        1.0,
-    )
-
-    bars = pd.DataFrame(
-        {
-            "open": [100.0, 200.0],
-            "close": [101.0, 201.0],
-            "volume": [1_000.0, 2_000.0],
-            "note": ["pre", "post"],
-        },
-        index=pd.to_datetime(["2020-08-28", "2020-09-02"]),
-    )
-
-    adjusted = corp_actions.adjust_bars(bars, "AAPL", reference_date=date(2020, 9, 2))
-
-    assert adjusted.loc[pd.Timestamp("2020-08-28"), "open"] == pytest.approx(25.0)
-    assert adjusted.loc[pd.Timestamp("2020-08-28"), "volume"] == pytest.approx(4_000.0)
-    assert adjusted.loc[pd.Timestamp("2020-09-02"), "close"] == pytest.approx(201.0)
-    assert adjusted.loc[pd.Timestamp("2020-08-28"), "note"] == "pre"
-    assert corp_actions.apply_adjustment_factor(10.0, 0.25) == pytest.approx(2.5)
 
 
-def test_populate_common_splits_uses_global_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    registry = corp_actions.CorporateActionRegistry(str(tmp_path))
-    monkeypatch.setattr(corp_actions, "_global_registry", registry)
-
-    corp_actions.populate_common_splits()
-
-    assert {action.symbol for action in registry.get_actions("TSLA")} == {"TSLA"}
-    assert registry.get_actions("AAPL")[0].ratio == 4.0
-    assert registry.get_actions("NVDA")[0].source == "manual"

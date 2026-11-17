@@ -84,9 +84,3 @@ def test_calculate_position_size_invalid_args():
         risk_engine.calculate_position_size()
 
 
-def test_register_trade_blocked():
-    """register_trade returns None when trading not allowed."""
-    eng = risk_engine.RiskEngine()
-    eng.max_trades = 1
-    eng.current_trades = 1
-    assert risk_engine.register_trade(eng, 1) is None

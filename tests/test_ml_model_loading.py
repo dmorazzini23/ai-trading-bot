@@ -243,106 +243,16 @@ def test_load_model_from_internal_dir(tmp_path, monkeypatch):
     assert hasattr(loaded, "predict")
 
 
-def test_train_and_save_model_synthetic_fallback_is_test_only_and_not_persisted(tmp_path, monkeypatch):
-    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: None)
-
-    model = model_loader.train_and_save_model("SYN", tmp_path)
-
-    model_path = tmp_path / "SYN.pkl"
-    assert hasattr(model, "predict")
-    assert not model_path.exists()
-    assert not default_manifest_path(model_path).exists()
-    assert list(model.feature_names_in_) == list(LIVE_ML_FEATURE_COLUMNS)
-    assert set(model.predict(np.zeros((4, len(LIVE_ML_FEATURE_COLUMNS)))).tolist()) <= {0, 1}
 
 
-def test_train_and_save_model_rejects_short_real_history_without_one_column_artifact(
-    tmp_path,
-    monkeypatch,
-):
-    pd = pytest.importorskip("pandas")
-    rows = 80
-    frame = pd.DataFrame(
-        {
-            "close": 100.0 + np.sin(np.arange(rows, dtype=float) / 3.0),
-            "volume": np.linspace(100_000.0, 120_000.0, rows),
-        },
-        index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
-    )
-    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: frame)
-
-    with pytest.raises(RuntimeError, match="No labeled training rows|Insufficient labeled training rows"):
-        model_loader.train_and_save_model("SHORT", tmp_path)
-
-    model_path = tmp_path / "SHORT.pkl"
-    assert not model_path.exists()
-    assert not default_manifest_path(model_path).exists()
 
 
-def test_train_and_save_model_fails_closed_without_real_bars_in_runtime(tmp_path, monkeypatch):
-    monkeypatch.setattr("ai_trading.data.fetch.get_daily_df", lambda *_args, **_kwargs: None)
-
-    def fake_get_env(key, default=None, **_kwargs):
-        if key in {
-            "PYTEST_CURRENT_TEST",
-            "PYTEST_RUNNING",
-            "TESTING",
-            "AI_TRADING_MODEL_TRAINING_SMOKE",
-        }:
-            return "" if isinstance(default, str) else False
-        return default
-
-    monkeypatch.setattr(model_loader, "get_env", fake_get_env)
-
-    with pytest.raises(RuntimeError, match="Real training bars unavailable"):
-        model_loader.train_and_save_model("SYN", tmp_path)
 
 
-def test_training_frame_trend_uses_past_only_for_future_tail_mutation():
-    pd = pytest.importorskip("pandas")
-    rows = 260
-    close = 100.0 + np.arange(rows, dtype=float) * 0.1 + np.sin(np.arange(rows) / 4.0)
-    base = pd.DataFrame(
-        {"close": close, "volume": np.linspace(100_000.0, 120_000.0, rows)},
-        index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
-    )
-    mutated = base.copy()
-    mutation_start = base.index[230]
-    mutated.loc[mutation_start:, "close"] = mutated.loc[mutation_start:, "close"] + 10_000.0
-
-    base_features = model_loader._build_training_frame(base)
-    mutated_features = model_loader._build_training_frame(mutated)
-
-    past_index = base_features.index[base_features.index < mutation_start]
-    pd.testing.assert_series_equal(
-        base_features.loc[past_index, "rsi"],
-        mutated_features.loc[past_index, "rsi"],
-    )
 
 
-def test_training_frame_drops_final_missing_future_close_before_labeling():
-    pd = pytest.importorskip("pandas")
-    rows = 240
-    frame = pd.DataFrame(
-        {"close": np.arange(100.0, 100.0 + rows), "volume": np.linspace(100.0, 200.0, rows)},
-        index=pd.date_range("2025-01-01", periods=rows, freq="D", tz="UTC"),
-    )
-
-    features = model_loader._build_training_frame(frame)
-
-    assert frame.index[-1] not in features.index
-    assert set(features["y"].astype(int).unique()) == {1}
 
 
-def test_next_bar_safe_time_series_splits_leave_label_gap():
-    pytest.importorskip("sklearn")
-
-    splits = list(model_loader._next_bar_safe_time_series_splits(np.arange(80), n_splits=4))
-
-    assert splits
-    for train_idx, test_idx in splits:
-        assert len(train_idx) > 0
-        assert train_idx.max() + 1 < test_idx.min()
 
 
 def test_live_model_loader_requires_verified_artifact(tmp_path, monkeypatch):

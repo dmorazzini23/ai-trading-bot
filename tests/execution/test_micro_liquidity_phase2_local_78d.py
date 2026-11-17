@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
 from ai_trading.execution import liquidity as liq
-from ai_trading.execution import microstructure as ms
 
 
 def test_liquidity_analysis_recommendations_trends_and_manager() -> None:
@@ -77,47 +76,3 @@ def test_liquidity_error_and_market_hour_branches(monkeypatch) -> None:
     assert analyzer._analyze_market_hours_liquidity()["liquidity_impact"] in {"high", "reduced", "elevated"}
 
 
-def test_microstructure_flow_spread_impact_and_defaults() -> None:
-    now = datetime.now(UTC)
-    trades = [
-        {
-            "timestamp": now + timedelta(seconds=i),
-            "price": 100.0 + i * 0.05,
-            "size": 100 + i * 50,
-            "side": "buy" if i % 2 == 0 else "sell",
-            "quote_mid": 100.0,
-            "quote_mid_before": 100.0,
-        }
-        for i in range(25)
-    ]
-    quotes = [
-        {"timestamp": now + timedelta(seconds=i + 1), "bid_size": 1000 + i, "ask_size": 500, "bid_price": 100.0, "ask_price": 100.2}
-        for i in range(25)
-    ]
-    spread = ms.BidAskSpreadAnalyzer()
-    spread_features = spread.analyze_spread_features(
-        {"bid_price": 100.0, "ask_price": 100.1, "last_price": 100.08, "bid_size": 12_000, "ask_size": 10_000},
-        trades,
-    )
-    assert spread_features["spread_bps"] > 0
-    assert spread.classify_spread_regime(spread_features) in set(ms.MarketRegimeFeature)
-    assert spread._calculate_trade_spreads([{"price": 0}]) == (0.0, 0.0)
-
-    flow = ms.OrderFlowAnalyzer()
-    flow_features = flow.analyze_order_flow(trades, quotes)
-    assert flow_features["trade_intensity"] > 0
-    toxicity = flow.detect_toxic_flow({"order_flow_toxicity": 0.8, "trade_intensity": 11.0, "order_imbalance": 0.9})
-    assert toxicity["risk_level"] == "extreme"
-    assert toxicity["recommendations"]
-
-    engine = ms.MarketMicrostructureEngine()
-    micro = engine.analyze_market_microstructure(
-        "AAPL",
-        {"bid_price": 100.0, "ask_price": 100.1, "last_price": 100.05, "bid_size": 1000, "ask_size": 1200, "volume": 50_000},
-        trades,
-        quotes,
-    )
-    impact = engine.estimate_execution_impact(5_000, micro)
-    assert impact["total_impact_bps"] > 0
-    assert engine._calculate_autocorrelation([1.0, 2.0], lag=5) == 0.0
-    assert engine._create_default_microstructure_data("BAD").symbol == "BAD"

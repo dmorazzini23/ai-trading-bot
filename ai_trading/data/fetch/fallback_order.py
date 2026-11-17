@@ -126,18 +126,6 @@ def demote_provider(symbol: str, provider: str | None = None) -> None:
         )
 
 
-def mark_yahoo(symbol: str | None = None) -> None:
-    """Record that Yahoo was used as a fallback.
-
-    ``symbol`` is optional for legacy callers without symbol context. When
-    provided, the pair is forwarded to :func:`register_fallback`.
-    """
-
-    if symbol is None:
-        symbol = ""
-    register_fallback("yahoo", symbol)
-
-
 def reset() -> None:
     """Reset tracked state and registries (used in tests)."""
 
@@ -152,7 +140,6 @@ __all__ = [
     "FALLBACK_PROVIDERS",
     "FALLBACK_SYMBOLS",
     "register_fallback",
-    "mark_yahoo",
     "resolve_promoted_provider",
     "promote_high_resolution",
     "demote_provider",

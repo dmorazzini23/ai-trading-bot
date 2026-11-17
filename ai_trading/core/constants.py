@@ -48,17 +48,3 @@ TRADING_CONSTANTS: dict[str, Any] = {
     'SYSTEM_LIMITS': SYSTEM_LIMITS,
 }
 
-
-def market_hours_utc_for(timestamp: datetime | None = None) -> dict[str, time]:
-    """Return configured market hours converted to UTC for ``timestamp``'s date."""
-
-    base = timestamp or datetime.now(UTC)
-    if base.tzinfo is None:
-        raise ValueError("timestamp must be timezone-aware")
-    session_date = base.astimezone(MARKET_TIMEZONE).date()
-    return {
-        name: datetime.combine(session_date, value, tzinfo=MARKET_TIMEZONE)
-        .astimezone(UTC)
-        .time()
-        for name, value in MARKET_HOURS.items()
-    }

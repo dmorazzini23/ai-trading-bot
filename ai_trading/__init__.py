@@ -15,7 +15,6 @@ PYTEST_DONT_REWRITE = ["ai_trading"]
 _PUBLIC_EXPORTS = {
     "alpaca_api": "ai_trading.alpaca_api",
     "app": "ai_trading.app",
-    "audit": "ai_trading.audit",
     "capital_scaling": "ai_trading.capital_scaling",
     "config": "ai_trading.config",
     "core": "ai_trading.core",
@@ -42,7 +41,6 @@ _PUBLIC_EXPORTS = {
 
 _LEGACY_RESEARCH_EXPORTS = {
     "predict": "ai_trading.predict",
-    "trade_logic": "ai_trading.trade_logic",
 }
 
 _EXPORTS = {**_PUBLIC_EXPORTS, **_LEGACY_RESEARCH_EXPORTS}
@@ -51,7 +49,6 @@ __all__ = sorted(_PUBLIC_EXPORTS)
 
 _DEPRECATED_RESEARCH_EXPORTS = {
     "predict": "ai_trading.predict is deprecated as a package-level live API; use it only for research utilities.",
-    "trade_logic": "ai_trading.trade_logic is deprecated as a package-level live API; use it only for research utilities.",
 }
 
 

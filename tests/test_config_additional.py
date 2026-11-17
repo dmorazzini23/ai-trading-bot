@@ -19,11 +19,6 @@ def test_require_env_vars_failure(monkeypatch, caplog):
     assert "Missing required environment variables" in caplog.text
 
 
-def test_validate_environment_failure(monkeypatch):
-    """validate_environment raises when vars missing."""
-    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    with pytest.raises(RuntimeError):
-        config.validate_environment()
 
 
 def test_validate_alpaca_credentials_missing(monkeypatch):
@@ -130,11 +125,3 @@ def test_reload_env_refreshes_exported_runtime_constants(monkeypatch, tmp_path):
     assert config.SAFE_MODE_ALLOW_PAPER is False
 
 
-def test_log_config_does_not_log(monkeypatch, caplog):
-    monkeypatch.setenv("ALPACA_API_KEY", "secret1234")
-    caplog.set_level("INFO")
-    config._CONFIG_LOGGED = False
-    config.log_config(["ALPACA_API_KEY"])
-    assert caplog.text == ""
-    assert "secret1234" not in caplog.text
-    assert config._CONFIG_LOGGED

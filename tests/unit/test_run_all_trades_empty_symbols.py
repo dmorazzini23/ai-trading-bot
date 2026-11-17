@@ -92,6 +92,8 @@ def test_run_all_trades_handles_empty_symbols(monkeypatch):
     process_mock = Mock()
     monkeypatch.setattr(eng, "_process_symbols", process_mock)
 
+    # _prepare_run is only reached on the legacy non-netting path; opt in explicitly.
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(eng, "_prepare_run", lambda *_a, **_k: (0.0, True, []))
 
     eng.run_all_trades_worker(state, runtime)

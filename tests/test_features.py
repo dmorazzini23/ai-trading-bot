@@ -5,7 +5,6 @@ from typing import Any, cast
 import pytest
 
 pd = pytest.importorskip("pandas")
-from ai_trading.features import build_features_pipeline
 from ai_trading.features.indicators import compute_vwap
 
 ps_stub = types.ModuleType("pydantic_settings")
@@ -31,21 +30,6 @@ def features_env(monkeypatch):
     yield
 
 
-def test_features_pipeline():
-    n = 60
-    data = {
-        'open': list(range(100, 100 + n)),
-        'high': list(range(101, 101 + n)),
-        'low': list(range(99, 99 + n)),
-        'close': [x + 0.5 for x in range(100, 100 + n)],
-        'volume': list(range(1000, 1000 + n))
-    }
-    df = pd.DataFrame(data)
-    df = build_features_pipeline(df, 'TEST')
-    assert all(col in df.columns for col in ['macd', 'macds', 'atr', 'vwap']), "Missing computed columns"
-    assert not df[['macd', 'macds', 'atr', 'vwap']].isnull().all().any(), "Indicators have all NaNs"
-    na_counts = df[['macd', 'atr', 'vwap', 'macds']].isna().sum()
-    assert (na_counts <= 20).all(), f"Excessive NaNs in features: {na_counts}"
 
 
 def test_intraday_vwap_resets_by_timestamp_date():
@@ -71,5 +55,3 @@ def test_intraday_vwap_resets_by_timestamp_date():
     assert out["vwap"].tolist() == [10.0, 15.0, 100.0]
 
 
-if __name__ == "__main__":
-    test_features_pipeline()

@@ -194,30 +194,6 @@ def get_reference_latest_price(ctx, symbol: str) -> float | None:
     return price if price > 0 else None
 
 
-def get_analytics_latest_price(ctx, symbol: str) -> float | None:
-    """Return analytics price, explicitly allowing stale daily close fallback."""
-
-    reference_price = get_reference_latest_price(ctx, symbol)
-    if reference_price is not None:
-        return reference_price
-    try:
-        df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
-    except (KeyError, ValueError, TypeError, OSError, AttributeError):
-        return None
-    price = _last_close_from(df_day)
-    try:
-        price_float = float(price)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(price_float) or price_float <= 0.0:
-        return None
-    logger.info(
-        'ANALYTICS_STALE_PRICE_FALLBACK',
-        extra={'symbol': symbol, 'timestamp': str(_last_timestamp_from(df_day))},
-    )
-    return price_float
-
-
 def get_latest_price(ctx, symbol: str) -> float | None:
     """Backward-compatible alias for execution pricing."""
 

@@ -100,17 +100,6 @@ def get_reference_bars_feed(requested: str | None = None) -> ExecutionFeed:
     return "iex"
 
 
-def resolve_feed_for_role(
-    requested: str | None = None,
-    *,
-    role: FeedRole | str = "execution",
-) -> str:
-    normalized_role = normalize_feed_role(str(role))
-    if normalized_role == "reference":
-        return get_reference_feed(requested)
-    return get_execution_feed(requested)
-
-
 __all__ = [
     "FeedRole",
     "ExecutionFeed",
@@ -120,5 +109,4 @@ __all__ = [
     "get_execution_feed",
     "get_reference_feed",
     "get_reference_bars_feed",
-    "resolve_feed_for_role",
 ]

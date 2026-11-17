@@ -259,26 +259,6 @@ def test_host_semaphore_is_scoped_per_event_loop(monkeypatch):
     _reload_pooling(pooling)
 
 
-def test_invalidating_limit_cache_refreshes_semaphore(monkeypatch):
-    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
-    pooling = _reload_pooling()
-
-    loop = asyncio.new_event_loop()
-    try:
-        first_id = loop.run_until_complete(_semaphore_id(pooling))
-        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=4)) == 2
-
-        monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "5")
-        pooling.invalidate_host_limit_cache()
-
-        second_id = loop.run_until_complete(_semaphore_id(pooling))
-        assert second_id != first_id
-        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=8)) == 5
-    finally:
-        loop.close()
-
-    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-    _reload_pooling(pooling)
 
 
 def test_http_host_limit_controller_legacy_env(monkeypatch):
@@ -362,43 +342,8 @@ def test_reload_host_limit_handles_invalid_env(monkeypatch):
     _reload_pooling(pooling)
 
 
-def test_sync_host_limiter_handles_invalid_http_host_limit(monkeypatch):
-    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-    monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "bad-value")
-    pooling = _reload_pooling()
-
-    limiter = pooling.get_host_limiter("example.com")
-
-    assert getattr(limiter, "_ai_trading_host_limit") == pooling._DEFAULT_LIMIT
-
-    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
-    _reload_pooling(pooling)
 
 
-def test_http_host_limit_survives_partial_pooling_stub(monkeypatch):
-    http_host_limit = reload_module("ai_trading.net.http_host_limit")
-    monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "2")
-
-    stub = types.SimpleNamespace()
-    monkeypatch.setattr(http_host_limit, "pooling", stub, raising=False)
-
-    loop = asyncio.new_event_loop()
-    try:
-        async def _exercise_async():
-            async with http_host_limit.host_limiter_async("Example.com"):
-                async with http_host_limit.host_limiter_async("Example.com"):
-                    assert http_host_limit.current_inflight() == 2
-
-        loop.run_until_complete(_exercise_async())
-    finally:
-        loop.close()
-
-    with http_host_limit.host_limiter("Example.com"):
-        assert http_host_limit.current_inflight() == 1
-
-    assert http_host_limit.current_inflight() == 0
-
-    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
 
 
 def test_config_changes_refresh_semaphore(monkeypatch):
@@ -431,84 +376,5 @@ def test_config_changes_refresh_semaphore(monkeypatch):
     _reload_pooling(pooling)
 
 
-def test_fallback_concurrency_shares_pooling_host_limit(monkeypatch):
-    from ai_trading.data.fallback import concurrency as fallback_concurrency
-
-    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "3")
-    pooling = _reload_pooling()
-
-    fallback_concurrency.reset_tracking_state()
-    fallback_concurrency.reset_peak_simultaneous_workers()
-
-    original_state = getattr(fallback_concurrency, "_POOLING_LIMIT_STATE", None)
-    fallback_concurrency._POOLING_LIMIT_STATE = None
-
-    try:
-        snapshot = pooling.reload_host_limit_if_env_changed()
-        assert snapshot.limit == 3
-
-        async def _exercise() -> tuple[int | None, int | None]:
-            limit = fallback_concurrency._get_effective_host_limit()
-            semaphore = fallback_concurrency._get_host_limit_semaphore()
-            assert isinstance(semaphore, asyncio.Semaphore)
-            recorded_limit = getattr(semaphore, "_ai_trading_host_limit", None)
-            return limit, recorded_limit
-
-        loop = asyncio.new_event_loop()
-        try:
-            limit, recorded_limit = loop.run_until_complete(_exercise())
-        finally:
-            loop.close()
-
-        assert limit == 3
-        assert recorded_limit == 3
-    finally:
-        fallback_concurrency._POOLING_LIMIT_STATE = original_state
-        monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-        _reload_pooling(pooling)
 
 
-def test_pooling_reload_invalidates_fallback_snapshot(monkeypatch):
-    from ai_trading.data.fallback import concurrency as fallback
-
-    original_state = getattr(fallback, "_POOLING_LIMIT_STATE", None)
-
-    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "4")
-    pooling = _reload_pooling()
-
-    async def _prime() -> None:
-        async def worker(symbol: str) -> str:
-            await asyncio.sleep(0)
-            return symbol
-
-        await fallback.run_with_concurrency(["AA", "BB"], worker, max_concurrency=6)
-
-    asyncio.run(_prime())
-
-    assert getattr(fallback, "_POOLING_LIMIT_STATE", None) is not None
-    assert fallback._POOLING_LIMIT_STATE[0] == 4  # type: ignore[index]
-
-    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
-    pooling = _reload_pooling(pooling)
-
-    assert getattr(fallback, "_POOLING_LIMIT_STATE", None) is None
-
-    limit_after_reload = fallback._get_effective_host_limit()
-    assert limit_after_reload == 2
-
-    asyncio.run(_prime())
-
-    refreshed_state = getattr(fallback, "_POOLING_LIMIT_STATE", None)
-    assert refreshed_state is not None
-    assert refreshed_state[0] == 2
-
-    fallback.reset_tracking_state()
-    fallback.reset_peak_simultaneous_workers()
-    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-    try:
-        if original_state is None:
-            fallback._POOLING_LIMIT_STATE = None
-        else:
-            fallback._POOLING_LIMIT_STATE = original_state
-    finally:
-        _reload_pooling(pooling)

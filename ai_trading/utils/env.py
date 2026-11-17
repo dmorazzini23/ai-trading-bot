@@ -61,19 +61,6 @@ def refresh_alpaca_credentials_cache() -> None:
     reset_alpaca_credential_state()
 
 
-def get_resolved_alpaca_credentials() -> AlpacaCredentials:
-    """Return the resolved Alpaca credentials with source metadata."""
-
-    return resolve_alpaca_credentials_with_base()
-
-
-def resolve_alpaca_creds(env: Mapping[str, str] | None = None) -> tuple[str | None, str | None]:
-    """Return Alpaca credentials preferring canonical env vars."""
-
-    creds = resolve_alpaca_credentials(env)
-    return creds.key, creds.secret
-
-
 def get_alpaca_creds() -> tuple[str, str]:
     """Return Alpaca API credentials using canonical precedence."""
 
@@ -255,8 +242,6 @@ __all__ = [
     "resolve_alpaca_feed",
     "resolve_alpaca_reference_feed",
     "alpaca_credential_status",
-    "get_resolved_alpaca_credentials",
-    "resolve_alpaca_creds",
     "is_data_feed_downgraded",
     "get_data_feed_override",
     "get_data_feed_downgrade_reason",
