@@ -377,6 +377,27 @@ def test_the_deciding_model_measures_the_stop_from_the_fill_and_exits_at_the_sto
     assert price(same_bar) == ("09:36", 100.3, "09:36", 99.8, "stop")  # entered at the bar's open, so its low came after the fill
 
 
+def test_the_deciding_model_uses_the_next_bar_that_exists_when_minutes_are_missing():
+    # No trade printed from 09:37 to 09:40 and from 09:43 to 09:49: a missing minute is not a bar.
+    times = ["09:35", "09:36", "09:41", "09:42", "09:50", "09:51"]
+    bars = [QUIET, (99.7, 100.2, 99.6, 100.1), (100.6, 100.9, 100.5, 100.8), (100.8, 100.9, 100.3, 100.4), (99.0, 99.2, 98.9, 99.1),
+            (99.1, 99.3, 99.0, 99.2)]
+    columns = [np.array(column, dtype=float) for column in zip(*bars)]
+    kwargs = dict(direction=1, trigger=100.0, stop_distance=0.5, close_stamp="09:52", stale_minutes=30, stale_adverse=5.0)
+    trade = trial.simulate_trade(times, *columns, model="bar_executable", **kwargs)
+    assert price(trade) == ("09:41", 100.6, "09:50", 99.0, "stop_gap")  # filled five minutes after the trigger; stop 100.1
+    careful = trial.simulate_trade(times, *columns, model="conservative", **kwargs)
+    assert price(careful) == price(trade)
+    touched = [*bars[:3], (100.8, 100.9, 100.0, 100.4), *bars[4:]]
+    columns = [np.array(column, dtype=float) for column in zip(*touched)]
+    assert price(trial.simulate_trade(times, *columns, model="bar_executable", **kwargs)) == ("09:41", 100.6, "09:42", 100.1, "stop")
+    assert price(trial.simulate_trade(times, *columns, model="conservative", **kwargs)) == ("09:41", 100.6, "09:42", 99.0, "stop")
+    # The record ending early is the stale rule's business: last bar 09:36 with a 16:00 close.
+    assert trial.simulate_trade(times[:2], *(column[:2] for column in columns), model="bar_executable", **(kwargs | {"close_stamp": "16:00"})) is None
+    stale = trial.simulate_trade(times[:3], *(column[:3] for column in columns), model="bar_executable", **(kwargs | {"close_stamp": "16:00"}))
+    assert price(stale) == ("09:41", 100.6, "09:41", pytest.approx(95.8), "stale_last_print")
+
+
 def test_the_papers_fills_are_exactly_the_trigger_and_the_stop():
     bars = [(100.4, 100.7, 99.0, 100.6), (100.6, 100.8, 100.5, 100.7), (99.0, 99.2, 98.0, 98.5), (98.5, 105.0, 98.4, 105.0)]
     paper = sim(bars, close="09:39", model="paper_exact")
@@ -825,7 +846,8 @@ class _World:
     """A deterministic synthetic market served through the provider's request interface."""
 
     def __init__(self, *, extra_daily=(), drop_market=lambda session, stamp: False, fail=(), fail_opening=(), thin_opening=(),
-                 drop_adjusted=None):
+                 drop_adjusted=None, fail_minute=()):
+        self.fail_minute = set(fail_minute)
         self.extra_daily, self.drop_market, self.fail, self.requests = extra_daily, drop_market, set(fail), []
         self.fail_opening, self.thin_opening, self.drop_adjusted = set(fail_opening), set(thin_opening), drop_adjusted
         n = len(SESSIONS)
@@ -908,6 +930,8 @@ class _World:
                 elif kind == "1Min":
                     assert len(held) <= 1
                     for i in held:
+                        if SESSIONS[i] in self.fail_minute:
+                            raise ValueError("provider error")
                         columns = self.path(symbol, i)
                         base = self._at(SESSIONS[i], "09:35")
                         bars += [_bar(base + timedelta(minutes=m), o, h, low, c, 100) for m, (o, h, low, c) in enumerate(zip(*columns))]
@@ -1252,3 +1276,154 @@ def test_the_selection_stays_small_in_memory_at_scale():
     assert peak < 100 * rows, f"peak {peak / rows:.0f} bytes per opening bar"  # measured 64; the pivot table this replaced used about 480
     whole = trial.build_selection(features, pd.concat(pieces, ignore_index=True), sessions, frozenset(), spec())
     pd.testing.assert_frame_equal(whole, selection)
+
+
+def test_a_thin_opening_on_an_unscored_session_is_recorded_and_only_a_scored_session_refuses(tmp_path):
+    """The 2020-03-16 case: a market-wide halt just after the open leaves few opening bars and an incomplete SPY record."""
+    halted = SESSIONS[70]
+    contract = small_contract()
+    contract["support_audit"] = contract["support_audit"] | {"report_opening_coverage_for": [halted, "2020-03-16"]}
+    _register(tmp_path, contract)
+    world = dict(thin_opening=[halted], drop_market=lambda session, stamp: session == halted and "09:31" <= stamp < "09:46")
+    result = _run(tmp_path, "acquire", _clients(**world))
+    manifest = _manifest(tmp_path)
+    asked, returned, lost = manifest["opening_coverage"][halted]
+    assert result["status"] == "acquisition_written" and (returned, lost) == (1, 0) and asked > 2
+    assert manifest["opening_shortfall_sessions"] == [halted] and result["counts"]["opening_shortfall_sessions_unscored"] == 1
+    audit = _run(tmp_path, "support-audit")
+    review = audit["pre_claim_review"]
+    assert review["split_events"] == 1 and review["opening_shortfall_sessions"] == [halted]
+    assert review["opening_coverage_asked_returned_failed"] == {halted: [asked, 1, 0], "2020-03-16": None}
+    assert review["session_status"] == {halted: "market_incomplete"} and audit["prices_read_for_analysis"] is False
+    # Names without that session's opening bar are unranked for the next 14 sessions; SA, which had it, still can be.
+    selection = pd.read_csv(tmp_path / manifest["frozen"]["selection"]["path"])
+    after = selection[selection.session.isin(SESSIONS[70:85])]
+    assert set(after.symbol) <= {"SA"} and len(selection[selection.session == SESSIONS[85]]) >= 1
+    # The same thin opening with a complete SPY record is a scored session with bad data: refused, after the SPY bars are in.
+    scored = tmp_path / "scored"
+    scored.mkdir()
+    _register(scored)
+    clients = _clients(thin_opening=[halted])
+    with pytest.raises(ValueError, match=f"opening bars cover too few names:{halted}:returned=1"):
+        _run(scored, "acquire", clients)
+    assert any(r.timeframe.value == "1Min" and r.symbol_or_symbols == ["SPY"] for r in clients.data.requests)
+    assert not (scored / f"artifacts/{CAMPAIGN}/data/acquisition.json").exists()
+
+
+def test_a_selected_name_whose_minute_request_failed_is_counted_once(acquired_template, tmp_path):
+    selection = pd.read_csv(acquired_template[0] / _manifest(acquired_template[0])["frozen"]["selection"]["path"])
+    orders = selection[selection.direction != 0]
+    per_session = orders.groupby("session").size()
+    session = per_session.idxmax()
+    lost, limit = int(per_session.max()), 0.01 * len(orders)
+    assert lost <= limit < 2 * lost  # inside the contract's 1 percent; counting it twice would have refused
+    _register(tmp_path)
+    result = _run(tmp_path, "acquire", _clients(fail_minute=[session]))
+    assert result["counts"]["orders_without_minute_bars"] == lost == len(_manifest(tmp_path)["failed"]["minute"])
+    other = tmp_path / "two"
+    other.mkdir()
+    _register(other)
+    second = per_session.drop(session).idxmax()
+    with pytest.raises(ValueError, match="too many selected names without minute bars"):
+        _run(other, "acquire", _clients(fail_minute=[session, second]))
+
+
+# --- the selection against a brute-force reference on gappy data (adapted from the second review) ---
+
+def _gappy_world(seed, n_sessions=90, n_symbols=45):
+    rng = np.random.default_rng(seed)
+    names = ["NA", "NAN", "NULL", "A", "AA", "AAA", "TRUE", "NONE", "INF"]
+    while len(names) < n_symbols:
+        name = "".join(rng.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), size=int(rng.integers(1, 6))))
+        if name not in names:
+            names.append(name)
+    bars, opening, splits = {}, {}, []
+    for j, name in enumerate(names):
+        kind = j % 9
+        start = int(rng.integers(1, n_sessions - 20)) if kind == 1 else 0  # late listing
+        end = int(rng.integers(20, n_sessions)) if kind == 2 else n_sessions  # delisted
+        level = float(rng.choice([4.0, 5.0, 5.2, 8.0, 30.0, 120.0]))
+        band, volume = float(rng.choice([0.005, 0.02, 0.06, 0.1])), float(rng.choice([6e5, 1e6, 1.05e6, 3e6, 2e7]))
+        split_at = int(rng.integers(16, n_sessions)) if kind == 3 else None
+        day, first = {}, {}
+        for i in range(start, end):
+            if i == split_at:
+                level /= 2
+                splits.append((name, SESSIONS[i]))
+            level = max(0.5, level * (1 + rng.normal(0, 0.02)))
+            open_ = 5.0 if rng.random() < 0.05 else round(level * (1 + rng.normal(0, 0.01)), 2)  # sometimes exactly on the threshold
+            close = round(level, 2)
+            high, low = round(max(open_, close) + band * level * rng.random(), 2), round(max(0.01, min(open_, close) - band * level * rng.random()), 2)
+            shares = 1e6 if kind == 4 else float(int(volume * rng.uniform(0.5, 1.6)))  # kind 4: exactly at the volume threshold
+            if not (kind == 5 and rng.random() < 0.03) and not (kind == 6 and i % 37 == 5):
+                day[i] = (open_, high, low, close, shares)
+            if rng.random() >= {6: 0.02, 7: 0.07}.get(kind, 0.0):
+                last = round(open_ * (1 + rng.choice([-0.003, 0.0, 0.003])), 2)
+                traded = 50_000.0 if kind == 8 else float(int(rng.integers(1, 6)) * 10_000) if kind == 0 else float(int(rng.integers(5_000, 400_000)))
+                first[i] = (open_, round(max(open_, last) + 0.05, 2), round(max(0.01, min(open_, last) - 0.05), 2), last,
+                            0.0 if rng.random() < 0.01 else traded)
+        bars[name], opening[name] = day, first
+    for name, lo, hi in (("ZEXA", 0, 14), ("AEXA", n_sessions - 14, n_sessions), ("MEXA", 40, 54), ("MEXB", 40, 55)):  # exactly 14 or 15 bars
+        names.append(name)
+        bars[name] = {i: (50.0, 52.0, 48.0, 50.0, 5e6) for i in range(n_sessions)}
+        opening[name] = {i: (50.0, 50.4, 49.9, 50.2, 9e9 if i == hi - 1 else 1e3) for i in range(lo, hi)}
+    return names, bars, opening, splits
+
+
+def _reference_selection(sessions, names, bars, opening, splits, not_shortable, chosen):
+    """The contract's words, one session and one name at a time, with no shared code."""
+    split_at = {}
+    for name, session in splits:
+        split_at.setdefault(name, []).append(sessions.index(session))
+    rows = []
+    for t in range(len(sessions)):
+        candidates = []
+        for name in names:
+            day, first = bars[name], opening[name]
+            if t < 15 or any(i not in day for i in range(t - 15, t + 1)) or any(t - 14 <= at <= t for at in split_at.get(name, [])):
+                continue
+            ranges = [max(day[i][1] - day[i][2], abs(day[i][1] - day[i - 1][3]), abs(day[i][2] - day[i - 1][3])) for i in range(t - 14, t)]
+            atr = float(np.mean(ranges))
+            if not (day[t][0] > chosen.min_open_price and sum(day[i][4] for i in range(t - 14, t)) / 14 >= chosen.min_avg_volume
+                    and atr > chosen.min_atr) or any(i not in first for i in range(t - 14, t + 1)):
+                continue
+            mean = sum(first[i][4] for i in range(t - 14, t)) / 14
+            if mean > 0 and first[t][4] / mean >= chosen.min_rel_volume:
+                candidates.append((-first[t][4] / mean, name, atr))
+        for rank, (negative, name, atr) in enumerate(sorted(candidates)[:chosen.top_names], 1):
+            open_, high, low, close, _ = opening[name][t]
+            direction = int(np.sign(close - open_))
+            trigger = high if direction > 0 else low if direction < 0 else np.nan
+            prior = bars[name][t - 1][3]
+            restricted = bars[name][t - 1][2] <= (1 - chosen.ssr_decline) * bars[name][t - 2][3]
+            rows.append(dict(session=sessions[t], symbol=name, rank=rank, rel_volume=-negative, direction=direction, trigger=trigger,
+                             atr=atr, stop_distance=chosen.stop_atr_fraction * atr, prior_close=prior,
+                             short_ok=bool(direction < 0 and name not in not_shortable and not restricted
+                                           and trigger > (1 - chosen.ssr_decline) * prior), or_open=open_, or_close=close))
+    return pd.DataFrame(rows, columns=trial.SELECTION_COLUMNS)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_the_selection_equals_a_brute_force_reference_on_gappy_multi_symbol_data(seed):
+    chosen = trial.contract_spec(json.loads(REPO_CONTRACT.read_text()))
+    sessions = SESSIONS[:90]
+    names, bars, opening, splits = _gappy_world(seed)
+    rng = np.random.default_rng(seed + 1000)
+    not_shortable = frozenset(rng.choice(names, size=8, replace=False).tolist())
+    table = lambda source: pd.DataFrame([dict(session=sessions[i], symbol=name, open=b[0], high=b[1], low=b[2], close=b[3], volume=b[4])  # noqa: E731
+                                         for name in names for i, b in source[name].items()])
+    daily_frame, opening_frame = table(bars), table(opening)
+    ordered = sorted(names)
+    features = pd.concat([trial.daily_features(daily_frame[daily_frame.symbol.isin(ordered[k:k + 7])].sort_values(["symbol", "session"]),
+                                               sessions, [e for e in splits if e[0] in ordered[k:k + 7]], chosen)
+                          for k in range(0, len(ordered), 7)], ignore_index=True)  # in symbol chunks, as acquisition does
+    pieces = [piece.sample(frac=1.0, random_state=int(rng.integers(1 << 30))).astype({"session": "category", "symbol": "category"})
+              for _, piece in opening_frame.groupby(opening_frame.session.str[:7], sort=True)]  # monthly, shuffled, own categories
+    got = trial.select_from_parts(features, lambda: iter(pieces), sessions, not_shortable, chosen).sort_values(["session", "rank"], ignore_index=True)
+    want = _reference_selection(sessions, names, bars, opening, splits, not_shortable, chosen).sort_values(["session", "rank"], ignore_index=True)
+    assert len(got) == len(want) > 300 and {"NA", "NAN", "NULL"} & set(got.symbol)
+    for column in ("session", "symbol", "rank", "direction", "short_ok"):
+        assert got[column].astype(str).tolist() == want[column].astype(str).tolist(), column
+    for column in ("rel_volume", "trigger", "atr", "stop_distance", "prior_close", "or_open", "or_close"):
+        np.testing.assert_allclose(got[column].to_numpy(dtype=float), want[column].to_numpy(dtype=float), rtol=1e-12, equal_nan=True, err_msg=column)
+    assert not {"ZEXA", "AEXA", "MEXA"} & set(got.symbol)  # 14 bars are history for a 15th that never comes

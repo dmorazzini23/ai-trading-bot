@@ -871,6 +871,7 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
     failed["opening"], failed["minute"] = {}, {}
     asked, opening_bars = 0, 0
     coverage: dict[str, list[int]] = {}
+    thin: list[str] = []  # sessions whose opening bars cover too few names; judged once the market proxy's record is known
     month_rows: list[pd.DataFrame] = []
 
     def flush(kind: str, month: str, columns: list[str]) -> int:
@@ -900,8 +901,10 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
             # One outage must not pass because the other 2,513 sessions were fine: each session is checked on its own.
             if lost_here > MAX_FAILED_FETCH_FRACTION * len(needed):
                 raise ValueError(f"too many opening-bar fetch failures:{session}:failed={lost_here}:asked={len(needed)}")
+            # A shortfall is allowed one name, and is refused below only if the session will be scored: on a market-wide
+            # halt just after the open (2020-03-16) few names trade in the first five minutes and the session is unscored.
             if len(needed) - returned > max(1.0, (1 - MIN_OPENING_COVERAGE) * len(needed)):
-                raise ValueError(f"opening bars cover too few names:{session}:returned={returned}:asked={len(needed)}")
+                thin.append(session)
     opening_bars += flush("opening", sessions[-1][:7], DAILY_COLUMNS)
 
     not_shortable = frozenset(row["symbol"] for row in assets if not (row["shortable"] and row["easy_to_borrow"]))
@@ -909,7 +912,8 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
     if selection.empty:
         raise ValueError("no name was selected on any session")
     orders = selection[selection.direction != 0]
-    without_bars, market_parts, incomplete = 0, 0, 0
+    without_bars, market_parts = 0, 0
+    incomplete: set[str] = set()
     by_month: dict[str, list[int]] = {}
     for i, session in enumerate(sessions):
         by_month.setdefault(session[:7], []).append(i)
@@ -931,13 +935,18 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
             raise ValueError(f"market proxy fetch failed:{month}")
         market = regular_market_bars(frame[frame.symbol == spec.market], calendar)
         counts = Counter(market.session)
-        incomplete += sum(counts.get(sessions[i], 0) != calendar.regular_minutes(i) for i in members)
+        incomplete.update(sessions[i] for i in members if counts.get(sessions[i], 0) != calendar.regular_minutes(i))
         sources[f"market/{month}"] = _write_table(root, directory / "market" / f"{month}.csv.gz", market)
         market_parts += len(market)
-    if len(failed["minute"]) + without_bars > MAX_FAILED_FETCH_FRACTION * len(orders):
-        raise ValueError(f"too many selected names without minute bars:{len(failed['minute']) + without_bars}:orders={len(orders)}")
-    if incomplete > MAX_INCOMPLETE_SESSION_FRACTION * len(sessions):
-        raise ValueError(f"degraded download:incomplete_market_sessions={incomplete}:sessions={len(sessions)}")
+    for session in thin:
+        if session not in incomplete:
+            asked_here, returned, _ = coverage[session]
+            raise ValueError(f"opening bars cover too few names:{session}:returned={returned}:asked={asked_here}")
+    # ``without_bars`` already counts a name whose request failed: it has no bars either.
+    if without_bars > MAX_FAILED_FETCH_FRACTION * len(orders):
+        raise ValueError(f"too many selected names without minute bars:{without_bars}:orders={len(orders)}")
+    if len(incomplete) > MAX_INCOMPLETE_SESSION_FRACTION * len(sessions):
+        raise ValueError(f"degraded download:incomplete_market_sessions={len(incomplete)}:sessions={len(sessions)}")
 
     as_json = lambda payload: json.dumps(payload, indent=1, sort_keys=True) + "\n"  # noqa: E731
     frozen = dict(
@@ -950,11 +959,12 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
                       names_ever_passing_daily_filters=len(names), name_days_passing_daily_filters=len(feature),
                       opening_bars_requested=asked, opening_bars=opening_bars, selected_name_days=len(selection),
                       orders=len(orders), orders_without_minute_bars=without_bars, market_bars=market_parts,
-                      incomplete_market_sessions=incomplete,
+                      incomplete_market_sessions=len(incomplete), opening_shortfall_sessions_unscored=len(thin),
                       selected_inactive_symbols=len({row["symbol"] for row in assets if row["status"] == "inactive"} & set(selection.symbol)))
     manifest = dict(campaign_id=contract["campaign_id"], contract_hash=canonical, feed="sip", adjustment="raw",
                     request=dict(start=start, end=end), fetched_at=datetime.now(NEW_YORK).isoformat(), sources=sources,
-                    frozen=frozen, counts=counts_out, failed=failed, opening_coverage=coverage, prices_read_for_analysis=False,
+                    frozen=frozen, counts=counts_out, failed=failed, opening_coverage=coverage, opening_shortfall_sessions=thin,
+                    prices_read_for_analysis=False,
                     quality_passed=True)
     write_json(manifest_path, manifest)
     return dict(status="acquisition_written", manifest=str(manifest_path), counts=counts_out, trial_claimed=False)
@@ -1102,6 +1112,11 @@ def load_month(root: Path, manifest: dict[str, Any], month: str) -> tuple[pd.Dat
 
 # --- orchestration ---------------------------------------------------------------------------------
 
+def _section_list(contract: dict[str, Any]) -> list[str]:
+    """Sessions the contract asks the support audit to show opening-bar coverage for."""
+    return [str(session) for session in (contract.get("support_audit") or {}).get("report_opening_coverage_for") or []]
+
+
 def run(root: Path, *, mode: str, contract_path: Path, client_factory: Callable[[], Clients] = swing._default_clients) -> dict[str, Any]:
     root = root.resolve()
     contract = json.loads((root / contract_path).resolve().read_text())
@@ -1140,6 +1155,12 @@ def run(root: Path, *, mode: str, contract_path: Path, client_factory: Callable[
     audit = dict(support_summary(spec, calendar, statuses, selected, with_minutes), audit="session_symbol_and_bar_time_only",
                  development_sessions=len(sessions), acquisition_counts=manifest.get("counts", {}), contract_hash=canonical,
                  prices_read_for_analysis=False, strategy_outcomes_computed=False, **blocked)
+    watched = _section_list(contract)
+    audit["pre_claim_review"] = dict(  # counts to be looked at before the claim; none is a price or an outcome
+        split_events=manifest.get("counts", {}).get("split_events"),
+        opening_shortfall_sessions=manifest.get("opening_shortfall_sessions", []),
+        opening_coverage_asked_returned_failed={session: manifest.get("opening_coverage", {}).get(session) for session in watched},
+        session_status={session: statuses[sessions.index(session)] for session in watched if session in sessions})
     write_json(directory / "support_audit.json", audit)
     if mode == "support-audit":
         return audit

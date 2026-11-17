@@ -76,7 +76,7 @@
     "minimum_relative_volume": 1.0,
     "top_names": 20,
     "doji": "no_order",
-    "rule": "The opening range is the provider's five-minute bar stamped 09:30 New York time (09:30:00 to 09:34:59). Relative volume on session t is that bar's volume on t divided by the mean of that bar's volume over sessions t-14 to t-1; the bar must exist on all 14; a name missing any of them is unranked until it has 14 in a row again. Among the names that pass the universe filters on t, those with relative volume of at least 1.0 are ranked highest first, ties by symbol, and the top 20 are selected. Direction: bar close above bar open is a buy; below is a sell; equal (a doji) keeps its rank and places no order. The selection uses nothing after 09:35 on t.",
+    "rule": "The opening range is the provider's five-minute bar stamped 09:30 New York time (09:30:00 to 09:34:59). Relative volume on session t is that bar's volume on t divided by the mean of that bar's volume over sessions t-14 to t-1; the bar must exist on all 14; a name missing any of them is unranked until it has 14 in a row again. Consequence, stated before any data: a name with no opening bar on 2020-03-16 is unranked on the next 14 sessions, through 2020-04-03, so the selection in those weeks draws on fewer names. Among the names that pass the universe filters on t, those with relative volume of at least 1.0 are ranked highest first, ties by symbol, and the top 20 are selected. Direction: bar close above bar open is a buy; below is a sell; equal (a doji) keeps its rank and places no order. The selection uses nothing after 09:35 on t.",
     "computed_at_acquisition": "The selection is computed once at acquisition from raw volumes and the opening bars, frozen with a hash, and rebuilt and compared before scoring. It decides which minute bars are downloaded. It contains no outcome."
   },
   "trade": {
@@ -270,7 +270,7 @@
   "cost_status": "fixed_scenarios_not_calibrated_execution_costs",
   "controls": {
     "cash": "Zero return. Both versions.",
-    "exposure_matched_market": "For every fill: the SPY one-minute close at the exit minute over the SPY one-minute close at the entry minute, minus 1, times the position's signed weight. Summed per session. Charged no cost. The long-only comparison: it is what the same dollars would have earned in the market over the same minutes."
+    "exposure_matched_market": "For every fill: SPY's price at the exit over SPY's price at the entry, minus 1, times the position's signed weight. The exit price is the SPY one-minute close of the exit minute. The entry price is the SPY one-minute OPEN of the entry minute when the fill is at a bar's open, which is every fill under the deciding bar_executable model (and under conservative); for a fill inside a bar (paper_exact, and lower_bound unless it gapped) it is the SPY one-minute close of the entry minute. Summed per session. Charged no cost. The long-only comparison: it is what the same dollars would have earned in the market over the same minutes."
   },
   "paired_difference": "Per eligible session: the version's net return minus its exposure-matched market return.",
   "observation_unit": "One observation per eligible session, in calendar order for the block bootstrap.",
@@ -294,7 +294,14 @@
   "support_audit": {
     "required_before_claim": true,
     "kind": "session_symbol_and_bar_time_only",
-    "rule": "`--support-audit` reads sessions, symbols and bar times only and writes artifacts/opening_range_trial_20261117/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial."
+    "rule": "`--support-audit` reads sessions, symbols and bar times only and writes artifacts/opening_range_trial_20261117/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial.",
+    "report_opening_coverage_for": [
+      "2020-03-09",
+      "2020-03-12",
+      "2020-03-16",
+      "2020-03-18"
+    ],
+    "pre_claim_review": "The support audit output carries pre_claim_review: the number of split events found, the sessions whose opening-bar shortfall was waived because they are unscored, and the opening-bar counts (asked, returned, failed) and eligibility status for the sessions listed in report_opening_coverage_for. Counts only. They are to be read before the claim; an implausible figure (no splits, or a waived session that is not a market-wide halt) is a reason to stop and ask, not to adjust."
   },
   "acceptance": {
     "positive_lower_bound_vs_cash_at_primary": true,
@@ -347,7 +354,7 @@
     "why_not_everything": "One-minute bars for every filtered stock on every day would be about 1,000 names x 390 bars x 2,514 sessions, about a billion rows. The selection needs only the first five-minute bar, and only the 20 selected names need their minute path, which cuts the download to about 2 percent of that without changing a single trade.",
     "memory": "Measured on synthetic data, 2026-11-17: the selection step on 3.67 million opening bars for 3,000 names over 2,514 sessions, read month by month from gzip files, with 1.21 million filter rows, peaked at 515 MB for the whole process (140 MB of that is the program's imports). The first draft built a sessions-by-names table and peaked at 1,641 MB on 3.4 million bars. A unit test bounds the step at 100 bytes per opening bar (64 measured). The acquisition holds the filter rows and one month of bars at a time; that path has been run end to end only on a small synthetic market."
   },
-  "acquisition": "Not done at registration. On the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, pauses 0.6 seconds per page so it uses about half the shared rate limit, and retries a transient error up to four times. It refuses, writing no manifest: any row dated outside development or in 2026; monthly or daily fetch failures for more than 1 percent of the symbols asked for; split-adjusted daily bars that do not cover exactly the raw daily bars (the split guard depends on them); on ANY single session, opening-bar failures for more than 1 percent of the names asked for that session, or opening bars returned for fewer than 90 percent of them; selected names without minute bars above 1 percent of all orders; an incomplete SPY minute record on more than 1 percent of sessions. Every session's opening-bar counts (asked, returned, failed) are written to the manifest. It refuses to overwrite an existing acquisition. It should be run outside market hours, because the running bot uses the same rate limit.",
+  "acquisition": "Not done at registration. On the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, pauses 0.6 seconds per page so it uses about half the shared rate limit, and retries a transient error up to four times. It refuses, writing no manifest: any row dated outside development or in 2026; monthly or daily fetch failures for more than 1 percent of the symbols asked for; split-adjusted daily bars that do not cover exactly the raw daily bars (the split guard depends on them); on ANY single session, opening-bar request failures for more than 1 percent of the names asked for that session (refused at once); on any session that will be scored, opening bars missing for more than 10 percent of the names asked for, with one missing name always allowed (this is judged after the SPY bars are fetched: a session whose SPY minute record is incomplete is unscored anyway, so its shortfall is recorded in the manifest under opening_shortfall_sessions and does not refuse); selected names with no minute bars, for any reason including a failed request, above 1 percent of all orders; an incomplete SPY minute record on more than 1 percent of sessions. Every session's opening-bar counts (asked, returned, failed) are written to the manifest. It refuses to overwrite an existing acquisition. It should be run outside market hours, because the running bot uses the same rate limit.",
   "acquisition_manifest": "artifacts/opening_range_trial_20261117/data/acquisition.json",
   "availability_check": "data probe only (2026-11-17): bar counts and stamps for 5 symbols on 5 sessions and 21 delisted symbols on one session each; no price was kept and no return was computed",
   "preconditions": [
@@ -377,7 +384,7 @@
   ],
   "runner": "ai_trading/tools/opening_range_trial.py",
   "acquisition_thresholds": {
-    "opening_bar_coverage_floor": "0.90 of the names asked for on one session (constant MIN_OPENING_COVERAGE). Every name asked for has a daily bar that session, so it traded; a missing opening bar means no trade between 09:30 and 09:35, which is rare for names averaging a million shares a day. In the probe 599 of 600 current liquid names returned the bar. An outage returns far fewer. Ten percent leaves room for halted opens.",
+    "opening_bar_coverage_floor": "0.90 of the names asked for on one session (constant MIN_OPENING_COVERAGE). Every name asked for has a daily bar that session, so it traded; a missing opening bar means no trade between 09:30 and 09:35, which is rare for names averaging a million shares a day. In the probe 599 of 600 current liquid names returned the bar. An outage returns far fewer. Ten percent leaves room for halted opens. One missing name is always allowed, so a session with very few names asked for cannot refuse on a single halted open. The floor refuses only for sessions with a complete SPY record. On 2020-03-16 the market-wide circuit breaker tripped about a second after the open, so the 09:30 bar holds almost no trading for most names; that session has an incomplete SPY record and is unscored, and its shortfall is recorded, not refused.",
     "failure_fraction": "0.01 (constants MAX_FAILED_FETCH_FRACTION and MAX_INCOMPLETE_SESSION_FRACTION), each in its own units as listed under acquisition."
   }
 }

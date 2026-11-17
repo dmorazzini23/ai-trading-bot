@@ -87,6 +87,23 @@ the real-money gate is unchanged.
    missing delisted companies are accepted with the label; no vendor list is
    added. Everything else stands as drafted.
 
+5. **Second review, before the ledger.** It passed the scoring logic with no
+   blocker and asked for small fixes, none of which changes a trade, a
+   criterion or an approved parameter. (a) The per-session opening-bar
+   coverage check is now judged after the SPY bars are fetched and refuses
+   only for sessions that will be scored; on 2020-03-16 the market-wide halt
+   a second after the open leaves the 09:30 bar nearly empty, that session is
+   unscored, and its shortfall is recorded instead of refusing the download.
+   Names without an opening bar that day are unranked through 2020-04-03.
+   (b) The contract's description of the matched-market control now matches
+   the runner: SPY's open of the entry minute for a fill at a bar's open.
+   (c) A selected name whose minute request failed was counted twice against
+   the 1% limit; it is counted once. (d) The one-missing-name allowance is
+   written into the contract. (e) The support audit shows the number of split
+   events and the opening-bar counts for the four March 2020 halt days before
+   the claim. (f) Tests added: missing minutes under the deciding fill model,
+   and the selection against a brute-force reference on gappy data.
+
 ## Data check before registration
 
 A probe on November 17 kept bar counts and time stamps only. Minute bars exist

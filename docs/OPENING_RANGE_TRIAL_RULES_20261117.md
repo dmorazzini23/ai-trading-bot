@@ -250,12 +250,22 @@ on a few days. It kept counts and times only, no prices.
   200 a minute and the running bot shares that allowance, so the program uses
   about half. That is 2 to 3 hours, best done while the market is closed.
   About half a gigabyte on disk. These figures are estimates.
-- **When the download is refused.** The program stops, and keeps nothing, if:
-  more than 1% of the stocks asked for fail to download in the monthly or
-  daily step; on any single day more than 1% of that day's 9:30–9:35 requests
-  fail, or fewer than 90% of the stocks asked for come back; more than 1% of
-  all orders have no minute-by-minute prices; or more than 1% of days have an
-  incomplete SPY record. One bad day cannot hide among 2,500 good ones.
+- **When the download is refused.** The program stops if: more than 1% of
+  the stocks asked for fail to download in the monthly or daily step; on any
+  single day more than 1% of that day's 9:30–9:35 requests fail; on any day
+  that will be scored, more than 10% of the stocks asked for have no
+  9:30–9:35 line (one missing stock is always allowed); more than 1% of all
+  orders have no minute-by-minute prices; or more than 1% of days have an
+  incomplete SPY record. One bad day cannot hide among 2,500 good ones. After
+  a refusal some partial price files may remain on disk, but the index file
+  that every later step requires is not written, so no later step accepts
+  them.
+- **One known odd day.** On March 16, 2020 the whole market was halted about
+  a second after the open, so most stocks have almost no 9:30–9:35 trading.
+  That day is not scored (SPY's record has a gap), so its thin data does not
+  stop the download; it is recorded. A stock with no 9:30–9:35 line that day
+  cannot be ranked for the next 14 days, through April 3, 2020, so the daily
+  20 are picked from fewer stocks in those weeks.
 - **Memory.** The machine has little spare memory beside the running bot. The
   step that picks the daily 20 was rewritten to use about a third of what it
   did; on made-up data at full size it peaked at 515 MB.
@@ -309,6 +319,11 @@ The owner approved the rules "as recommended".
 - The step that picks the daily 20 uses far less memory.
 - A halted stock's closing price can no longer go below one cent.
 - Buy-and-sell-short passing alone now explicitly permits nothing.
+- After a second review: the March 16, 2020 case above; the market
+  comparison is described exactly (from SPY's first price of the entry
+  minute); a failed minute download is counted once, not twice; the check
+  before scoring now shows how many stock splits were found and that day's
+  counts.
 - A ticker spelled "NA" is no longer misread as a blank.
 
 ## Steps from here
