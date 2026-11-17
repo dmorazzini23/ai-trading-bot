@@ -1,6 +1,15 @@
 # Current handoff
 
-## November 17: legacy-path removal phase 2 built, not deployed (`4e9d951a1`) (start here)
+## November 17: legacy-path removal phase 2 deployed (`8a3a07b18`) (start here)
+
+- **Deployed** Tue 21:29 UTC (closed, flat), owner-approved. Full `pytest` on
+  `8a3a07b18`: 6,579 passed, 2 skipped, 0 failed. `release_identity` passed
+  both phases with the unchanged config hash. Spec backup
+  `runtime/release_spec.98f7b9d3b.bak.json`. First start:
+  `IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`, `BROKER_SYNC`, 0
+  errors, NRestarts=0. Rollback: checkout `98f7b9d3b`, restore that backup,
+  restart. Not yet observed: a market-hours session on this commit.
+- The build notes below were written before the deploy.
 
 Branch `claude/legacy-path-phase2` from main `783ec7d6f`. Not pushed, not
 merged, not deployed; the running service is still `98f7b9d3b`.
