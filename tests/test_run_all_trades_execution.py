@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from ai_trading.config.management import get_trading_config
 from ai_trading.core import bot_engine
 from ai_trading.core import run_all_trades_execution as execution_module
 from ai_trading.core.run_all_trades_execution import execute_run_all_trades_cycle
@@ -78,7 +79,6 @@ def test_execute_run_all_trades_cycle_reaches_pending_boundary_on_required_repla
         loop_id="loop-1",
         loop_start=0.0,
         api=api,
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert state.replay_live_parity_gate["ok"] is False
@@ -166,7 +166,6 @@ def test_execute_run_all_trades_cycle_requires_replay_live_parity_by_default_out
         loop_id="loop-2",
         loop_start=0.0,
         api=api,
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert state.replay_live_parity_gate["ok"] is False
@@ -303,7 +302,6 @@ def test_execute_run_all_trades_cycle_accepts_native_get_orders(monkeypatch) -> 
         loop_id="loop-get-orders",
         loop_start=0.0,
         api=api,
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert listed == [api]
@@ -389,7 +387,6 @@ def test_execute_cycle_missing_list_orders_degrades_to_pending_skip(monkeypatch)
         loop_id="loop-missing-orders",
         loop_start=0.0,
         api=object(),
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert state._warned_missing_list_orders is True
@@ -449,7 +446,6 @@ def test_execute_cycle_open_order_failure_records_dependency_breaker(monkeypatch
         loop_id="loop-open-order-failure",
         loop_start=0.0,
         api=_Api(),
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert breaker_failures == [("broker_open_orders", breaker_info)]
@@ -469,7 +465,6 @@ def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(
     monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "symbol")
     monkeypatch.setattr(bot_engine, "_resolve_runtime_info_log_ttl_seconds", lambda *_args, **_kwargs: 1.0)
     monkeypatch.setattr(bot_engine, "_should_emit_runtime_info_log", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda _runtime: True)
     monkeypatch.setattr(bot_engine, "_run_netting_cycle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
     monkeypatch.setattr(
@@ -500,7 +495,6 @@ def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(
         loop_id="loop-symbol-pending",
         loop_start=0.0,
         api=SimpleNamespace(list_orders=lambda: []),
-        restore_last_run_timestamp=lambda: None,
     )
 
     assert emitted
@@ -509,3 +503,46 @@ def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(
     assert extra["blocked_symbols_count"] == 2
     assert extra["blocked_symbols"] == ["AAPL", "MSFT"]
     assert data_provider_updates[0]["status"] == "healthy"
+
+
+def test_execute_cycle_runs_netting_when_config_disables_it(monkeypatch) -> None:
+    """The cycle has one route; ``netting_enabled=False`` no longer selects another."""
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "0")
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
+    disabled_cfg = get_trading_config()
+    assert disabled_cfg.netting_enabled is False
+    monkeypatch.setattr(bot_engine, "_decision_log_runtime_path", lambda: "runtime/test-decisions.jsonl")
+    monkeypatch.setattr(bot_engine, "list_open_orders", lambda _api: [])
+    monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda _orders, _runtime: False)
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False},
+    )
+    monkeypatch.setattr(bot_engine.runtime_state, "update_data_provider_state", lambda **_kwargs: None)
+    netting_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(bot_engine, "_run_netting_cycle", lambda *args: netting_calls.append(args))
+
+    state = SimpleNamespace()
+    runtime = SimpleNamespace(cfg=disabled_cfg)
+    execute_run_all_trades_cycle(
+        state=state,
+        runtime=runtime,
+        cfg_runtime=disabled_cfg,
+        loop_id="loop-netting-only",
+        loop_start=12.5,
+        api=SimpleNamespace(list_orders=lambda: []),
+    )
+
+    assert netting_calls == [(state, runtime, "loop-netting-only", 12.5)]
+    for legacy_entry in (
+        "_netting_pipeline_enabled",
+        "run_multi_strategy",
+        "_prepare_run",
+        "_process_symbols",
+    ):
+        assert not hasattr(bot_engine, legacy_entry), legacy_entry
+

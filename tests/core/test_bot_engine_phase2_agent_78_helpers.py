@@ -185,22 +185,7 @@ def test_confirmed_pending_orders_uses_alpaca_py_get_order_by_id() -> None:
     assert [item.id for item in pending] == ["ord-3"]
 
 
-def test_degraded_state_and_timeframe_helpers_cover_fatal_inference() -> None:
-    assert bot_engine._degrade_state((True, "provider_disabled")) == (
-        True,
-        "provider_disabled",
-        True,
-    )
-    assert bot_engine._degrade_state((True, "recovering", False)) == (
-        True,
-        "recovering",
-        False,
-    )
-    assert bot_engine._degrade_state(True) == (True, None, False)
-    assert bot_engine._reason_implies_fatal(None) is False
-    assert bot_engine._reason_implies_fatal(" ") is False
-    assert bot_engine._reason_implies_fatal("safe_mode:halt") is True
-    assert bot_engine._reason_implies_fatal(_BadStr()) is False
+def test_fallback_timeframe_helper_respects_daily_inclusion() -> None:
     assert bot_engine._fallback_active_for_timeframes(None, include_daily=True) is False
     assert bot_engine._fallback_active_for_timeframes({}, include_daily=True) is False
     assert (
@@ -236,45 +221,6 @@ def test_quote_age_helpers_cover_seconds_invalid_and_env_fallback(
     assert bot_engine._quote_age_ms_from_state({"age_sec": "1.25"}) == 1250.0
     assert bot_engine._quote_age_ms_from_state({"quote_age_ms": "bad"}) is None
     assert bot_engine._quote_age_ms_from_state({"quote_age_ms": -1}) is None
-
-
-def test_resolve_data_provider_degraded_uses_snapshot_safe_mode_and_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        bot_engine.runtime_state,
-        "observe_data_provider_state",
-        lambda: {
-            "status": "degraded",
-            "timeframes": {"1Min": True},
-            "using_backup": False,
-            "reason": None,
-        },
-    )
-    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: None)
-    monkeypatch.setattr(bot_engine.provider_monitor, "is_disabled", lambda _provider: False)
-
-    assert bot_engine._resolve_data_provider_degraded() == (
-        True,
-        "degraded",
-        False,
-    )
-
-    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: "data_quality:minute_gap")
-    assert bot_engine._resolve_data_provider_degraded() == (
-        True,
-        "data_quality:minute_gap",
-        False,
-    )
-
-    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: None)
-    monkeypatch.setattr(bot_engine.provider_monitor, "is_disabled", lambda _provider: True)
-    monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: {})
-    assert bot_engine._resolve_data_provider_degraded() == (
-        True,
-        "provider_disabled",
-        True,
-    )
 
 
 def test_primary_feed_derisk_state_blocks_after_prolonged_degradation(
@@ -321,45 +267,6 @@ def test_primary_feed_derisk_state_blocks_after_prolonged_degradation(
     assert state["scale"] == 1.0
     assert state["quote_age_ms"] == 5000.0
     assert state["reason"] == "gap,synthetic_quote,stale_quote,prolonged_degraded_feed"
-
-
-def test_pre_trade_gate_blocks_sip_and_unsafe_fallback_quotes(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    _patch_get_env(monkeypatch, {"PYTEST_RUNNING": "", "ALLOW_EXECUTION_ON_FALLBACK_QUOTES": False})
-    monkeypatch.setattr(bot_engine, "_sip_lockout_active", lambda: True)
-
-    assert bot_engine._pre_trade_gate() is True
-
-    monkeypatch.setattr(bot_engine, "_sip_lockout_active", lambda: False)
-    monkeypatch.setattr(
-        bot_engine.runtime_state,
-        "observe_data_provider_state",
-        lambda: {"status": "healthy", "timeframes": {"1Min": True}},
-    )
-    monkeypatch.setattr(
-        bot_engine.runtime_state,
-        "observe_quote_status",
-        lambda: {"synthetic": True, "quote_age_ms": 5000.0, "source": "fallback"},
-    )
-    monkeypatch.setattr(bot_engine.provider_monitor, "is_safe_mode_active", lambda: False)
-    monkeypatch.setattr(bot_engine.provider_monitor, "is_disabled", lambda _provider: False)
-    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: None)
-    monkeypatch.setattr(bot_engine, "_failsoft_mode_active", lambda _provider_state=None: False)
-    monkeypatch.setattr(bot_engine, "_safe_mode_blocks_trading", lambda: True)
-    monkeypatch.setattr(
-        bot_engine,
-        "get_trading_config",
-        lambda: SimpleNamespace(execution_mode="sim", safe_mode_allow_paper=False),
-    )
-
-    with caplog.at_level(logging.WARNING):
-        assert bot_engine._pre_trade_gate() is True
-
-    assert any(record.getMessage() == "EXECUTION_BLOCKED_UNSAFE_QUOTES" for record in caplog.records)
-
-
 
 
 def test_startup_cancel_mode_identifier_subset_and_decision(

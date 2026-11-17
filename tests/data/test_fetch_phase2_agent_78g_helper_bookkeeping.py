@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -83,23 +82,6 @@ def _reset_fetch_bookkeeping(monkeypatch: pytest.MonkeyPatch) -> None:
     fetch._set_fetch_state({})
 
 
-def _frame(
-    close: float | None = 101.0,
-    *,
-    timestamp: datetime = datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "timestamp": [timestamp],
-            "open": [100.0],
-            "high": [102.0],
-            "low": [99.0],
-            "close": [close],
-            "volume": [1000],
-        },
-    )
-
-
 def test_env_bootstrap_and_incomplete_row_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {
         "AI_TRADING_BOOTSTRAP_PRIMARY_ONLY": "false",
@@ -133,51 +115,19 @@ def test_env_bootstrap_and_incomplete_row_helpers(monkeypatch: pytest.MonkeyPatc
     assert fetch._apply_incomplete_row_policy(["not", "a", "frame"], None, None) == ["not", "a", "frame"]
 
 
-def test_safe_empty_wrappers_backup_get_bars_and_daily_fetch_backup(
+def test_safe_empty_wrappers_and_backup_get_bars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(fetch, "_empty_should_emit", lambda *_args: (_ for _ in ()).throw(ValueError("boom")))
     monkeypatch.setattr(fetch, "_empty_record", lambda *_args: None)
     monkeypatch.setattr(fetch, "_empty_classify", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(fetch, "_backup_get_bars", lambda *_args: (_ for _ in ()).throw(RuntimeError("down")))
-    monkeypatch.setattr(fetch, "fetch_yf_batched", lambda *_args, **_kwargs: {"AAPL": _frame(), "MSFT": pd.DataFrame()})
-    monkeypatch.setattr(fetch, "_data_fallback_allowed", lambda: False)
-    monkeypatch.setattr(fetch, "_current_settings", lambda: SimpleNamespace(backup_data_provider="yahoo"))
-    monkeypatch.setattr(
-        fetch,
-        "activate_data_kill_switch",
-        lambda reason, **kwargs: calls.append((reason, kwargs)),
-    )
-    monkeypatch.setattr(fetch, "log_data_quality_event", lambda *_args, **_kwargs: pytest.fail("blocked fallback should not log usage"))
 
     key = ("alpaca", "AAPL", "1Min", "empty", "2026-04-24")
     assert fetch._safe_empty_should_emit(key, BASE_START) is False
     assert fetch._safe_empty_record(key, BASE_START) == 0
     assert fetch._safe_empty_classify(symbol="AAPL") == logging.INFO
     assert fetch._safe_backup_get_bars("AAPL", BASE_START, BASE_END, "1m").empty
-
-    assert fetch.fetch_daily_backup(["AAPL", "MSFT"], start=BASE_START, end=BASE_END) == {}
-    assert calls == [("backup_provider_blocked", {"provider": "yahoo", "metadata": {"symbols": ["AAPL"]}})]
-
-
-def test_daily_fetch_backup_logs_when_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    events: list[dict[str, Any]] = []
-    monkeypatch.setattr(fetch, "fetch_yf_batched", lambda *_args, **_kwargs: {"SPY": _frame()})
-    monkeypatch.setattr(fetch, "_data_fallback_allowed", lambda: True)
-    monkeypatch.setattr(fetch, "_current_settings", lambda: SimpleNamespace(backup_data_provider="finnhub"))
-    monkeypatch.setattr(fetch, "activate_data_kill_switch", lambda *_args, **_kwargs: pytest.fail("allowed fallback should not trip kill switch"))
-    monkeypatch.setattr(fetch, "log_data_quality_event", lambda event, **kwargs: events.append({"event": event, **kwargs}))
-
-    result = fetch.fetch_daily_backup(["SPY"], period="5d")
-
-    assert list(result) == ["SPY"]
-    assert list(result["SPY"].columns[:6]) == ["timestamp", "open", "high", "low", "close", "volume"]
-    assert events[0]["event"] == "backup_provider_used"
-    assert events[0]["provider"] == "finnhub"
-    assert events[0]["context"] == {"symbols": ["SPY"]}
-
-
 
 
 def test_global_backup_skip_probe_and_alert_bookkeeping(

@@ -6,7 +6,6 @@ from ai_trading import (
     alpaca_api,  # AI-AGENT-REF: canonical import
     utils,
 )
-from ai_trading.core import bot_engine
 
 try:
     from ai_trading.strategies.base import TradeSignal
@@ -25,26 +24,6 @@ def test_health_rows_throttle(monkeypatch, caplog):
     t[0] += 5
     utils.health_rows_passed([1])
     assert "HEALTH_ROWS_THROTTLED" in caplog.text
-
-
-def test_skip_cooldown_throttle(monkeypatch, caplog):
-    caplog.set_level("INFO")
-    bot_engine._LAST_SKIP_CD_TIME = 0.0
-    bot_engine._LAST_SKIP_SYMBOLS = frozenset()
-    t = [0.0]
-    monkeypatch.setattr(time, "monotonic", lambda: t[0])
-    bot_engine.log_skip_cooldown(["AAPL"])
-    assert "SKIP_COOLDOWN" in caplog.text
-    caplog.clear()
-    bot_engine.log_skip_cooldown(["AAPL"])
-    assert not caplog.records
-    caplog.clear()
-    t[0] += 16
-    bot_engine.log_skip_cooldown(["AAPL"])
-    assert caplog.records
-    caplog.clear()
-    bot_engine.log_skip_cooldown(["MSFT"])
-    assert caplog.records
 
 
 def test_cooldown_expired_throttle(monkeypatch, caplog):

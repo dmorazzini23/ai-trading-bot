@@ -402,8 +402,3 @@ def is_trading_day(symbol: str, dt: datetime | None=None) -> bool:
         dt = datetime.now(UTC)
     calendar = get_calendar_registry()
     return calendar.is_trading_day(symbol, dt)
-
-def ensure_final_bar(symbol: str, timeframe: str) -> bool:
-    """Check if final bar should be ensured for symbol/timeframe."""
-    calendar = get_calendar_registry()
-    return calendar.ensure_final_bar(symbol, timeframe)

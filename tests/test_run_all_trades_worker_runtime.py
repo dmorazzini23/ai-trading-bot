@@ -24,7 +24,6 @@ def test_run_all_trades_worker_records_execute_stage_and_softens_finalizer_hooks
 
     state = bot_engine.BotState()
     state.running = True
-    state._strategies_loaded = True
     runtime = SimpleNamespace(
         risk_engine=SimpleNamespace(wait_for_exposure_update=lambda _timeout: None)
     )
@@ -102,7 +101,6 @@ def test_run_all_trades_worker_records_execute_stage_and_softens_finalizer_hooks
     assert guard_calls == [0.42]
     assert hook_order == ["heartbeat", "flush", "stops"]
     assert state.running is False
-    assert state._strategies_loaded is False
     assert state.last_loop_duration == 11.0
     assert dummy_lock.released is True
     assert any(

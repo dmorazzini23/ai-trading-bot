@@ -461,41 +461,6 @@ def test_quote_fallback_and_gate_paths_publish_state(monkeypatch: pytest.MonkeyP
     assert updates[-1]["status"] == "rejected"
 
 
-def test_resolve_limit_price_uses_last_trade_and_blocks_degraded_last_close(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_get_env(monkeypatch, {"EXECUTION_MODE": "paper", "PRICE_SLIPPAGE_BPS": 10.0})
-    monkeypatch.setattr(
-        bot_engine,
-        "get_trading_config",
-        lambda: SimpleNamespace(nbbo_required_for_limit=False),
-    )
-    monkeypatch.setattr(bot_engine, "_fetch_quote", lambda ctx, symbol, feed=None: None)
-    monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: True)
-    monkeypatch.setattr(bot_engine, "_allow_last_close_execution", lambda: False)
-    monkeypatch.setattr(bot_engine, "_resolve_data_provider_degraded", lambda: (True, "gap", False))
-
-    minute_df = pd.DataFrame({"close": [99.0, 100.0]})
-    limit, source = bot_engine._resolve_limit_price(
-        SimpleNamespace(execution_mode="paper"),
-        "AAPL",
-        "buy",
-        minute_df,
-        last_close=None,
-    )
-    assert source == "last_trade"
-    assert limit == 100.0
-
-    limit, source = bot_engine._resolve_limit_price(
-        SimpleNamespace(execution_mode="paper"),
-        "AAPL",
-        "sell",
-        pd.DataFrame({"not_close": [1.0]}),
-        last_close=100.0,
-    )
-    assert (limit, source) == (None, None)
-
-
 @contextlib.contextmanager
 def _span(*_: Any, **__: Any):
     yield
@@ -1402,31 +1367,3 @@ def test_confidence_cost_aware_size_adjustment_never_increases_strong_edge(
 
     assert qty == 10
     assert annotations == {}
-
-
-def test_safe_trade_realtime_position_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:
-    state = SimpleNamespace(auth_skipped_symbols=set())
-    ctx = SimpleNamespace(api=SimpleNamespace(list_positions=lambda: [SimpleNamespace(symbol="AAPL", qty="3")]))
-    monkeypatch.setattr(bot_engine, "trade_logic", lambda *args, **kwargs: pytest.fail("held buy should skip"))
-    monkeypatch.setattr(bot_engine, "OrderSide", SimpleNamespace(BUY="buy", SELL="sell"))
-
-    assert bot_engine._safe_trade(
-        ctx,
-        state,
-        "AAPL",
-        1000.0,
-        object(),
-        True,
-        side="buy",
-    ) is False
-
-    ctx.api = SimpleNamespace(list_positions=lambda: [])
-    assert bot_engine._safe_trade(
-        ctx,
-        state,
-        "MSFT",
-        1000.0,
-        object(),
-        True,
-        side="sell",
-    ) is False

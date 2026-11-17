@@ -114,7 +114,6 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     monkeypatch.setattr(eng, "is_market_open", lambda: True)
     monkeypatch.setattr(eng, "_is_market_open_base", lambda: True)
     monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _rt: None)
-    monkeypatch.setattr(eng, "get_strategies", lambda: [])
     monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(eng.CFG, "log_market_fetch", False, raising=False)
     monkeypatch.setattr(eng, "MEMORY_OPTIMIZATION_AVAILABLE", False, raising=False)
@@ -128,8 +127,8 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
 
     monkeypatch.setattr(eng, "run_lock", DummyLock())
 
-    monkeypatch.setattr(eng, "_process_symbols", lambda *_a, **_k: ([], {}, 0))
-    monkeypatch.setattr(eng, "_prepare_run", lambda *_a, **_k: (0.0, True, []))
+    # Trailing stops are checked while the execution engine is attached, before the cycle body.
+    monkeypatch.setattr(eng, "_run_netting_cycle", lambda *_a, **_k: None)
 
     called = {"flag": False}
 

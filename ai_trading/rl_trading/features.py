@@ -1,21 +1,11 @@
 from __future__ import annotations
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:
-    import numpy as np
     import pandas as pd
 
-def _safe_series(x: pd.Series | None, size: int, fill: float = 0.0) -> pd.Series:
-    pd = load_pandas()
-    if x is None:
-        return pd.Series([fill] * size)
-    x = pd.to_numeric(x, errors='coerce').fillna(fill)
-    if len(x) >= size:
-        return x.tail(size)
-    return pd.concat([pd.Series([fill] * (size - len(x))), x], ignore_index=True)
 
 def rsi(close: pd.Series, length: int = 14) -> pd.Series:
     pd = load_pandas()
@@ -76,43 +66,3 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     volume = pd.to_numeric(volume, errors='coerce').fillna(0.0)
     sign = np.sign(close.diff().fillna(0.0))
     return (sign * volume).cumsum().fillna(0.0)
-
-@dataclass
-class FeatureConfig:
-    window: int = 64
-
-def compute_features(
-    df: pd.DataFrame,
-    cfg: FeatureConfig | None = None,
-    *,
-    window: int | None = None,
-) -> np.ndarray:
-    pd = load_pandas()
-    import numpy as np
-
-    if window is not None:
-        cfg = FeatureConfig(window=int(window))
-    if cfg is None:
-        cfg = FeatureConfig()
-    w = int(cfg.window)
-    if w <= 0:
-        raise ValueError("Feature window must be positive")
-    df = df.copy()
-    close = df.get('close', df.get('Close'))
-    high = df.get('high', df.get('High', close))
-    low = df.get('low', df.get('Low', close))
-    vol = df.get('volume', df.get('Volume'))
-    close = _safe_series(close, len(df), 0.0)
-    rets = close.pct_change().replace([np.inf, -np.inf], 0.0).fillna(0.0).tail(w)
-    rsi_s = rsi(close).fillna(50.0).tail(w) / 100.0
-    atr_s = atr(high, low, close).fillna(0.0).tail(w)
-    vwapb = vwap_bias(close, high, low, _safe_series(vol, len(df), 0.0)).fillna(0.0).tail(w)
-    bbpos = bollinger_position(close).tail(w)
-    obv_s = obv(close, _safe_series(vol, len(df), 0.0))
-    obv_s = (
-        (obv_s - obv_s.rolling(w, min_periods=1).mean())
-        / (obv_s.rolling(w, min_periods=1).std() + 1e-08)
-    ).fillna(0.0).clip(-1.0, 1.0).tail(w)
-    parts = [rets, rsi_s, atr_s, vwapb, bbpos, obv_s]
-    vec = np.concatenate([p.to_numpy(dtype=np.float32) for p in parts], axis=0)
-    return np.asarray(vec, dtype=np.float32)

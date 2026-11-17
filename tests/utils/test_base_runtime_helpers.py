@@ -44,20 +44,6 @@ def test_log_warning_routes_health_stale_to_debug(monkeypatch):
     ]
 
 
-def test_should_log_stale_caches_by_symbol_timestamp(monkeypatch):
-    base._STALE_CACHE.clear()
-    clock = {"now": 1000.0}
-    monkeypatch.setattr("time.time", lambda: clock["now"])
-    ts = pd.Timestamp("2026-01-01T00:00:00Z")
-
-    assert base.should_log_stale("SPY", ts, ttl=60) is True
-    assert base.should_log_stale("SPY", ts, ttl=60) is False
-
-    clock["now"] = 1061.0
-    assert base.should_log_stale("SPY", ts, ttl=60) is True
-    assert base.should_log_stale("QQQ", ts, ttl=60) is True
-
-
 def test_backoff_delay_caps_and_applies_jitter(monkeypatch):
     monkeypatch.setattr(base.random, "uniform", lambda low, high: high)
 
@@ -137,57 +123,6 @@ def test_health_check_handles_length_errors(monkeypatch):
     assert base.health_check([1, 2]) is True
     assert base.health_check([1]) is False
     assert base.health_check(object()) is False
-
-
-
-
-
-
-def test_price_feature_helpers_use_minute_data(monkeypatch):
-    idx = pd.date_range(pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=29), periods=30, freq="min")
-    data = pd.DataFrame(
-        {
-            "high": list(range(30, 60)),
-            "low": list(range(20, 50)),
-            "close": list(range(25, 55)),
-            "volume": [100] * 29 + [500],
-        },
-        index=idx,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine.fetch_minute_df_safe",
-        lambda _symbol: data,
-    )
-
-    assert base.get_rolling_atr("SPY", window=3) > 0
-    assert base.get_current_vwap("SPY") > 0
-    assert base.get_volume_spike_factor("SPY") == pytest.approx(5.0)
-
-    monkeypatch.setattr("ai_trading.core.bot_engine.fetch_minute_df_safe", lambda _symbol: None)
-    assert base.get_rolling_atr("SPY") == 0.0
-    assert base.get_current_vwap("SPY") == 0.0
-    assert base.get_volume_spike_factor("SPY") == 1.0
-
-
-def test_price_feature_helpers_fail_closed_on_stale_minute_data(monkeypatch):
-    idx = pd.date_range("2020-01-02 14:30:00+00:00", periods=30, freq="min")
-    stale = pd.DataFrame(
-        {
-            "high": list(range(30, 60)),
-            "low": list(range(20, 50)),
-            "close": list(range(25, 55)),
-            "volume": [100] * 29 + [500],
-        },
-        index=idx,
-    )
-    monkeypatch.setattr(
-        "ai_trading.core.bot_engine.fetch_minute_df_safe",
-        lambda _symbol: stale,
-    )
-
-    assert base.get_rolling_atr("SPY", window=3) == 0.0
-    assert base.get_current_vwap("SPY") == 0.0
-    assert base.get_volume_spike_factor("SPY") == 1.0
 
 
 def test_pre_trade_health_check_collects_symbol_results(monkeypatch):

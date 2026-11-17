@@ -4,7 +4,6 @@ Smoke test for runtime context and pandas index fixes.
 Tests that:
 1. LazyBotContext has .params attribute 
 2. pandas MultiIndex is used instead of private _RealMultiIndex
-3. _prepare_run can access runtime.params without AttributeError
 """
 import os
 import sys
@@ -46,47 +45,6 @@ def test_lazy_bot_context_params():
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
         return False
 
-def test_prepare_run_signature():
-    """Test that _prepare_run can access runtime.params."""
-    try:
-        from ai_trading.core.bot_engine import BotState, _prepare_run
-
-        class MockAPI:
-
-            def get_account(self):
-
-                class MockAccount:
-
-                    def __init__(self):
-                        self.equity = '10000'
-                return MockAccount()
-
-        class MockCapitalScaler:
-
-            def update(self, runtime, equity):
-                pass
-
-        class MockRuntime:
-
-            def __init__(self):
-                self.api = MockAPI()
-                self.capital_scaler = MockCapitalScaler()
-                self.params = {'CAPITAL_CAP': 0.25, 'DOLLAR_RISK_LIMIT': 0.05, 'MAX_POSITION_SIZE': 1000}
-        runtime = MockRuntime()
-        state = BotState()
-        try:
-            _prepare_run(runtime, state)
-        except AttributeError as e:
-            if 'params' in str(e):
-                return False
-            else:
-                pass
-        except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
-            pass
-        return True
-    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
-        return False
-
 def test_empty_dataframe_helper():
     """Test the empty DataFrame helper creates valid indexes."""
     try:
@@ -102,7 +60,7 @@ def test_empty_dataframe_helper():
 
 def main():
     """Run smoke tests for pandas index and runtime context fixes."""
-    tests = [test_pandas_multiindex_usage, test_empty_dataframe_helper, test_lazy_bot_context_params, test_prepare_run_signature]
+    tests = [test_pandas_multiindex_usage, test_empty_dataframe_helper, test_lazy_bot_context_params]
     passed = 0
     for test in tests:
         try:

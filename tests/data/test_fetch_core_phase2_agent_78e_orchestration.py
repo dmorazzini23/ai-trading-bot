@@ -803,21 +803,6 @@ def test_repair_rth_minute_gaps_uses_backup_and_records_metadata(monkeypatch: py
     assert not repaired.empty
 
 
-def test_should_skip_symbol_sets_coverage_metadata_for_catastrophic_gap() -> None:
-    start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
-    end = start + timedelta(minutes=3)
-    frame = _frame(start - timedelta(days=1))
-    frame.attrs["symbol"] = "AAPL"
-
-    assert fetch.should_skip_symbol(
-        frame,
-        window=(start, end),
-        tz="America/New_York",
-        max_gap_ratio=0.0,
-    ) is True
-    assert frame.attrs["_coverage_meta"]["skip_flagged"] is True
-
-
 def test_get_daily_df_forced_yahoo_and_fresh_memo(fetch_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     from ai_trading import alpaca_api
 

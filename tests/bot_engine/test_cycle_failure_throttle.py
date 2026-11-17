@@ -157,7 +157,6 @@ def _patch_minimal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(be, "ensure_alpaca_attached", lambda _rt: None)
     monkeypatch.setattr(be, "ensure_data_fetcher", lambda _rt: None)
     monkeypatch.setattr(be, "get_trade_logger", lambda: None)
-    monkeypatch.setattr(be, "get_strategies", lambda: [])
     monkeypatch.setattr(be, "is_market_open", lambda: True)
     monkeypatch.setattr(be, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(be, "_validate_trading_api", lambda _api: True)
@@ -165,9 +164,7 @@ def _patch_minimal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(be, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(be, "_handle_pending_orders", lambda *_a, **_k: False)
     monkeypatch.setattr(be, "signal_manager", types.SimpleNamespace(begin_cycle=lambda: None))
-    # These tests drive the legacy non-netting path (_prepare_run, run_multi_strategy); opt in explicitly.
-    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
-    monkeypatch.setattr(be, "run_multi_strategy", lambda _rt: None)
+    monkeypatch.setattr(be, "_run_netting_cycle", lambda *_a, **_k: None)
     monkeypatch.setattr(be, "check_halt_flag", lambda _rt: False)
     monkeypatch.setattr(be, "_log_loop_heartbeat", lambda *_a, **_k: None)
     monkeypatch.setattr(be, "_check_runtime_stops", lambda _rt: None)
@@ -189,43 +186,35 @@ def _patch_minimal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(be, "run_lock", _DummyLock())
 
 
-def test_missing_columns_failure_does_not_throttle(monkeypatch, caplog):
-    """A MissingOHLCVColumnsError should not update the throttle timestamp."""
+def test_broker_api_failure_does_not_throttle(monkeypatch, caplog):
+    """A cycle that fails on a broker API error should not update the throttle timestamp."""
 
     _patch_minimal_runtime(monkeypatch)
     monkeypatch.setattr(be, "datetime", _FixedDateTime)
     monkeypatch.setattr(be, "audit_positions", lambda _rt: None)
-    monkeypatch.setattr(
-        be,
-        "_prepare_run",
-        lambda _rt, _state, _tickers=None: (0.0, True, []),
-    )
 
     runtime = _stub_runtime(monkeypatch)
     state = be.BotState()
 
     attempt_counter = {"calls": 0}
-    missing_error = be.data_fetcher_module.MissingOHLCVColumnsError
-    monkeypatch.setattr(be, "DataFetchError", missing_error)
 
-    def _prepare_stub(_rt, _state, _tickers=None):  # noqa: D401 - match contract
+    def _netting_stub(*_a, **_k):  # noqa: D401 - match contract
         attempt_counter["calls"] += 1
-        if attempt_counter["calls"] <= 3:
-            raise missing_error("missing")
-        return (0.0, True, [])
+        if attempt_counter["calls"] == 1:
+            raise be.APIError("boom")
 
-    monkeypatch.setattr(be, "_prepare_run", _prepare_stub)
+    monkeypatch.setattr(be, "_run_netting_cycle", _netting_stub)
 
     caplog.set_level("WARNING")
 
     be.run_all_trades_worker(state, runtime)
 
-    assert attempt_counter["calls"] == 3
+    assert attempt_counter["calls"] == 1
     assert state.last_run_at is None
 
     be.run_all_trades_worker(state, runtime)
 
-    assert attempt_counter["calls"] == 4
+    assert attempt_counter["calls"] == 2
     assert not any(
         record.message == "RUN_ALL_TRADES_SKIPPED_RECENT" for record in caplog.records
     )
@@ -237,11 +226,6 @@ def test_warmup_resets_last_run_timestamp(monkeypatch, caplog):
     _patch_minimal_runtime(monkeypatch)
     monkeypatch.setattr(be, "datetime", _FixedDateTime)
     monkeypatch.setattr(be, "audit_positions", lambda _rt: None)
-    monkeypatch.setattr(
-        be,
-        "_prepare_run",
-        lambda _rt, _state, _tickers=None: (0.0, True, []),
-    )
 
     runtime = _stub_runtime(monkeypatch)
     state = be.BotState()

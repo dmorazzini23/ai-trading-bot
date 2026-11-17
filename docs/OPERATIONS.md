@@ -96,13 +96,14 @@ Live mode now requires one authoritative durability path:
 - `DATABASE_URL=postgresql+psycopg://...`
 - Live JSONL OMS ledgers are disabled in the hot path.
 - Legacy/non-netting live execution is blocked in non-test runtimes.
-- `STRATEGIES` only applies on the legacy non-netting path
-  (`AI_TRADING_NETTING_ENABLED=0`), which the service no longer accepts:
-  startup exits with `NETTING_DISABLED_UNSUPPORTED`. Under netting the listed
-  classes are instantiated but never consulted, and the bot logs
-  `STRATEGIES_NOT_CONSUMED_UNDER_NETTING` once per day. Leave `STRATEGIES`
-  unset. A list where no name matches a registry key logs
-  `STRATEGIES_NONE_RESOLVED` and loads no strategies.
+- The legacy non-netting decision cycle has been removed: every trading
+  cycle runs the netting pipeline and does not read `netting_enabled`.
+  `AI_TRADING_NETTING_ENABLED=0` is rejected at startup with
+  `NETTING_DISABLED_UNSUPPORTED`, both by the service and by
+  `ai_trading.__main__.run_trade` (used by `scripts/runtime_artifacts_reset.sh`).
+- `STRATEGIES` is no longer read and no strategy classes are loaded at runtime;
+  `STRATEGIES_NOT_CONSUMED_UNDER_NETTING` and `STRATEGIES_NONE_RESOLVED` are no
+  longer logged. Remove `STRATEGIES` from `.env` if it is still set.
 - Pretrade pacing persists by default at `runtime/pretrade_rate_limiter.db`; point
   `AI_TRADING_PRETRADE_RATE_LIMITER_PATH` at a shared durable runtime volume if
   you run supervised active/passive processes on the same host.

@@ -86,7 +86,6 @@ from ai_trading.data.timeutils import (
 from ai_trading.logging import (
     get_logger,
     log_backup_provider_used,
-    log_data_quality_event,
     log_empty_retries_exhausted,
     log_fetch_attempt,
     log_finnhub_disabled,
@@ -293,7 +292,6 @@ from ai_trading.data.feed_roles import (
 )
 from ai_trading.data.price_quote_feed import ensure_entitled_feed
 from ai_trading.data.provider_monitor import (
-    activate_data_kill_switch,
     canonical_provider,
     is_safe_mode_active,
     provider_monitor,
@@ -1492,72 +1490,6 @@ _YF_INTERVAL_MAP = {
     "1Hour": "60m",
     "1Day": "1d",
 }
-
-
-def _data_fallback_allowed() -> bool:
-    """Return ``True`` when backup data providers are explicitly permitted."""
-    explicit: bool | None
-    try:
-        explicit = get_env("AI_TRADING_ALLOW_DATA_FALLBACK", None, cast=bool)
-    except FETCH_FALLBACK_EXCEPTIONS:
-        explicit = None
-    if explicit is not None:
-        return bool(explicit)
-
-    try:
-        settings = _current_settings()
-    except FETCH_FALLBACK_EXCEPTIONS:
-        settings = None
-    if settings is not None:
-        try:
-            max_fallbacks = int(getattr(settings, "max_data_fallbacks", 0) or 0)
-        except (TypeError, ValueError):
-            max_fallbacks = 0
-        if max_fallbacks > 0:
-            return True
-
-    return False
-
-
-def fetch_daily_backup(
-    symbols: Iterable[str], *, start: Any | None = None, end: Any | None = None, period: str = "1y",
-) -> dict[str, pd.DataFrame]:
-    """Fetch daily bars via Yahoo Finance in batches returning normalized frames."""
-    results = fetch_yf_batched(symbols, start=start, end=end, period=period, interval="1d")
-    filtered: dict[str, pd.DataFrame] = {}
-    for symbol, frame in results.items():
-        if frame is None or frame.empty:
-            continue
-        normalized = normalize_ohlcv_df(frame, include_columns=("timestamp",))
-        normalized = _drop_future_daily_bars(normalized, symbol=symbol, source="yahoo")
-        if normalized is None or normalized.empty:  # type: ignore[truthy-bool]
-            continue
-        filtered[symbol] = normalized
-    if not filtered:
-        return filtered
-
-    try:
-        backup_provider = getattr(_current_settings(), "backup_data_provider", get_backup_data_provider())
-    except FETCH_FALLBACK_EXCEPTIONS:
-        backup_provider = get_backup_data_provider()
-    metadata = {"symbols": sorted(filtered.keys())}
-    if not _data_fallback_allowed():
-        activate_data_kill_switch(
-            "backup_provider_blocked",
-            provider=str(backup_provider or "yahoo"),
-            metadata=metadata,
-        )
-        return {}
-
-    log_data_quality_event(
-        "backup_provider_used",
-        provider=str(backup_provider or "yahoo"),
-        severity="warning",
-        reason="primary_data_unavailable",
-        symbols=filtered.keys(),
-        context=metadata,
-    )
-    return filtered
 
 
 def _current_settings():
@@ -7735,163 +7667,6 @@ def _resolve_gap_ratio_limit(*, default_ratio: float = 0.05, feed: str | None = 
 
 def _format_gap_ratio_reason(ratio: float, limit: float) -> str:
     return f"gap_ratio={ratio * 100:.2f}% > limit={limit * 100:.2f}%"
-
-
-_SKIP_LOGGED: set[tuple[str, _dt.date]] = set()
-
-
-def should_skip_symbol(
-    df: pd.DataFrame,
-    *,
-    window: tuple[_dt.datetime, _dt.datetime],
-    tz: str | ZoneInfo,
-    max_gap_ratio: float,
-) -> bool:
-    """Return ``True`` when the DataFrame should be skipped due to coverage gaps."""
-    pd_local = _ensure_pandas()
-    if pd_local is None or df is None or getattr(df, "empty", True):
-        return False
-    tzinfo = ZoneInfo(tz) if isinstance(tz, str) else tz
-    start, end = window
-    expected_local, start_utc, end_utc = _normalize_window_bounds(start, end, tzinfo)
-    expected_count = int(expected_local.size)
-    try:
-        raw_timestamps = pd_local.to_datetime(df["timestamp"], utc=True)
-        if isinstance(raw_timestamps, pd_local.Series):
-            raw_timestamps = pd_local.DatetimeIndex(raw_timestamps)
-        timestamps_utc = raw_timestamps.tz_convert("UTC")
-        timestamps = raw_timestamps.tz_convert(tzinfo)
-    except FETCH_FALLBACK_EXCEPTIONS:
-        raw_timestamps = pd_local.DatetimeIndex([])
-        timestamps_utc = pd_local.DatetimeIndex([])
-        timestamps = pd_local.DatetimeIndex([])
-
-    if expected_count == 0:
-        try:
-            from ai_trading.utils import market_calendar as market_calendar_module
-
-            expected_local = _build_trading_minute_index(
-                pd_local,
-                tz=tzinfo,
-                start_utc=start_utc.to_pydatetime(),
-                end_utc=end_utc.to_pydatetime(),
-                is_trading_day_fn=getattr(market_calendar_module, "is_trading_day", None),
-                session_bounds_fn=getattr(market_calendar_module, "rth_session_utc", None),
-            )
-            expected_count = int(expected_local.size)
-        except FETCH_FALLBACK_EXCEPTIONS:
-            expected_count = 0
-
-    if expected_count == 0:
-        try:
-            in_window = int(
-                ((timestamps_utc >= start_utc) & (timestamps_utc < end_utc)).sum(),
-            )
-        except FETCH_FALLBACK_EXCEPTIONS:
-            in_window = 0
-        if (
-            len(timestamps_utc) > 0
-            and in_window == 0
-            and max_gap_ratio is not None
-            and float(max_gap_ratio) <= 0.0
-        ):
-            try:
-                attrs = df.attrs  # type: ignore[attr-defined]
-            except FETCH_FALLBACK_EXCEPTIONS:
-                attrs = None
-            if isinstance(attrs, dict):
-                coverage_meta = attrs.setdefault("_coverage_meta", {})
-                if isinstance(coverage_meta, dict):
-                    total_points = max(int(len(timestamps_utc)), 1)
-                    coverage_meta.update(
-                        {
-                            "expected": total_points,
-                            "missing_after": total_points,
-                            "gap_ratio": 1.0,
-                            "skip_flagged": True,
-                        },
-                    )
-            symbol = attrs.get("symbol") if isinstance(attrs, dict) else "UNKNOWN"
-            symbol_str = str(symbol) if symbol else "UNKNOWN"
-            key = (symbol_str, start.date())
-            if key not in _SKIP_LOGGED:
-                logger.warning(
-                    "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_ratio=%s",
-                    symbol_str,
-                    max(int(len(timestamps_utc)), 1),
-                    max(int(len(timestamps_utc)), 1),
-                    "100.0000%",
-                )
-                _SKIP_LOGGED.add(key)
-            return True
-        return False
-    missing_after = int(expected_local.difference(timestamps).size)
-    gap_ratio = missing_after / expected_count if expected_count else 0.0
-    try:
-        attrs = df.attrs  # type: ignore[attr-defined]
-    except FETCH_FALLBACK_EXCEPTIONS:
-        attrs = None
-    coverage_meta_info: dict[str, object] | None = None
-    if isinstance(attrs, dict):
-        existing_meta = attrs.get("_coverage_meta")
-        if isinstance(existing_meta, dict):
-            coverage_meta_info = existing_meta
-        else:
-            coverage_meta_info = {}
-            attrs["_coverage_meta"] = coverage_meta_info
-    if coverage_meta_info is not None:
-        coverage_meta_info.update(
-            {
-                "expected": expected_count,
-                "missing_after": missing_after,
-                "gap_ratio": gap_ratio,
-            },
-        )
-    symbol = None
-    if isinstance(attrs, dict):
-        symbol = attrs.get("symbol")
-    symbol_str = str(symbol) if symbol else "UNKNOWN"
-    catastrophic_gap = math.isclose(gap_ratio, 1.0, rel_tol=0.0, abs_tol=1e-6) or gap_ratio >= 0.999999
-    skip_due_to_ratio = gap_ratio > max_gap_ratio if max_gap_ratio is not None else False
-    skip = catastrophic_gap or skip_due_to_ratio
-    if skip:
-        if coverage_meta_info is None and isinstance(attrs, dict):
-            meta_candidate = attrs.setdefault("_coverage_meta", {})
-            if isinstance(meta_candidate, dict):
-                coverage_meta_info = meta_candidate
-        if isinstance(coverage_meta_info, dict):
-            coverage_meta_info["skip_flagged"] = True
-            coverage_meta_info["gap_ratio"] = gap_ratio
-            coverage_meta_info["missing_after"] = missing_after
-            coverage_meta_info["expected"] = expected_count
-        key = (symbol_str, start.date())
-        if key not in _SKIP_LOGGED:
-            if catastrophic_gap:
-                logger.warning(
-                    "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_ratio=%s",
-                    symbol_str,
-                    missing_after,
-                    expected_count,
-                    f"{gap_ratio:.4%}",
-                )
-            else:
-                logger.info(
-                    "SKIP_SYMBOL_GAP_RATIO_LIMIT | symbol=%s missing=%d expected=%d gap_ratio=%s limit=%s",
-                    symbol_str,
-                    missing_after,
-                    expected_count,
-                    f"{gap_ratio:.4%}",
-                    f"{max_gap_ratio:.4%}" if max_gap_ratio is not None else "na",
-                )
-            _SKIP_LOGGED.add(key)
-    else:
-        if isinstance(coverage_meta_info, dict):
-            coverage_meta_info.pop("skip_flagged", None)
-        if gap_ratio > max_gap_ratio and isinstance(coverage_meta_info, dict):
-            coverage_meta_info["gap_ratio"] = gap_ratio
-            coverage_meta_info["missing_after"] = missing_after
-            coverage_meta_info["expected"] = expected_count
-    return skip
 
 
 def _parse_host_limit(raw: Any) -> int:
@@ -14832,7 +14607,6 @@ __all__ = [
     "clear_cached_minute_timestamp",
     "clear_safe_mode_cycle",
     "ensure_datetime",
-    "fetch_daily_backup",
     "fh_fetcher",
     "get_bars",
     "get_bars_batch",
@@ -14848,7 +14622,6 @@ __all__ = [
     "refresh_default_feed",
     "retry_empty_fetch_once",
     "set_cached_minute_timestamp",
-    "should_skip_symbol",
 ]
 
 def _record_gap_ratio_state(ratio: float | None, *, metadata: Mapping[str, Any] | None = None) -> None:

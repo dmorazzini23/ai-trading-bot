@@ -20,36 +20,6 @@ _REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
 }
 
 
-def _list_broker_positions(api: Any) -> list[Any]:
-    get_all_positions = getattr(api, "get_all_positions", None)
-    if callable(get_all_positions):
-        return list(get_all_positions() or [])
-    list_positions = getattr(api, "list_positions", None)
-    if callable(list_positions):
-        return list(list_positions() or [])
-    raise AttributeError("broker client missing positions method")
-
-
-def _position_symbol(position: Any) -> str:
-    return str(getattr(position, "symbol", "") or "")
-
-
-def _position_qty(position: Any) -> int:
-    try:
-        qty = int(float(getattr(position, "qty", getattr(position, "quantity", 0)) or 0))
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        qty = 0
-    if qty < 0:
-        return qty
-    try:
-        side = str(getattr(position, "side", "") or "").strip().lower()
-    except AI_TRADING_FALLBACK_EXCEPTIONS:
-        side = ""
-    if side in {"short", "sell", "sell_short"}:
-        return -abs(qty)
-    return qty
-
-
 def _replay_live_parity_gate_cache_ttl_seconds() -> float:
     return max(
         0.0,
@@ -186,57 +156,6 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
     return gate
 
 
-def _drawdown_guard_halts_cycle(*, be: Any, runtime: Any, dbc: Any, account_snapshot: Any) -> bool:
-    """Score account equity on the drawdown breaker; True when the cycle must stop."""
-    snapshot_equity = getattr(account_snapshot, "equity", None)
-    if snapshot_equity is None:
-        # A missing account snapshot is not a zero-equity reading; scoring it
-        # would register a 100% drawdown and halt the cycle.
-        be.logger.warning(
-            "DRAWDOWN_CHECK_SKIPPED",
-            extra={"reason": "account_equity_unavailable"},
-        )
-        return False
-    try:
-        current_equity = float(snapshot_equity)
-        trading_allowed = dbc.update_equity(current_equity)
-        status = dbc.get_status()
-        if not trading_allowed:
-            be.logger.critical(
-                "TRADING_HALTED_DRAWDOWN_PROTECTION",
-                extra={
-                    "current_drawdown": status["current_drawdown"],
-                    "max_drawdown": status["max_drawdown"],
-                    "peak_equity": status["peak_equity"],
-                    "current_equity": current_equity,
-                },
-            )
-            try:
-                portfolio = _list_broker_positions(runtime.api)
-                for pos in portfolio:
-                    be.manage_position_risk(runtime, pos)
-            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
-                be.logger.warning(
-                    "HALT_MANAGE_FAIL",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
-            return True
-        be.logger.debug(
-            "DRAWDOWN_STATUS_OK",
-            extra={
-                "current_drawdown": status["current_drawdown"],
-                "max_drawdown": status["max_drawdown"],
-                "trading_allowed": status["trading_allowed"],
-            },
-        )
-    except (be.APIError, TimeoutError, ConnectionError, TypeError, ValueError) as e:
-        be.logger.error(
-            "DRAWDOWN_CHECK_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-    return False
-
-
 def execute_run_all_trades_cycle(
     *,
     state: Any,
@@ -245,9 +164,12 @@ def execute_run_all_trades_cycle(
     loop_id: str,
     loop_start: float,
     api: Any,
-    restore_last_run_timestamp: Any,
 ) -> None:
-    """Execute the main worker cycle after bootstrap has completed."""
+    """Execute the netting worker cycle after bootstrap has completed.
+
+    The netting pipeline is the only decision path; the cycle does not read
+    ``netting_enabled``. Startup rejects a config that disables it.
+    """
     be = importlib.import_module("ai_trading.core.bot_engine")
     default_required = not bool(
         str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
@@ -353,604 +275,96 @@ def execute_run_all_trades_cycle(
             else:
                 return
 
-        if be._netting_pipeline_enabled(runtime):
-            cycle_engine = getattr(runtime, "execution_engine", None)
-            cycle_started = False
-            broker_snapshot = None
-            if cycle_engine is not None:
-                start_hook = getattr(cycle_engine, "start_cycle", None)
-                if callable(start_hook):
+        cycle_engine = getattr(runtime, "execution_engine", None)
+        cycle_started = False
+        broker_snapshot = None
+        if cycle_engine is not None:
+            start_hook = getattr(cycle_engine, "start_cycle", None)
+            if callable(start_hook):
+                try:
+                    start_hook()
+                    cycle_started = True
+                except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+                    be.logger.warning(
+                        "EXECUTION_START_CYCLE_FAILED",
+                        extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+                        exc_info=True,
+                    )
+        try:
+            be._run_netting_cycle(state, runtime, loop_id, loop_start)
+            _propagate_replay_entry_control(
+                state=state,
+                runtime=runtime,
+                be=be,
+                gate=parity_gate,
+                control=entry_control,
+            )
+            provider_status_after = ""
+            provider_using_backup = False
+            try:
+                provider_state_after = be.runtime_state.observe_data_provider_state()
+            except AI_TRADING_FALLBACK_EXCEPTIONS:
+                provider_state_after = {}
+            if isinstance(provider_state_after, dict):
+                try:
+                    provider_status_after = str(
+                        provider_state_after.get("status") or ""
+                    ).strip().lower()
+                except AI_TRADING_FALLBACK_EXCEPTIONS:
+                    provider_status_after = ""
+                provider_using_backup = bool(provider_state_after.get("using_backup"))
+                timeframe_state_after = provider_state_after.get("timeframes")
+                if isinstance(timeframe_state_after, be.Mapping):
+                    minute_backup = timeframe_state_after.get("1Min")
+                    if isinstance(minute_backup, bool):
+                        provider_using_backup = minute_backup
+            if provider_status_after not in {
+                "down",
+                "disabled",
+                "failed",
+                "unreachable",
+                "error",
+            }:
+                be.runtime_state.update_data_provider_state(
+                    status="degraded" if provider_using_backup else "healthy",
+                    data_status="ready",
+                    reason=(
+                        "data_available_via_backup"
+                        if provider_using_backup
+                        else "data_available_netting"
+                    ),
+                    safe_mode=be.is_safe_mode_active(),
+                )
+            post_sync_enabled = True
+            try:
+                post_sync_enabled = bool(
+                    getattr(cfg_runtime, "post_submit_broker_sync", True)
+                )
+            except (TypeError, ValueError):
+                post_sync_enabled = True
+            if post_sync_enabled:
+                engine_for_sync = getattr(runtime, "execution_engine", None) or cycle_engine
+                if engine_for_sync is not None and hasattr(
+                    engine_for_sync, "synchronize_broker_state"
+                ):
                     try:
-                        start_hook()
-                        cycle_started = True
+                        broker_snapshot = engine_for_sync.synchronize_broker_state()
+                    except AI_TRADING_FALLBACK_EXCEPTIONS:
+                        be.logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
+        finally:
+            if cycle_started and cycle_engine is not None:
+                end_hook = getattr(cycle_engine, "end_cycle", None)
+                if callable(end_hook):
+                    try:
+                        end_hook()
                     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
                         be.logger.warning(
-                            "EXECUTION_START_CYCLE_FAILED",
+                            "EXECUTION_END_CYCLE_FAILED",
                             extra={"cause": exc.__class__.__name__, "detail": str(exc)},
                             exc_info=True,
                         )
-            try:
-                be._run_netting_cycle(state, runtime, loop_id, loop_start)
-                _propagate_replay_entry_control(
-                    state=state,
-                    runtime=runtime,
-                    be=be,
-                    gate=parity_gate,
-                    control=entry_control,
-                )
-                provider_status_after = ""
-                provider_using_backup = False
-                try:
-                    provider_state_after = be.runtime_state.observe_data_provider_state()
-                except AI_TRADING_FALLBACK_EXCEPTIONS:
-                    provider_state_after = {}
-                if isinstance(provider_state_after, dict):
-                    try:
-                        provider_status_after = str(
-                            provider_state_after.get("status") or ""
-                        ).strip().lower()
-                    except AI_TRADING_FALLBACK_EXCEPTIONS:
-                        provider_status_after = ""
-                    provider_using_backup = bool(provider_state_after.get("using_backup"))
-                    timeframe_state_after = provider_state_after.get("timeframes")
-                    if isinstance(timeframe_state_after, be.Mapping):
-                        minute_backup = timeframe_state_after.get("1Min")
-                        if isinstance(minute_backup, bool):
-                            provider_using_backup = minute_backup
-                if provider_status_after not in {
-                    "down",
-                    "disabled",
-                    "failed",
-                    "unreachable",
-                    "error",
-                }:
-                    be.runtime_state.update_data_provider_state(
-                        status="degraded" if provider_using_backup else "healthy",
-                        data_status="ready",
-                        reason=(
-                            "data_available_via_backup"
-                            if provider_using_backup
-                            else "data_available_netting"
-                        ),
-                        safe_mode=be.is_safe_mode_active(),
-                    )
-                post_sync_enabled = True
-                try:
-                    post_sync_enabled = bool(
-                        getattr(cfg_runtime, "post_submit_broker_sync", True)
-                    )
-                except (TypeError, ValueError):
-                    post_sync_enabled = True
-                if post_sync_enabled:
-                    engine_for_sync = getattr(runtime, "execution_engine", None) or cycle_engine
-                    if engine_for_sync is not None and hasattr(
-                        engine_for_sync, "synchronize_broker_state"
-                    ):
-                        try:
-                            broker_snapshot = engine_for_sync.synchronize_broker_state()
-                        except AI_TRADING_FALLBACK_EXCEPTIONS:
-                            be.logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
-            finally:
-                if cycle_started and cycle_engine is not None:
-                    end_hook = getattr(cycle_engine, "end_cycle", None)
-                    if callable(end_hook):
-                        try:
-                            end_hook()
-                        except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-                            be.logger.warning(
-                                "EXECUTION_END_CYCLE_FAILED",
-                                extra={"cause": exc.__class__.__name__, "detail": str(exc)},
-                                exc_info=True,
-                            )
-            if broker_snapshot is not None:
-                be._record_broker_sync_metrics(state, broker_snapshot)
-            return
-
-        if be.get_verbose_logging():
-            be.logger.info(
-                "RUN_ALL_TRADES_START",
-                extra={"timestamp": be.utc_now_iso()},
-            )
-        if bool(getattr(be.CFG, "log_market_fetch", True)):
-            be.logger.info("MARKET_FETCH")
-        else:
-            be.logger.debug("MARKET_FETCH")
-
-        ctx = be._get_runtime_context_or_none()
-        if ctx and getattr(runtime, "data_fetcher", None) is None:
-            runtime.data_fetcher = getattr(ctx, "data_fetcher", None)
-        be.ensure_data_fetcher(runtime)
-        be.get_trade_logger()
-        manager = getattr(runtime, "signal_manager", None)
-        if manager is None and ctx is not None:
-            manager = getattr(ctx, "signal_manager", None)
-        if manager is None:
-            manager = be.signal_manager
-        if hasattr(manager, "begin_cycle"):
-            manager.begin_cycle()
-
-        for attempt in range(3):
-            try:
-                current_cash, regime_ok, symbols = be._prepare_run(
-                    runtime,
-                    state,
-                    getattr(runtime, "base_universe_tickers", None),
-                )
-                break
-            except be.DataFetchError as e:
-                be.logger.warning(
-                    "DATA_FETCHER_UNAVAILABLE",
-                    extra={"detail": str(e), "attempt": attempt + 1},
-                )
-                if attempt == 2:
-                    restore_last_run_timestamp()
-                    return
-                time.sleep(1.0)
-            except be.APIError as e:
-                be.logger.warning(
-                    "PREPARE_RUN_API_ERROR",
-                    extra={"detail": str(e), "attempt": attempt + 1},
-                )
-                if attempt == 2:
-                    restore_last_run_timestamp()
-                    return
-                time.sleep(1.0)
-
-        if be.MEMORY_OPTIMIZATION_AVAILABLE:
-            try:
-                memory_stats = be.optimize_memory()
-                if memory_stats.get("memory_usage_mb", 0) > 512:
-                    be.logger.warning(
-                        "HIGH_MEMORY_USAGE_DETECTED",
-                        extra={
-                            "memory_usage_mb": memory_stats.get("memory_usage_mb", 0),
-                            "symbols_count": len(symbols),
-                        },
-                    )
-                    if memory_stats.get("memory_usage_mb", 0) > 1024:
-                        be.logger.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
-                        be.emergency_memory_cleanup()
-            except (RuntimeError, ValueError, TypeError) as e:
-                be.logger.debug(
-                    "MEMORY_OPTIMIZATION_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
-
-        get_account = getattr(api, "get_account", None)
-        can_fetch_account = callable(get_account)
-        account_snapshot = (
-            be.safe_alpaca_get_account(runtime) if can_fetch_account else None
-        )
-        dbc = getattr(runtime, "drawdown_circuit_breaker", None)
-        if dbc and can_fetch_account and _drawdown_guard_halts_cycle(
-            be=be, runtime=runtime, dbc=dbc, account_snapshot=account_snapshot
-        ):
-            return
-
-        if be.check_halt_flag(runtime):
-            be._log_health_diagnostics(runtime, "halt_flag_loop")
-            be.logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
-            try:
-                portfolio = _list_broker_positions(runtime.api)
-                for pos in portfolio:
-                    be.manage_position_risk(runtime, pos)
-            except AI_TRADING_FALLBACK_EXCEPTIONS as e:
-                be.logger.warning(
-                    "HALT_MANAGE_FAIL",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
-            return
-
-        be._maybe_hot_reload_runtime_models(runtime)
-        alpha_model = getattr(runtime, "model", None)
-        if not alpha_model:
-            be.logger.warning(
-                "ALPHA_MODEL_UNAVAILABLE - skipping compute stage for this cycle"
-            )
-            return
-
-        if not symbols:
-            be.logger_once.warning(
-                "RUN_ALL_TRADES_NO_SYMBOLS",
-                key="run_all_trades_no_symbols_cycle",
-            )
-            be.logger.info("SKIP_MINUTE_FETCH", extra={"reason": "no_symbols"})
-            time.sleep(1.0)
-            return
-
-        try:
-            provider_state = be.runtime_state.observe_data_provider_state()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            provider_state = {}
-        data_status = None
-        try:
-            data_status = str(provider_state.get("data_status") or "").strip().lower()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            data_status = None
-        if data_status in {"empty", "degraded"} and be.is_safe_mode_active():
-            be.logger.warning(
-                "DATA_STATUS_EMPTY_SHORT_CIRCUIT",
-                extra={"data_status": data_status or "unknown"},
-            )
-            be.runtime_state.update_service_status(
-                status="degraded",
-                reason=data_status or "data_empty",
-            )
-            time.sleep(1.0)
-            return
-
-        base_attempts, base_delay = be._resolve_data_retry_settings()
-        attempts_limit = max(1, base_attempts)
-        retry_delay = base_delay
-        prefer_backup_quotes = bool(getattr(state, "prefer_backup_quotes", False))
-        primary_disabled = False
-        primary_provider_fn = getattr(
-            be.data_fetcher_module,
-            "is_primary_provider_enabled",
-            None,
-        )
-        if callable(primary_provider_fn):
-            try:
-                primary_disabled = not bool(primary_provider_fn())
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                primary_disabled = False
-        if primary_disabled:
-            be.runtime_state.update_data_provider_state(
-                status="degraded",
-                reason="primary_provider_disabled",
-                data_status="degraded",
-                safe_mode=be.is_safe_mode_active(),
-            )
-        if primary_disabled and be.is_safe_mode_active():
-            be.logger.warning(
-                "SAFE_MODE_DATA_SKIP",
-                extra={"reason": be.safe_mode_reason() or "provider_disabled"},
-            )
-            be.runtime_state.update_service_status(status="degraded", reason="data_empty")
-            time.sleep(1.0)
-            return
-        attempts_limit, retry_delay, short_circuit_reason = be._short_circuit_retry_budget(
-            prefer_backup=prefer_backup_quotes,
-            primary_disabled=primary_disabled,
-            attempts=attempts_limit,
-            delay=retry_delay,
-        )
-        if short_circuit_reason:
-            be.logger.info(
-                "DATA_SOURCE_RETRY_BYPASS",
-                extra={"reason": short_circuit_reason, "attempts": attempts_limit},
-            )
-        if be._warmup_data_only_mode_active() and attempts_limit > 1:
-            attempts_limit = 1
-            retry_delay = 0.0
-            be.logger.info(
-                "WARMUP_DATA_ONLY_RETRY_BYPASS",
-                extra={"attempts": attempts_limit},
-            )
-
-        processed: list[str] = []
-        row_counts: dict[str, int] = {}
-        attempts_used = 0
-        fetch_attempts_total = 0
-        for attempt in range(attempts_limit):
-            attempts_used = attempt + 1
-            try:
-                with be.StageTimer(be.logger, "CYCLE_DATA_MS", symbols=len(symbols)):
-                    processed, row_counts, fetch_attempts = be._process_symbols(
-                        symbols,
-                        current_cash,
-                        alpha_model,
-                        regime_ok,
-                    )
-                    fetch_attempts_total += fetch_attempts
-            except be.CycleAbortSafeMode as exc:
-                be.logger.warning(
-                    "CYCLE_EARLY_EXIT_SAFE_MODE",
-                    extra={
-                        "reason": str(exc)
-                        or (be.safe_mode_reason() or "provider_safe_mode")
-                    },
-                )
-                return
-            if processed:
-                if attempt:
-                    be.logger.info(
-                        "DATA_SOURCE_RETRY_SUCCESS",
-                        extra={"attempt": attempts_used, "symbols": symbols},
-                    )
-                break
-            if attempt < attempts_limit - 1 and retry_delay > 0.0:
-                time.sleep(retry_delay)
-
-        try:
-            cfg_for_summary = be.get_trading_config()
-        except be.COMMON_EXC:
-            cfg_for_summary = None
-
-        def _sync_broker_snapshot_if_enabled() -> Any | None:
-            post_sync_enabled = True
-            if cfg_for_summary is not None:
-                try:
-                    post_sync_enabled = bool(
-                        getattr(cfg_for_summary, "post_submit_broker_sync", True)
-                    )
-                except (TypeError, ValueError):
-                    post_sync_enabled = True
-            if not post_sync_enabled:
-                return None
-            engine_obj = getattr(runtime, "execution_engine", None)
-            if engine_obj is None or not hasattr(engine_obj, "synchronize_broker_state"):
-                return None
-            try:
-                return engine_obj.synchronize_broker_state()
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                be.logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
-                return None
-
-        if fetch_attempts_total == 0:
-            be.logger.info(
-                "CYCLE_DATA_SKIP_NO_FETCH",
-                extra={"symbols": symbols, "attempts": attempts_used or attempts_limit},
-            )
-            broker_snapshot = _sync_broker_snapshot_if_enabled()
-            if broker_snapshot is not None:
-                be._record_broker_sync_metrics(state, broker_snapshot)
-            return
-
-        if sum(row_counts.values()) == 0:
-            last_ts = None
-            for sym in symbols:
-                ts = runtime.data_fetcher._minute_timestamps.get(sym)
-                if last_ts is None or (ts and ts > last_ts):
-                    last_ts = ts
-            be.logger.critical(
-                "DATA_SOURCE_EMPTY",
-                extra={
-                    "symbols": symbols,
-                    "endpoint": "minute",
-                    "last_success": last_ts.isoformat() if last_ts else "unknown",
-                    "row_counts": row_counts,
-                },
-            )
-            be.logger.info(
-                "DATA_SOURCE_RETRY_FAILED",
-                extra={"attempts": attempts_used or attempts_limit, "symbols": symbols},
-            )
-            state.skipped_cycles += 1
-            be.runtime_state.update_data_provider_state(
-                status="degraded",
-                reason="data_source_empty",
-                data_status="empty",
-                safe_mode=be.is_safe_mode_active(),
-            )
-            be.runtime_state.update_service_status(
-                status="degraded",
-                reason="data_source_empty",
-            )
-            broker_snapshot = _sync_broker_snapshot_if_enabled()
-            if broker_snapshot is not None:
-                be._record_broker_sync_metrics(state, broker_snapshot)
-            return
-
-        zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
-        skipped = [s for s in symbols if s not in processed]
-        if attempts_used == 0:
-            attempts_used = attempts_limit
-        success = not skipped and not zero_row_symbols
-        if attempts_used > 1 or skipped or zero_row_symbols:
-            be.logger.info(
-                "DATA_SOURCE_RETRY_FINAL",
-                extra={"success": success, "attempts": attempts_used},
-            )
-
-        provider_using_backup = False
-        try:
-            provider_state_post = be.runtime_state.observe_data_provider_state()
-        except AI_TRADING_FALLBACK_EXCEPTIONS:
-            provider_state_post = {}
-        if isinstance(provider_state_post, dict):
-            provider_using_backup = bool(provider_state_post.get("using_backup"))
-            timeframe_state_post = provider_state_post.get("timeframes")
-            if isinstance(timeframe_state_post, be.Mapping):
-                minute_backup = timeframe_state_post.get("1Min")
-                if isinstance(minute_backup, bool):
-                    provider_using_backup = minute_backup
-        be.runtime_state.update_data_provider_state(
-            status="degraded" if provider_using_backup else "healthy",
-            data_status="ready",
-            reason=(
-                "data_available_via_backup"
-                if provider_using_backup
-                else "data_available"
-            ),
-            safe_mode=be.is_safe_mode_active(),
-        )
-
-        if skipped:
-            be.logger.info(
-                "CYCLE_SKIPPED_SUMMARY",
-                extra={"count": len(skipped), "symbols": skipped},
-            )
-            if len(skipped) == len(symbols):
-                state.skipped_cycles += 1
-            else:
-                state.skipped_cycles = 0
-        else:
-            state.skipped_cycles = 0
-        if state.skipped_cycles >= 2:
-            be.logger.critical(
-                "ALL_SYMBOLS_SKIPPED_TWO_CYCLES",
-                extra={
-                    "hint": "Check data provider API keys and entitlements; test data fetch manually from the server; review data fetcher logs",
-                },
-            )
-
-        _propagate_replay_entry_control(
-            state=state,
-            runtime=runtime,
-            be=be,
-            gate=parity_gate,
-            control=entry_control,
-        )
-        be.run_multi_strategy(runtime)
-        broker_snapshot = _sync_broker_snapshot_if_enabled()
         if broker_snapshot is not None:
             be._record_broker_sync_metrics(state, broker_snapshot)
-        try:
-            be.get_risk_engine().refresh_positions(runtime.api)
-            pos_list = _list_broker_positions(runtime.api)
-            state.position_cache = {
-                _position_symbol(p): _position_qty(p) for p in pos_list if _position_symbol(p)
-            }
-            state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
-            state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
-            try:
-                state.execution_metrics.positions = len(pos_list)
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                be.logger.debug(
-                    "EXECUTION_METRIC_POSITIONS_ASSIGN_FAILED",
-                    exc_info=True,
-                )
-            if runtime.execution_engine:
-                trailing_hook = getattr(runtime.execution_engine, "check_trailing_stops", None)
-                if callable(trailing_hook):
-                    try:
-                        trailing_hook()
-                    except (ValueError, TypeError) as e:
-                        be.logger.info(
-                            "TRAILING_STOP_CHECK_SUPPRESSED",
-                            extra={
-                                "cause": e.__class__.__name__,
-                                "detail": str(e),
-                            },
-                        )
-        except AI_TRADING_FALLBACK_EXCEPTIONS as e:
-            be.logger.warning(
-                "REFRESH_POSITIONS_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-        be.logger.info(
-            "RUN_ALL_TRADES_COMPLETE | processed=%s symbols, total_rows=%s",
-            len(row_counts),
-            sum(row_counts.values()),
-        )
-        try:
-            acct = runtime.api.get_account()
-            cash = float(acct.cash)
-            equity = float(acct.equity)
-            positions_snapshot = _list_broker_positions(runtime.api)
-            be.logger.debug("Raw Alpaca positions: %s", positions_snapshot)
-            from ai_trading import portfolio as portfolio_mod
-            from ai_trading.utils import portfolio_lock
-
-            try:
-                with portfolio_lock:
-                    runtime.portfolio_weights = portfolio_mod.compute_portfolio_weights(
-                        runtime,
-                        [p.symbol for p in positions_snapshot],
-                    )
-            except (ZeroDivisionError, ValueError, KeyError) as e:
-                be.logger.warning(
-                    "WEIGHT_RECOMPUTE_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    exc_info=True,
-                )
-            exposure = (
-                sum(abs(float(p.market_value)) for p in positions_snapshot) / equity * 100
-                if equity > 0
-                else 0.0
-            )
-            try:
-                state.execution_metrics.exposure_pct = float(exposure)
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                be.logger.debug("EXECUTION_METRIC_EXPOSURE_ASSIGN_FAILED", exc_info=True)
-            provider_mode = "alpaca"
-            try:
-                if getattr(state, "prefer_backup_quotes", False) or be.provider_monitor.is_disabled("alpaca"):
-                    provider_mode = "backup/synthetic"
-                elif be.provider_monitor.is_disabled("alpaca_sip"):
-                    provider_mode = "backup/synthetic"
-            except AI_TRADING_FALLBACK_EXCEPTIONS:
-                if getattr(state, "prefer_backup_quotes", False):
-                    provider_mode = "backup/synthetic"
-            state.execution_metrics.provider_mode = provider_mode
-            be.logger.info(
-                "Portfolio summary: cash=$%.2f, equity=$%.2f, exposure=%.2f%%, positions=%d",
-                cash,
-                equity,
-                exposure,
-                len(positions_snapshot),
-            )
-            be.logger.info(
-                "POSITIONS_DETAIL",
-                extra={
-                    "positions": [
-                        {
-                            "symbol": p.symbol,
-                            "qty": int(p.qty),
-                            "avg_price": float(p.avg_entry_price),
-                            "market_value": float(p.market_value),
-                        }
-                        for p in positions_snapshot
-                    ],
-                },
-            )
-            be.logger.info(
-                "WEIGHTS_VS_POSITIONS",
-                extra={
-                    "weights": runtime.portfolio_weights,
-                    "positions": {p.symbol: int(p.qty) for p in positions_snapshot},
-                    "cash": cash,
-                },
-            )
-            try:
-                adaptive_cap = be.get_risk_engine()._adaptive_global_cap()
-            except (ZeroDivisionError, ValueError, KeyError) as e:
-                be.logger.warning(
-                    "ADAPTIVE_CAP_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
-                adaptive_cap = 0.0
-            be.logger.info(
-                "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
-                cash,
-                equity,
-                exposure,
-                len(positions_snapshot),
-                adaptive_cap,
-            )
-            log_exec_summary = True
-            if cfg_for_summary is not None:
-                try:
-                    log_exec_summary = bool(
-                        getattr(cfg_for_summary, "log_exec_summary_enabled", True)
-                    )
-                except (TypeError, ValueError):
-                    log_exec_summary = True
-            if log_exec_summary:
-                be._log_execution_summary(state.execution_metrics)
-        except (be.APIError, TimeoutError, ConnectionError) as e:
-            be.logger.warning(
-                "SUMMARY_FAIL",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-        try:
-            acct = runtime.api.get_account()
-            last_equity = getattr(acct, "last_equity", acct.equity)
-            pnl = float(acct.equity) - float(last_equity)
-            be.logger.info(
-                "LOOP_PNL",
-                extra={
-                    "loop_id": loop_id,
-                    "pnl": pnl,
-                    "mode": "SHADOW" if be.CFG.shadow_mode else "LIVE",
-                },
-            )
-        except (be.APIError, TimeoutError, ConnectionError, ValueError) as e:
-            be.logger.warning(
-                "PNL_RETRIEVAL_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
     finally:
         if getattr(state, "_decision_journal_recorder", None) is decision_recorder:
             delattr(state, "_decision_journal_recorder")

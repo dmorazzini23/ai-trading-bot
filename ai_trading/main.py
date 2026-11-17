@@ -2807,10 +2807,11 @@ def _install_signal_handlers() -> None:
 
 
 def _require_netting_pipeline(trading_cfg: Any) -> None:
-    """Reject a resolved config that selects the legacy non-netting path.
+    """Reject a resolved config that disables the netting pipeline.
 
-    The service only runs the netting pipeline. Tests may still opt in to the
-    legacy path explicitly while it is being removed.
+    Netting is the only decision path, so ``AI_TRADING_NETTING_ENABLED=0`` asks
+    for something that no longer exists. Test mode is exempt because tests set
+    the flag to prove the cycle ignores it.
     """
 
     if bool(getattr(trading_cfg, "netting_enabled", True)):

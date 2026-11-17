@@ -14,7 +14,6 @@ from datetime import time as dt_time
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
-from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import get_logger
@@ -88,72 +87,6 @@ def log_warning(msg: str, *, exc: Exception | None = None, extra: dict | None = 
         logger.debug(msg, extra=extra)
     else:
         logger.warning(msg, extra=extra)
-
-
-_STALE_CACHE: dict[str, tuple[Timestamp, float]] = {}
-_STALE_CACHE_LOCK = threading.Lock()
-
-
-def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool:
-    """Check if stale data warning should be logged for this symbol."""
-    import time
-
-    current_time = time.time()
-    with _STALE_CACHE_LOCK:
-        if symbol in _STALE_CACHE:
-            cached_ts, cached_time = _STALE_CACHE[symbol]
-            if cached_ts == last_ts and current_time - cached_time < ttl:
-                return False
-        _STALE_CACHE[symbol] = (last_ts, current_time)
-        return True
-
-
-def _minute_frame_latest_timestamp(df: DataFrame) -> Timestamp | None:
-    try:
-        import pandas as pd  # pylint: disable=import-error
-    except ImportError as exc:  # pragma: no cover - pandas missing
-        raise ImportError(
-            "pandas is required for minute data freshness checks. Install with `pip install ai-trading-bot[pandas]`."
-        ) from exc
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return None
-    if isinstance(df.index, pd.DatetimeIndex):
-        latest = pd.to_datetime(df.index, errors="coerce", utc=True).max()
-        return None if pd.isna(latest) else cast(Timestamp, latest)
-    for column in ("timestamp", "ts", "datetime", "date"):
-        if column not in df.columns:
-            continue
-        latest = pd.to_datetime(df[column], errors="coerce", utc=True).max()
-        if not pd.isna(latest):
-            return cast(Timestamp, latest)
-    return None
-
-
-def _fresh_minute_frame_or_none(df: DataFrame | None, *, symbol: str) -> DataFrame | None:
-    if df is None:
-        return None
-    latest = _minute_frame_latest_timestamp(df)
-    if latest is None:
-        logger.warning(
-            "MINUTE_DATA_DIRECT_CONSUMER_STALE",
-            extra={"symbol": symbol, "reason": "missing_timestamp"},
-        )
-        return None
-    tolerance_seconds = max(0, int(get_settings().minute_data_freshness_tolerance_seconds))
-    age_seconds = max(0.0, (dt.datetime.now(dt.UTC) - latest.to_pydatetime()).total_seconds())
-    if age_seconds > tolerance_seconds:
-        if should_log_stale(symbol, latest, ttl=tolerance_seconds or 300):
-            logger.warning(
-                "MINUTE_DATA_DIRECT_CONSUMER_STALE",
-                extra={
-                    "symbol": symbol,
-                    "age_seconds": float(age_seconds),
-                    "tolerance_seconds": int(tolerance_seconds),
-                    "latest_timestamp": str(latest),
-                },
-            )
-        return None
-    return df
 
 
 def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1) -> float:
@@ -488,91 +421,6 @@ def get_pid_on_port(port: int) -> int | None:
         except COMMON_EXC + (OSError,) as e:
             logger.error("get_pid_on_port failed for %s", proc_path, exc_info=e)
     return None
-
-
-def get_rolling_atr(symbol: str, window: int = 14) -> float:
-    """Return normalized ATR over ``window`` days."""
-    from ai_trading.core.bot_engine import fetch_minute_df_safe
-
-    df = _fresh_minute_frame_or_none(fetch_minute_df_safe(symbol), symbol=symbol)
-    if df is None or df.empty:
-        return 0.0
-    try:
-        import pandas as pd  # pylint: disable=import-error
-    except ImportError as exc:  # pragma: no cover - pandas missing
-        raise ImportError(
-            "pandas is required for get_rolling_atr. Install with `pip install ai-trading-bot[pandas]`."
-        ) from exc
-    high = df["high"].rolling(window).max()
-    low = df["low"].rolling(window).min()
-    close = df["close"]
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(window).mean().iloc[-1]
-    last_valid_close = close.dropna()
-    if not last_valid_close.empty:
-        last_close = last_valid_close.iloc[-1]
-    else:
-        logger.critical("All NaNs in close column for get_rolling_atr")
-        last_close = 0.0
-    val = float(atr) / float(last_close) if last_close else 0.0
-    logger.info("ATR for %s=%.5f", symbol, val)
-    return val
-
-
-def get_current_vwap(symbol: str) -> float:
-    """Return simple intraday VWAP for ``symbol``."""
-    from ai_trading.core.bot_engine import fetch_minute_df_safe
-
-    df = _fresh_minute_frame_or_none(fetch_minute_df_safe(symbol), symbol=symbol)
-    if df is None or df.empty:
-        return 0.0
-    pv = (df["close"] * df["volume"]).sum()
-    vol = df["volume"].sum()
-    vwap = pv / vol if vol else 0.0
-    logger.info("VWAP for %s=%.4f", symbol, vwap)
-    return float(vwap)
-
-
-def get_volume_spike_factor(symbol: str) -> float:
-    """Return last minute volume over 20-period average."""
-    from ai_trading.core.bot_engine import fetch_minute_df_safe
-
-    df = _fresh_minute_frame_or_none(fetch_minute_df_safe(symbol), symbol=symbol)
-    if df is None or len(df) < 21:
-        return 1.0
-    last_vol = df["volume"].iloc[-1]
-    avg_vol = df["volume"].iloc[-21:-1].mean()
-    factor = float(last_vol) / float(avg_vol) if avg_vol else 1.0
-    logger.info("Volume spike %s=%.2f", symbol, factor)
-    return factor
-
-
-def get_ml_confidence(symbol: str) -> float:
-    """Return model confidence for ``symbol``."""
-    try:
-        from ai_trading.models.artifacts import load_verified_joblib_artifact
-    except COMMON_EXC as e:
-        logger.error("load_model failed", exc_info=e)
-        return 0.5
-    try:
-        import pandas as pd  # pylint: disable=import-error
-    except ImportError as exc:  # pragma: no cover - pandas missing
-        raise ImportError(
-            "pandas is required for get_ml_confidence. Install with `pip install ai-trading-bot[pandas]`."
-        ) from exc
-    S = get_settings()
-    model_path = S.model_path
-    model = load_verified_joblib_artifact(model_path)
-    if model is None:
-        return 0.5
-    feats = pd.DataFrame({"price": [0.0]})
-    try:
-        conf = float(model.predict_proba(feats)[0][1])
-    except COMMON_EXC as e:
-        logger.error("predict_proba failed", exc_info=e)
-        conf = 0.5
-    logger.info("ML confidence for %s=%.2f", symbol, conf)
-    return conf
 
 
 def to_serializable(obj: Any) -> Any:

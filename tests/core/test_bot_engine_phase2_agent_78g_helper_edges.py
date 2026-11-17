@@ -127,9 +127,6 @@ def test_correlation_matrix_and_small_normalizers() -> None:
     assert matrix["AAPL"]["SHORT"] == 0.0
     assert bot_engine._portfolio_optimizer_decision_token(SimpleNamespace(value=" BLOCK ")) == "block"
     assert bot_engine._portfolio_optimizer_decision_token(None) == "unknown"
-    assert bot_engine._normalize_price_source_label(_BadStr()) == ""
-    assert bot_engine._normalize_price_source_label(" N/A ") == ""
-    assert bot_engine._normalize_price_source_label(" Alpaca_IEX ") == "alpaca_iex"
     assert bot_engine._clamp_unit_interval("1.5", default=0.3) == 1.0
     assert bot_engine._clamp_unit_interval(float("nan"), default=0.3) == 0.3
 
@@ -469,89 +466,3 @@ def test_jsonl_timestamp_and_replay_metric_helpers(tmp_path) -> None:
     assert bucket_summary["by_symbol_session"]["AAPL:manual"]["sample_count"] == 1.0
     assert bucket_summary["by_symbol_session_regime"]["AAPL:manual:trend"]["net_edge_bps"] == pytest.approx(100.0)
     assert bucket_summary["by_symbol_session"]["MSFT:closing"]["net_edge_bps"] == pytest.approx(200.0)
-
-
-
-
-def test_screen_env_prefilter_and_market_data_quality_helpers(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    _patch_get_env(
-        monkeypatch,
-        {
-            "POSITIVE": 4,
-            "ZERO": 0,
-            "BAD": ValueError("bad env"),
-            "FLOAT_LOW": -2.5,
-            "FLAG": True,
-        },
-    )
-    assert bot_engine._safe_env_int("POSITIVE", 1) == 4
-    assert bot_engine._safe_env_int("ZERO", 9) == 9
-    assert bot_engine._safe_env_non_negative_int("ZERO", 9) == 0
-    assert bot_engine._safe_env_float("FLOAT_LOW", 1.0, min_value=0.25) == 0.25
-    assert bot_engine._safe_env_bool("FLAG", False) is True
-    assert bot_engine._safe_env_bool("BAD", True) is True
-
-    monkeypatch.setattr(bot_engine, "_SCREEN_TOPN", 2)
-    monkeypatch.setattr(bot_engine, "_SCREEN_BATCH_SIZE", 2)
-    monkeypatch.setattr(bot_engine, "_SCREEN_MIN_REFETCH_SEC", 60)
-    bot_engine._LAST_SCREEN_FETCH.clear()
-
-    assert bot_engine._should_refetch_screen_symbol("AAPL", now_ts=100.0) is True
-    assert bot_engine._should_refetch_screen_symbol("AAPL", now_ts=120.0) is False
-    assert bot_engine._should_refetch_screen_symbol("AAPL", now_ts=161.0) is True
-    filtered, throttled = bot_engine._prefilter_screen_symbols([" aapl ", "MSFT", "MSFT", "", "TSLA"])
-    assert filtered == ["AAPL", "MSFT"]
-    assert throttled == ["TSLA"]
-    assert list(bot_engine._iter_screen_batches(["A", "B", "C"])) == [["A", "B"], ["C"]]
-
-    assert bot_engine._validate_market_data_quality(None, "AAPL")["reason"] == "no_data"
-    short = pd.DataFrame({"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [100]})
-    assert bot_engine._validate_market_data_quality(short, "AAPL")["reason"].startswith(
-        "insufficient_data_"
-    )
-    missing = pd.DataFrame({"close": [1.0] * 25})
-    assert bot_engine._validate_market_data_quality(missing, "AAPL")["reason"] == "missing_columns"
-
-    base = pd.DataFrame(
-        {
-            "open": [10.0] * 25,
-            "high": [11.0] * 25,
-            "low": [9.0] * 25,
-            "close": [10.0] * 25,
-            "volume": [20_000] * 25,
-        }
-    )
-    excessive_nan = base.copy()
-    excessive_nan.loc[:4, "open"] = None
-    assert (
-        bot_engine._validate_market_data_quality(excessive_nan, "AAPL")["reason"]
-        == "excessive_nan_open"
-    )
-    invalid_price = base.copy()
-    invalid_price.loc[5, "close"] = 0.0
-    assert bot_engine._validate_market_data_quality(invalid_price, "AAPL")["reason"] == "invalid_prices"
-
-    low_liquidity = base.copy()
-    low_liquidity["volume"] = [9_999] * 25
-    assert bot_engine._validate_market_data_quality(low_liquidity, "AAPL")["reason"] == "low_liquidity"
-
-    zero_volume = base.copy()
-    zero_volume.loc[:6, "volume"] = 0
-    assert (
-        bot_engine._validate_market_data_quality(zero_volume, "AAPL")["reason"]
-        == "excessive_zero_volume"
-    )
-
-    volatile = base.copy()
-    volatile["close"] = [10.0, 20.0, 9.0, 19.0, 8.0] * 5
-    with caplog.at_level(logging.WARNING):
-        valid = bot_engine._validate_market_data_quality(volatile, "AAPL")
-    assert valid["valid"] is True
-    assert any(record.getMessage() == "DATA_QUALITY_EXTREME_VOLATILITY" for record in caplog.records)
-
-    passed = bot_engine._validate_market_data_quality(base, "AAPL")
-    assert passed["valid"] is True
-    assert passed["reason"] == "passed_validation"
