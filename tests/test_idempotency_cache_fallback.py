@@ -4,7 +4,6 @@ import builtins
 import importlib.util
 import logging
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -39,6 +38,16 @@ def test_order_idempotency_cache_fallback(monkeypatch, caplog):
         "Fallback import should emit a diagnostic message"
     )
 
+    # The autouse ``_freeze_clock`` fixture freezes ``time.monotonic`` as well as
+    # wall time, so a real sleep never advances the clock the fallback cache
+    # reads.  Drive that clock explicitly instead.
+    time_state = {"now": 0.0}
+
+    def _fake_monotonic() -> float:
+        return time_state["now"]
+
+    monkeypatch.setattr(module, "monotonic_time", _fake_monotonic)
+
     cache = module.OrderIdempotencyCache(ttl_seconds=0.1, max_size=10)
     key = cache.generate_key("AAPL", "buy", 1)
 
@@ -47,12 +56,12 @@ def test_order_idempotency_cache_fallback(monkeypatch, caplog):
     assert cache.is_duplicate(key) is True
     assert cache.get_existing_order(key)["order_id"] == "OID-1"
 
-    time.sleep(0.15)
+    time_state["now"] += 0.15
     assert cache.get_existing_order(key) is None
     assert cache.is_duplicate(key) is False
 
     cache.mark_submitted(key, "OID-2")
-    time.sleep(0.15)
+    time_state["now"] += 0.15
     cleared = cache.clear_expired()
     assert cleared >= 1
     assert cache.stats()["size"] == 0
