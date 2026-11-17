@@ -10,12 +10,9 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import importlib
 import importlib.util
 import logging
-import time
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
-from ai_trading import paths
+from typing import TYPE_CHECKING, Any
 from ai_trading.models.artifacts import (
     load_verified_joblib_artifact,
     write_artifact_manifest,
@@ -38,7 +35,7 @@ except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover
             def __enter__(self) -> _Dummy:  # pragma: no cover - trivial
                 return self
 
-            def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover
+            def __exit__(self, exc_type, exc, _tb) -> None:  # pragma: no cover
                 return None
 
         return _Dummy()

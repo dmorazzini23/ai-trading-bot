@@ -8,21 +8,15 @@ Addresses the critical issues:
 """
 from __future__ import annotations
 
-import json
 import threading
-import time
-from collections import deque
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC
 from typing import TYPE_CHECKING, cast
 
-from ai_trading.config import management as config
 from ai_trading.config.management import get_trading_config
 from ai_trading.exc import RequestException
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from ai_trading.logging import get_logger
-from ai_trading.utils.time import safe_utcnow
-from ai_trading.utils.timing import sleep as psleep
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from ai_trading.config.runtime import TradingConfig

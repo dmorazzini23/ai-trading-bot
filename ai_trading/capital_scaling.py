@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from ai_trading.logging import get_logger
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - only for type checkers
     import numpy as np

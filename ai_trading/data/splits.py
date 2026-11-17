@@ -7,7 +7,6 @@ including purged group time series splits and walk-forward analysis.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime, timedelta
 import numpy as np
 from typing import TYPE_CHECKING, cast
 from ai_trading.logging import logger

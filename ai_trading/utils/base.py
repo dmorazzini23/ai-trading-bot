@@ -6,19 +6,16 @@ import os
 import random
 import socket
 import subprocess
-import sys
 import threading
 import time
 import warnings
 from datetime import date, datetime
 from datetime import time as dt_time
 from typing import TYPE_CHECKING, Any, cast
-from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
-from ai_trading.data.feed_roles import get_execution_feed
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import get_logger
 from ai_trading.settings import get_verbose_logging
@@ -29,7 +26,6 @@ from .safe_subprocess import SUBPROCESS_TIMEOUT_DEFAULT, safe_subprocess_run
 
 from ai_trading.alpaca_api import (  # type: ignore
     alpaca_get as _alpaca_get,
-    AlpacaOrderHTTPError,
 )
 
 alpaca_get = _alpaca_get
@@ -188,7 +184,7 @@ class _CallableLock:
         self._lock.acquire()
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type, exc, _tb):
         self._lock.release()
         return False
 

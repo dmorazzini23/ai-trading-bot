@@ -16,7 +16,7 @@ import stat
 import tempfile
 import sys
 from bisect import bisect_right
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, cast
+from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, TYPE_CHECKING, TypedDict, cast
 from types import SimpleNamespace
 from collections import Counter, OrderedDict, deque
 from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
@@ -92,14 +92,13 @@ from ai_trading.logging import (
 )
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.telemetry import runtime_state
-from ai_trading.diagnostics.env_diag import gather_alpaca_diag, log_env_diag
+from ai_trading.diagnostics.env_diag import log_env_diag
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
     AlpacaOrderHTTPError,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
     get_trading_client_cls,
     get_data_client_cls,
-    get_api_error_cls,
     is_alpaca_service_available,
 )
 from ai_trading.utils.base import is_market_open as _is_market_open_base
@@ -109,7 +108,6 @@ from ai_trading.core.errors import ErrorAction, ErrorCategory, ErrorInfo, classi
 from ai_trading.core.retry import retry_idempotent
 from ai_trading.core.runtime_contract import (
     is_testing_mode as is_runtime_contract_testing_mode,
-    normalize_execution_mode,
     require_dependency,
     require_no_stubs,
 )
@@ -163,7 +161,7 @@ from ai_trading.runtime.paper_sampling import (
     stale_model_diagnostics_allowed,
 )
 from ai_trading.runtime.run_manifest import write_run_manifest
-from ai_trading.models.artifacts import load_verified_joblib_artifact, write_artifact_manifest
+from ai_trading.models.artifacts import load_verified_joblib_artifact
 from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_BAR_TIMEFRAME,
     DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
@@ -199,7 +197,6 @@ from ai_trading.governance.rollout import (
     save_rollout_state,
 )
 from ai_trading.services.execution import (
-    execute_signal_orders as _execute_signal_orders_service,
     execute_trade_cycle as _execute_trade_cycle_service,
     submit_order as _submit_order_service,
 )
@@ -211,9 +208,7 @@ from ai_trading.services.reconciliation import (
     reconcile_position_targets as _reconcile_position_targets_service,
 )
 from ai_trading.services.risk_approval import (
-    build_policy_runtime_toggles_payload as _build_policy_runtime_toggles_payload_service,
     ensure_policy_learning_artifacts as _ensure_policy_learning_artifacts_service,
-    load_policy_rollback_state as _load_policy_rollback_state_service,
     load_policy_runtime_toggles as _load_policy_runtime_toggles_service,
     policy_rollback_state_path as _policy_rollback_state_path_service,
     policy_runtime_toggles_path as _policy_runtime_toggles_path_service,
@@ -221,7 +216,6 @@ from ai_trading.services.risk_approval import (
     write_policy_runtime_toggles as _write_policy_runtime_toggles_service,
 )
 from ai_trading.services.signal import (
-    evaluate_signal_and_confirm as _evaluate_signal_and_confirm_service,
     generate_directional_signals as _generate_directional_signals_service,
 )
 
@@ -8072,7 +8066,7 @@ import threading
 import time as pytime
 from argparse import ArgumentParser
 from collections.abc import Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime as dt_
 from datetime import time as dt_time
@@ -8824,7 +8818,7 @@ def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
 
 # ML dependencies - sklearn is a hard dependency
 
-from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
+from ai_trading.utils import model_lock, safe_to_datetime, validate_ohlcv
 
 # ai_trading/core/bot_engine.py:670 - Move retrain_meta_learner import to lazy location
 
