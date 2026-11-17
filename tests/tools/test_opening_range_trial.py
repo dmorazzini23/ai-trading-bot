@@ -54,12 +54,15 @@ def _no_pauses(monkeypatch):
 
 # --- contract ---------------------------------------------------------------------------------------
 
-def test_repository_contract_is_a_draft_with_the_papers_parameters_fixed(tmp_path):
+def test_repository_contract_is_registered_with_the_papers_parameters_fixed(tmp_path):
     draft = json.loads(REPO_CONTRACT.read_text())
-    assert draft["status"] == "draft_not_registered" and "draft_notice" in draft
+    assert draft["status"] == "registered" and "draft_notice" not in draft and draft["campaign_id"] == "opening_range_trial_20261117"
     reset = json.loads((REPO_CONTRACT.parents[1] / trial.RESET_CONFIG).read_text())
-    assert draft["campaign_id"] not in reset["registered_trials"]
-    assert not (REPO_CONTRACT.parents[1] / "artifacts" / draft["campaign_id"] / "campaign_state.json").exists()
+    assert draft["campaign_id"] in reset["registered_trials"]
+    assert any(a["campaign_id"] == draft["campaign_id"] and (REPO_CONTRACT.parents[1] / a["record"]).is_file() for a in reset["amendments"])
+    assert (draft["holdout_start"], draft["holdout_end"]) == (reset["holdout_start"], reset["holdout_end"]) == ("2026-09-09", "2026-12-08")
+    assert draft["promotion_authority"] is False and draft["runtime_authority"] is False and draft["max_trials"] == 1
+    assert "2026-11-17" in draft["authorization"] and draft["owner_decisions"]["date"] == "2026-11-17"
     full = trial.contract_spec(draft)
     assert (full.min_open_price, full.min_avg_volume, full.min_atr, full.lookback) == (5.0, 1_000_000.0, 0.5, 14)
     assert (full.min_rel_volume, full.top_names, full.stop_atr_fraction) == (1.0, 20, 0.1)
@@ -70,7 +73,8 @@ def test_repository_contract_is_a_draft_with_the_papers_parameters_fixed(tmp_pat
     assert full.tier("decision")[0] == "base" and full.tier(trial.STRESS_ROLE)[0] == "stress"
     assert [r for _, _, r in full.tiers].count("reported_only") == 3
     assert trial.FILL_RULES["deciding_model"] == trial.DECIDING_MODEL == "bar_executable"
-    assert set(draft["fills"]["models"]) == set(trial.FILL_MODELS) and draft["acceptance"]["positive_under_conservative_fills_at_primary"] is True
+    assert set(draft["fills"]["models"]) == set(trial.FILL_MODELS) and draft["fills"]["reported_only_models"] == list(trial.FILL_MODELS[1:])
+    assert not any("conservative" in key for key in draft["acceptance"]) and "required_positive_model" not in draft["fills"]
     assert "permits nothing" in draft["versions"]["long_short"]
     assert (full.min_days, full.min_years, full.min_per_year, full.min_trades, full.min_selected) == (2300, 9, 230, 5000, 10)
     assert (full.block, full.replicates, full.seed, full.lower_quantile, full.min_positive_years) == (21, 10000, 20261117, 0.0125, 6)
@@ -79,7 +83,7 @@ def test_repository_contract_is_a_draft_with_the_papers_parameters_fixed(tmp_pat
     assert draft["survivorship"]["label"] == trial.PROBE_STATUSES[draft["survivorship"]["probe_status"]]
     assert "PENDING" not in json.dumps(draft) and len(draft["limitations"]) >= 6 and len(draft["departures_from_the_paper"]) >= 8
     (tmp_path / "config").mkdir()
-    (tmp_path / "config/draft.json").write_text(json.dumps(draft))
+    (tmp_path / "config/draft.json").write_text(json.dumps(draft | {"status": "draft_not_registered"}))
     for mode in ("acquire", "support-audit", "preflight", "fit"):
         with pytest.raises(ValueError, match="not registered"):
             trial.run(tmp_path, mode=mode, contract_path=Path("config/draft.json"), client_factory=lambda: pytest.fail("fetched"))
@@ -118,15 +122,13 @@ def test_contract_refusals_happen_before_any_data(changes, match):
         ("trade", {"stop_atr_fraction": 0}, "stop_atr_fraction"),
         ("fills", {"deciding_model": "paper_exact"}, "fill models"),
         ("fills", {"deciding_model": "lower_bound"}, "fill models"),
-        ("fills", {"required_positive_model": "paper_exact"}, "fill models"),
-        ("fills", {"reported_only_models": ["paper_exact"]}, "fill models"),
+        ("fills", {"reported_only_models": ["paper_exact", "lower_bound"]}, "fill models"),
         ("fills", {"commission_per_share": -1}, "commission_per_share"),
         ("sizing", {"max_leverage": 8}, "max_leverage"),
         ("sizing", {"risk_fraction_of_slot": True}, "risk_fraction_of_slot"),
         ("shorts", {"require_current_shortable_and_easy_to_borrow": False}, "shortable"),
         ("survivorship", {"probe_status": "not_run"}, "probe_status"),
         ("acceptance", {"positive_at_stress": False}, "disabled"),
-        ("acceptance", {"positive_under_conservative_fills_at_primary": False}, "disabled"),
         ("acceptance", {"long_only_positive_lower_bound_vs_exposure_matched_market_at_primary": False}, "disabled"),
         ("bootstrap", {"replicates": 150}, "multiple of 100"),
         ("universe", {"minimum_open_price": "5"}, "minimum_open_price"),
@@ -734,19 +736,18 @@ def test_long_only_needs_every_criterion_including_the_market_comparison():
     version = report["versions"]["long_only"]
     assert report["decision"] == version["decision"] == "eligible_for_untouched_test_planning" and all(version["criteria"].values())
     assert set(version["criteria"]) == {"adequate_support", "positive_lower_bound_vs_cash_at_primary", "positive_at_stress",
-                                        "consistent_years", "positive_under_conservative_fills_at_primary",
-                                        "positive_lower_bound_vs_exposure_matched_market_at_primary"}
+                                        "consistent_years", "positive_lower_bound_vs_exposure_matched_market_at_primary"}
     tiers = version["cost_tiers"]
     assert tiers["base"]["net_per_day_bps"] > tiers["stress"]["net_per_day_bps"] > tiers["double"]["net_per_day_bps"] > 0
     assert (tiers["stress"]["per_side_bps"], tiers["stress"]["role"], tiers["double"]["role"]) == (7.5, trial.STRESS_ROLE, "reported_only")
     assert report["deciding_fill_model"] == "bar_executable" and set(report["reported_only"]["fill_models"]) == set(trial.FILL_MODELS[1:])
 
-    # The same trades, but the conservative fill model loses money at the base cost: retired on that criterion alone.
-    cautious = judge(good, sessions, decision_spec(), conservative=trade_rows(sessions, gross=noisy(sessions, 0.0001)))
-    criteria = cautious["versions"]["long_only"]["criteria"]
-    assert cautious["decision"] == "retired" and not criteria["positive_under_conservative_fills_at_primary"]
-    assert all(value for key, value in criteria.items() if key != "positive_under_conservative_fills_at_primary")
-    assert not cautious["versions"]["long_short"]["criteria"]["positive_under_conservative_fills_at_primary"]
+    # The conservative fill model is reported only: losing money under it changes no decision and no criterion.
+    cautious = judge(good, sessions, decision_spec(), conservative=trade_rows(sessions, gross=noisy(sessions, -0.01)))
+    assert cautious["decision"] == cautious["secondary_decision"] == "eligible_for_untouched_test_planning"
+    assert cautious["versions"] == report["versions"]
+    assert cautious["reported_only"]["fill_models"]["conservative"]["long_only"]["cost_tiers"]["base"]["net_per_day_bps"] < 0
+    assert "decision" not in cautious["reported_only"]["fill_models"]["conservative"]["long_only"]
 
     # Equal-notional sizing (every fill at the cap, 1.6 times larger here) is reported and decides nothing.
     sized = report["reported_only"][trial.EQUAL_NOTIONAL]["long_only"]
@@ -1042,7 +1043,7 @@ def test_the_stages_run_in_order_and_claim_exactly_once(acquired, monkeypatch):
     assert set(report["output_sha256"]) == {f"trades_{model}.csv" for model in trial.FILL_MODELS}
     assert report["deciding_fill_model"] == "bar_executable" and set(report["reported_only"]["fill_models"]) == set(trial.FILL_MODELS[1:])
     assert set(report["reported_only"][trial.EQUAL_NOTIONAL]) == set(trial.VERSIONS)
-    assert "positive_under_conservative_fills_at_primary" in report["versions"]["long_only"]["criteria"]
+    assert not any("conservative" in key for v in trial.VERSIONS for key in report["versions"][v]["criteria"])
     trades = pd.read_csv(directory / "trades_bar_executable.csv")
     filled = trades[trades.status == "filled"]
     assert filled.entry_at_open.all() and (filled.entry_time >= "09:36").all()  # never the trigger bar itself

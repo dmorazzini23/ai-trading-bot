@@ -10,7 +10,7 @@
   "holdout_end": "2026-12-08",
   "allowed_work": ["evidence_reconciliation", "correctness_fixes", "weekly_scorecard", "registered_development_trial", "portfolio_manager_mode_build", "registered_strategy_research"],
   "paused_work": ["unregistered_search", "scheduled_training", "day_sleeve_retraining", "holdout_evaluation"],
-  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025", "swing_reversal_trial_20261115", "intraday_momentum_trial_20261115"],
+  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025", "swing_reversal_trial_20261115", "intraday_momentum_trial_20261115", "opening_range_trial_20261117"],
   "amendments": [
     {
       "date": "2026-10-18",
@@ -51,6 +51,14 @@
       "contract": "config/intraday_momentum_trial_campaign.json",
       "ledger": "artifacts/intraday_momentum_trial_20261115/campaign_state.json",
       "scope": "one registered development trial of SPY end-of-day intraday momentum on 2016-2025 half-hour bars, long-only primary and long-short secondary; training block, holdout and real-money gate unchanged"
+    },
+    {
+      "date": "2026-11-17",
+      "record": "docs/RESEARCH_RESET_AMENDMENT_20261117_OPENING_RANGE.md",
+      "campaign_id": "opening_range_trial_20261117",
+      "contract": "config/opening_range_trial_campaign.json",
+      "ledger": "artifacts/opening_range_trial_20261117/campaign_state.json",
+      "scope": "one registered development trial of the 5-minute opening-range breakout on the 20 stocks with the highest opening relative volume, 2016-2025 raw minute bars, long-only primary and long-short as information; training block, holdout and real-money gate unchanged"
     }
   ],
   "promotion_authority": false

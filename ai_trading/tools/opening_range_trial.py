@@ -7,7 +7,7 @@ five-minute bar closed above its open is bought once a later one-minute bar trad
 bar's high; below its open, it is sold short through its low. The deciding fill model enters at
 the next one-minute bar's open. A filled order has a stop loss one tenth of the 14-session
 average true range from the fill and is otherwise closed at the session's end. Three other fill
-models are scored beside it: one must also stay positive, two are reported as bounds. Every parameter comes from the contract. The
+models are scored beside it and reported only. Every parameter comes from the contract. The
 scoring core is pure: it takes bar tables and a session calendar and returns one row per order.
 
 Modes. All but ``--probe`` refuse a draft contract, an unlisted campaign or a missing ledger
@@ -68,8 +68,8 @@ PROBE_STATUSES = {"delisted_symbols_served": "none_detected_by_probe",
                   "delisted_symbols_missing_or_partial": "incomplete_direction_unknown"}
 FILL_MODELS = ("bar_executable", "conservative", "paper_exact", "lower_bound")
 DECIDING_MODEL, CONSERVATIVE_MODEL = FILL_MODELS[0], FILL_MODELS[1]
-FILL_RULES = {"deciding_model": DECIDING_MODEL, "required_positive_model": CONSERVATIVE_MODEL,
-              "reported_only_models": ["paper_exact", "lower_bound"], "session_end_exit": "last_bar_close"}
+FILL_RULES = {"deciding_model": DECIDING_MODEL, "reported_only_models": ["conservative", "paper_exact", "lower_bound"],
+              "session_end_exit": "last_bar_close"}
 EQUAL_NOTIONAL = "equal_notional_sizing"  # reported only: every fill at the leverage cap, the other reading of the paper
 MIN_PRICE = 0.01
 PRICE_COLUMNS = daily.PRICE_COLUMNS
@@ -205,7 +205,6 @@ def contract_spec(contract: dict[str, Any]) -> OrbSpec:
     if primary != float(contract.get("primary_per_side_cost_bps", math.nan)) or stress <= primary or primary <= 0:
         raise ValueError("decision tier must equal primary_per_side_cost_bps and the stress tier must cost more")
     if not all(acceptance.get(k) is True for k in ("positive_lower_bound_vs_cash_at_primary", "positive_at_stress",
-                                                   "positive_under_conservative_fills_at_primary",
                                                    "long_only_positive_lower_bound_vs_exposure_matched_market_at_primary")):
         raise ValueError("acceptance criteria cannot be disabled")
     replicates = daily._int(bootstrap.get("replicates"), "bootstrap replicates")
@@ -450,7 +449,7 @@ def simulate_trade(times: list[str], opens: np.ndarray, highs: np.ndarray, lows:
       A later bar that opens at or below the stop exits at its open; a bar whose low reaches the
       stop exits at the stop price. Every price used is one a one-minute record can show in
       order, so on a process with no edge the result averages zero before costs.
-    * ``conservative`` (must stay positive). The same entry; a bar whose low reaches the stop
+    * ``conservative`` (reported). The same entry; a bar whose low reaches the stop
       exits at the worse of the stop and the next bar's open.
     * ``paper_exact`` (reported, upper bound). Enter at exactly the trigger; the trigger bar
       cannot stop the trade; a later low at the stop exits at exactly the stop, gaps included.
@@ -642,8 +641,7 @@ def equal_notional(trades: pd.DataFrame) -> pd.DataFrame:
     return scaled
 
 
-def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *, version: str, decides: bool,
-                    conservative: pd.DataFrame | None = None) -> dict[str, Any]:
+def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *, version: str, decides: bool) -> dict[str, Any]:
     part = version_trades(trades, version)
     years = np.array([s[:4] for s in sessions])
     tiers: dict[str, dict[str, Any]] = {}
@@ -685,9 +683,6 @@ def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *,
                 "positive_lower_bound_vs_cash_at_primary": bounds["vs_cash_bps"] > 0,
                 "positive_at_stress": bool(stressed.mean() > 0),
                 "consistent_years": positive_years >= spec.min_positive_years}
-    if conservative is not None:
-        cautious, _ = day_returns(version_trades(conservative, version), sessions, primary[1])
-        criteria["positive_under_conservative_fills_at_primary"] = bool(cautious.mean() > 0)
     if version == "long_only":
         criteria["positive_lower_bound_vs_exposure_matched_market_at_primary"] = bounds["vs_matched_market_bps"] > 0
     decision = ("eligible_for_untouched_test_planning" if all(criteria.values())
@@ -699,12 +694,11 @@ def _version_report(trades: pd.DataFrame, sessions: list[str], spec: OrbSpec, *,
 def evaluate(trades: dict[str, pd.DataFrame], sessions: list[str], spec: OrbSpec) -> dict[str, Any]:
     """Both versions under the deciding fill model; the ledger decision is the long-only decision.
 
-    ``trades`` maps each fill model to its trade table. The conservative model supplies one
-    criterion; the other models, the every-short book and equal-notional sizing are reported only.
+    ``trades`` maps each fill model to its trade table. Only the deciding model's table enters
+    a criterion; the other models, the every-short book and equal-notional sizing are reported only.
     """
     main = trades[DECIDING_MODEL]
-    versions = {v: _version_report(main, sessions, spec, version=v, decides=True, conservative=trades[CONSERVATIVE_MODEL])
-                for v in VERSIONS}
+    versions = {v: _version_report(main, sessions, spec, version=v, decides=True) for v in VERSIONS}
     others = {model: {v: _version_report(table, sessions, spec, version=v, decides=False) for v in VERSIONS}
               for model, table in trades.items() if model != DECIDING_MODEL}
     sized = equal_notional(main)

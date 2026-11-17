@@ -1,13 +1,15 @@
 # Opening-range breakout trial: the rules in plain words
 
-**Status, November 17, 2026:** a draft for the owner to approve or reject before
-any result exists. Revised the same day after an independent review: the way
-fills are assumed, the cost levels and several checks changed (see "What
-changed after review" at the end). Nothing is registered. There is no ledger. No trade result
-has been computed on real prices. The only contact with the data provider was a
+**Status, November 17, 2026:** approved by the owner and registered as one
+trial ([amendment](RESEARCH_RESET_AMENDMENT_20261117_OPENING_RANGE.md)). The
+rules below were fixed before any result existed. They were revised once, the
+same day, after an independent review (see "What changed after review"), and
+the owner's answers are recorded near the end. At registration there is no
+ledger yet, nothing has been downloaded for scoring, and no trade result has
+been computed on real prices. The only contact with the data provider was a
 small check of what data exists (see "What the data check found"). The full
-contract is `config/opening_range_trial_campaign.json`; the program that would
-score it is `ai_trading/tools/opening_range_trial.py`. It never places orders.
+contract is `config/opening_range_trial_campaign.json`; the program that
+scores it is `ai_trading/tools/opening_range_trial.py`. It never places orders.
 
 ## The idea
 
@@ -119,15 +121,16 @@ On the same made-up prices with no edge, this rule comes out at about zero
 (between −0.02 and +0.09 of the planned loss per trade across calm to very
 jumpy prices). A program test now checks this every time the code changes.
 
-**Three other fill rules are scored beside it:**
+**Three other fill rules are scored beside it, for information only:**
 
-- **Cautious** (the strategy must still make money under it): the same entry,
-  but a stop-loss sale gets the worse of the stop price and the next minute's
-  first price. On no-edge prices it loses about 0.1 to 0.2 of the planned loss
-  per trade, so it is a demanding check.
-- **The paper's own** (information, the best case): every order filled at
-  exactly its price.
-- **The first draft's** (information, the worst case).
+- **Cautious:** the same entry, but a stop-loss sale gets the worse of the
+  stop price and the next minute's first price. On no-edge prices it loses
+  about 0.1 to 0.2 of the planned loss per trade. It was first drafted as a
+  pass condition; the owner made it information only, because it could fail a
+  real edge by itself.
+- **The paper's own** (the best case): every order filled at exactly its
+  price.
+- **The first draft's** (the worst case).
 
 ## What it costs
 
@@ -167,16 +170,15 @@ Tested on January 2016 to December 2025: about 2,500 trading days.
 1. It made money after all costs, by a margin that a standard resampling test
    separates from luck.
 2. It still made money at one and a half times the slippage (0.075% each way).
-3. It still made money under the cautious fill rule.
-4. It made money in at least 6 of the 10 calendar years.
-5. It beat simply holding the same amount of the whole market (the SPY fund)
+3. It made money in at least 6 of the 10 calendar years.
+4. It beat simply holding the same amount of the whole market (the SPY fund)
    over the same minutes, again by a margin the resampling test separates
    from luck. This shows the gain is not just the market rising that day.
-6. There was enough data: at least 2,300 usable days, at least 230 in each of
+5. There was enough data: at least 2,300 usable days, at least 230 in each of
    9 years, at least 10 stocks picked on a typical day, and at least 5,000
    completed trades.
 
-The buy-and-sell-short version is measured against tests 1, 2, 3, 4 and 6,
+The buy-and-sell-short version is measured against tests 1, 2, 3 and 5,
 for information. Its result permits nothing.
 
 **Days that are left out.** A day is used only if the market fund SPY has a
@@ -279,30 +281,29 @@ on a few days. It kept counts and times only, no prices.
 The filters, the 14 days, the 20 stocks, the five minutes, the stop loss and
 the commission are the paper's numbers, unchanged.
 
-## Questions for the owner
+## The owner's answers (November 17, 2026)
 
-1. **Size of a trade.** The request said "1% of equity". The paper's words fit
-   "1% of the slice" better (see the table). Which is meant? Both are now
-   reported; only the slice reading decides.
-2. **The cautious fill rule as a pass condition.** On prices with no edge it
-   still loses 0.1 to 0.2 of the planned loss per trade. A strategy with a
-   real but modest edge could fail on this test alone. Keep it as a
-   condition, or show it for information?
-3. **Cost levels.** 0.05% decides and 0.075% is the stress case. By our
-   arithmetic the base cost already equals the published return. Is the owner
-   content to run a test that is expected to fail?
-4. **Missing dead companies.** Accept the gap with a warning label, or add a
-   vendor's list of delisted tickers (see the data check)?
-5. **Two rules the paper does not have.** The trading-halt rule and the
-   short-sale restriction are ours. Approve or change them.
+The owner approved the rules "as recommended".
+
+1. **Size of a trade.** As drafted: 1% of the slice decides; the other
+   reading is shown for information.
+2. **The cautious fill rule.** For information only. It is no longer a pass
+   condition for either version.
+3. **Cost levels.** Run it: 0.05% each way decides, 0.075% is the stress
+   case, in the knowledge that a fail is the likely outcome.
+4. **Missing dead companies.** Accept the gap with the warning label. No
+   vendor list is added.
+5. **The trading-halt rule and the short-sale restriction.** Stand as
+   drafted.
 
 ## What changed after review
 
 - The deciding fill rule: was "worst case inside the minute", now "buy at the
   next minute's first price". The old rule is kept as the worst case, for
   information.
-- A cautious fill rule was added as a pass condition, and the paper's exact
-  fills as the best case.
+- A cautious fill rule and the paper's exact fills were added. The cautious
+  rule was first a pass condition; by the owner's decision it is information
+  only.
 - The stress cost: was 0.10% each way, now 0.075%; 0.10% is shown only.
 - The download now checks every day on its own.
 - The step that picks the daily 20 uses far less memory.
@@ -310,13 +311,14 @@ the commission are the paper's numbers, unchanged.
 - Buy-and-sell-short passing alone now explicitly permits nothing.
 - A ticker spelled "NA" is no longer misread as a blank.
 
-## Steps after approval
+## Steps from here
 
-Each needs the owner's word.
+Done: review findings closed, rules approved, amendment adopted, contract
+marked registered. Each remaining step needs the owner's word.
 
 ```bash
 RUN="./venv/bin/python -m ai_trading.tools.opening_range_trial --repository-root . --contract config/opening_range_trial_campaign.json"
-# close the review's findings; adopt an amendment; set status to registered; register the ledger
+# create the ledger (artifacts/opening_range_trial_20261117/campaign_state.json) before any price is read for scoring
 $RUN --acquire         # one download, 2 to 3 hours, market closed; needs credentials; never claims
 $RUN --support-audit   # days, names and times only; never reads prices or claims
 $RUN --preflight       # file hashes, date bounds, price validity, rebuilds the daily picks; never claims
