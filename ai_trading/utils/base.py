@@ -184,7 +184,7 @@ class _CallableLock:
         self._lock.acquire()
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type, exc, _tb):
         self._lock.release()
         return False
 

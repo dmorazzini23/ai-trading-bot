@@ -35,7 +35,7 @@ except AI_TRADING_FALLBACK_EXCEPTIONS:  # pragma: no cover
             def __enter__(self) -> _Dummy:  # pragma: no cover - trivial
                 return self
 
-            def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover
+            def __exit__(self, exc_type, exc, _tb) -> None:  # pragma: no cover
                 return None
 
         return _Dummy()

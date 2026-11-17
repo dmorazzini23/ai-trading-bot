@@ -69,26 +69,3 @@ class MarketData:
     close: float
     volume: int
     metadata: dict[str, Any] = None
-
-
-class IDependencyContainer(ABC):
-    """Interface for dependency injection container."""
-
-    @abstractmethod
-    def register(self, interface: type, implementation: type, singleton: bool=False) -> None:
-        """Register implementation for interface."""
-
-    @abstractmethod
-    def register_instance(self, interface: type, instance: Any) -> None:
-        """Register instance for interface."""
-
-    @abstractmethod
-    def resolve(self, interface: type) -> Any:
-        """Resolve implementation for interface."""
-
-    @abstractmethod
-    def configure(self, config: dict[str, Any]) -> None:
-        """Configure container with configuration."""
-
-_container: IDependencyContainer | None = None
-

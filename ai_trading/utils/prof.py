@@ -169,7 +169,7 @@ class SoftBudget:
         self.reset()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
+    def __exit__(self, exc_type, exc, _tb) -> Literal[False]:
         return False
 
     def reset(self) -> None:
