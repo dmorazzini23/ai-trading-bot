@@ -47,10 +47,17 @@ not merged, not deployed; no service restart.
   passed, 10 failed; 9 also fail on `f76f3c397` (research automation script,
   runtime backup sync, `test_issue_1_meta_learning_trigger_exists`), the tenth
   (an order-dependent short test of this branch) is fixed in `a82adfb07`.
-- **Open owner questions:** should a protective exit pass
-  `LIQ_THIN_MAX_ORDER_BLOCK` (clip to the dollar cap) and the approval
-  `RISK_*_HARD_BLOCK` / soft-throttle scaling, which can still delay or shrink
-  it; pretrade `DERISK_DATA_QUALITY_BLOCK` holds it while the quote is missing.
+- **Review follow-up (`1ea5dd677`, `80d1c98bf`, `bde6f5ec8`):** a protective
+  exit is clipped to the thin-order cap instead of blocked (at least one
+  share) and keeps its full size under approval soft throttles; a malformed
+  store row drops only itself; a failed calendar lookup is not cached; a
+  restart with a flipped side starts a `first_seen` episode; Slack sends one
+  message per marker type listing symbols. Phase-2 baseline still
+  `5bd1a138...`; scenario (a) now exits 34 of 42 on the arming bar and the
+  last 8 one bar later (the thin-block delay is gone).
+- **Open owner questions:** the zero-volume `LIQ_PARTICIPATION_BLOCK`, hard
+  risk blocks and a missing quote (pretrade `DERISK_DATA_QUALITY_BLOCK`) can
+  still hold a protective exit.
 - **Next:** owner review, then a deploy decision. Check the release config
   hash before restarting (no ConfigSpec change was made).
 
