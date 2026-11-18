@@ -763,7 +763,7 @@ webhook. Code: `ai_trading/monitoring/journal_alerts.py`, sender
   `DATA_KILL_SWITCH_ACTIVATED` (stopped) and `DRAWDOWN_BREAKER_RESET`,
   `HALT_FLAG_REMOVED`, `TRANSIENT_HALT_CLEARED` (resumed). 15 minute hold per marker.
 - **New error**: each ERROR/CRITICAL log line type (logger plus message with
-  numbers collapsed) alerts once, then at most hourly with an occurrence count.
+  numbers collapsed) alerts once, then at most hourly with an occurrence count. The standing `MODEL_REGISTRY_STALE` error repeats at most once a day.
 
 State (journal cursor, per-type last-sent and suppressed counts) is
 `slack_journal_alert_state.json` beside the incident state file. The first run

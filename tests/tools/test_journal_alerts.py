@@ -159,13 +159,13 @@ def test_trading_marker_cooldown_and_combined_message() -> None:
 
 
 def test_new_error_alerts_once_then_counts_repeats() -> None:
-    err = lambda off: _app("MODEL_REGISTRY_STALE", "ERROR", "ai_trading.logging", off, age_s=int(off))  # noqa: E731
+    err = lambda off: _app("BROKER_CALL_FAILED", "ERROR", "ai_trading.logging", off, age_s=int(off))  # noqa: E731
     events = ja.detect([err(0), err(1), err(2)])
     assert len({e["key"] for e in events}) == 1
     sent, state = ja.apply_dedupe(events, {}, now=T0)
     assert len(sent) == 1 and sent[0]["count"] == 3 and sent[0]["new"]
     (msg,) = ja.build_messages(sent)
-    assert "New ERROR: MODEL_REGISTRY_STALE" in _text(msg)
+    assert "New ERROR: BROKER_CALL_FAILED" in _text(msg)
 
     sent, state = ja.apply_dedupe(ja.detect([err(60)]), state, now=T0 + timedelta(minutes=1))
     assert sent == []
@@ -175,6 +175,17 @@ def test_new_error_alerts_once_then_counts_repeats() -> None:
     assert sent[0]["count"] == 3 and not sent[0]["new"]
     (msg,) = ja.build_messages(sent)
     assert "Repeated ERROR" in _text(msg) and "3 since" in _text(msg)
+
+
+def test_standing_error_repeats_at_most_once_a_day() -> None:
+    err = lambda off: _app("MODEL_REGISTRY_STALE", "ERROR", "ai_trading.logging", off, age_s=int(off))  # noqa: E731
+    sent, state = ja.apply_dedupe(ja.detect([err(0)]), {}, now=T0)
+    assert len(sent) == 1 and sent[0]["new"]
+    for hours in (2, 12, 23):
+        sent, state = ja.apply_dedupe(ja.detect([err(hours)]), state, now=T0 + timedelta(hours=hours))
+        assert sent == []
+    sent, _ = ja.apply_dedupe(ja.detect([err(99)]), state, now=T0 + timedelta(hours=24, minutes=1))
+    assert len(sent) == 1 and sent[0]["count"] == 4 and not sent[0]["new"]
 
 
 def test_error_types_with_different_numbers_group_together() -> None:

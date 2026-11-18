@@ -31,6 +31,9 @@ ERROR_COOLDOWN = timedelta(hours=1)
 TRADING_COOLDOWN = timedelta(minutes=15)
 SERVICE_COOLDOWN = timedelta(minutes=10)
 STATE_RETENTION = timedelta(days=7)
+# Errors that describe a standing, already-known condition and log on every cycle.
+# They still alert at once when first seen; repeats are held for the longer period.
+STANDING_ERROR_COOLDOWNS = {"MODEL_REGISTRY_STALE": timedelta(days=1)}
 
 # Markers that mean new openings are blocked, and the markers that lift them.
 TRADING_STOP_MARKERS = (
@@ -242,8 +245,11 @@ def _parse_time(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def _cooldown_for(alert: str) -> timedelta:
-    return {"error": ERROR_COOLDOWN, "trading": TRADING_COOLDOWN}.get(alert, SERVICE_COOLDOWN)
+def _cooldown_for(event: Mapping[str, Any]) -> timedelta:
+    alert = str(event["alert"])
+    if alert == "error":
+        return STANDING_ERROR_COOLDOWNS.get(str(event.get("message", "")), ERROR_COOLDOWN)
+    return TRADING_COOLDOWN if alert == "trading" else SERVICE_COOLDOWN
 
 
 def apply_dedupe(
@@ -270,7 +276,7 @@ def apply_dedupe(
         record = state.get(key, {})
         last_sent = _parse_time(record.get("last_sent"))
         suppressed = int(record.get("suppressed", 0) or 0)
-        cooled = last_sent is None or now - last_sent >= _cooldown_for(str(first["alert"]))
+        cooled = last_sent is None or now - last_sent >= _cooldown_for(first)
         if cooled or key == "service:start":
             repeats = len(group) + suppressed
             details = list(dict.fromkeys(str(e["detail"]) for e in group if isinstance(e["detail"], str)))
