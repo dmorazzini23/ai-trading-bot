@@ -196,9 +196,10 @@ def test_position_backstop_markers_are_their_own_group() -> None:
     ]
     to_send, _ = ja.apply_dedupe(events, {}, now=T0)
     texts = [_text(message) for message in ja.build_messages(to_send)]
-    assert len(texts) == 4
+    assert len(texts) == 3  # one message per marker type
     assert "Safety backstop: AAPL long stop-loss exit, -5.3% vs entry" in texts[0]
-    assert "Safety backstop: MSFT short max-hold exit, held 5 sessions" in texts[1]
+    assert "Safety backstop: max-hold exit for MSFT, AMD" in texts[1]
+    assert "MSFT short max-hold exit, held 5 sessions" in texts[1]
     assert "Safety backstop: AAPL long exit stalled, still holding 10" in texts[2]
     assert "KILL_SWITCH_BLOCK" in texts[2]
     assert "Trading stopped" not in "".join(texts)
@@ -359,3 +360,32 @@ def test_unreadable_journal_reports_and_keeps_state(tmp_path: Path) -> None:
     )
     assert out["reason"] == "journal_unreadable"
     assert not (tmp_path / "slack_journal_alert_state.json").exists()
+
+
+def test_position_alerts_group_per_marker_and_keep_per_symbol_keys() -> None:
+    events = ja.detect(
+        [
+            _stop("AAPL"),
+            _stop("MSFT", off=1, loss_pct=-0.061),
+            _app("POSITION_MAX_HOLD_BREACH | symbol=NVDA", "WARNING", off=2, symbol="NVDA", side="long", sessions_held=5),
+        ]
+    )
+    to_send, state = ja.apply_dedupe(events, {}, now=T0)
+    assert sorted(state) == [
+        "position:POSITION_MAX_HOLD_BREACH:NVDA",
+        "position:POSITION_STOP_LOSS_BREACH:AAPL",
+        "position:POSITION_STOP_LOSS_BREACH:MSFT",
+    ]
+    messages = ja.build_messages(to_send)
+    assert len(messages) == 2  # one per marker type
+    stop_text = _text(messages[0])
+    assert "Safety backstop: stop-loss exit for AAPL, MSFT" in stop_text
+    assert "AAPL long stop-loss exit, -5.3% vs entry" in stop_text
+    assert "MSFT long stop-loss exit, -6.1% vs entry" in stop_text
+    assert "Safety backstop: NVDA long max-hold exit, held 5 sessions" in _text(messages[1])
+
+
+def test_position_alert_symbol_falls_back_to_the_marker_suffix() -> None:
+    (event,) = ja.detect([_app("POSITION_STOP_LOSS_BREACH | symbol=TSLA", "WARNING", loss_pct=-0.07)])
+    assert event["symbol"] == "TSLA"
+    assert event["key"] == "position:POSITION_STOP_LOSS_BREACH:TSLA"

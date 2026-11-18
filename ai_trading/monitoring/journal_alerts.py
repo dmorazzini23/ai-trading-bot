@@ -182,7 +182,7 @@ def detect(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             # Per-symbol backstop markers log as "MARKER | symbol=SYM".
             position_marker = marker.split(" | ", 1)[0]
             if position_marker in _POSITION_MARKERS:
-                events.append(_position_event(position_marker, payload, at))
+                events.append(_position_event(position_marker, payload, at, marker_text=marker))
                 continue
             level = str(payload.get("level") or "").upper()
             if level in _ERROR_LEVELS:
@@ -250,8 +250,17 @@ _POSITION_DETAIL_FIELDS = (
 )
 
 
-def _position_event(marker: str, payload: Mapping[str, Any], at: datetime) -> dict[str, Any]:
-    symbol = str(payload.get("symbol") or "?").strip().upper() or "?"
+_SYMBOL_SUFFIX_RE = re.compile(r"\|\s*symbol=([A-Za-z0-9.\-/]+)")
+
+
+def _position_event(
+    marker: str, payload: Mapping[str, Any], at: datetime, *, marker_text: str = ""
+) -> dict[str, Any]:
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    if not symbol:
+        # Fall back to the "MARKER | symbol=SYM" suffix when extras are missing.
+        suffix = _SYMBOL_SUFFIX_RE.search(marker_text)
+        symbol = suffix.group(1).upper() if suffix else "?"
     detail = {k: payload[k] for k in _POSITION_DETAIL_FIELDS if payload.get(k) is not None}
     return {
         "alert": "position",
@@ -442,18 +451,34 @@ def position_summary(event: Mapping[str, Any]) -> str:
     return f"Safety backstop: {who} exit stalled{still}"
 
 
-def _position_message(event: Mapping[str, Any]) -> dict[str, Any]:
+_POSITION_GROUP_TITLES = {
+    "POSITION_STOP_LOSS_BREACH": "stop-loss exit",
+    "POSITION_MAX_HOLD_BREACH": "max-hold exit",
+    "POSITION_BACKSTOP_EXIT_STALLED": "exit stalled",
+}
+
+
+def _position_message(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """One message for all symbols of one backstop marker in this run."""
+
     severity = fmt.Severity.WARNING
-    title = position_summary(event)
-    detail = dict(event.get("detail") or {})
-    lines = [f"{_ts(event['at'])}: {fmt.humanize(event['marker'])}"]
-    if detail.get("last_gates"):
-        lines.append(f"last gates: {fmt.truncate(', '.join(map(str, detail['last_gates'])), 300)}")
-    if detail.get("lock_until"):
-        lines.append(f"re-entry locked until {detail['lock_until']}")
-    count = int(event.get("count", 1) or 1)
-    if count > 1:
-        lines.append(f"x{count} since {_ts(event['first_seen'])}")
+    if len(events) == 1:
+        title = position_summary(events[0])
+    else:
+        symbols = ", ".join(str(e.get("symbol") or "?") for e in events)
+        title = f"Safety backstop: {_POSITION_GROUP_TITLES.get(str(events[0]['marker']), 'exit')} for {symbols}"
+    lines = []
+    for event in events:
+        detail = dict(event.get("detail") or {})
+        line = f"{_ts(event['at'])}: {position_summary(event)}"
+        if detail.get("last_gates"):
+            line += f"; last gates: {fmt.truncate(', '.join(map(str, detail['last_gates'])), 300)}"
+        if detail.get("lock_until"):
+            line += f"; re-entry locked until {detail['lock_until']}"
+        count = int(event.get("count", 1) or 1)
+        if count > 1:
+            line += f" (x{count} since {_ts(event['first_seen'])})"
+        lines.append(line)
     blocks = [
         fmt.header_block(severity, title),
         fmt.section_block(fmt.bullets(lines)),
@@ -491,7 +516,7 @@ def _error_message(event: Mapping[str, Any]) -> dict[str, Any]:
 
 def build_messages(to_send: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """One message for service events, one for trading markers, one per
-    position-backstop symbol event, one per error type."""
+    position-backstop marker type (listing its symbols), one per error type."""
 
     messages: list[dict[str, Any]] = []
     service = [e for e in to_send if e["alert"] == "service"]
@@ -500,7 +525,15 @@ def build_messages(to_send: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
         messages.append(_service_message(service))
     if trading:
         messages.append(_trading_message(trading))
-    messages.extend(_position_message(e) for e in to_send if e["alert"] == "position")
+    position_groups: dict[str, list[Mapping[str, Any]]] = {}
+    for event in to_send:
+        if event["alert"] == "position":
+            position_groups.setdefault(str(event["marker"]), []).append(event)
+    messages.extend(
+        _position_message(position_groups[marker])
+        for marker in POSITION_BACKSTOP_MARKERS
+        if marker in position_groups
+    )
     messages.extend(_error_message(e) for e in to_send if e["alert"] == "error")
     return messages
 
