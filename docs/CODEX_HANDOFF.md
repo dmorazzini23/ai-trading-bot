@@ -1,5 +1,52 @@
 # Current handoff
 
+## November 18: position backstop built, not deployed (`8bb0ec7ba`) (start here)
+
+Branch `claude/position-backstop` from `f76f3c397` (phase 3 tip). Not pushed,
+not merged, not deployed; no service restart.
+- **What:** owner-approved safety backstops in the netting cycle
+  (`ai_trading/core/netting_position_backstop.py`, constants only, no
+  ConfigSpec/Settings/env change): 5% stop loss against broker
+  `avg_entry_price`, maximum hold of 5 NYSE sessions, position cap on new
+  openings at `cfg.max_portfolio_positions`. A fired backstop forces a flat
+  target through the normal netting submission and locks the symbol until the
+  next session open (`runtime/position_backstop_state.json`). Operator notes in
+  `docs/OPERATIONS.md` ("Position Backstop").
+- **Protective exit passes:** policy ablation, quarantine block mode, event
+  blackout (also not re-raised to pretrade), adaptive sizing, approval soft
+  blocks (net edge, spread, calibration, pacing, stale order), capacity
+  throttle, portfolio optimizer; recorded as the original gate plus
+  `PROTECTIVE_EXIT_OVERRIDE`. **Still respects:** halts (daily/weekly loss
+  included), missing price, kill switch, bar dedup, participation cap,
+  `LIQ_THIN_MAX_ORDER_BLOCK`, sell-to-available, duplicate intent, broker
+  breakers, pretrade. Normal exits unchanged.
+- **Not wired on purpose:** `state.position_entry_times` / `_position_opened_at`
+  (would switch on the alpha time stop), `STOP_LOCK`, re-entry cooldown, the
+  dead `AI_TRADING_LIVE_STOP_LOSS_BPS` / `AI_TRADING_MAX_POSITION_HOLD_SECONDS`.
+- **Log markers:** per-symbol markers log as `MARKER | symbol=SYM`; the
+  runtime log throttle drops identical messages within 5 s, so a bare marker
+  lost every symbol after the first in a cycle. Journal alerts match the
+  part before ` | `.
+- **Decision parity:** phase-2 harness `backstop_412ffd8d0` and
+  `backstop_8bb0ec7ba` give
+  `COMBINED_DECISIONS 5bd1a138...dbdf0b192`; all six files identical to
+  `post_phase2_4e9d951a1` (nothing arms in the harness).
+- **Scenarios** (`/home/aiuser/ai-trading-baselines/backstop_scenarios`, a copy
+  of the harness; runs 1, 2 and a third on `8bb0ec7ba` identical): stop fires on the AAPL dip, the
+  exit sells 42 to 0 reduce-only one bar later (the arming bar was held by
+  `LIQ_THIN_MAX_ORDER_BLOCK`), re-entry blocked the rest of the day, AAPL
+  bought again next session; stop + kill switch: no orders, lock kept, one
+  `EXIT_STALLED`; hold (constant 1): every held symbol exits on day 2's first
+  bar, with `PROTECTIVE_EXIT_OVERRIDE` over `SPREAD_TOO_WIDE_BLOCK`,
+  `NET_EDGE_FLOOR_BLOCK` and the capacity throttle; cap 2: never more than 2
+  open, `POSITION_CAP_BLOCK` only on openings.
+- **Open owner questions:** should a protective exit pass
+  `LIQ_THIN_MAX_ORDER_BLOCK` (clip to the dollar cap) and the approval
+  `RISK_*_HARD_BLOCK` / soft-throttle scaling, which can still delay or shrink
+  it; pretrade `DERISK_DATA_QUALITY_BLOCK` holds it while the quote is missing.
+- **Next:** owner review, then a deploy decision. Check the release config
+  hash before restarting (no ConfigSpec change was made).
+
 ## November 18: legacy-path removal phase 3 built, not deployed (`28292960e`) (start here)
 
 Branch `claude/legacy-path-phase3` from `d4803827b` (main with the drawdown
