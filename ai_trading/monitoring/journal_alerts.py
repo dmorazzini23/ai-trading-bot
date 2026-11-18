@@ -208,6 +208,10 @@ _TRADING_DETAIL_FIELDS = ("reason", "drawdown", "peak", "equity", "path", "provi
 def _trading_event(marker: str, payload: Mapping[str, Any], at: datetime) -> dict[str, Any]:
     stopped = marker in TRADING_STOP_MARKERS
     detail = {k: payload[k] for k in _TRADING_DETAIL_FIELDS if payload.get(k) is not None}
+    # The drawdown breaker logs these two under longer names.
+    for name, logged in (("drawdown", "current_drawdown"), ("peak", "peak_equity")):
+        if name not in detail and payload.get(logged) is not None:
+            detail[name] = payload[logged]
     return {
         "alert": "trading",
         "kind": "stopped" if stopped else "resumed",

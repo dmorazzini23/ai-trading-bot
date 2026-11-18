@@ -63,6 +63,7 @@ class NettingSymbolProcessor:
     thin_spread_bps: float
     thin_vol_mult: float
     primary_feed_derisk: Mapping[str, Any]
+    drawdown_breaker: Mapping[str, Any]
     quarantine_enabled: bool
     quarantine_manager: Any
     quarantine_apply_sleeve: bool
@@ -511,6 +512,30 @@ def process_netting_symbol(
             config_snapshot=symbol_snapshot,
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
+
+    if bool(processor.drawdown_breaker.get("open", False)):
+        # Evaluated after the stop lock and quarantine have had the chance to
+        # turn the trade into an exit, so the breaker never holds an exit back.
+        post_trade_shares = current_shares + delta_shares
+        if post_trade_shares * current_shares < 0:
+            # Trading through flat would open the opposite side: exit only.
+            net_target.target_dollars = 0.0
+            net_target.target_shares = 0
+            delta_shares = -current_shares
+            gates.append("DRAWDOWN_BREAKER_REDUCE_ONLY")
+            symbol_snapshot["drawdown_breaker"] = dict(processor.drawdown_breaker)
+        elif abs(post_trade_shares) > abs(current_shares):
+            gates.append("DRAWDOWN_BREAKER_BLOCK")
+            symbol_snapshot["drawdown_breaker"] = dict(processor.drawdown_breaker)
+            _record_decision(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
     event_risk_near = False
     if processor.event_blackout_enabled:

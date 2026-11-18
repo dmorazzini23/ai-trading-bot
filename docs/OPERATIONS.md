@@ -504,6 +504,29 @@ Repeated Alpaca failures can trigger provider safe-mode:
 Resume only after Alpaca data is healthy again and the halt condition has been
 cleared intentionally.
 
+### Drawdown Circuit Breaker
+
+Each netting cycle that reaches the decision stage feeds the account equity
+from the execution engine's per-cycle account snapshot (no extra broker call)
+to the drawdown breaker.
+
+- **Trip:** equity at or below `(1 - MAX_DRAWDOWN_THRESHOLD)` of the highest
+  equity this process has seen (8% with `MAX_DRAWDOWN_THRESHOLD=0.08`). Logs
+  `DRAWDOWN_BREAKER_TRIPPED` (critical).
+- **While open:** orders that increase exposure are rejected with gate
+  `DRAWDOWN_BREAKER_BLOCK` in the decision record; orders that reduce a
+  position still go out; a reversal is cut to an exit and tagged
+  `DRAWDOWN_BREAKER_REDUCE_ONLY`. It does not set the global halt.
+- **Reset:** automatic once drawdown is back under the threshold; there is no
+  extra recovery margin. Logs `DRAWDOWN_BREAKER_RESET` (warning).
+- **Unusable equity** (no snapshot, missing, non-numeric, zero or negative)
+  is never scored: `DRAWDOWN_BREAKER_FEED_SKIPPED` (warning) and the state is
+  left as it was.
+- **State is in memory only.** A restart closes the breaker and takes the
+  first equity reading after start as the new peak, so it cannot trip on
+  start, and it measures drawdown since the last restart, not all-time. A
+  cash withdrawal reads as drawdown. `peak_equity.txt` is not used.
+
 ### Runtime JSONL retention
 
 `ai-trading-runtime-prune.timer` (every 30 minutes) runs

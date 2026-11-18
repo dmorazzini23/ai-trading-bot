@@ -106,6 +106,15 @@ def test_start_never_suppressed() -> None:
 # --- alert 2: trading stopped / resumed -----------------------------------------
 
 
+def test_drawdown_breaker_fields_as_the_breaker_logs_them() -> None:
+    events = ja.detect(
+        [_app("DRAWDOWN_BREAKER_TRIPPED", "ERROR", current_drawdown=0.0801, peak_equity=81655.0, equity=75114.0)]
+    )
+    sent, _ = ja.apply_dedupe(events, {}, now=T0)
+    text = _text(ja.build_messages(sent)[0])
+    assert "drawdown 8.0%" in text and "81,655" in text and "75,114" in text
+
+
 def test_drawdown_breaker_tripped_and_reset_messages() -> None:
     trip = ja.detect(
         [_app("DRAWDOWN_BREAKER_TRIPPED", "ERROR", drawdown=0.0612, peak=101234.5, equity=95040.0)]
