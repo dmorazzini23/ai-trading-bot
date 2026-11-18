@@ -179,8 +179,10 @@ def detect(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             if marker in _TRADING_MARKERS:
                 events.append(_trading_event(marker, payload, at))
                 continue
-            if marker in _POSITION_MARKERS:
-                events.append(_position_event(marker, payload, at))
+            # Per-symbol backstop markers log as "MARKER | symbol=SYM".
+            position_marker = marker.split(" | ", 1)[0]
+            if position_marker in _POSITION_MARKERS:
+                events.append(_position_event(position_marker, payload, at))
                 continue
             level = str(payload.get("level") or "").upper()
             if level in _ERROR_LEVELS:

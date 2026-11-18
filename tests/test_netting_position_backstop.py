@@ -51,7 +51,26 @@ def _et(*args: int) -> datetime:
 
 
 def _messages(caplog: pytest.LogCaptureFixture, name: str) -> list[logging.LogRecord]:
-    return [record for record in caplog.records if record.getMessage() == name]
+    return [record for record in caplog.records if record.getMessage().split(" | ", 1)[0] == name]
+
+
+def test_per_symbol_markers_survive_the_runtime_log_throttle(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from ai_trading.logging import MessageThrottleFilter
+
+    throttle = MessageThrottleFilter(throttle_seconds=5.0)
+    with caplog.at_level(logging.INFO):
+        backstop = _backstop(tmp_path, positions={"AAPL": 10, "MSFT": 5}, bases={"AAPL": 100.0, "MSFT": 100.0})
+        for symbol, qty in (("AAPL", 10), ("MSFT", 5)):
+            backstop.evaluate_symbol(symbol=symbol, current_shares=qty, delta_shares=0, price=90.0, bar_ts=NOW)
+
+    breaches = _messages(caplog, "POSITION_STOP_LOSS_BREACH")
+    assert [record.getMessage() for record in breaches] == [
+        "POSITION_STOP_LOSS_BREACH | symbol=AAPL",
+        "POSITION_STOP_LOSS_BREACH | symbol=MSFT",
+    ]
+    assert all(throttle.filter(record) for record in breaches)
 
 
 def _episode(opened_at: datetime, side: str = "long") -> Episode:

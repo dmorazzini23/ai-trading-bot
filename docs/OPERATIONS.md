@@ -551,7 +551,8 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   exit keeps being forced while held, and a flat symbol cannot reopen
   (`POSITION_BACKSTOP_REENTRY_BLOCK`). Markers: `POSITION_STOP_LOSS_BREACH`,
   `POSITION_MAX_HOLD_BREACH`, `POSITION_BACKSTOP_EXIT_STALLED` (still held two
-  bars after arming), `POSITION_BACKSTOP_LOCK_EXPIRED`.
+  bars after arming), `POSITION_BACKSTOP_LOCK_EXPIRED`. Per-symbol markers log
+  as `MARKER | symbol=SYM` so the runtime log throttle keeps one line per symbol.
 - **What a protective exit passes / respects:** it passes the policy ablation
   block, quarantine block mode, event blackout, adaptive sizing, approval soft
   blocks (net edge floor, spread, calibration, pacing, stale orders), capacity

@@ -96,6 +96,13 @@ class Evaluation:
     price_suspect: bool = False
 
 
+def _symbol_marker(marker: str, symbol: str) -> str:
+    """``MARKER | symbol=SYM``: the runtime log throttle drops identical messages
+    within a few seconds, so per-symbol markers carry the symbol in the text."""
+
+    return f"{marker} | symbol={symbol}"
+
+
 def _side_of(qty: float) -> str:
     return "long" if qty > 0 else "short"
 
@@ -451,7 +458,7 @@ class PositionBackstop:
                 self._dirty = True
                 self._bars_since_arming.pop(symbol, None)
                 self.logger.info(
-                    "POSITION_BACKSTOP_LOCK_EXPIRED",
+                    _symbol_marker("POSITION_BACKSTOP_LOCK_EXPIRED", symbol),
                     extra={
                         "symbol": symbol,
                         "reason": lock.reason,
@@ -463,7 +470,7 @@ class PositionBackstop:
         for symbol, reason in sorted(unarmed.items()):
             if symbol in self.positions and self._once("unarmed", symbol, reason):
                 self.logger.info(
-                    "POSITION_BACKSTOP_UNARMED",
+                    _symbol_marker("POSITION_BACKSTOP_UNARMED", symbol),
                     extra={"symbol": symbol, "reason": reason, "qty": self.positions[symbol]},
                 )
         if self.cap_limit is not None and len(self.positions) > self.cap_limit and self._once("cap_exceeded"):
@@ -496,7 +503,7 @@ class PositionBackstop:
         if result.price_suspect and self._once("price_suspect", symbol):
             basis = self.bases.get(symbol)
             self.logger.warning(
-                "POSITION_BACKSTOP_PRICE_SUSPECT",
+                _symbol_marker("POSITION_BACKSTOP_PRICE_SUSPECT", symbol),
                 extra={
                     "symbol": symbol,
                     "price": float(price),
@@ -552,10 +559,10 @@ class PositionBackstop:
         }
         if result.reason == REASON_STOP_LOSS:
             extra.update({"loss_pct": result.loss_pct, "threshold": -POSITION_STOP_LOSS_PCT})
-            self.logger.warning("POSITION_STOP_LOSS_BREACH", extra=extra)
+            self.logger.warning(_symbol_marker("POSITION_STOP_LOSS_BREACH", symbol), extra=extra)
         else:
             extra.update({"sessions_held": result.sessions_held, "threshold": POSITION_MAX_HOLD_SESSIONS})
-            self.logger.warning("POSITION_MAX_HOLD_BREACH", extra=extra)
+            self.logger.warning(_symbol_marker("POSITION_MAX_HOLD_BREACH", symbol), extra=extra)
 
     def _track_stall(self, symbol: str, current_shares: int, lock: Lock, bar_ts: Any) -> None:
         armed_at, last_bar, bars = self._bars_since_arming.get(symbol, (lock.armed_at, None, 0))
@@ -568,7 +575,7 @@ class PositionBackstop:
         if bars >= POSITION_BACKSTOP_STALL_BARS and stall_key not in self._stall_logged:
             self._stall_logged.add(stall_key)
             self.logger.warning(
-                "POSITION_BACKSTOP_EXIT_STALLED",
+                _symbol_marker("POSITION_BACKSTOP_EXIT_STALLED", symbol),
                 extra={
                     "symbol": symbol,
                     "side": _side_of(current_shares),
@@ -602,7 +609,7 @@ class PositionBackstop:
             "cycle_openings": len(self.cycle_openings),
         }
         if self._once("cap_block", symbol):
-            self.logger.info("POSITION_CAP_BLOCK", extra={"symbol": symbol, **context})
+            self.logger.info(_symbol_marker("POSITION_CAP_BLOCK", symbol), extra={"symbol": symbol, **context})
         return context
 
     def note_opening_submitted(self, symbol: str) -> None:

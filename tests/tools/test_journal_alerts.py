@@ -171,7 +171,7 @@ def _stop(symbol: str, off: float = 0, **extra: Any) -> dict[str, Any]:
     fields = {"symbol": symbol, "side": "long", "qty": 10, "avg_entry": 200.0, "price": 189.4,
               "loss_pct": -0.053, "threshold": -0.05, "lock_until": "2026-11-19T14:30:00+00:00"}
     fields.update(extra)
-    return _app("POSITION_STOP_LOSS_BREACH", "WARNING", off=off, **fields)
+    return _app(f"POSITION_STOP_LOSS_BREACH | symbol={symbol}", "WARNING", off=off, **fields)
 
 
 def test_position_backstop_markers_are_their_own_group() -> None:
@@ -179,20 +179,24 @@ def test_position_backstop_markers_are_their_own_group() -> None:
     events = ja.detect(
         [
             _stop("AAPL"),
-            _app("POSITION_MAX_HOLD_BREACH", "WARNING", off=1, symbol="MSFT", side="short", sessions_held=5),
-            _app("POSITION_BACKSTOP_EXIT_STALLED", "WARNING", off=2, symbol="AAPL", side="long", qty=10,
+            _app("POSITION_MAX_HOLD_BREACH | symbol=MSFT", "WARNING", off=1, symbol="MSFT", side="short",
+                 sessions_held=5),
+            _app("POSITION_BACKSTOP_EXIT_STALLED | symbol=AAPL", "WARNING", off=2, symbol="AAPL", side="long", qty=10,
                  last_gates=["POSITION_STOP_LOSS_EXIT", "KILL_SWITCH_BLOCK"]),
-            _app("POSITION_BACKSTOP_UNARMED", "INFO", off=3, symbol="NVDA", reason="no_basis"),
+            _app("POSITION_BACKSTOP_UNARMED | symbol=NVDA", "INFO", off=3, symbol="NVDA", reason="no_basis"),
+            # A bare marker (no symbol suffix) is still recognised.
+            _app("POSITION_MAX_HOLD_BREACH", "WARNING", off=4, symbol="AMD", side="long", sessions_held=6),
         ]
     )
     assert [(e["alert"], e["kind"], e["key"]) for e in events] == [
         ("position", "exit", "position:POSITION_STOP_LOSS_BREACH:AAPL"),
         ("position", "exit", "position:POSITION_MAX_HOLD_BREACH:MSFT"),
         ("position", "stalled", "position:POSITION_BACKSTOP_EXIT_STALLED:AAPL"),
+        ("position", "exit", "position:POSITION_MAX_HOLD_BREACH:AMD"),
     ]
     to_send, _ = ja.apply_dedupe(events, {}, now=T0)
     texts = [_text(message) for message in ja.build_messages(to_send)]
-    assert len(texts) == 3
+    assert len(texts) == 4
     assert "Safety backstop: AAPL long stop-loss exit, -5.3% vs entry" in texts[0]
     assert "Safety backstop: MSFT short max-hold exit, held 5 sessions" in texts[1]
     assert "Safety backstop: AAPL long exit stalled, still holding 10" in texts[2]
