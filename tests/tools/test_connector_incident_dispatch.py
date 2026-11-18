@@ -366,3 +366,54 @@ def test_build_scheduled_close_recap_returns_block_kit_payload(
     assert payload["blocks"][0]["type"] == "header"
     assert payload["blocks"][0]["text"]["text"] == "🟠 Market close · Fri Oct 16 · needs review"
     assert "**" not in json.dumps(payload)
+
+
+def test_run_dispatch_calls_journal_notifier_and_respects_disable() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def _journal(args: dict[str, Any]) -> dict[str, Any]:
+        calls.append(args)
+        return {"sent": False}
+
+    env = {"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc"}
+    common = {
+        "slack_notifier": lambda args: {"sent": False},
+        "slack_eod_notifier": lambda args: {"sent": False},
+        "slack_journal_notifier": _journal,
+    }
+    payload = dispatch.run_dispatch(env=env, **common)
+    assert payload["slack_journal"]["attempted"] is True
+    assert calls and calls[0]["webhook_url"] == "https://hooks.slack.test/abc"
+
+    calls.clear()
+    payload = dispatch.run_dispatch(
+        env={**env, "AI_TRADING_CONNECTOR_SLACK_JOURNAL_ENABLED": "0"}, **common
+    )
+    assert payload["slack_journal"]["attempted"] is False and not calls
+
+
+def test_unit_failed_alert_posts_through_webhook_poster() -> None:
+    posted: list[tuple[str, dict[str, Any]]] = []
+
+    def _poster(url: str, payload: dict[str, Any]) -> int:
+        posted.append((url, payload))
+        return 200
+
+    result = dispatch.run_unit_failed_alert(
+        "ai-trading.service",
+        env={"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc"},
+        poster=_poster,
+    )
+    assert result["sent"] is True and result["status_code"] == 200
+    assert "ai-trading.service entered the failed state" in json.dumps(posted[0][1])
+
+
+def test_unit_failed_alert_dry_run_and_guards() -> None:
+    def _boom(url: str, payload: dict[str, Any]) -> int:
+        raise AssertionError("must not post")
+
+    dry = dispatch.run_unit_failed_alert("ai-trading.service", env={}, poster=_boom, dry_run=True)
+    assert dry["dry_run"] is True and dry["sent"] is False
+    assert dispatch.run_unit_failed_alert("bad name; rm", env={}, poster=_boom)["error"] == "invalid_unit_name"
+    missing = dispatch.run_unit_failed_alert("ai-trading.service", env={}, poster=_boom)
+    assert missing["skipped_reason"] == "missing_webhook"

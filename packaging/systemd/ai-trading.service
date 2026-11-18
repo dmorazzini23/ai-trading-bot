@@ -2,6 +2,7 @@
 Description=AI Trading Bot
 After=network-online.target
 Wants=network-online.target
+OnFailure=ai-trading-systemd-failure-alert@%n.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

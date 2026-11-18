@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
 from ai_trading.analytics import portfolio_history
+from ai_trading.monitoring import journal_alerts
 from ai_trading.monitoring import slack_format as slack_fmt
 from ai_trading.runtime.atomic_io import atomic_write_text
 
@@ -2317,6 +2318,75 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
         "triggers": triggers,
         "snapshot": snapshot,
     }
+
+
+def _journal_state_path(args: dict[str, Any]) -> Path:
+    """Journal alert state sits next to the incident state file."""
+
+    raw = str(args.get("journal_state_path") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return _incident_state_path(args).with_name("slack_journal_alert_state.json")
+
+
+def tool_notify_journal_alerts(args: dict[str, Any]) -> dict[str, Any]:
+    """Run the journal alerts; a dry run takes no lock and writes nothing."""
+
+    if _bool_arg(args.get("dry_run"), default=False):
+        return _notify_journal_alerts(args)
+    return _with_incident_state_lock(_notify_journal_alerts)(args)
+
+
+def _notify_journal_alerts(args: dict[str, Any]) -> dict[str, Any]:
+    """Alert on service lifecycle, trading halts and new ERROR/CRITICAL log types.
+
+    ``dry_run`` builds the messages without a webhook, without sending and
+    without touching state; it replays ``since_minutes`` of journal.
+    """
+
+    dry_run = _bool_arg(args.get("dry_run"), default=False)
+    since_minutes = _int_arg(args.get("since_minutes"), default=10)
+    runner = args.get("journal_runner") or journal_alerts.run_journalctl
+    state_path = _journal_state_path(args)
+    cursor, alerts_state = (None, {}) if dry_run else journal_alerts.load_alert_state(_load_state(state_path))
+    now = datetime.now(UTC)
+    try:
+        if cursor is None and not dry_run:
+            # First run: start from "now" so existing history is not replayed.
+            _save_state(state_path, {"cursor": journal_alerts.tail_cursor(runner=runner), "alerts": {}})
+            return {"sent": False, "reason": "journal_cursor_initialized", "state_path": str(state_path)}
+        entries = journal_alerts.read_entries(cursor=cursor, since_minutes=since_minutes, runner=runner)
+    except journal_alerts.JournalReadError as exc:
+        return {"sent": False, "reason": "journal_unreadable", "error": str(exc)}
+    events = journal_alerts.detect(entries)
+    to_send, new_alerts = journal_alerts.apply_dedupe(events, alerts_state, now=now)
+    messages = journal_alerts.build_messages(to_send)
+    result: dict[str, Any] = {
+        "sent": False,
+        "entries_read": len(entries),
+        "events_detected": len(events),
+        "alerts": [
+            {"key": event["key"], "count": event["count"], "at": event["at"].isoformat()}
+            for event in to_send
+        ],
+        "messages": len(messages),
+    }
+    if dry_run:
+        result["message_preview"] = messages
+        result["reason"] = "dry_run"
+        return result
+    if messages:
+        webhook_url = _slack_webhook_url(args)
+        channel = str(args.get("channel") or "").strip()
+        timeout_s = float(args.get("timeout_s") or 5.0)
+        for payload in messages:
+            if channel:
+                payload["channel"] = channel
+            _post_slack_message(webhook_url, payload, timeout_s=timeout_s)
+        result["sent"] = True
+    new_cursor = str(entries[-1].get("__CURSOR") or "") if entries else ""
+    _save_state(state_path, {"cursor": new_cursor or cursor, "alerts": new_alerts})
+    return result
 
 
 def tool_runtime_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
