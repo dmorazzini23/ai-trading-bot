@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from ai_trading.config.runtime import TradingConfig
-from ai_trading.core import bot_engine
+from ai_trading.core import bot_engine, netting_symbol_cycle
 from ai_trading.core.netting import NettedTarget, SleeveConfig, SleeveProposal
 from ai_trading.core.netting_execution_context import _NON_DISABLEABLE_GATE_NAMES
 from ai_trading.core.netting_symbol_cycle import process_netting_symbol
@@ -372,8 +372,11 @@ def _no_submit(**_kwargs: Any) -> Any:
     ],
 )
 def test_open_breaker_blocks_exposure_increasing_orders(
-    positions: dict[str, int], target_dollars: float
+    monkeypatch: pytest.MonkeyPatch, positions: dict[str, int], target_dollars: float
 ) -> None:
+    # The short case needs shorts enabled; do not depend on the ambient launch
+    # profile, which other tests in the full run can leave short-disabled.
+    monkeypatch.setattr(netting_symbol_cycle, "_short_openings_allowed", lambda _cfg: True)
     processor, records = _make_processor(
         drawdown_breaker=dict(OPEN_BREAKER),
         positions=positions,
