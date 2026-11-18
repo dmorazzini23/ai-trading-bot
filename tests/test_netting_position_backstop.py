@@ -777,6 +777,26 @@ def test_bypassed_gate_passes_a_protective_exit_and_still_holds_a_normal_one(
     assert gates[-1] == "OK_TRADE"
 
 
+def test_event_blackout_is_not_raised_again_by_pretrade_for_a_protective_exit(tmp_path: Path) -> None:
+    seen: list[bool] = []
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 10}, event_blackout_enabled=True, is_near_event_func=lambda *a, **k: True
+    )
+    real_prelude = processor.prepare_submit_prelude_func
+
+    def _prelude(**kwargs: Any) -> Any:
+        seen.append(bool(kwargs["event_risk_near"]))
+        return real_prelude(**kwargs)
+
+    processor.prepare_submit_prelude_func = _prelude
+
+    _process(processor, target_dollars=0.0)
+
+    assert seen == [False]
+    assert submitted == [-10]
+    assert records[0]["config_snapshot"]["event_risk_near"] is True
+
+
 def test_approval_block_outside_the_override_list_still_holds_a_protective_exit(tmp_path: Path) -> None:
     processor, records, submitted = _processor(
         tmp_path,

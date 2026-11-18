@@ -884,7 +884,9 @@ def process_netting_symbol(
         symbol_snapshot=symbol_snapshot,
         execution_model_lineage=dict(processor.execution_model_lineage),
         correlation_id=opportunity_correlation_id,
-        event_risk_near=event_risk_near,
+        # Pretrade repeats the event-risk blackout on this flag; a protective
+        # exit already passed that blackout above, so it is not raised again.
+        event_risk_near=event_risk_near and not protective_exit,
         opening_trade=bool(opening_trade),
         portfolio_optimizer_enabled=bool(processor.portfolio_optimizer_enabled),
         portfolio_optimizer=processor.portfolio_optimizer,
