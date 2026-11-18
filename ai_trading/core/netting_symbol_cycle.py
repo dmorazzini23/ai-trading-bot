@@ -722,7 +722,8 @@ def process_netting_symbol(
             get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float)
         )
         if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
-            if _gate_blocks(processor, "LIQ_THIN_MAX_ORDER_BLOCK"):
+            thin_block_applies = _gate_blocks(processor, "LIQ_THIN_MAX_ORDER_BLOCK")
+            if thin_block_applies and not protective_exit:
                 gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
                 _record_decision(
                     symbol=symbol,
@@ -739,10 +740,18 @@ def process_netting_symbol(
                     delta_shares,
                 )
             )
+            if protective_exit:
+                # A backstop exit goes out clipped to the thin-order cap (at least
+                # one share, never more than the exit); the lock finishes the rest.
+                thin_cap_qty = int(math.copysign(min(abs(thin_cap_qty), abs(delta_shares)), delta_shares))
             delta_shares = thin_cap_qty
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price
-            gates.append("LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED")
+            if protective_exit and thin_block_applies:
+                gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
+                _note_protective_override()
+            else:
+                gates.append("LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED")
 
     expanding_exposure = abs(current_shares + delta_shares) > abs(current_shares)
     adjustment_result = processor.apply_symbol_adjustments_func(

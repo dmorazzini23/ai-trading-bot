@@ -664,6 +664,32 @@ def prepare_netting_symbol_approval(
             approval=approval,
             approval_context=approval_context,
         )
+    if (
+        protective_exit
+        and abs(int(approval_context.adjusted_delta_shares)) < abs(int(delta_shares_value))
+    ):
+        # Soft throttles only shrink a backstop exit; keep its full size. Any
+        # other scaling reason (or a hard block) is left as approved.
+        scaling_reasons = {
+            str(reason)
+            for reason in approval.reasons
+            if str(reason) != GATE_PROTECTIVE_EXIT_OVERRIDE and not str(reason).endswith("_BLOCK")
+        }
+        if scaling_reasons and all(reason.endswith("_SOFT_THROTTLE") for reason in scaling_reasons):
+            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
+                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+            approval = ExecutionApproval(
+                True,
+                int(delta_shares_value),
+                float(approval.expected_net_edge_bps),
+                tuple(approval.reasons) + (GATE_PROTECTIVE_EXIT_OVERRIDE,),
+            )
+            approval_context = replace(
+                approval_context,
+                approval=approval,
+                adjusted_delta_shares=int(delta_shares_value),
+                adjusted_side=side,
+            )
     if int(approval_context.adjusted_delta_shares) != int(delta_shares_value):
         delta_shares_value = int(approval_context.adjusted_delta_shares)
         target_shares = int(current_shares + delta_shares_value)

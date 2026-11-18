@@ -124,14 +124,22 @@ def _as_utc(value: datetime) -> datetime:
 
 
 @lru_cache(maxsize=1024)
-def _session_bounds(day: date) -> tuple[datetime, datetime] | None:
+def _cached_session_bounds(day: date) -> tuple[datetime, datetime] | None:
+    # Raises on a failed lookup; lru_cache does not cache exceptions.
     if not market_calendar.is_trading_day(day):
         return None
+    session = market_calendar.session_info(day)
+    return _as_utc(session.start_utc), _as_utc(session.end_utc)
+
+
+def _session_bounds(day: date) -> tuple[datetime, datetime] | None:
+    """Session open/close for ``day``; ``None`` for a non-trading day or a
+    failed lookup (a failure is not cached, so a later call retries)."""
+
     try:
-        session = market_calendar.session_info(day)
+        return _cached_session_bounds(day)
     except (ValueError, RuntimeError):
         return None
-    return _as_utc(session.start_utc), _as_utc(session.end_utc)
 
 
 def sessions_held(opened_at: datetime, now: datetime, *, limit: int | None = None) -> int:
@@ -255,10 +263,15 @@ def _optional_float(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+_ROW_ERRORS = (KeyError, TypeError, ValueError, AttributeError)
+
+
 @dataclass(slots=True)
 class BackstopStore:
     episodes: dict[str, Episode] = field(default_factory=dict)
     locks: dict[str, Lock] = field(default_factory=dict)
+    # Rows dropped as malformed by the last from_payload (not persisted).
+    dropped_rows: int = field(default=0, compare=False)
 
     @classmethod
     def from_payload(cls, payload: Any) -> BackstopStore:
@@ -269,21 +282,28 @@ class BackstopStore:
         if not isinstance(episodes_raw, Mapping) or not isinstance(locks_raw, Mapping):
             raise ValueError("episodes/locks are not objects")
         store = cls()
+        # A malformed row drops only itself; the rest of the store is kept.
         for symbol, row in episodes_raw.items():
-            store.episodes[str(symbol).upper()] = Episode(
-                opened_at=_parse_ts(row["opened_at"]),
-                opened_at_source=str(row["opened_at_source"]),
-                side=str(row["side"]),
-            )
+            try:
+                store.episodes[str(symbol).upper()] = Episode(
+                    opened_at=_parse_ts(row["opened_at"]),
+                    opened_at_source=str(row["opened_at_source"]),
+                    side=str(row["side"]),
+                )
+            except _ROW_ERRORS:
+                store.dropped_rows += 1
         for symbol, row in locks_raw.items():
-            store.locks[str(symbol).upper()] = Lock(
-                until=_parse_ts(row["until"]),
-                reason=str(row["reason"]),
-                armed_at=_parse_ts(row["armed_at"]),
-                entry_price=_optional_float(row.get("entry_price")),
-                trigger_price=_optional_float(row.get("trigger_price")),
-                side=str(row["side"]),
-            )
+            try:
+                store.locks[str(symbol).upper()] = Lock(
+                    until=_parse_ts(row["until"]),
+                    reason=str(row["reason"]),
+                    armed_at=_parse_ts(row["armed_at"]),
+                    entry_price=_optional_float(row.get("entry_price")),
+                    trigger_price=_optional_float(row.get("trigger_price")),
+                    side=str(row["side"]),
+                )
+            except _ROW_ERRORS:
+                store.dropped_rows += 1
         return store
 
     def to_payload(self) -> dict[str, Any]:
@@ -334,7 +354,10 @@ class BackstopStore:
             episode = self.episodes.get(symbol)
             if episode is not None and episode.side == side:
                 continue
-            if episode is not None or (seen is not None and symbol not in seen):
+            # A stored episode whose side differs from the broker's position is
+            # a new episode. On the first reconcile after a start the flip (or
+            # the opening) happened while the bot was down: "first_seen".
+            if seen is not None and (episode is not None or symbol not in seen):
                 source = SOURCE_OBSERVED
             else:
                 source = SOURCE_FIRST_SEEN
@@ -390,6 +413,12 @@ class PositionBackstop:
     def _load(self) -> None:
         try:
             self.store = load_store(self.path)
+            if self.store.dropped_rows:
+                self.logger.warning(
+                    "POSITION_BACKSTOP_STATE_ROWS_DROPPED",
+                    extra={"path": str(self.path), "dropped_rows": self.store.dropped_rows},
+                )
+                self._dirty = True  # rewrite without the bad rows at the next save
         except FileNotFoundError:
             self.logger.warning(
                 "POSITION_BACKSTOP_STATE_LOAD_FAILED",

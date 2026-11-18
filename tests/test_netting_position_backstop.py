@@ -306,7 +306,7 @@ def test_expired_lock_on_a_still_held_position_is_evaluated_again(tmp_path: Path
     assert backstop.store.locks["AAPL"].until == _et(2026, 11, 20, 9, 30)
 
 
-@pytest.mark.parametrize("content", ["{not json", "[]", '{"episodes": {"AAPL": {"side": "long"}}}'])
+@pytest.mark.parametrize("content", ["{not json", "[]", '{"episodes": []}'])
 def test_corrupt_state_file_falls_back_to_an_empty_store(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, content: str
 ) -> None:
@@ -1240,3 +1240,195 @@ def test_netting_cycle_exits_a_stopped_position_and_blocks_nothing_else(
     saved = json.loads((tmp_path / "runtime" / "position_backstop_state.json").read_text())
     assert saved["locks"]["MSFT"]["reason"] == "stop_loss"
     assert saved["episodes"]["MSFT"]["opened_at_source"] == "first_seen"
+
+
+# ---- review follow-up: thin-liquidity cap, soft throttles, store, restart --------
+
+
+@pytest.fixture
+def thin_regime(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_trading.risk.liquidity_regime import LiquidityRegime
+
+    monkeypatch.setattr(netting_symbol_cycle, "classify_liquidity_regime", lambda *a, **k: LiquidityRegime.THIN)
+    monkeypatch.setenv("AI_TRADING_PARTICIPATION_CAP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_LIQ_THIN_COST_MULT", "1.3")
+    monkeypatch.setenv("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", "5000")
+
+
+@pytest.mark.usefixtures("thin_regime")
+def test_thin_max_order_clips_a_protective_exit_and_still_blocks_a_normal_one(tmp_path: Path) -> None:
+    # 1000 shares at $10: the thin cost multiplier makes it 769 shares ($7,690),
+    # above the $5,000 thin cap.
+    normal, normal_records, normal_submitted = _processor(
+        tmp_path / "normal", positions={"AAPL": 1000}, avg_entry=10.2, liq_regime_enabled=True
+    )
+    plain, plain_records = _make_processor(positions={"AAPL": 1000}, liq_regime_enabled=True)
+    plain.now = NOW
+    protective, records, submitted = _processor(
+        tmp_path / "protective", positions={"AAPL": 1000}, liq_regime_enabled=True
+    )
+
+    assert _process(normal, target_dollars=0.0) == _process(plain, target_dollars=0.0)
+    _process(protective, target_dollars=0.0)
+
+    assert normal_submitted == []
+    assert normal_records[0]["gates"] == plain_records[0]["gates"]
+    assert normal_records[0]["gates"][-1] == "LIQ_THIN_MAX_ORDER_BLOCK"
+    assert submitted == [-500]
+    assert records[0]["gates"] == [
+        "POSITION_STOP_LOSS_EXIT",
+        "LIQ_THIN_COST_MULT_SCALE",
+        "LIQ_THIN_MAX_ORDER_BLOCK",
+        "PROTECTIVE_EXIT_OVERRIDE",
+        "OK_TRADE",
+    ]
+    # The lock finishes the rest on later bars.
+    assert "AAPL" in protective.position_backstop.store.locks
+
+
+@pytest.mark.usefixtures("thin_regime")
+def test_thin_max_order_clip_sends_at_least_one_share(tmp_path: Path) -> None:
+    # 3 shares at $6,000: the $5,000 cap rounds to zero shares; one goes out.
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 3}, avg_entry=7000.0, liq_regime_enabled=True
+    )
+    processor.latest_price = {"AAPL": 6000.0}
+
+    _process(processor, target_dollars=0.0)
+
+    assert submitted == [-1]
+    assert "LIQ_THIN_MAX_ORDER_BLOCK" in records[0]["gates"]
+
+
+def _throttle_policy(*, factor_hard_ratio: float = 0.5001) -> Any:
+    big = 1e12
+    return SimpleNamespace(
+        objective=SimpleNamespace(fee_bps=0.0, borrow_bps=0.0, min_expected_net_edge_bps=-1000.0),
+        execution=SimpleNamespace(
+            stale_order_block_sec=1e9, max_spread_bps=1000.0, min_rolling_volume=0.0, calibration_block_enabled=False
+        ),
+        risk_budgets=SimpleNamespace(
+            symbol_hard_dollars=big, symbol_soft_dollars=big,
+            portfolio_hard_gross_dollars=big, portfolio_soft_gross_dollars=big,
+            sleeve_hard_dollars=big, sleeve_soft_dollars=big,
+            factor_soft_ratio=0.1, factor_hard_ratio=factor_hard_ratio,
+        ),
+        calibration=SimpleNamespace(
+            max_ece_normal=1.0, max_brier_normal=1.0, max_ece_stress=1.0, max_brier_stress=1.0, min_samples=10
+        ),
+    )
+
+
+def _real_approval(policy: Any) -> dict[str, Any]:
+    from ai_trading.policy.compiler import approve_execution_candidate
+
+    # Exiting 100 shares at $10 leaves a sector share of 0.5 of the book:
+    # RISK_FACTOR_SOFT_THROTTLE scales the order to a tenth.
+    return {
+        "effective_policy": policy,
+        "portfolio_current_gross": 2000.0,
+        "sector_gross": {"TECH": 1500.0},
+        "get_sector_func": lambda symbol: "TECH",
+        "evaluate_execution_approval_func": evaluate_execution_approval,
+        "approve_execution_candidate_func": approve_execution_candidate,
+        "prepare_symbol_approval_func": prepare_netting_symbol_approval,
+    }
+
+
+def test_soft_throttle_keeps_a_protective_exit_full_and_scales_a_normal_one(tmp_path: Path) -> None:
+    overrides = _real_approval(_throttle_policy())
+    normal, normal_records, normal_submitted = _processor(
+        tmp_path / "normal", positions={"AAPL": 100}, avg_entry=10.2, **overrides
+    )
+    plain, plain_records = _make_processor(positions={"AAPL": 100}, **overrides)
+    plain.now = NOW
+    protective, records, submitted = _processor(tmp_path / "protective", positions={"AAPL": 100}, **overrides)
+    plain_submitted: list[int] = []
+    real_plain_submit = plain.execute_submission_func
+    plain.execute_submission_func = lambda **kw: plain_submitted.append(int(kw["delta_shares"])) or real_plain_submit(**kw)
+
+    _process(normal, target_dollars=0.0)
+    _process(plain, target_dollars=0.0)
+    _process(protective, target_dollars=0.0)
+
+    assert normal_submitted == plain_submitted == [-10]
+    assert normal_records[0]["gates"] == plain_records[0]["gates"]
+    assert "RISK_FACTOR_SOFT_THROTTLE" in normal_records[0]["gates"]
+    assert submitted == [-100]
+    assert "RISK_FACTOR_SOFT_THROTTLE" in records[0]["gates"]
+    assert records[0]["gates"].count("PROTECTIVE_EXIT_OVERRIDE") == 1
+
+
+def test_hard_risk_block_still_holds_a_protective_exit(tmp_path: Path) -> None:
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 100}, **_real_approval(_throttle_policy(factor_hard_ratio=0.2))
+    )
+
+    _process(processor, target_dollars=0.0)
+
+    assert submitted == []
+    assert "RISK_FACTOR_HARD_BLOCK" in records[0]["gates"]
+    assert "PROTECTIVE_EXIT_OVERRIDE" not in records[0]["gates"]
+
+
+def test_malformed_row_drops_only_that_row(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    path = tmp_path / "runtime" / "position_backstop_state.json"
+    path.parent.mkdir(parents=True)
+    good_lock = {
+        "until": NEXT_OPEN.isoformat(), "reason": "stop_loss", "armed_at": NOW.isoformat(),
+        "entry_price": 100.0, "trigger_price": 94.0, "side": "long",
+    }
+    path.write_text(json.dumps({
+        "episodes": {
+            "AAPL": {"opened_at": NOW.isoformat(), "opened_at_source": "observed", "side": "long"},
+            "MSFT": {"side": "long"},
+            "NVDA": "garbage",
+        },
+        "locks": {"AAPL": good_lock, "AMD": {**good_lock, "until": "not-a-time"}},
+    }))
+
+    with caplog.at_level(logging.INFO):
+        backstop = PositionBackstop(path, LOGGER)
+
+    assert set(backstop.store.episodes) == {"AAPL"}
+    assert set(backstop.store.locks) == {"AAPL"}
+    (dropped,) = _messages(caplog, "POSITION_BACKSTOP_STATE_ROWS_DROPPED")
+    assert dropped.levelno == logging.WARNING
+    assert dropped.dropped_rows == 3
+    assert not _messages(caplog, "POSITION_BACKSTOP_STATE_LOAD_FAILED")
+    _backstop(tmp_path, positions={"AAPL": 10}, backstop=backstop)
+    saved = json.loads(path.read_text())
+    assert set(saved["episodes"]) == {"AAPL"} and set(saved["locks"]) == {"AAPL"}
+
+
+def test_failed_calendar_lookup_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    day = datetime(2031, 3, 4).date()  # a Tuesday
+    nbp._cached_session_bounds.cache_clear()
+    real = nbp.market_calendar.session_info
+    calls = {"n": 0}
+
+    def _flaky(d: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("calendar unavailable")
+        return real(d, **kwargs)
+
+    monkeypatch.setattr(nbp.market_calendar, "session_info", _flaky)
+    try:
+        assert nbp._session_bounds(day) is None
+        bounds = nbp._session_bounds(day)
+        assert bounds is not None and bounds[1].astimezone(ET).hour == 16
+    finally:
+        nbp._cached_session_bounds.cache_clear()
+
+
+def test_restart_with_a_flipped_side_starts_a_new_episode(tmp_path: Path) -> None:
+    opened = NOW - timedelta(days=3)
+    first = _backstop(tmp_path, positions={"AAPL": 10, "MSFT": 5}, now=opened)
+    assert first.store.episodes["AAPL"].opened_at == opened
+
+    # Restart: AAPL is now short (flipped while down), MSFT still long.
+    restarted = _backstop(tmp_path, positions={"AAPL": -4, "MSFT": 7})
+
+    assert restarted.store.episodes["AAPL"] == Episode(NOW, "first_seen", "short")
+    assert restarted.store.episodes["MSFT"].opened_at == opened
