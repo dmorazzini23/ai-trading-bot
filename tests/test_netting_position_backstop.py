@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from ai_trading.config.runtime import TradingConfig
-from ai_trading.core import bot_engine, netting_position_backstop as nbp
+from ai_trading.core import bot_engine, netting_position_backstop as nbp, netting_symbol_cycle
 from ai_trading.core.execution_guards import evaluate_execution_approval
 from ai_trading.core.netting import NettedTarget, SleeveConfig, SleeveProposal
 from ai_trading.core.netting_execution_context import _NON_DISABLEABLE_GATE_NAMES
@@ -574,7 +574,10 @@ def test_breach_exits_through_the_normal_submission(tmp_path: Path) -> None:
     assert "AAPL" in processor.position_backstop.store.locks
 
 
-def test_short_breach_buys_to_cover(tmp_path: Path) -> None:
+def test_short_breach_buys_to_cover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Do not depend on the ambient launch profile, which other tests in the
+    # full run can leave short-disabled (long-only would flatten the short first).
+    monkeypatch.setattr(netting_symbol_cycle, "_short_openings_allowed", lambda _cfg: True)
     processor, records, submitted = _processor(tmp_path, positions={"AAPL": -10}, avg_entry=9.0)
 
     _process(processor, target_dollars=-100.0)
