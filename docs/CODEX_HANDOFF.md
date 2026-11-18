@@ -40,6 +40,13 @@ not merged, not deployed; no service restart.
   bar, with `PROTECTIVE_EXIT_OVERRIDE` over `SPREAD_TOO_WIDE_BLOCK`,
   `NET_EDGE_FLOOR_BLOCK` and the capacity throttle; cap 2: never more than 2
   open, `POSITION_CAP_BLOCK` only on openings.
+- **Validation:** 78 tests in `tests/test_netting_position_backstop.py`, 3 new
+  in `tests/tools/test_journal_alerts.py`; `agent_validate_changed.sh
+  --market-hours` (463 tests, live `/healthz`, incident snapshot); ruff, mypy,
+  `typecheck_strict.sh`, vulture clean. Full suite after the close: 6465
+  passed, 10 failed; 9 also fail on `f76f3c397` (research automation script,
+  runtime backup sync, `test_issue_1_meta_learning_trigger_exists`), the tenth
+  (an order-dependent short test of this branch) is fixed in `a82adfb07`.
 - **Open owner questions:** should a protective exit pass
   `LIQ_THIN_MAX_ORDER_BLOCK` (clip to the dollar cap) and the approval
   `RISK_*_HARD_BLOCK` / soft-throttle scaling, which can still delay or shrink
