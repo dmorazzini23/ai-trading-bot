@@ -1,6 +1,35 @@
 # Current handoff
 
-## November 17: drawdown breaker wired into the netting cycle, not deployed (`0e0abae3b`) (start here)
+## November 18: drawdown breaker deployed (`d4803827b`) (start here)
+
+- **Running service:** `d4803827b` since Wed Nov 18 21:26 UTC (market closed),
+  owner-approved. It is `8fca5a4b6` (phase 2 + Slack journal alerts) plus the
+  `claude/netting-drawdown-breaker` merge and the Slack alert field fix
+  (`current_drawdown` / `peak_equity`).
+- **Breaker as deployed:** trips at drawdown >= 8% from the highest equity this
+  process has seen, resets at <= 6.4% (`DRAWDOWN_RESET_FRACTION = 0.8`). While
+  open, orders that add exposure are blocked (`DRAWDOWN_BREAKER_BLOCK`) and
+  exits still go out. The sections below predate the reset margin; where they
+  say "no recovery margin", this section wins.
+- **Peak is in memory only.** It restarted from current equity at this
+  restart. Persisting it across restarts is deferred by the owner ("later").
+- **Validation:** full suite on `d4803827b` after the close: 6,660 passed,
+  2 skipped, 0 failed. `release_identity` passed both phases against a scratch
+  spec (config hash unchanged). Spec backup
+  `runtime/release_spec.8fca5a4b6.bak.json` (SHA only).
+- **Startup:** `IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`,
+  `DrawdownCircuitBreaker initialized`, `BROKER_SYNC` x4, 0 errors,
+  NRestarts=0 after four minutes. `/healthz` 503 with only the preserved
+  `required_model_stale` and `replay_live_parity_gate_failed`.
+- **Not yet observed:** a market-hours cycle on this commit (first one is
+  Thu Nov 19 14:30 UTC), and a real trip or reset.
+- **Rollback:** `git checkout --detach 8fca5a4b6`, restore the spec backup,
+  `sudo systemctl restart ai-trading.service`.
+- **Next, each needing the owner's go-ahead to deploy:** phase 3
+  (`claude/legacy-path-phase3`, full suite not yet run), then the position
+  backstop (`claude/position-backstop`, in build).
+
+## November 17: drawdown breaker wired into the netting cycle, not deployed (`0e0abae3b`)
 
 Branch `claude/netting-drawdown-breaker` from the phase 2 tip `8a3a07b18`.
 Not pushed, not merged, not deployed; the running service is still `98f7b9d3b`.
