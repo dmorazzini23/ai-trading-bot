@@ -215,6 +215,42 @@ would be reported as undecided, not as a pass.
 
 ## Result
 
-_Empty. To be filled once, after the single `--fit`, with the decision, the
-criteria table for both versions, the reported-only figures and the counts of
-skipped sessions. No result exists at the time of registration._
+Scored once on 2026-11-18 at 08:18 UTC under campaign `opening_range_trial_20261118`
+(contract hash `3c767e3a...0582363`). **Decision: retired.** The ledger holds one trial, status
+`retired`; the budget is consumed. The holdout was not read, no model was fitted and no order was
+sent. Report: `artifacts/opening_range_trial_20261118/report.json` (signature `ff454a60...56347e`).
+
+Deciding version: long-only, `bar_executable` fills, 5 bps a side. 2,490 eligible days,
+20,257 filled trades.
+
+| Criterion | Long-only (decides) | Long-short (information) |
+| --- | --- | --- |
+| Adequate support | pass | pass |
+| Bootstrap lower bound above zero vs cash at 5 bps | fail (-13.2 bps/day) | fail (-24.1 bps/day) |
+| Lower bound above zero vs exposure-matched SPY | fail (-13.7 bps/day) | not applicable |
+| Mean above zero at 7.5 bps | fail (-16.4 bps/day) | fail (-31.5 bps/day) |
+| Positive in at least 6 of 10 years | fail (0 of 10) | fail (0 of 10) |
+| Decision | retired | retired |
+
+Net per day, long-only: -10.4 bps at 5 bps a side (about -26 percent a year, Sharpe below -2),
+-4.4 bps at 2.5 bps a side, +1.6 bps with commission only (about +4 percent a year). Long-short:
+-20.9 bps at 5 bps a side, +0.3 bps with commission only. The best year, 2021, was -0.2 bps a day
+long-only.
+
+Reading: before trading costs the rule has a small positive expectancy (average +0.10 R a trade,
+13 percent of trades reach the close, the rest stop out), which matches the direction of the
+published result but at roughly a ninth of its size. A stop of 10 percent of ATR means large
+positions and about 2.4 times equity turned over each day, so any realistic spread cost removes
+the edge many times over. This is the outcome expected before scoring.
+
+Reported only: average R before costs by fill model, long-only: `paper_exact` +0.39,
+`bar_executable` +0.10, `conservative` -0.24, `lower_bound` -0.69. The spread between them shows
+the published figures depend on being filled at the exact trigger and stop prices. Equal-notional
+sizing: -11.0 bps a day at 5 bps a side. Order statuses: 39,928 filled, 9,422 not triggered,
+407 doji, 43 without minute bars; 5,634 shorts blocked by the short rule.
+
+Skipped sessions: 15 insufficient history, 8 incomplete SPY record, 1 excluded provider outage
+(2022-03-08). Survivorship label: `incomplete_direction_unknown`.
+
+Nothing is permitted by this result. The rule is not to be re-scored with different stops, costs,
+universes or dates under this hypothesis.
