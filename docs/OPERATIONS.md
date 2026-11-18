@@ -555,12 +555,23 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   as `MARKER | symbol=SYM` so the runtime log throttle keeps one line per symbol.
 - **What a protective exit passes / respects:** it passes the policy ablation
   block, quarantine block mode, event blackout, adaptive sizing, approval soft
-  blocks (net edge floor, spread, calibration, pacing, stale orders), capacity
-  throttle and portfolio optimizer, recorded as the original gate plus
-  `PROTECTIVE_EXIT_OVERRIDE`. It does not pass halts (including the daily and
-  weekly loss stop), a missing price, the kill switch, bar dedup, the
-  participation cap, sell-to-available, duplicate intent, broker breakers or
-  pretrade checks. Normal exits are unchanged.
+  blocks (net edge floor, spread, calibration, pacing, stale orders) and
+  approval soft-throttle scaling, capacity throttle and portfolio optimizer,
+  recorded as the original gate plus `PROTECTIVE_EXIT_OVERRIDE`. In thin
+  liquidity it is clipped to the thin-order dollar cap
+  (`LIQ_THIN_MAX_ORDER_BLOCK` plus the override, at least one share) instead of
+  blocked; the lock exits the rest on later bars. It does not pass halts
+  (including the daily and weekly loss stop), a missing price, the kill switch,
+  bar dedup, the participation cap, sell-to-available, duplicate intent, broker
+  breakers or pretrade checks. Normal exits are unchanged.
+- **What can still hold a protective exit back:** the participation cap with
+  zero rolling volume (`LIQ_PARTICIPATION_BLOCK`; owner decision pending),
+  approval hard risk blocks (`RISK_*_HARD_BLOCK`), a missing quote (pretrade
+  `DERISK_DATA_QUALITY_BLOCK`), and a move above 40% from entry, which is
+  treated as bad data so the stop loss does not arm. The stall alert
+  (`POSITION_BACKSTOP_EXIT_STALLED`) only fires on bars the symbol is
+  evaluated; a resting, unfilled exit order keeps the symbol out of the cycle
+  (pending-order filter), so it suppresses the stall alert.
 - **Position cap:** a new opening is blocked (`POSITION_CAP_BLOCK`) when held
   positions plus flat symbols with pending orders plus openings already sent
   this cycle reach `AI_TRADING_MAX_PORTFOLIO_POSITIONS`. Adds, trims, exits and
@@ -570,8 +581,13 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   (episodes and locks; written atomically only when it changes). It survives a
   restart; a missing or unreadable file starts empty
   (`POSITION_BACKSTOP_STATE_LOAD_FAILED`) and every held position restarts its
-  hold clock. To clear a lock early, stop the service, delete the symbol's
-  entry under `locks`, and start it again.
+  hold clock. One malformed row drops only that row
+  (`POSITION_BACKSTOP_STATE_ROWS_DROPPED`). After a restart a stored episode
+  is kept when the broker position has the same side and replaced
+  (`first_seen`) when the side differs; a same-side close and reopen while
+  the bot was down cannot be detected and keeps the old entry time. To clear
+  a lock early, stop the service, delete the symbol's entry under `locks`,
+  and start it again.
 
 ### Runtime JSONL retention
 
@@ -832,9 +848,10 @@ webhook. Code: `ai_trading/monitoring/journal_alerts.py`, sender
   `DATA_KILL_SWITCH_ACTIVATED` (stopped) and `DRAWDOWN_BREAKER_RESET`,
   `HALT_FLAG_REMOVED`, `TRANSIENT_HALT_CLEARED` (resumed). 15 minute hold per marker.
 - **Position backstop**: `POSITION_STOP_LOSS_BREACH`, `POSITION_MAX_HOLD_BREACH`,
-  `POSITION_BACKSTOP_EXIT_STALLED` (WARNING), one message per symbol such as
-  "Safety backstop: AAPL long stop-loss exit, -5.3% vs entry". 15 minute hold
-  per marker and symbol.
+  `POSITION_BACKSTOP_EXIT_STALLED` (WARNING), one message per marker type per
+  dispatcher run listing the symbols (a single symbol reads like "Safety
+  backstop: AAPL long stop-loss exit, -5.3% vs entry"). 15 minute hold per
+  marker and symbol.
 - **New error**: each ERROR/CRITICAL log line type (logger plus message with
   numbers collapsed) alerts once, then at most hourly with an occurrence count. The standing `MODEL_REGISTRY_STALE` error repeats at most once a day.
 
