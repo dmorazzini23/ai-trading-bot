@@ -1,11 +1,13 @@
 """Slack alerts derived from the ai-trading.service journal.
 
-Three alert kinds, all read from ``journalctl`` (the aiuser account is in the
+Four alert kinds, all read from ``journalctl`` (the aiuser account is in the
 ``systemd-journal`` group, so no sudo is needed):
 
 * service lifecycle: unit start, failure, or restart;
 * trading stopped / resumed: halt and kill-switch markers and the drawdown
   breaker markers ``DRAWDOWN_BREAKER_TRIPPED`` / ``DRAWDOWN_BREAKER_RESET``;
+* position backstop: a stop-loss or maximum-hold exit of one symbol, or such an
+  exit that has stalled (de-duplicated per marker and symbol);
 * new ERROR / CRITICAL log line types, de-duplicated by message type.
 
 Detection and message building are pure functions over journal entries. The
@@ -49,6 +51,13 @@ TRADING_RESUME_MARKERS = (
     "TRANSIENT_HALT_CLEARED",
 )
 _TRADING_MARKERS = frozenset(TRADING_STOP_MARKERS) | frozenset(TRADING_RESUME_MARKERS)
+# Position backstop markers: one symbol each, never merged across symbols.
+POSITION_BACKSTOP_MARKERS = (
+    "POSITION_STOP_LOSS_BREACH",
+    "POSITION_MAX_HOLD_BREACH",
+    "POSITION_BACKSTOP_EXIT_STALLED",
+)
+_POSITION_MARKERS = frozenset(POSITION_BACKSTOP_MARKERS)
 _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
 
 _EXIT_RE = re.compile(r"Main process exited, code=(\w+), status=(\S+)")
@@ -151,7 +160,7 @@ def normalize_error_type(logger_name: str, message: str) -> str:
 def detect(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Classify entries into alert events, oldest first.
 
-    Each event: ``alert`` (service|trading|error), ``kind``, ``key`` (dedupe key),
+    Each event: ``alert`` (service|trading|position|error), ``kind``, ``key`` (dedupe key),
     ``at`` (datetime) and ``detail`` fields for the message.
     """
 
@@ -169,6 +178,9 @@ def detect(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             marker = str(payload.get("msg") or "")
             if marker in _TRADING_MARKERS:
                 events.append(_trading_event(marker, payload, at))
+                continue
+            if marker in _POSITION_MARKERS:
+                events.append(_position_event(marker, payload, at))
                 continue
             level = str(payload.get("level") or "").upper()
             if level in _ERROR_LEVELS:
@@ -222,6 +234,34 @@ def _trading_event(marker: str, payload: Mapping[str, Any], at: datetime) -> dic
     }
 
 
+_POSITION_DETAIL_FIELDS = (
+    "side",
+    "qty",
+    "avg_entry",
+    "price",
+    "loss_pct",
+    "sessions_held",
+    "threshold",
+    "lock_until",
+    "bars_since_arming",
+    "last_gates",
+)
+
+
+def _position_event(marker: str, payload: Mapping[str, Any], at: datetime) -> dict[str, Any]:
+    symbol = str(payload.get("symbol") or "?").strip().upper() or "?"
+    detail = {k: payload[k] for k in _POSITION_DETAIL_FIELDS if payload.get(k) is not None}
+    return {
+        "alert": "position",
+        "kind": "stalled" if marker == "POSITION_BACKSTOP_EXIT_STALLED" else "exit",
+        "key": f"position:{marker}:{symbol}",
+        "marker": marker,
+        "symbol": symbol,
+        "at": at,
+        "detail": detail,
+    }
+
+
 def _error_event(
     level: str, logger_name: str, message: str, payload: Mapping[str, Any], at: datetime
 ) -> dict[str, Any]:
@@ -253,7 +293,7 @@ def _cooldown_for(event: Mapping[str, Any]) -> timedelta:
     alert = str(event["alert"])
     if alert == "error":
         return STANDING_ERROR_COOLDOWNS.get(str(event.get("message", "")), ERROR_COOLDOWN)
-    return TRADING_COOLDOWN if alert == "trading" else SERVICE_COOLDOWN
+    return TRADING_COOLDOWN if alert in {"trading", "position"} else SERVICE_COOLDOWN
 
 
 def apply_dedupe(
@@ -377,6 +417,49 @@ def _trading_message(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return fmt.message(fmt.fallback_text(severity, title, lines[-1] if lines else ""), blocks)
 
 
+def position_summary(event: Mapping[str, Any]) -> str:
+    """One line, e.g. ``Safety backstop: AAPL long stop-loss exit, -5.3% vs entry``."""
+
+    detail = dict(event.get("detail") or {})
+    symbol = str(event.get("symbol") or "?")
+    side = str(detail.get("side") or "").strip()
+    who = f"{symbol} {side}".strip()
+    marker = str(event.get("marker") or "")
+    if marker == "POSITION_STOP_LOSS_BREACH":
+        try:
+            move = f", {float(detail['loss_pct']) * 100:+.1f}% vs entry"
+        except (KeyError, TypeError, ValueError):
+            move = ""
+        return f"Safety backstop: {who} stop-loss exit{move}"
+    if marker == "POSITION_MAX_HOLD_BREACH":
+        held = detail.get("sessions_held")
+        suffix = f", held {held} sessions" if held is not None else ""
+        return f"Safety backstop: {who} max-hold exit{suffix}"
+    qty = detail.get("qty")
+    still = f", still holding {qty}" if qty is not None else ""
+    return f"Safety backstop: {who} exit stalled{still}"
+
+
+def _position_message(event: Mapping[str, Any]) -> dict[str, Any]:
+    severity = fmt.Severity.WARNING
+    title = position_summary(event)
+    detail = dict(event.get("detail") or {})
+    lines = [f"{_ts(event['at'])}: {fmt.humanize(event['marker'])}"]
+    if detail.get("last_gates"):
+        lines.append(f"last gates: {fmt.truncate(', '.join(map(str, detail['last_gates'])), 300)}")
+    if detail.get("lock_until"):
+        lines.append(f"re-entry locked until {detail['lock_until']}")
+    count = int(event.get("count", 1) or 1)
+    if count > 1:
+        lines.append(f"x{count} since {_ts(event['first_seen'])}")
+    blocks = [
+        fmt.header_block(severity, title),
+        fmt.section_block(fmt.bullets(lines)),
+        fmt.context_block("Exit goes through the normal netting order path.", fmt.now_label()),
+    ]
+    return fmt.message(fmt.fallback_text(severity, title), blocks)
+
+
 def _error_message(event: Mapping[str, Any]) -> dict[str, Any]:
     severity = fmt.Severity.CRITICAL if event["kind"] == "critical" else fmt.Severity.WARNING
     new = bool(event.get("new"))
@@ -405,7 +488,8 @@ def _error_message(event: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def build_messages(to_send: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """One message for service events, one for trading markers, one per error type."""
+    """One message for service events, one for trading markers, one per
+    position-backstop symbol event, one per error type."""
 
     messages: list[dict[str, Any]] = []
     service = [e for e in to_send if e["alert"] == "service"]
@@ -414,6 +498,7 @@ def build_messages(to_send: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
         messages.append(_service_message(service))
     if trading:
         messages.append(_trading_message(trading))
+    messages.extend(_position_message(e) for e in to_send if e["alert"] == "position")
     messages.extend(_error_message(e) for e in to_send if e["alert"] == "error")
     return messages
 
