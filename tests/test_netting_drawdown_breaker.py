@@ -85,25 +85,145 @@ def test_trip_at_threshold_logs_one_structured_line(caplog: pytest.LogCaptureFix
     assert trips[0].current_drawdown == pytest.approx(0.08)
     assert trips[0].max_drawdown == 0.08
     assert trips[0].peak_equity == 100_000.0
+    assert trips[0].equity == 92_000.0
+    assert trips[0].trip_level == 0.08
+    assert trips[0].reset_level == pytest.approx(0.064)
 
 
-def test_reset_once_drawdown_is_back_under_threshold(caplog: pytest.LogCaptureFixture) -> None:
+def test_reset_only_once_drawdown_recovers_past_the_reset_level(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     breaker = _breaker()
     breaker.score_account_snapshot({"equity": 100_000.0})
     breaker.score_account_snapshot({"equity": 90_000.0})
     assert breaker.state is CircuitBreakerState.OPEN
 
     with caplog.at_level(logging.INFO):
-        at_threshold = breaker.score_account_snapshot({"equity": 92_000.0})
-        recovered = breaker.score_account_snapshot({"equity": 92_500.0})
+        under_trip = breaker.score_account_snapshot({"equity": 92_500.0})  # 7.5%
+        just_above_reset = breaker.score_account_snapshot({"equity": 93_590.0})  # 6.41%
+        recovered = breaker.score_account_snapshot({"equity": 93_600.0})  # 6.4%
 
-    assert at_threshold["open"] is True
+    assert under_trip["open"] is True
+    assert just_above_reset["open"] is True
     assert recovered["open"] is False
     assert recovered["peak_equity"] == 100_000.0
     resets = _messages(caplog, "DRAWDOWN_BREAKER_RESET")
     assert len(resets) == 1
-    assert resets[0].current_drawdown == pytest.approx(0.075)
+    assert resets[0].current_drawdown == pytest.approx(0.064)
     assert resets[0].peak_equity == 100_000.0
+    assert resets[0].equity == 93_600.0
+    assert resets[0].trip_level == 0.08
+    assert resets[0].reset_level == pytest.approx(0.064)
+
+
+def test_transition_lines_carry_the_dollar_context(caplog: pytest.LogCaptureFixture) -> None:
+    breaker = _breaker()
+    breaker.score_account_snapshot({"equity": 81_655.0})
+
+    with caplog.at_level(logging.INFO):
+        breaker.score_account_snapshot({"equity": 75_122.0})  # 8.0% below 81,655
+        breaker.score_account_snapshot({"equity": 76_430.0})  # under 6.4%
+
+    (trip,) = _messages(caplog, "DRAWDOWN_BREAKER_TRIPPED")
+    (reset,) = _messages(caplog, "DRAWDOWN_BREAKER_RESET")
+    assert trip.equity == 75_122.0
+    assert trip.peak_equity == 81_655.0
+    assert trip.current_drawdown >= 0.08
+    assert (trip.trip_level, trip.reset_level) == (0.08, pytest.approx(0.064))
+    assert reset.equity == 76_430.0
+    assert reset.peak_equity == 81_655.0
+    assert reset.current_drawdown < 0.064
+    assert (reset.trip_level, reset.reset_level) == (0.08, pytest.approx(0.064))
+
+
+def test_oscillation_around_the_trip_level_stays_tripped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    breaker = _breaker()
+    breaker.score_account_snapshot({"equity": 100_000.0})
+
+    with caplog.at_level(logging.INFO):
+        payloads = [
+            breaker.score_account_snapshot({"equity": equity})
+            for equity in (92_000.0, 92_050.0, 91_950.0, 92_100.0, 91_990.0, 92_200.0)
+        ]
+
+    assert [p["open"] for p in payloads] == [True] * 6
+    assert len(_messages(caplog, "DRAWDOWN_BREAKER_TRIPPED")) == 1
+    assert not _messages(caplog, "DRAWDOWN_BREAKER_RESET")
+    assert breaker.peak_equity == 100_000.0
+
+
+def test_oscillation_around_the_reset_level_resets_at_most_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    breaker = _breaker()
+    breaker.score_account_snapshot({"equity": 100_000.0})
+    breaker.score_account_snapshot({"equity": 91_000.0})
+    assert breaker.state is CircuitBreakerState.OPEN
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        noise = [
+            breaker.score_account_snapshot({"equity": equity})
+            # 6.5%, 6.3%, 6.5%, 6.3%, 6.6%, 7.9%: around the reset level, then
+            # all the way up to just under the trip level.
+            for equity in (93_500.0, 93_700.0, 93_500.0, 93_700.0, 93_400.0, 92_100.0)
+        ]
+        retrip = breaker.score_account_snapshot({"equity": 92_000.0})  # 8.0%
+
+    assert [p["open"] for p in noise] == [True, False, False, False, False, False]
+    assert retrip["open"] is True
+    assert len(_messages(caplog, "DRAWDOWN_BREAKER_RESET")) == 1
+    assert len(_messages(caplog, "DRAWDOWN_BREAKER_TRIPPED")) == 1
+    assert breaker.peak_equity == 100_000.0
+
+
+def test_new_high_while_tripped_raises_the_peak_and_resets() -> None:
+    breaker = _breaker()
+    breaker.score_account_snapshot({"equity": 100_000.0})
+    breaker.score_account_snapshot({"equity": 90_000.0})
+
+    payload = breaker.score_account_snapshot({"equity": 101_000.0})
+
+    assert payload["open"] is False
+    assert payload["peak_equity"] == 101_000.0
+    # Protection is measured from the new peak: 8% below it trips again.
+    assert breaker.score_account_snapshot({"equity": 92_900.0})["open"] is True
+
+
+@pytest.mark.parametrize("fraction", [0.0, 1.0, 1.5, -0.2, float("nan")])
+def test_a_fraction_without_a_margin_falls_back_to_the_default(fraction: float) -> None:
+    breaker = DrawdownCircuitBreaker(max_drawdown=0.08, recovery_threshold=fraction)
+    breaker.update_equity(100_000.0)
+    breaker.update_equity(92_000.0)
+
+    assert breaker.get_status()["recovery_drawdown"] == pytest.approx(0.064)
+    assert breaker.update_equity(92_500.0) is False
+    assert breaker.update_equity(93_600.0) is True
+
+
+def test_manual_reset_follows_the_reset_level() -> None:
+    breaker = _breaker()
+    breaker.update_equity(100_000.0)
+    breaker.update_equity(91_000.0)
+
+    assert breaker.manual_reset(92_500.0) is False
+    assert breaker.state is CircuitBreakerState.OPEN
+    assert breaker.manual_reset(93_600.0) is True
+    assert breaker.state is CircuitBreakerState.CLOSED
+
+
+def test_manual_reset_on_a_closed_breaker_logs_no_transition(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    breaker = _breaker()
+    breaker.update_equity(100_000.0)
+
+    with caplog.at_level(logging.INFO):
+        assert breaker.manual_reset() is True
+
+    assert not _messages(caplog, "DRAWDOWN_BREAKER_RESET")
 
 
 @pytest.mark.parametrize(
@@ -205,6 +325,27 @@ def test_cycle_feed_survives_a_failing_or_absent_account_snapshot(
     assert len(_messages(caplog, "DRAWDOWN_BREAKER_ACCOUNT_SNAPSHOT_FAILED")) == 1
     assert len(_messages(caplog, "DRAWDOWN_BREAKER_FEED_SKIPPED")) == 2
 
+
+
+def test_failed_readings_while_tripped_never_reset_it() -> None:
+    breaker = _breaker()
+    breaker.score_account_snapshot({"equity": 100_000.0})
+    breaker.score_account_snapshot({"equity": 92_000.0})
+    runtime = SimpleNamespace(drawdown_circuit_breaker=breaker)
+
+    def _boom() -> Any:
+        raise ConnectionError("broker unreachable")
+
+    for engine in (
+        SimpleNamespace(_get_account_snapshot=_boom),
+        SimpleNamespace(_get_account_snapshot=lambda: None),
+        SimpleNamespace(_get_account_snapshot=lambda: {"equity": 0}),
+        SimpleNamespace(),
+    ):
+        assert bot_engine._score_drawdown_breaker(runtime, engine)["open"] is True
+    # Still tripped: a reading between the levels does not reset it either.
+    assert breaker.score_account_snapshot({"equity": 93_000.0})["open"] is True
+    assert breaker.peak_equity == 100_000.0
 
 # ---- the per-symbol gate -------------------------------------------------
 

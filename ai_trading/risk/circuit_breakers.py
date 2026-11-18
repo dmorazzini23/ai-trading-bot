@@ -15,6 +15,11 @@ from ai_trading.utils.time import safe_utcnow
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 from ..core.constants import PERFORMANCE_THRESHOLDS
 
+# A tripped drawdown breaker resets only once drawdown is back at or below this
+# fraction of the trip level (0.8 x 8% = 6.4%), so equity noise around either
+# level cannot trip and reset it on consecutive readings.
+DRAWDOWN_RESET_FRACTION = 0.8
+
 class CircuitBreakerState(Enum):
     """Circuit breaker state enumeration."""
     CLOSED = 'closed'
@@ -36,27 +41,50 @@ class DrawdownCircuitBreaker:
     when predefined thresholds are exceeded.
     """
 
-    def __init__(self, max_drawdown: float=None, recovery_threshold: float=0.8):
-        """Initialize drawdown circuit breaker."""
+    def __init__(self, max_drawdown: float=None, recovery_threshold: float=DRAWDOWN_RESET_FRACTION):
+        """Initialize drawdown circuit breaker.
+
+        ``recovery_threshold`` is the reset level as a fraction of the trip
+        level: trip at drawdown >= ``max_drawdown``, reset only at drawdown <=
+        ``max_drawdown * recovery_threshold``. The peak only ever rises; neither
+        a trip nor a reset moves it.
+        """
         self.max_drawdown = max_drawdown or PERFORMANCE_THRESHOLDS['MAX_DRAWDOWN']
         self.recovery_threshold = recovery_threshold
         self.state = CircuitBreakerState.CLOSED
         self.current_drawdown = 0.0
         self.peak_equity = 0.0
+        self.last_equity: float | None = None
         self.halt_timestamp: datetime | None = None
         self.reset_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
         emit_once(logger, 'DRAWDOWN_CB_INIT', 'info', 'DrawdownCircuitBreaker initialized', max_drawdown=self._safe_format_percentage(self.max_drawdown))
 
     def _recovery_drawdown_threshold(self) -> float:
-        """Return the drawdown that must be reached before automatic reset."""
+        """Return the drawdown at or below which a tripped breaker resets.
+
+        A fraction outside (0, 1) would leave no reset margin below the trip
+        level, so ``DRAWDOWN_RESET_FRACTION`` is used in its place.
+        """
         try:
             max_drawdown = float(self.max_drawdown)
-            threshold = float(self.recovery_threshold)
+            fraction = float(self.recovery_threshold)
         except (TypeError, ValueError):
             return 0.0
-        if threshold > max_drawdown:
-            threshold = round(1.0 - threshold, 12)
-        return max(0.0, min(max_drawdown, threshold))
+        if not (math.isfinite(fraction) and 0.0 < fraction < 1.0):
+            fraction = DRAWDOWN_RESET_FRACTION
+        return max(0.0, max_drawdown * fraction)
+
+    def _transition_extra(self, reason: str) -> dict[str, Any]:
+        """Structured fields shared by the TRIPPED and RESET log lines."""
+        return {
+            'reason': reason,
+            'current_drawdown': self.current_drawdown,
+            'max_drawdown': self.max_drawdown,
+            'trip_level': self.max_drawdown,
+            'reset_level': self._recovery_drawdown_threshold(),
+            'peak_equity': self.peak_equity,
+            'equity': self.last_equity,
+        }
 
     def _safe_format_percentage(self, value) -> str:
         """
@@ -88,6 +116,7 @@ class DrawdownCircuitBreaker:
             if current_equity < 0:
                 logger.warning(f'Negative equity detected: {current_equity}')
                 return False
+            self.last_equity = float(current_equity)
             if current_equity > self.peak_equity:
                 self.peak_equity = current_equity
             if self.peak_equity > 0:
@@ -102,10 +131,7 @@ class DrawdownCircuitBreaker:
                     self._trigger_halt('Maximum drawdown exceeded')
                     return False
             elif self.state == CircuitBreakerState.OPEN:
-                if (
-                    self.current_drawdown < float(self.max_drawdown)
-                    and self.current_drawdown <= self._recovery_drawdown_threshold()
-                ):
+                if self.current_drawdown <= self._recovery_drawdown_threshold():
                     self._reset_breaker('Drawdown recovery achieved')
                     return True
                 return False
@@ -119,15 +145,7 @@ class DrawdownCircuitBreaker:
         try:
             self.state = CircuitBreakerState.OPEN
             self.halt_timestamp = safe_utcnow()
-            logger.critical(
-                'DRAWDOWN_BREAKER_TRIPPED',
-                extra={
-                    'reason': reason,
-                    'current_drawdown': self.current_drawdown,
-                    'max_drawdown': self.max_drawdown,
-                    'peak_equity': self.peak_equity,
-                },
-            )
+            logger.critical('DRAWDOWN_BREAKER_TRIPPED', extra=self._transition_extra(reason))
             for callback in self.reset_callbacks:
                 try:
                     callback('halt', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': self.halt_timestamp})
@@ -141,15 +159,7 @@ class DrawdownCircuitBreaker:
         try:
             self.state = CircuitBreakerState.CLOSED
             self.halt_timestamp = None
-            logger.warning(
-                'DRAWDOWN_BREAKER_RESET',
-                extra={
-                    'reason': reason,
-                    'current_drawdown': self.current_drawdown,
-                    'max_drawdown': self.max_drawdown,
-                    'peak_equity': self.peak_equity,
-                },
-            )
+            logger.warning('DRAWDOWN_BREAKER_RESET', extra=self._transition_extra(reason))
             for callback in self.reset_callbacks:
                 try:
                     callback('reset', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': safe_utcnow()})
@@ -226,6 +236,8 @@ class DrawdownCircuitBreaker:
                 self._safe_format_percentage(self._recovery_drawdown_threshold()),
             )
             return False
+        if self.state is not CircuitBreakerState.OPEN:
+            return True
         self._reset_breaker('Manual reset after drawdown recovery')
         return True
 

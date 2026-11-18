@@ -42,7 +42,10 @@ def test_drawdown_breaker_invalid_values_callbacks_and_recovery() -> None:
 
     assert breaker.update_equity(89_000.0) is False
     assert breaker.update_equity(90_000.0) is False
-    assert breaker.update_equity(90_001.0) is True
+    # Reset level is 0.9 x 10% = 9%: back under the trip level is not enough.
+    assert breaker.update_equity(90_001.0) is False
+    assert breaker.update_equity(90_900.0) is False
+    assert breaker.update_equity(91_000.0) is True
     assert breaker.state is CircuitBreakerState.CLOSED
     assert events[-1][0] == "reset"
 
