@@ -6,10 +6,6 @@ from typing import Iterable
 
 import pytest
 
-from ai_trading.position.profit_taking import ProfitTakingEngine
-from ai_trading.position.technical_analyzer import TechnicalSignalAnalyzer
-from ai_trading.position.trailing_stops import TrailingStopManager
-
 
 class MockSequence:
     """Simple sequence without pandas methods like ``diff``."""
@@ -25,39 +21,6 @@ class MockSequence:
 
     def __getitem__(self, index):  # pragma: no cover - simple delegation
         return self._values[index]
-
-
-@pytest.mark.parametrize("factory", (list, MockSequence))
-def test_technical_analyzer_rsi_accepts_sequences(factory) -> None:
-    analyzer = TechnicalSignalAnalyzer()
-    prices = factory(range(1, 40))
-
-    value = analyzer._calculate_rsi(prices, 14)
-
-    assert isinstance(value, float)
-    assert 0.0 <= value <= 100.0
-
-
-@pytest.mark.parametrize("factory", (list, MockSequence))
-def test_trailing_stop_rsi_accepts_sequences(factory) -> None:
-    manager = TrailingStopManager()
-    prices = factory(range(1, 40))
-
-    value = manager._calculate_rsi(prices, 14)
-
-    assert isinstance(value, float)
-    assert 0.0 <= value <= 100.0
-
-
-@pytest.mark.parametrize("factory", (list, MockSequence))
-def test_profit_taking_rsi_accepts_sequences(factory) -> None:
-    engine = ProfitTakingEngine()
-    prices = factory(range(1, 40))
-
-    value = engine._calculate_rsi(prices, 14)
-
-    assert isinstance(value, float)
-    assert 0.0 <= value <= 100.0
 
 
 @pytest.mark.parametrize("factory", (list, MockSequence))

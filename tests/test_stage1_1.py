@@ -1,7 +1,6 @@
 import importlib
 import sys
 import types
-from enum import Enum
 from typing import Any, cast
 
 
@@ -70,21 +69,6 @@ def _stub_bot_engine_heavy_deps(monkeypatch):
     stub_indicators.rsi = lambda *a, **k: 0.0
     stub_indicators.ema = lambda *a, **k: 1.0
     monkeypatch.setitem(sys.modules, "ai_trading.indicators", stub_indicators)
-
-    class _PositionAction(Enum):
-        HOLD = "hold"
-
-    class _IntelligentPositionManager:
-        def __init__(self, *a, **k):  # noqa: D401, ARG002
-            """Test stub that skips heavy imports."""
-
-        def analyze_position(self, *a, **k):  # noqa: D401, ARG002
-            return None
-
-    stub_ipm = cast(Any, types.ModuleType("ai_trading.position.intelligent_manager"))
-    stub_ipm.PositionAction = _PositionAction
-    stub_ipm.IntelligentPositionManager = _IntelligentPositionManager
-    monkeypatch.setitem(sys.modules, "ai_trading.position.intelligent_manager", stub_ipm)
 
 
 def test_meta_learning_import_without_sklearn(monkeypatch):
