@@ -190,6 +190,29 @@ alone permits nothing.
   (`artifacts/opening_range_trial_20261118/campaign_state.json`) and a fresh
   acquisition, each on the owner's word, outside market hours.
 
+## Read before the claim, November 18, 2026 (08:20 UTC, nothing scored yet)
+
+The second acquisition wrote its manifest and the support audit reports support as possible
+(2,490 eligible days, 236 to 252 a year, median 20 selected names, no blocking reason). The
+pre-claim review was read on counts only:
+
+- Split events: 1,617. Plausible for ten years of the candidate set.
+- Waived opening shortfalls: 2020-03-16 (the market-wide halt) and 2022-03-08. The second is the
+  session this addendum leaves unscored (1,041 of 1,161 opening bars, the same counts as the
+  refused run), so it is expected and is not a reason to stop.
+- Incomplete SPY sessions: 8, under the limit.
+
+One data defect was found and is recorded here before scoring, with no rule changed. The
+provider's DAILY bars for 2022-03-08 are also cut short for NYSE-listed names (for example the
+recorded daily volume for BAC is 6.3 million shares against 82 to 118 million on the neighbouring
+sessions; 720 of 1,239 liquid names with a bar that day show under a quarter of their usual
+volume). The 14-session ATR and average volume therefore carry one bad daily bar for those names
+on 2022-03-09 through 2022-03-28. That touches 151 of about 49,800 selected name-days (0.3
+percent) on 14 of 2,490 scored days (0.56 percent); the stop distance for those entries can be
+off by roughly one fourteenth. No direction of bias is known. It is judged too small to move the
+result and the scoring proceeds on the registered rules; a result decided by a margin this small
+would be reported as undecided, not as a pass.
+
 ## Result
 
 _Empty. To be filled once, after the single `--fit`, with the decision, the
