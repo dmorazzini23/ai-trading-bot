@@ -62,21 +62,11 @@ def _observe_cycle_execute_latency(be: Any, execution_stage_start: float | None)
         be.logger.debug("CYCLE_EXECUTE_LATENCY_OBSERVE_FAILED", exc_info=True)
 
 
-def _resolve_stale_ratio(be: Any) -> float:
-    try:
-        cfg = be.get_trading_config()
-        return float(getattr(cfg, "execution_stale_ratio_shadow", 0.30))
-    except be.COMMON_EXC:
-        return 0.30
-
-
 def _log_cycle_gates(be: Any) -> None:
     be.logger.info(
         "CYCLE_GATES",
         extra={
             "shadow": be.guard_shadow_active(),
-            "stale": getattr(be.EXEC_GUARD_STATE, "stale_symbols", "na"),
-            "universe": getattr(be.EXEC_GUARD_STATE, "universe_size", "na"),
         },
     )
 
@@ -101,13 +91,6 @@ def _finalize_run_all_trades_cycle(
     state.running = False
     state.last_loop_duration = last_loop_duration
 
-    stale_ratio = _resolve_stale_ratio(be)
-    _run_finalizer_hook(
-        be,
-        "guard_end_cycle",
-        be.guard_end_cycle,
-        stale_threshold_ratio=stale_ratio,
-    )
     _run_finalizer_hook(be, "cycle_gates_log", _log_cycle_gates, be)
     _run_finalizer_hook(
         be,

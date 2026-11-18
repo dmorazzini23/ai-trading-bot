@@ -21,8 +21,6 @@ class SafetyState:
     """Process-wide safety state (reset on process restart)."""
 
     shadow_cycle: bool = False
-    stale_symbols: int = 0
-    universe_size: int = 0
 
 
 STATE = SafetyState()
@@ -182,29 +180,6 @@ def quote_fresh_enough(
         quote_ts_utc = quote_ts_utc.replace(tzinfo=_dt.timezone.utc)
     age = (_utcnow() - quote_ts_utc).total_seconds()
     return -MAX_FUTURE_QUOTE_SKEW_SECONDS <= age <= max_age_sec
-
-
-def begin_cycle(universe_size: int, degraded: bool) -> None:
-    """Reset per-cycle counters and shadow-mode hint."""
-
-    STATE.universe_size = int(universe_size or 0)
-    STATE.stale_symbols = 0
-    # Degraded data should not implicitly enable shadow mode.
-    STATE.shadow_cycle = False
-
-
-def mark_symbol_stale() -> None:
-    """Increment the per-cycle stale symbol counter."""
-
-    STATE.stale_symbols += 1
-
-
-def end_cycle(stale_threshold_ratio: float = 0.30) -> None:
-    """Finalize cycle bookkeeping and promote shadow mode if required."""
-
-    _ = stale_threshold_ratio  # Kept for API stability; stale-ratio promotion was removed.
-
-    # Shadow cycles are not promoted based on stale ratios.
 
 
 def shadow_active() -> bool:

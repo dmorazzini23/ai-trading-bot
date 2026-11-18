@@ -327,24 +327,13 @@ from ai_trading.config.management import (
     clear_runtime_env_override,
 )
 try:
-    from ai_trading.execution.guards import (
-        STATE as EXEC_GUARD_STATE,
-        end_cycle as guard_end_cycle,
-        shadow_active as guard_shadow_active,
-    )
+    from ai_trading.execution.guards import shadow_active as guard_shadow_active
     from ai_trading.execution.timing import execution_span, record_cycle_wall
 except (ImportError, ModuleNotFoundError, AttributeError):
     from contextlib import contextmanager
-    from types import SimpleNamespace as _SimpleNamespace
-
-    EXEC_GUARD_STATE = cast(Any, _SimpleNamespace(active=False))
-
-    def guard_end_cycle(stale_threshold_ratio: float = 0.0) -> None:
-        _ = stale_threshold_ratio
-        return None
 
     def guard_shadow_active() -> bool:
-        return bool(getattr(EXEC_GUARD_STATE, 'active', False))
+        return False
 
     @contextmanager
     def execution_span(*_a, **_k):
