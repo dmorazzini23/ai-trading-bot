@@ -1,6 +1,51 @@
 # Current handoff
 
-## November 17: drawdown breaker wired into the netting cycle, not deployed (`0e0abae3b`) (start here)
+## November 18: legacy-path removal phase 3 built, not deployed (`28292960e`) (start here)
+
+Branch `claude/legacy-path-phase3` from `d4803827b` (main with the drawdown
+breaker). Not pushed, not merged, not deployed.
+- **Commits:** `e4910cda9` removes `ai_trading/position/` (no importer
+  outside its tests); `877253b78` removes `core/trade_cycle.py` (reached only
+  via `bot_engine.trade_logic`, which had no non-test caller), the
+  `services.execution` trade-cycle and signal-order entry points, the
+  `bot_engine` helpers only that cycle reached, their settings getters,
+  `utils.base.validate_ohlcv`, `meta_learning.trigger_meta_learning_conversion`,
+  `data/sanitize.py`, `data/corp_actions.py` and `portfolio/sizing.py`;
+  `28292960e` removes the guards stale-symbol counter, `begin_cycle`,
+  `end_cycle` and the worker's `guard_end_cycle` hook (`CYCLE_GATES` now logs
+  only `shadow`).
+- **Kept (live):** `submit_runtime.submit_order_runtime` and
+  `services.execution.submit_order` (the netting submit path goes
+  `bot_engine.submit_order` -> service -> runtime), `decision_journal`
+  (used by `run_all_trades_execution`), `control_plane` (only its services
+  label changed), `guards.shadow_active` (read by `live_trading`).
+- **Size:** source 11 files deleted, 11 edited, 11,767 lines removed; tests
+  31 files deleted, 34 edited, 8,553 lines removed (about 250 test functions).
+- **Decision parity:** `phase3_28292960e` gives `COMBINED_DECISIONS
+  5bd1a138...dbdf0b192` and `COMBINED_FULL 2ecc5ccd...32e877bb`; all six files
+  identical to `post_phase2_4e9d951a1`. Coverage of the harness on
+  `d4803827b` executed none of the removed functions or modules.
+- **Validation (market open, so no full suite):** 462 targeted tests with the
+  editable finder stripped; `agent_validate_changed.sh --market-hours`
+  (295 tests, ruff, mypy, py_compile, live `/healthz`, incident snapshot);
+  `typecheck_strict.sh`; `vulture --min-confidence 80`; import of all 446
+  `ai_trading` modules from the worktree. No `CONFIG_SPECS`, Settings field or
+  BotState field changed.
+- **Phase 4 candidates (not touched):** BotState/BotContext fields and
+  Settings fields that lost their only reader; live-env keys with no reader
+  (`AI_TRADING_PROFITABILITY_GOVERNOR_*`, `AI_TRADING_FEED_RELIABILITY_*`,
+  `AI_TRADING_PAPER_SAMPLING_*` trade limits); `circuit_breakers.manual_halt_trading`
+  (no caller; breaker file is off limits); `guards.shadow_active` (no writer,
+  always False); about 135 top-level functions already unreferenced before
+  this phase; the `netting_enabled` ConfigSpec.
+- **Note:** `ExecutionService.submit_order` raises
+  `NonNettingLiveExecutionBlockedError` when the execution mode is `live`,
+  and the netting pipeline submits through it. Paper is unaffected; review
+  before any real-money switch.
+- **Next:** owner review, full `pytest` after the close, then a deploy
+  decision.
+
+## November 17: drawdown breaker wired into the netting cycle, not deployed (`0e0abae3b`)
 
 Branch `claude/netting-drawdown-breaker` from the phase 2 tip `8a3a07b18`.
 Not pushed, not merged, not deployed; the running service is still `98f7b9d3b`.
