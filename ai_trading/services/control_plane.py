@@ -190,7 +190,6 @@ class ControlPlaneService:
                 "boundary_type": "facade",
                 "canonical_runtime_owner": [
                     "ai_trading.core.submit_runtime.submit_order_runtime",
-                    "ai_trading.core.trade_cycle.execute_trade_logic",
                 ],
                 "status": broker_health.get("status") or rollout.get("status") or "unknown",
                 "inputs": ["broker_health", "open_orders", "execution_quality"],

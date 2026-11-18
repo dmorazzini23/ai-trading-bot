@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import math
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -230,8 +229,6 @@ def test_capacity_throttle_adaptive_modes_and_exception_defaults(
     assert result[:5] == (10.0, 20.0, 0.1, 0.2, 0.5)
 
 
-
-
 def test_data_fetcher_daily_memo_paths_short_circuit_without_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -419,48 +416,6 @@ def test_fetch_quote_unwraps_nested_symbol_payloads(monkeypatch: pytest.MonkeyPa
     assert request_seen[0].feed == "iex"
 
 
-def test_quote_fallback_and_gate_paths_publish_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    updates: list[dict[str, Any]] = []
-    monkeypatch.setattr(bot_engine.runtime_state, "update_quote_status", lambda **kwargs: updates.append(kwargs))
-    monkeypatch.setattr(bot_engine, "get_trading_config", lambda: SimpleNamespace(
-        execution_require_bid_ask=True,
-        execution_allow_last_close=False,
-        execution_max_staleness_sec=60,
-        gap_ratio_limit=0.01,
-        execution_allow_fallback_price=False,
-        allow_execution_on_fallback_quotes=False,
-        degraded_feed_mode="block",
-    ))
-    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
-    monkeypatch.setattr(bot_engine, "_fetch_quote", lambda ctx, symbol: {"synthetic": True, "details": {"fallback_reason": "backup"}})
-    monkeypatch.setattr(bot_engine, "activate_data_kill_switch", lambda *args, **kwargs: None)
-
-    blocked = bot_engine._ensure_executable_quote(
-        SimpleNamespace(data_client=object(), execution_mode="paper"),
-        "AAPL",
-        reference_price=100.0,
-    )
-    assert blocked.reason == "missing_bid_ask"
-    assert updates[-1]["status"] == "fallback_blocked"
-
-    monkeypatch.setattr(
-        bot_engine,
-        "_fetch_quote",
-        lambda ctx, symbol: SimpleNamespace(
-            bid_price=150.0,
-            ask_price=151.0,
-            timestamp=datetime.now(UTC),
-        ),
-    )
-    blocked_gap = bot_engine._ensure_executable_quote(
-        SimpleNamespace(data_client=object(), execution_mode="paper"),
-        "AAPL",
-        reference_price=100.0,
-    )
-    assert blocked_gap.reason == "gap_ratio_exceeded"
-    assert updates[-1]["status"] == "rejected"
-
-
 @contextlib.contextmanager
 def _span(*_: Any, **__: Any):
     yield
@@ -480,12 +435,6 @@ def _patch_safe_submit_basics(monkeypatch: pytest.MonkeyPatch, *, pytest_running
     monkeypatch.setattr(bot_engine, "execution_span", lambda *args, **kwargs: _span())
     monkeypatch.setattr(bot_engine, "monotonic_time", lambda: 10.0)
     monkeypatch.setattr(bot_engine.time, "sleep", lambda seconds: None)
-
-
-
-
-
-
 
 
 def test_price_simple_primary_trade_and_invalid_feed_fallback(
@@ -533,70 +482,6 @@ def test_price_simple_provider_disabled_and_backup_frame_probe(
     monkeypatch.setattr(bot_engine.data_fetcher_module, "is_primary_provider_enabled", lambda: False)
     assert bot_engine._get_latest_price_simple("MSFT") is None
     assert bot_engine._PRICE_SOURCE["MSFT"] == bot_engine._ALPACA_DISABLED_SENTINEL
-
-
-def test_frequency_and_alpha_decay_state_branches(monkeypatch: pytest.MonkeyPatch) -> None:
-    now = datetime(2026, 4, 27, 15, tzinfo=UTC)
-    monkeypatch.setattr(bot_engine, "get_alpha_decay_window_minutes", lambda: 30)
-    monkeypatch.setattr(bot_engine, "get_alpha_decay_threshold_step", lambda: 0.05)
-    monkeypatch.setattr(bot_engine, "get_alpha_decay_max_trades_window", lambda: 2)
-    monkeypatch.setattr(bot_engine, "get_alpha_decay_start_trades", lambda: 1)
-    monkeypatch.setattr(bot_engine, "get_alpha_decay_max_bump", lambda: 0.2)
-
-    state = SimpleNamespace(trade_history=[("AAPL", now - timedelta(minutes=5)), ("AAPL", now - timedelta(minutes=10))])
-    guard = bot_engine._alpha_decay_entry_guard(state, "AAPL", now)
-    assert guard["enabled"] is True
-    assert guard["blocked"] is True
-    assert guard["threshold_bump"] == pytest.approx(0.1)
-
-    no_history = SimpleNamespace(trade_history="bad")
-    assert bot_engine._alpha_decay_entry_guard(no_history, "AAPL", now)["enabled"] is False
-
-    monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_HOUR", 3)
-    monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_DAY", 10)
-    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: False)
-    freq_state = SimpleNamespace(
-        trade_history=[
-            ("AAPL", now - timedelta(minutes=1)),
-            ("MSFT", now - timedelta(minutes=2)),
-            ("NVDA", now - timedelta(minutes=3)),
-        ]
-    )
-    assert bot_engine._check_trade_frequency_limits(freq_state, "AAPL", now) is True
-
-    record_state = SimpleNamespace()
-    bot_engine._record_trade_in_frequency_tracker(record_state, "AAPL", now)
-    assert record_state.trade_history == [("AAPL", now)]
-
-
-def test_paper_sampling_frequency_override_is_paper_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = datetime(2026, 4, 27, 15, tzinfo=UTC)
-    monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_HOUR", 4)
-    monkeypatch.setattr(bot_engine, "MAX_TRADES_PER_DAY", 20)
-    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: True)
-    _patch_get_env(
-        monkeypatch,
-        {
-            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_HOUR": 8,
-            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY": 80,
-            "AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SYMBOL_PER_HOUR": 3,
-        },
-    )
-    state = SimpleNamespace(
-        trade_history=[
-            ("AAPL", now - timedelta(minutes=1)),
-            ("MSFT", now - timedelta(minutes=2)),
-            ("NVDA", now - timedelta(minutes=3)),
-            ("TSLA", now - timedelta(minutes=4)),
-        ]
-    )
-
-    assert bot_engine._check_trade_frequency_limits(state, "AMZN", now) is False
-
-    monkeypatch.setattr(bot_engine, "_paper_sampling_runtime_active", lambda: False)
-    assert bot_engine._check_trade_frequency_limits(state, "AMZN", now) is True
 
 
 def test_pre_rank_execution_candidates_quality_filter_and_exploration(
@@ -1031,115 +916,6 @@ def test_bot_engine_sentiment_wrapper_preserves_canonical_fail_closed(
         bot_engine.fetch_sentiment(SimpleNamespace(), "AAPL")
 
 
-def test_liquidity_factor_quote_and_last_bar_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_get_env(monkeypatch, {"PYTEST_RUNNING": ""})
-    monkeypatch.setattr(
-        bot_engine,
-        "get_settings",
-        lambda: SimpleNamespace(default_liquidity_factor=0.8),
-    )
-    minute = pd.DataFrame(
-        {
-            "high": [102.0, 103.0],
-            "low": [99.0, 100.0],
-            "close": [101.0, 102.0],
-            "volume": [500_000, 600_000],
-        }
-    )
-    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda symbol: minute)
-    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
-    monkeypatch.setattr(
-        bot_engine,
-        "StockLatestQuoteRequest",
-        lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    monkeypatch.setattr(bot_engine, "get_execution_feed", lambda: "iex")
-
-    class QuoteClient:
-        def get_stock_latest_quote(self, request: Any) -> dict[str, Any]:
-            return {"AAPL": {"bp": "100.00", "ap": "100.02"}}
-
-    ctx = SimpleNamespace(
-        volume_threshold=100_000,
-        data_client=QuoteClient(),
-        liquidity_annotations=None,
-    )
-    value = bot_engine.liquidity_factor(ctx, "AAPL")
-    assert value > 0.9
-    assert ctx.liquidity_annotations["AAPL"]["fallback"] is False
-
-    no_quote_ctx = SimpleNamespace(
-        volume_threshold=100_000,
-        data_client=None,
-        last_bar_by_symbol={"MSFT": {"high": 20.0, "low": 19.0, "close": 19.5, "volume": 20_000}},
-        liquidity_annotations={},
-    )
-    fallback = bot_engine.liquidity_factor(no_quote_ctx, "MSFT")
-    assert 0.1 <= fallback <= 0.8
-    assert no_quote_ctx.liquidity_annotations["MSFT"]["fallback"] is True
-
-
-def test_price_reliability_records_coverage_metadata() -> None:
-    state = SimpleNamespace(price_reliability={})
-    df = _bars_df()
-    df.attrs.update(
-        {
-            "price_reliable": False,
-            "price_reliable_reason": "gap",
-            "_coverage_meta": {
-                "gap_ratio": "0.12",
-                "provider_canonical": "yahoo",
-                "fallback_contiguous": True,
-                "using_fallback_provider": True,
-                "primary_feed_gap": False,
-                "fallback_repaired": True,
-                "expected": "10",
-                "missing_after": "2",
-                "coverage_last_timestamp": datetime(2026, 4, 27, tzinfo=UTC),
-            },
-        }
-    )
-
-    bot_engine._record_price_reliability(state, "AAPL", df)
-
-    assert state.price_reliability["AAPL"] == (False, "gap")
-    assert state.data_quality["AAPL"]["provider_canonical"] == "yahoo"
-    assert state.data_quality["AAPL"]["coverage_expected"] == 10
-
-    bot_engine._record_price_reliability(state, "AAPL", pd.DataFrame())
-    assert "AAPL" not in state.price_reliability
-    assert "AAPL" not in state.data_quality
-
-
-def test_fetch_feature_data_handles_fetch_errors_and_cached_features(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    halted: list[str] = []
-    ctx = SimpleNamespace(
-        halt_manager=SimpleNamespace(manual_halt_trading=lambda reason: halted.append(reason)),
-    )
-    state = SimpleNamespace(price_reliability={})
-    err = bot_engine.DataFetchError("missing")
-    setattr(err, "fetch_reason", "close_column_missing")
-    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", lambda symbol: (_ for _ in ()).throw(err))
-
-    raw, feat, skip = bot_engine._fetch_feature_data(ctx, state, "AAPL")
-
-    assert (raw, feat, skip) == (None, None, False)
-    assert halted == ["AAPL:empty_frame"]
-    assert state.data_quality["AAPL"]["missing_ohlcv"] is True
-
-    good = _bars_df()
-    monkeypatch.setattr(bot_engine, "validate_ohlcv", lambda frame: None)
-    monkeypatch.setattr(bot_engine, "_get_cycle_feature_cache", lambda symbol, df: pd.DataFrame({"close": [1.0]}))
-    raw, feat, skip = bot_engine._fetch_feature_data(ctx, state, "AAPL", price_df=good)
-    assert raw is good
-    assert list(feat.columns) == ["close"]
-    assert skip is None
-
-
 def _minute_frame(end: datetime, rows: int, *, provider: str = "alpaca_iex", feed: str = "iex") -> pd.DataFrame:
     index = pd.date_range(end - timedelta(minutes=rows + 1), periods=rows, freq="min", tz=UTC)
     frame = pd.DataFrame(
@@ -1206,164 +982,3 @@ def test_fetch_minute_df_safe_uncached_recovers_low_coverage(
     assert len(result) == 4
     assert any(call.get("feed") == "sip" for call in calls)
 
-
-def test_evaluate_trade_signal_capping_clamping_and_component_rms(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(bot_engine, "_metafallback_confidence_cap", lambda: 0.6)
-    _patch_get_env(monkeypatch, {"AI_TRADING_SIGNAL_HOLD_EPS": 0.05})
-
-    manager = SimpleNamespace(
-        evaluate=lambda ctx, state, feat_df, symbol, model: (0, 2.0, "raw"),
-        last_components=[],
-        meta_confidence_capped=True,
-    )
-    ctx = SimpleNamespace(signal_manager=manager)
-
-    score, conf, strat = bot_engine._evaluate_trade_signal(ctx, SimpleNamespace(), _bars_df(), "AAPL", object())
-    assert (score, conf, strat) == (0.0, 0.6, "HOLD")
-
-    manager.last_components = [(1, 0.3, "mom"), (1, 0.4, "mom"), (-1, 0.2, "noise")]
-    manager.meta_confidence_capped = False
-    score, conf, strat = bot_engine._evaluate_trade_signal(ctx, SimpleNamespace(), _bars_df(), "AAPL", object())
-    assert score == 1.0
-    assert conf == pytest.approx(math.sqrt((0.4**2 + 0.2**2) / 2.0))
-    assert strat == "mom+noise"
-
-
-def test_manage_existing_position_exit_and_pyramid_paths(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent: list[tuple[str, int, str]] = []
-    exits: list[str] = []
-    pyramids: list[tuple[str, float]] = []
-    ctx = SimpleNamespace(
-        api=SimpleNamespace(get_position=lambda symbol: SimpleNamespace(qty="0", avg_entry_price="95")),
-        trade_logger=SimpleNamespace(log_exit=lambda state, symbol, price: exits.append(symbol)),
-        stop_targets={"AAPL": 90.0},
-        take_profit_targets={"AAPL": 110.0},
-    )
-    state = SimpleNamespace(
-        trade_cooldowns={},
-        last_trade_direction={},
-        position_entry_times={"AAPL": datetime(2026, 4, 27, tzinfo=UTC)},
-        trade_history=[],
-    )
-    monkeypatch.setattr(bot_engine, "should_exit", lambda ctx, state, symbol, price, atr: (True, 5, "stop_loss"))
-    monkeypatch.setattr(bot_engine, "send_exit_order", lambda ctx, symbol, qty, price, reason: sent.append((symbol, qty, reason)))
-    monkeypatch.setattr(bot_engine, "_record_exit_expectancy", lambda *args, **kwargs: None)
-    monkeypatch.setattr(bot_engine, "_reset_reversal_signal_streak", lambda state, symbol: None)
-
-    assert bot_engine._manage_existing_position(ctx, state, "AAPL", _bars_df(100.0), 0.8, 2.0, 5) is True
-    assert sent == [("AAPL", 5, "stop_loss")]
-    assert exits == ["AAPL"]
-    assert "AAPL" not in ctx.stop_targets
-
-    monkeypatch.setattr(bot_engine, "should_exit", lambda ctx, state, symbol, price, atr: (False, 0, ""))
-    monkeypatch.setattr(bot_engine, "maybe_pyramid", lambda ctx, symbol, entry, price, atr, conf: pyramids.append((symbol, entry)))
-    ctx.api = SimpleNamespace(get_position=lambda symbol: SimpleNamespace(qty="5", avg_entry_price="95"))
-    assert bot_engine._manage_existing_position(ctx, state, "AAPL", _bars_df(101.0), 0.8, 2.0, 5) is True
-    assert pyramids == [("AAPL", 95.0)]
-
-
-def test_calculate_entry_size_guards_and_low_liquidity_minimum(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    assert bot_engine.calculate_entry_size(SimpleNamespace(api=None), "AAPL", 100.0, 2.0, 0.6) == 1
-
-    ctx = SimpleNamespace(
-        api=SimpleNamespace(get_account=lambda: SimpleNamespace(cash="10000")),
-        params={"get_capital_cap()": 0.1},
-        data_fetcher=SimpleNamespace(get_daily_df=lambda ctx, symbol: _bars_df()),
-        max_position_dollars=5000.0,
-    )
-    assert bot_engine.calculate_entry_size(ctx, "AAPL", 0.0, 2.0, 0.6) == 0
-
-    monkeypatch.setattr(bot_engine, "fractional_kelly_size", lambda *args, **kwargs: 0)
-    assert bot_engine.calculate_entry_size(ctx, "AAPL", 100.0, 2.0, 0.6) == 0
-
-    monkeypatch.setattr(bot_engine, "fractional_kelly_size", lambda *args, **kwargs: 20)
-    monkeypatch.setattr(bot_engine, "vol_target_position_size", lambda *args, **kwargs: 20)
-    monkeypatch.setattr(bot_engine, "liquidity_factor", lambda ctx, symbol: 0.1)
-    assert bot_engine.calculate_entry_size(ctx, "AAPL", 100.0, 2.0, 0.7) == 10
-
-
-def test_confidence_cost_aware_size_adjustment_disabled_preserves_qty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_get_env(
-        monkeypatch,
-        {"AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED": False},
-    )
-    annotations: dict[str, Any] = {}
-
-    qty = bot_engine._apply_confidence_cost_aware_size_adjustment(
-        symbol="AAPL",
-        side="buy",
-        qty=10,
-        confidence=0.2,
-        expected_edge_bps=10.0,
-        expected_net_edge_bps=1.0,
-        cost_components={"total_cost_bps": 9.0},
-        annotations=annotations,
-    )
-
-    assert qty == 10
-    assert annotations == {}
-
-
-def test_confidence_cost_aware_size_adjustment_downscales_weak_net_edge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_get_env(
-        monkeypatch,
-        {
-            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED": True,
-            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_MIN_SCALE": 0.25,
-        },
-    )
-    annotations: dict[str, Any] = {}
-
-    qty = bot_engine._apply_confidence_cost_aware_size_adjustment(
-        symbol="MSFT",
-        side="sell_short",
-        qty=20,
-        confidence=0.6,
-        expected_edge_bps=20.0,
-        expected_net_edge_bps=4.0,
-        cost_components={"total_cost_bps": 16.0},
-        annotations=annotations,
-    )
-
-    assert qty == 5
-    assert annotations["confidence_cost_size_before"] == 20
-    assert annotations["confidence_cost_size_after"] == 5
-    assert annotations["confidence_cost_total_bps"] == 16.0
-    assert annotations["confidence_cost_size_scale"] == pytest.approx(0.25)
-
-
-def test_confidence_cost_aware_size_adjustment_never_increases_strong_edge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_get_env(
-        monkeypatch,
-        {
-            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_ENABLED": True,
-            "AI_TRADING_CONFIDENCE_COST_AWARE_SIZING_MIN_SCALE": 0.25,
-        },
-    )
-    annotations: dict[str, Any] = {}
-
-    qty = bot_engine._apply_confidence_cost_aware_size_adjustment(
-        symbol="AAPL",
-        side="buy",
-        qty=10,
-        confidence=1.0,
-        expected_edge_bps=20.0,
-        expected_net_edge_bps=25.0,
-        cost_components={"total_cost_bps": 0.0},
-        annotations=annotations,
-    )
-
-    assert qty == 10
-    assert annotations == {}

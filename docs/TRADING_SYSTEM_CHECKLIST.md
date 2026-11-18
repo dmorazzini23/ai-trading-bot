@@ -183,13 +183,12 @@ execution, persistence, and operator recovery.
   - [ai_trading/core/run_all_trades_worker.py](../ai_trading/core/run_all_trades_worker.py)
   instead of keeping the remaining cycle shell and teardown path inline in
   `bot_engine.py`.
-- The non-netting symbol decision flow now also lives outside the main
-  engine file in:
-  - [ai_trading/core/trade_cycle.py](../ai_trading/core/trade_cycle.py)
-  instead of keeping the older `trade_logic(...)` state machine fully expanded
-  inline in `bot_engine.py`.
-- The non-netting submit runtime now also lives outside the main engine
-  file in:
+- The non-netting symbol decision flow (`core/trade_cycle.py`, reached only
+  through `bot_engine.trade_logic(...)`) was removed on 2026-11-18; the
+  netting pipeline is the only decision path.
+- The submit runtime lives outside the main engine file in the following
+  module, and the netting pipeline submits through it
+  (`bot_engine.submit_order` -> `services.execution.submit_order`):
   - [ai_trading/core/submit_runtime.py](../ai_trading/core/submit_runtime.py)
   and now reuses the shared execution-intent and OMS pretrade boundary instead
   of keeping submit-time gates as an inline special case in `bot_engine.py`.

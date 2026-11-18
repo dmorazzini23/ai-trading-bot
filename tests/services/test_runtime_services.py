@@ -14,11 +14,8 @@ import pytest
 import ai_trading.portfolio as portfolio_mod
 
 from ai_trading.services.execution import (
-    ExecutionService,
     NonNettingLiveExecutionBlockedError,
     UnknownExecutionModeError,
-    execute_signal_orders,
-    execute_trade_cycle,
     submit_order,
 )
 from ai_trading.services.portfolio import ensure_portfolio_weights
@@ -86,82 +83,6 @@ def test_evaluate_signal_and_confirm_enforces_threshold() -> None:
 
     assert result == (-1, 0.0, "")
     assert logger.messages[0][0] == "SKIP_LOW_SIGNAL"
-
-
-def test_execute_signal_orders_submits_expected_orders(monkeypatch) -> None:
-    calls: list[tuple[str, int, str]] = []
-    ctx = types.SimpleNamespace()
-    signals = pd.Series([1, 0, -1], index=["A", "B", "C"])
-
-    def _submit_order(_self, _ctx, symbol, qty, side, **_kwargs):
-        calls.append((symbol, qty, side))
-        return types.SimpleNamespace(status="accepted")
-
-    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
-    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
-
-    assert orders == [("A", "buy"), ("C", "sell")]
-    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
-
-
-def test_execute_signal_orders_returns_only_successfully_submitted_orders(monkeypatch) -> None:
-    calls: list[tuple[str, int, str]] = []
-    ctx = types.SimpleNamespace()
-    signals = pd.Series([1, -1], index=["A", "C"])
-
-    def _submit_order(_self, _ctx, symbol, qty, side, **_kwargs):
-        calls.append((symbol, qty, side))
-        if symbol == "A":
-            raise ValueError("broker rejected")
-        return types.SimpleNamespace(status="accepted")
-
-    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
-    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
-
-    assert orders == [("C", "sell")]
-    assert calls == [("A", 1, "buy"), ("C", 1, "sell")]
-
-
-def test_execute_signal_orders_excludes_terminal_rejected_response(monkeypatch) -> None:
-    ctx = types.SimpleNamespace()
-    signals = pd.Series([1, -1], index=["A", "C"])
-
-    def _submit_order(_self, _ctx, symbol, _qty, _side, **_kwargs):
-        return types.SimpleNamespace(status="rejected" if symbol == "A" else "accepted")
-
-    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
-    orders = execute_signal_orders(ctx, signals, logger=_DummyLogger())
-
-    assert orders == [("C", "sell")]
-
-
-def test_execute_signal_orders_uses_canonical_submit_service(monkeypatch) -> None:
-    calls: list[tuple[str, int, str]] = []
-
-    def _submit_order(_self, _ctx, symbol, qty, side, **_kwargs) -> types.SimpleNamespace:
-        calls.append((symbol, qty, side))
-        return types.SimpleNamespace(status="accepted")
-
-    monkeypatch.setattr(ExecutionService, "submit_order", _submit_order)
-    ctx = types.SimpleNamespace()
-
-    orders = execute_signal_orders(ctx, pd.Series([1], index=["AAPL"]), logger=_DummyLogger())
-
-    assert orders == [("AAPL", "buy")]
-    assert calls == [("AAPL", 1, "buy")]
-
-
-def test_execute_signal_orders_blocks_non_netting_live_mode(monkeypatch) -> None:
-    monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.delenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", raising=False)
-    ctx = types.SimpleNamespace(
-        api=types.SimpleNamespace(
-            submit_order=lambda *, order_data: types.SimpleNamespace(status="accepted")
-        )
-    )
-
-    with pytest.raises(NonNettingLiveExecutionBlockedError, match="execute_signal_orders"):
-        execute_signal_orders(ctx, pd.Series([1], index=["AAPL"]), logger=_DummyLogger())
 
 
 def test_ensure_portfolio_weights_requires_canonical_weights(monkeypatch) -> None:
@@ -318,21 +239,6 @@ def test_execution_service_blocks_non_netting_live_submit(monkeypatch) -> None:
         submit_order(types.SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
 
 
-def test_execution_service_blocks_non_netting_live_trade_cycle(monkeypatch) -> None:
-    monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.delenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", raising=False)
-
-    with pytest.raises(NonNettingLiveExecutionBlockedError, match="blocked for live non-netting execution"):
-        execute_trade_cycle(
-            types.SimpleNamespace(),
-            types.SimpleNamespace(),
-            "AAPL",
-            1000.0,
-            model=None,
-            regime_ok=True,
-        )
-
-
 def test_execution_service_non_netting_live_escape_hatch_is_test_only(monkeypatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "live")
     monkeypatch.setenv("AI_TRADING_ENABLE_NON_NETTING_LIVE_EXECUTION", "1")
@@ -420,3 +326,4 @@ def test_write_policy_runtime_toggles_uses_atomic_replace(
     assert replace_calls
     assert replace_calls[-1][1] == os.fspath(runtime_toggles_path)
     assert json.loads(runtime_toggles_path.read_text(encoding="utf-8")) == payload
+

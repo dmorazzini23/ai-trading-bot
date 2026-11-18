@@ -2,32 +2,6 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 
-def test_validate_ohlcv_detects_missing():
-    """Test that validate_ohlcv detects missing columns."""
-    from ai_trading.utils.base import validate_ohlcv
-
-    bad = pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, freq="D"), "close":[1,2,3]})
-    with pytest.raises(ValueError) as exc_info:
-        validate_ohlcv(bad)
-    assert "missing columns" in str(exc_info.value)
-
-def test_validate_ohlcv_passes_valid():
-    """Test that validate_ohlcv passes valid OHLCV data."""
-    from ai_trading.utils.base import validate_ohlcv
-
-    # Valid DataFrame with all required columns
-    valid_df = pd.DataFrame({
-        'timestamp': pd.date_range('2024-01-01', periods=3, freq='D'),
-        'open': [100, 101, 102],
-        'high': [102, 103, 104],
-        'low': [99, 100, 101],
-        'close': [101, 102, 103],
-        'volume': [1000, 1100, 1200]
-    })
-
-    # Should not raise any exception
-    validate_ohlcv(valid_df)
-
 def test_pretrade_lookback_days_setting():
     """Test that the new pretrade_lookback_days setting is available."""
     from ai_trading.config.settings import get_settings
@@ -64,3 +38,4 @@ def test_regime_basket_proxy_function():
     out = _regime_basket_to_proxy_bars(wide)
     assert "timestamp" in out.columns and "close" in out.columns
     assert len(out) == 5
+

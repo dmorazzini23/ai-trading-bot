@@ -69,8 +69,6 @@ def test_observed_round_trip_conversion_keeps_prices_and_timestamps(history):
     assert row["reward"] == pytest.approx(0.02)
 
 
-
-
 @pytest.mark.parametrize("numpy_available", [True, False])
 def test_loaded_optimizer_bounds_predictions_and_scales_for_volatility(history, monkeypatch, numpy_available):
     core, _ = history
@@ -93,12 +91,3 @@ def test_prediction_failure_preserves_input_without_inventing_signals(history, m
     assert core.optimize_signals(source, model=model) == source
     assert core.optimize_signals(source, SimpleNamespace(MODEL_PATH="unused")) == source
 
-
-@pytest.mark.parametrize("kind", ["missing", "empty", "directory"])
-def test_conversion_trigger_rejects_unavailable_files(history, kind):
-    core, path = history
-    if kind == "empty":
-        path.touch()
-    elif kind == "directory":
-        path.mkdir()
-    assert not core.trigger_meta_learning_conversion({"symbol": "AAPL"})

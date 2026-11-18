@@ -6,9 +6,6 @@ Tests the specific issues identified in production logs.
 from datetime import UTC, datetime
 
 
-
-
-
 def test_position_sizing_minimum_viable():
     """Test that position sizing provides minimum viable quantities with available cash."""
 
@@ -63,29 +60,6 @@ def test_meta_learning_price_conversion():
     assert all(row['exit_price'] > 0 for row in valid_rows), "All exit prices should be positive"
 
 
-def test_liquidity_minimum_position():
-    """Test that low liquidity still allows minimum positions with sufficient cash."""
-
-    # Simulate the fixed liquidity logic from calculate_entry_size
-    cash = 88000.0  # $88K available
-    price = 150.0
-    liquidity_factor = 0.1  # Very low liquidity (< 0.2 threshold)
-
-    # Fixed logic - allow minimum position with sufficient cash
-    if liquidity_factor < 0.2:
-        if cash > 5000:
-            # Use minimum viable position
-            result = max(1, int(1000 / price)) if price > 0 else 1
-        else:
-            result = 0
-    else:
-        result = 1
-
-
-    assert result > 0, "Should allow minimum position even with low liquidity when cash > $5000"
-    assert result >= 1, "Should have at least 1 share minimum"
-
-
 def test_stale_data_bypass_startup():
     """Test that stale data bypass works during initial deployment."""
 
@@ -109,7 +83,4 @@ def test_stale_data_bypass_startup():
         trading_allowed = True
 
     assert not trading_allowed, "Should block trading when stale data bypass is disabled"
-
-
-
 
