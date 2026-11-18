@@ -7,7 +7,20 @@ import math
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
+from ai_trading.core.netting_position_backstop import GATE_PROTECTIVE_EXIT_OVERRIDE
 from ai_trading.policy.compiler import ExecutionApproval, SafetyTier
+
+
+# Approval blocks a protective (backstop) exit may pass; any other block holds it.
+PROTECTIVE_EXIT_OVERRIDABLE_APPROVAL_BLOCKS = frozenset(
+    {
+        "NET_EDGE_FLOOR_BLOCK",
+        "SPREAD_TOO_WIDE_BLOCK",
+        "CALIBRATION_BLOCK",
+        "ORDER_PACING_CAP_BLOCK",
+        "STALE_ORDER_BLOCK",
+    }
+)
 
 
 def _side_for_delta(delta_shares: int, current_shares: int, target_shares: int) -> str:
@@ -130,6 +143,7 @@ def prepare_netting_symbol_approval(
     alpha_decay_entry_guard_func: Callable[..., Mapping[str, Any]],
     evaluate_execution_approval_func: Callable[..., Any],
     approve_execution_candidate_func: Callable[..., Any],
+    protective_exit: bool = False,
 ) -> NettingSymbolApprovalResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
@@ -617,6 +631,25 @@ def prepare_netting_symbol_approval(
                 adjusted_delta_shares=int(delta_shares_value),
                 adjusted_side=side,
             )
+    if protective_exit and not approval.allowed:
+        # Same pattern as the paper floor: the original block names stay in the
+        # journal and the backstop exit is approved at its full size.
+        approval_blocks = {str(reason) for reason in approval.reasons if str(reason).endswith("_BLOCK")}
+        if approval_blocks and approval_blocks <= PROTECTIVE_EXIT_OVERRIDABLE_APPROVAL_BLOCKS:
+            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
+                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+            approval = ExecutionApproval(
+                True,
+                int(delta_shares_value),
+                float(approval.expected_net_edge_bps),
+                tuple(approval.reasons) + (GATE_PROTECTIVE_EXIT_OVERRIDE,),
+            )
+            approval_context = replace(
+                approval_context,
+                approval=approval,
+                adjusted_delta_shares=int(delta_shares_value),
+                adjusted_side=side,
+            )
     if not approval.allowed:
         return NettingSymbolApprovalResult(
             delta_shares=delta_shares_value,
@@ -734,7 +767,21 @@ def prepare_netting_symbol_approval(
             capacity_scale = min(capacity_scale, slo_derisk_scale)
         if feed_derisk_scale < 1.0:
             capacity_scale = min(capacity_scale, feed_derisk_scale)
-        if capacity_scale < 1.0:
+        if capacity_scale < 1.0 and protective_exit:
+            # A backstop exit keeps its full size; record what the throttle would have done.
+            throttled_qty = int(round(float(delta_shares_value) * capacity_scale))
+            gates_added.append(
+                "CAPACITY_THROTTLE_BLOCK" if throttled_qty == 0 else "CAPACITY_THROTTLE_SCALE"
+            )
+            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
+                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+            snapshot_updates["capacity_throttle"] = {
+                "scale": capacity_scale,
+                "before_delta_shares": capacity_before_qty,
+                "after_delta_shares": int(delta_shares_value),
+                "protective_exit": True,
+            }
+        elif capacity_scale < 1.0:
             throttled_qty = int(round(float(delta_shares_value) * capacity_scale))
             if throttled_qty == 0:
                 blocked_reason = "CAPACITY_THROTTLE_BLOCK"

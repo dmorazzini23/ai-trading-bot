@@ -10,6 +10,10 @@ from typing import Any, Callable, Collection, Mapping, Sequence
 from ai_trading.config.management import get_env
 from ai_trading.config.launch_profiles import resolve_launch_profile
 from ai_trading.core.evidence_lineage import deterministic_opportunity_correlation_id
+from ai_trading.core.netting_position_backstop import (
+    GATE_CAP_BLOCK,
+    GATE_PROTECTIVE_EXIT_OVERRIDE,
+)
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
     LiquidityRegime,
@@ -163,6 +167,8 @@ class NettingSymbolProcessor:
     prepare_symbol_approval_func: Callable[..., Any]
     prepare_submit_prelude_func: Callable[..., Any]
     execute_submission_func: Callable[..., Any]
+    # PositionBackstop for the cycle; None leaves every decision unchanged.
+    position_backstop: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +205,15 @@ def _short_openings_allowed(cfg: Any) -> bool:
         if value is not None:
             allowed = bool(allowed and bool(value))
     return bool(allowed)
+
+
+def _extend_gates(gates: list[str], added: Sequence[str]) -> None:
+    """Extend ``gates``; a protective-exit override is recorded only once."""
+
+    for gate in added:
+        if gate == GATE_PROTECTIVE_EXIT_OVERRIDE and gate in gates:
+            continue
+        gates.append(gate)
 
 
 def _terminal_metrics(
@@ -259,7 +274,16 @@ def process_netting_symbol(
                 context={"gates": gate_values},
             )
         kwargs["metrics"] = metrics
+        if backstop is not None:
+            backstop.note_decision(symbol, kwargs.get("gates", ()))
         return processor.record_decision_func(**kwargs)
+
+    backstop = processor.position_backstop
+    protective_exit = False
+
+    def _note_protective_override() -> None:
+        if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates:
+            gates.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
 
     liq_features = processor.latest_liquidity.get(
         symbol,
@@ -360,6 +384,36 @@ def process_netting_symbol(
                 config_snapshot=symbol_snapshot,
             )
             return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
+    if backstop is not None:
+        # Safety backstop (stop loss / maximum hold / post-exit lock). It acts
+        # only on a held position or a locked symbol; otherwise nothing changes.
+        backstop_step = backstop.evaluate_symbol(
+            symbol=symbol,
+            current_shares=int(current_shares),
+            delta_shares=int(delta_shares),
+            price=float(price),
+            bar_ts=net_target.bar_ts,
+        )
+        if backstop_step.action == "exit":
+            net_target.target_dollars = 0.0
+            net_target.target_shares = 0
+            delta_shares = -current_shares
+            initial_requested_delta_shares = int(delta_shares)
+            protective_exit = True
+            gates.append(str(backstop_step.gate))
+            symbol_snapshot["position_backstop"] = dict(backstop_step.snapshot or {})
+        elif backstop_step.action == "reentry_block":
+            gates.append(str(backstop_step.gate))
+            symbol_snapshot["position_backstop"] = dict(backstop_step.snapshot or {})
+            _record_decision(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
     symbol_prelude = processor.prepare_symbol_prelude_func(
         state=processor.state,
         symbol=symbol,
@@ -391,8 +445,9 @@ def process_netting_symbol(
         gates=gates,
         position_opened_at_func=processor.position_opened_at_func,
         exit_policy_pressure_context_func=processor.exit_policy_pressure_context_func,
+        protective_exit=protective_exit,
     )
-    gates.extend(symbol_prelude.gates_added)
+    _extend_gates(gates, symbol_prelude.gates_added)
     symbol_snapshot.update(symbol_prelude.snapshot_updates)
     delta_shares = int(symbol_prelude.delta_shares)
     net_target.target_shares = int(symbol_prelude.target_shares)
@@ -458,6 +513,9 @@ def process_netting_symbol(
                 net_target.target_dollars = 0.0
                 net_target.target_shares = 0
                 delta_shares = -current_shares
+            elif protective_exit:
+                # Block mode would hold the backstop exit back; the exit goes on.
+                _note_protective_override()
             else:
                 _record_decision(
                     symbol=symbol,
@@ -537,6 +595,25 @@ def process_netting_symbol(
             )
             return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
+    if backstop is not None and not protective_exit:
+        cap_context = backstop.cap_block(
+            symbol=symbol,
+            current_shares=int(current_shares),
+            delta_shares=int(delta_shares),
+        )
+        if cap_context is not None:
+            gates.append(GATE_CAP_BLOCK)
+            symbol_snapshot["position_cap"] = dict(cap_context)
+            _record_decision(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
+
     event_risk_near = False
     if processor.event_blackout_enabled:
         cached_event_risk = processor.event_blackout_cache.get(symbol)
@@ -555,7 +632,10 @@ def process_netting_symbol(
             processor.event_blackout_cache[symbol] = cached_event_risk
         event_risk_near = bool(cached_event_risk)
         symbol_snapshot["event_risk_near"] = event_risk_near
-        if event_risk_near:
+        if event_risk_near and protective_exit:
+            gates.append("EVENT_RISK_BLACKOUT_BLOCK")
+            _note_protective_override()
+        elif event_risk_near:
             gates.append("EVENT_RISK_BLACKOUT_BLOCK")
             _record_decision(
                 symbol=symbol,
@@ -685,13 +765,14 @@ def process_netting_symbol(
         resolve_uncertainty_capital_auto_controls_func=processor.resolve_uncertainty_capital_auto_controls_func,
         clip_delta_to_symbol_notional_cap_func=processor.clip_delta_to_symbol_notional_cap_func,
         logger=processor.logger,
+        protective_exit=protective_exit,
     )
     if adjustment_result.uncertainty_event is not None:
         processor.uncertainty_cycle_events.append(dict(adjustment_result.uncertainty_event))
     delta_shares = int(adjustment_result.delta_shares)
     net_target.target_shares = int(adjustment_result.target_shares)
     net_target.target_dollars = float(adjustment_result.target_dollars)
-    gates.extend(adjustment_result.gates_added)
+    _extend_gates(gates, adjustment_result.gates_added)
     symbol_snapshot.update(adjustment_result.snapshot_updates)
     if adjustment_result.blocked_reason:
         _record_decision(
@@ -748,8 +829,9 @@ def process_netting_symbol(
         alpha_decay_entry_guard_func=processor.alpha_decay_entry_guard_func,
         evaluate_execution_approval_func=processor.evaluate_execution_approval_func,
         approve_execution_candidate_func=processor.approve_execution_candidate_func,
+        protective_exit=protective_exit,
     )
-    gates.extend(approval_result.gates_added)
+    _extend_gates(gates, approval_result.gates_added)
     symbol_snapshot.update(approval_result.snapshot_updates)
     delta_shares = int(approval_result.delta_shares)
     net_target.target_shares = int(approval_result.target_shares)
@@ -820,8 +902,9 @@ def process_netting_symbol(
         auth_forbidden_cooldown_remaining_seconds_func=processor.auth_forbidden_cooldown_remaining_seconds_func,
         safe_validate_pretrade_func=processor.safe_validate_pretrade_func,
         get_sector_func=processor.get_sector_func,
+        protective_exit=protective_exit,
     )
-    gates.extend(submit_prelude.gates_added)
+    _extend_gates(gates, submit_prelude.gates_added)
     symbol_snapshot.update(submit_prelude.snapshot_updates)
     if submit_prelude.blocked_reason:
         _record_decision(
@@ -1001,6 +1084,8 @@ def process_netting_symbol(
             submitted_increment=int(submit_result.submitted_increment),
         )
 
+    if backstop is not None and int(current_shares) == 0 and int(delta_shares) != 0:
+        backstop.note_opening_submitted(symbol)
     _record_decision(
         symbol=symbol,
         bar_ts=net_target.bar_ts,

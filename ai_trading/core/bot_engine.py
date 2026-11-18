@@ -22685,6 +22685,99 @@ def _score_drawdown_breaker(runtime: Any, exec_engine: Any) -> dict[str, Any]:
     return breaker.score_account_snapshot(account_snapshot)
 
 
+def _broker_position_field(position: Any, name: str) -> Any:
+    if isinstance(position, Mapping):
+        return position.get(name)
+    return getattr(position, name, None)
+
+
+def _position_entry_basis(
+    runtime: Any, positions: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Broker average entry prices that can arm the position stop loss.
+
+    Reads the execution engine's broker-sync snapshot (no broker call). A
+    basis is valid only when the snapshot is fresh, its quantity equals the
+    cycle's position and the price is finite and positive. Returns
+    ``(bases, unarmed)``; ``unarmed`` maps each held symbol without a valid
+    basis to ``no_basis``, ``qty_mismatch`` or ``stale_snapshot``.
+    """
+
+    from ai_trading.core.netting_position_backstop import (
+        POSITION_BACKSTOP_BASIS_MAX_AGE_SECONDS,
+        PositionBasis,
+    )
+
+    held: dict[str, float] = {}
+    for raw_symbol, raw_qty in positions.items():
+        qty = _safe_float(raw_qty)
+        if qty is not None and math.isfinite(qty) and qty != 0:
+            held[str(raw_symbol).strip().upper()] = float(qty)
+    if not held:
+        return {}, {}
+    engine = getattr(runtime, "execution_engine", None)
+    snapshot = getattr(engine, "_broker_sync", None) if engine is not None else None
+    if snapshot is None:
+        return {}, {symbol: "no_basis" for symbol in held}
+    snapshot_ts = _safe_float(getattr(snapshot, "timestamp", None))
+    age_s = (
+        float(monotonic_time()) - snapshot_ts
+        if snapshot_ts is not None and math.isfinite(snapshot_ts)
+        else None
+    )
+    if (
+        not bool(getattr(snapshot, "positions_fresh", False))
+        or age_s is None
+        or age_s < 0.0
+        or age_s > POSITION_BACKSTOP_BASIS_MAX_AGE_SECONDS
+    ):
+        return {}, {symbol: "stale_snapshot" for symbol in held}
+    broker_rows: dict[str, tuple[float | None, float | None]] = {}
+    for position in tuple(getattr(snapshot, "positions", ()) or ()):
+        symbol = str(_broker_position_field(position, "symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        qty = _safe_float(_broker_position_field(position, "qty"))
+        side_raw = _broker_position_field(position, "side")
+        side = str(getattr(side_raw, "value", side_raw) or "").strip().lower()
+        if qty is not None and side in {"short", "sell"}:
+            qty = -abs(qty)
+        broker_rows[symbol] = (qty, _safe_float(_broker_position_field(position, "avg_entry_price")))
+    bases: dict[str, Any] = {}
+    unarmed: dict[str, str] = {}
+    for symbol, qty in held.items():
+        row = broker_rows.get(symbol)
+        if row is None:
+            unarmed[symbol] = "no_basis"
+            continue
+        broker_qty, avg_entry = row
+        if broker_qty is None or not math.isfinite(broker_qty) or abs(broker_qty - qty) > 1e-9:
+            unarmed[symbol] = "qty_mismatch"
+        elif avg_entry is None or not math.isfinite(avg_entry) or avg_entry <= 0.0:
+            unarmed[symbol] = "no_basis"
+        else:
+            bases[symbol] = PositionBasis(avg_entry_price=float(avg_entry), qty=float(qty))
+    return bases, unarmed
+
+
+def _load_position_backstop(state: BotState) -> Any:
+    """Process-lifetime position backstop, loaded once from its runtime artifact."""
+
+    backstop = getattr(state, "_position_backstop", None)
+    if backstop is not None:
+        return backstop
+    from ai_trading.core.netting_position_backstop import (
+        POSITION_BACKSTOP_STATE_PATH,
+        PositionBackstop,
+    )
+
+    backstop = PositionBackstop(
+        _resolve_runtime_artifact_path(POSITION_BACKSTOP_STATE_PATH), logger
+    )
+    setattr(state, "_position_backstop", backstop)
+    return backstop
+
+
 _TRANSIENT_HALT_REASONS: frozenset[str] = frozenset({"DERISK_SLO_BREACH_BLOCK"})
 
 
@@ -23136,6 +23229,12 @@ _GATE_ROOT_EXACT: dict[str, str] = {
     "LIQ_PARTICIPATION_BLOCK": "LIQUIDITY_PARTICIPATION",
     "LIQ_PARTICIPATION_BLOCK_BYPASSED": "LIQUIDITY_PARTICIPATION",
     "COST_AWARE_ENTRY_GUARD": "COST_AWARE_ENTRY",
+    # Position backstop: one root each so de-duplication keeps them apart.
+    "POSITION_STOP_LOSS_EXIT": "POSITION_STOP_LOSS",
+    "POSITION_MAX_HOLD_EXIT": "POSITION_MAX_HOLD",
+    "POSITION_BACKSTOP_REENTRY_BLOCK": "POSITION_BACKSTOP_REENTRY",
+    "POSITION_CAP_BLOCK": "POSITION_CAP",
+    "PROTECTIVE_EXIT_OVERRIDE": "PROTECTIVE_EXIT_OVERRIDE",
 }
 _GATE_ROOT_PREFIX: tuple[tuple[str, str], ...] = (
     ("ENTRY_CONSTRAINED_", "ENTRY_CONSTRAINED"),
@@ -29599,6 +29698,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         for sym in getattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
         if str(sym).strip()
     }
+    position_backstop = _load_position_backstop(state)
+    backstop_bases, backstop_unarmed = _position_entry_basis(runtime, positions)
+    position_backstop.begin_cycle(
+        now=now,
+        positions=positions,
+        bases=backstop_bases,
+        unarmed=backstop_unarmed,
+        cap_limit=getattr(cfg, "max_portfolio_positions", None),
+        pending_symbols=blocked_symbols,
+    )
 
     proposals_by_symbol: dict[str, list[SleeveProposal]] = {sym: [] for sym in symbols}
     latest_bar_ts: dict[str, datetime] = {}
@@ -30522,6 +30631,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         prepare_symbol_approval_func=prepare_netting_symbol_approval,
         prepare_submit_prelude_func=prepare_netting_submit_prelude,
         execute_submission_func=execute_netting_submission,
+        position_backstop=position_backstop,
     )
 
     for symbol, net_target in targets.items():
