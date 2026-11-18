@@ -130,8 +130,7 @@ print(f"Adjusted size: {adjusted_size} (from 1000)")
 ## Corporate Actions
 
 The standalone corporate-action registry (`ai_trading.data.corp_actions`) was removed
-as dead code; price and volume adjustment now relies on the adjusted bars requested
-from the data provider. No registry API is available.
+as dead code: the trading cycle never called it. No registry API is available.
 
 ## Integration Points
 
