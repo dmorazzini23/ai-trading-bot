@@ -129,42 +129,9 @@ print(f"Adjusted size: {adjusted_size} (from 1000)")
 
 ## Corporate Actions
 
-### Purpose
-Unified corporate action adjustment pipeline ensures consistent price and volume adjustments across features, labels, and execution.
-
-### Key Features
-- Centralized action registry with persistence
-- Automatic price and volume adjustment factors
-- Support for splits, dividends, spin-offs, mergers
-- Historical data adjustment with reference dates
-
-### Usage Examples
-
-```python
-from ai_trading.data.corp_actions import get_corp_action_registry, adjust_bars
-import pandas as pd
-
-# Get registry and add action
-registry = get_corp_action_registry()
-registry.add_action(
-    symbol='AAPL',
-    ex_date='2020-08-31', 
-    action_type='split',
-    ratio=4.0,
-    description='4-for-1 stock split'
-)
-
-# Adjust historical bars
-bars_df = pd.DataFrame({
-    'open': [100, 105, 102],
-    'close': [104, 101, 108],
-    'volume': [1000, 1200, 900]
-}, index=pd.date_range('2020-08-29', periods=3))
-
-adjusted_bars = adjust_bars(bars_df, 'AAPL')
-print("Adjusted for corporate actions:")
-print(adjusted_bars)
-```
+The standalone corporate-action registry (`ai_trading.data.corp_actions`) was removed
+as dead code; price and volume adjustment now relies on the adjusted bars requested
+from the data provider. No registry API is available.
 
 ## Integration Points
 

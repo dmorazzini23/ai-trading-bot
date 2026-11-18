@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+import ai_trading.data.fetch as data_fetch
 from ai_trading.core import bot_engine
 
 
@@ -349,3 +350,28 @@ def test_jsonl_timestamp_and_replay_metric_helpers(tmp_path) -> None:
     assert bucket_summary["by_symbol_session_regime"]["AAPL:manual:trend"]["net_edge_bps"] == pytest.approx(100.0)
     assert bucket_summary["by_symbol_session"]["MSFT:closing"]["net_edge_bps"] == pytest.approx(200.0)
 
+
+def test_feed_sanitizers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bot_engine, "_pytest_running", lambda: False)
+    monkeypatch.setattr(
+        bot_engine,
+        "data_fetcher_module",
+        SimpleNamespace(
+            _state={"sip_unauthorized": True},
+            _SIP_UNAUTHORIZED=False,
+            _normalize_feed_value=lambda raw: "iex" if raw == "alpaca_iex" else None,
+        ),
+    )
+
+    assert bot_engine._sanitize_alpaca_feed(None) is None
+    assert bot_engine._sanitize_alpaca_feed("sip") == "iex"
+    assert bot_engine._sanitize_alpaca_feed("bogus") is None
+    assert bot_engine._canonicalize_fallback_feed("alpaca_sip") == "sip"
+    assert bot_engine._canonicalize_fallback_feed("alpaca_iex") == "iex"
+    assert bot_engine._canonicalize_fallback_feed(_BadStr()) is None
+
+    monkeypatch.setattr(data_fetch, "_state", {"sip_unauthorized": True}, raising=False)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", False, raising=False)
+    assert bot_engine._sanitized_alpaca_feed_for_quote("sip") is None
+    assert bot_engine._sanitized_alpaca_feed_for_quote("iex") == "iex"
+    assert bot_engine._sanitized_alpaca_feed_for_quote("bad") is None
