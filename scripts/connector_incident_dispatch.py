@@ -199,12 +199,15 @@ def _load_managed_connector_secret_defaults(env: dict[str, str]) -> dict[str, An
     return {"secrets_backend": backend, "hydrated": hydrated}
 
 
-def _load_connector_callables() -> tuple[SlackIncidentNotifier, SlackEodNotifier]:
+def _load_connector_callables() -> tuple[
+    SlackIncidentNotifier, SlackEodNotifier, SlackIncidentNotifier
+]:
     from tools import mcp_slack_alerts_server as slack_srv
 
     return (
         slack_srv.tool_notify_incident_channel,
         slack_srv.tool_notify_eod_summary,
+        slack_srv.tool_notify_journal_alerts,
     )
 
 
@@ -213,6 +216,7 @@ def run_dispatch(
     env: Mapping[str, str] | None = None,
     slack_notifier: SlackIncidentNotifier,
     slack_eod_notifier: SlackEodNotifier,
+    slack_journal_notifier: SlackIncidentNotifier | None = None,
 ) -> dict[str, Any]:
     env_map = dict(os.environ if env is None else env)
     managed_secret_summary = _load_managed_connector_secret_defaults(env_map)
@@ -220,6 +224,7 @@ def run_dispatch(
         "started_at": datetime.now(UTC).isoformat(),
         "slack": {"enabled": False, "attempted": False},
         "slack_eod": {"enabled": False, "attempted": False},
+        "slack_journal": {"enabled": False, "attempted": False},
         "managed_connector_secrets": managed_secret_summary,
         "errors": [],
     }
@@ -356,6 +361,35 @@ def run_dispatch(
     else:
         summary["slack_eod"]["skipped_reason"] = "disabled"
 
+    journal_enabled = slack_journal_notifier is not None and _bool_env(
+        env_map.get("AI_TRADING_CONNECTOR_SLACK_JOURNAL_ENABLED"),
+        default=True,
+    )
+    summary["slack_journal"]["enabled"] = journal_enabled
+    if journal_enabled and slack_journal_notifier is not None:
+        if webhook:
+            journal_args: dict[str, Any] = {"webhook_url": webhook}
+            journal_channel = (env_map.get("AI_TRADING_SLACK_CHANNEL") or "").strip()
+            if journal_channel:
+                journal_args["channel"] = journal_channel
+            incident_state = (env_map.get("AI_TRADING_SLACK_INCIDENT_STATE_PATH") or "").strip()
+            if incident_state:
+                journal_args["state_path"] = incident_state
+            summary["slack_journal"]["attempted"] = True
+            try:
+                summary["slack_journal"]["result"] = slack_journal_notifier(journal_args)
+            except Exception as exc:  # pragma: no cover - runtime guard
+                summary["slack_journal"]["error"] = str(exc)
+                summary["errors"].append(
+                    {
+                        "connector": "slack_journal",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+        else:
+            summary["slack_journal"]["skipped_reason"] = "missing_webhook"
+
     summary["finished_at"] = datetime.now(UTC).isoformat()
     summary["ok"] = len(summary["errors"]) == 0
     return summary
@@ -467,9 +501,76 @@ def run_scheduled_report(
     return summary
 
 
+_UNIT_NAME_RE = re.compile(r"^[A-Za-z0-9@:_.\\-]{1,128}$")
+
+
+def build_unit_failed_payload(unit: str) -> dict[str, Any]:
+    """Slack payload for a systemd unit that entered the failed state."""
+    from ai_trading.monitoring import slack_format as fmt
+
+    title = f"{unit} entered the failed state"
+    return fmt.message(
+        fmt.fallback_text(fmt.Severity.CRITICAL, title),
+        [
+            fmt.header_block(fmt.Severity.CRITICAL, title),
+            fmt.section_block(
+                "*What happened*\nsystemd gave up on the unit (OnFailure hook); it will not restart on its own."
+            ),
+            fmt.context_block(
+                f"Check `systemctl status {unit}` and `journalctl -u {unit}`.", fmt.now_label()
+            ),
+        ],
+    )
+
+
+def run_unit_failed_alert(
+    unit: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    poster: Callable[[str, dict[str, Any]], int] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Post the unit-failed alert through the dispatcher's Slack webhook."""
+    if not _UNIT_NAME_RE.match(unit):
+        return {"error": "invalid_unit_name", "sent": False}
+    payload = build_unit_failed_payload(unit)
+    if dry_run:
+        return {"unit": unit, "sent": False, "dry_run": True, "message_preview": payload}
+    env_map = dict(os.environ if env is None else env)
+    _load_managed_connector_secret_defaults(env_map)
+    webhook = (env_map.get("AI_TRADING_SLACK_WEBHOOK_URL") or env_map.get("SLACK_WEBHOOK_URL") or "").strip()
+    if not webhook:
+        return {"unit": unit, "sent": False, "skipped_reason": "missing_webhook"}
+    if poster is None:
+        from tools import mcp_slack_alerts_server as slack_srv
+
+        poster = slack_srv._post_slack_message
+    return {"unit": unit, "sent": True, "status_code": poster(webhook, payload)}
+
+
+def _journal_dry_run(args: list[str]) -> int:
+    """Print what the journal alerts would send over a lookback window; sends nothing."""
+
+    since_minutes = _int_env(args[0]) if args else None
+    from tools import mcp_slack_alerts_server as slack_srv
+
+    result = slack_srv.tool_notify_journal_alerts(
+        {"dry_run": True, "since_minutes": since_minutes or 1440}
+    )
+    print(json.dumps(result, sort_keys=True, default=str))
+    return 0 if result.get("reason") == "dry_run" else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     _load_runtime_env_defaults()
+    if args[:1] == ["--unit-failed"]:
+        unit = args[1] if len(args) > 1 else ""
+        result = run_unit_failed_alert(unit, dry_run="--dry-run" in args[2:])
+        print(json.dumps(result, sort_keys=True, default=str))
+        return 0 if result.get("sent") or result.get("dry_run") or result.get("skipped_reason") else 1
+    if args[:1] == ["--journal-dry-run"]:
+        return _journal_dry_run(args[1:])
     if args[:1] == ["--report"]:
         kind = args[1] if len(args) > 1 else ""
         if kind not in SCHEDULED_REPORTS:
@@ -478,10 +579,11 @@ def main(argv: list[str] | None = None) -> int:
         result = run_scheduled_report(kind)
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("sent") or result.get("skipped_reason") else 1
-    slack_notifier, slack_eod_notifier = _load_connector_callables()
+    slack_notifier, slack_eod_notifier, slack_journal_notifier = _load_connector_callables()
     summary = run_dispatch(
         slack_notifier=slack_notifier,
         slack_eod_notifier=slack_eod_notifier,
+        slack_journal_notifier=slack_journal_notifier,
     )
     print(json.dumps(summary, sort_keys=True))
 

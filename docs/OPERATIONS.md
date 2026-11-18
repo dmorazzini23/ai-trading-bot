@@ -746,3 +746,40 @@ Manual send: `systemctl --user start ai-trading-slack-report@preflight.service`.
 Non-sending preview: build the text with
 `connector_incident_dispatch.build_scheduled_report("preflight")`.
 
+
+### Journal Slack Alerts
+
+The connector timer (`scripts/connector_incident_dispatch.py`, every minute) also
+reads the `ai-trading.service` journal with `journalctl` (the `aiuser` account is
+in `systemd-journal`; no sudo) and sends three alert kinds through the same Slack
+webhook. Code: `ai_trading/monitoring/journal_alerts.py`, sender
+`tools/mcp_slack_alerts_server.py:tool_notify_journal_alerts`.
+
+- **Service lifecycle**: `Started` (INFO, so a manual deploy shows as a start),
+  `Failed with result`, non-zero `Main process exited`, `Scheduled restart job`
+  (CRITICAL). Failures are held back 10 minutes per type and report a count.
+- **Trading stopped / resumed**: markers `DRAWDOWN_BREAKER_TRIPPED`,
+  `DISASTER_HALT_TRIGGERED`, `ALERT_HALT_TRADING`, `HALT_FLAG_WRITTEN`,
+  `DATA_KILL_SWITCH_ACTIVATED` (stopped) and `DRAWDOWN_BREAKER_RESET`,
+  `HALT_FLAG_REMOVED`, `TRANSIENT_HALT_CLEARED` (resumed). 15 minute hold per marker.
+- **New error**: each ERROR/CRITICAL log line type (logger plus message with
+  numbers collapsed) alerts once, then at most hourly with an occurrence count.
+
+State (journal cursor, per-type last-sent and suppressed counts) is
+`slack_journal_alert_state.json` beside the incident state file. The first run
+only records the cursor. Disable with `AI_TRADING_CONNECTOR_SLACK_JOURNAL_ENABLED=0`.
+Non-sending preview of the last 24h (no webhook, no state written):
+
+```bash
+./venv/bin/python scripts/connector_incident_dispatch.py --journal-dry-run 1440
+```
+
+`ai-trading.service` has `OnFailure=ai-trading-systemd-failure-alert@%n.service`,
+which runs `scripts/systemd_failure_alert.sh` (delegates to
+`connector_incident_dispatch.py --unit-failed`) when systemd gives up on the unit.
+Install (needs sudo, owner only):
+
+```bash
+sudo cp packaging/systemd/ai-trading.service packaging/systemd/ai-trading-systemd-failure-alert@.service /etc/systemd/system/
+sudo systemctl daemon-reload   # takes effect at the next service restart
+```
