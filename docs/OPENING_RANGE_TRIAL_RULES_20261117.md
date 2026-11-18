@@ -11,6 +11,14 @@ small check of what data exists (see "What the data check found"). The full
 contract is `config/opening_range_trial_campaign.json`; the program that
 scores it is `ai_trading/tools/opening_range_trial.py`. It never places orders.
 
+**Status, November 18, 2026:** the one-time download refused on one day,
+March 8, 2022, because the data provider is missing most stocks' prices for
+it. The owner decided to leave that day out of the scoring, as a day with a
+broken SPY record already is. Nothing else changed. Because the contract
+changed, the trial was registered again as `opening_range_trial_20261118`;
+the November 17 registration was withdrawn before any trial was used. See
+"November 18: one day left out".
+
 ## The idea
 
 Some mornings a stock trades far more than usual in its first five minutes.
@@ -326,14 +334,62 @@ The owner approved the rules "as recommended".
   counts.
 - A ticker spelled "NA" is no longer misread as a blank.
 
+## November 18: one day left out
+
+**What happened.** The one-time download ran on November 17 and stopped at
+its last check, as designed, writing no index file: on March 8, 2022 the
+provider returned a 9:30–9:35 line for 1,041 of the 1,161 stocks asked for,
+89.7% against the 90% floor. Nothing from that download is used.
+
+**What we found, from counts only.** No price, volume total or result was
+looked at. On March 8, 2022 the provider's archive has no prices for
+NYSE-listed stocks after the 9:30 minute, for the whole day. JPM, XOM, GE and
+F have one 9:30 one-minute line and nothing after it; KO and BAC have none.
+116 stocks that had a 9:30–9:35 line the day before and the day after have
+none that day, and all are NYSE-listed. AAPL, MSFT, SPY and IWM are complete,
+so the SPY check that catches broken days does not catch this one. Of all
+2,513 days with 9:30–9:35 requests it is the only such day. The only bigger
+shortfall is March 16, 2020, the market-wide halt, which is already left out.
+
+**The decision (owner, November 18, 2026, before any scoring).** March 8,
+2022 is not scored. It is treated exactly like a day with a broken SPY
+record: no trades are computed for it under any fill rule, it is left out of
+the SPY comparison and it is counted as a skipped day. The 90% floor is not
+lowered and still stops the download on every other scored day; a failed
+download of more than 1% of a day's requests still stops it on any day,
+this one included. The day is named in the contract's `excluded_sessions`
+list with its reason and these counts. The list is the rule: if a re-download
+turns out complete for that day, it is still left out, and the index file
+says so. The check before scoring shows the day, its counts and its status.
+
+**A side effect, stated now.** The day's 9:30–9:35 lines stay in the data,
+just as March 16, 2020's do. A stock with no line that day cannot be ranked
+for the next 14 days, through March 28, 2022, so the daily 20 in those weeks
+are picked from fewer stocks, with NYSE-listed stocks under-represented. A stock whose line that
+day covers less than five minutes has a lower 14-day average for those weeks,
+which makes its later opening volume look relatively larger. Changing the
+ranking rule to avoid this was not approved, so it stands.
+
+**Why a new registration.** The record of a registered trial cannot be
+edited. The November 17 registration had used nothing (no trial claimed), so
+it was withdrawn and the same trial, with this one change, was registered as
+`opening_range_trial_20261118` with its own folder. No trial budget is
+consumed or reused. The old folder keeps the refused download as evidence; the
+new trial does not read it. New contract hash:
+`3c767e3abbc5a7212e2047ee684502c3f42c2f3f2486cb102b8cccc9f0582363`
+(withdrawn: `bd0ab065cf1460873df8c85fa30a5eb1894840ac4819e9368b18440fc4c75998`).
+
 ## Steps from here
 
 Done: review findings closed, rules approved, amendment adopted, contract
-marked registered. Each remaining step needs the owner's word.
+marked registered; on November 18 the March 8, 2022 exclusion added and the
+trial registered again as `opening_range_trial_20261118`. Each remaining step
+needs the owner's word. The download is run again from the start, into the
+new folder.
 
 ```bash
 RUN="./venv/bin/python -m ai_trading.tools.opening_range_trial --repository-root . --contract config/opening_range_trial_campaign.json"
-# create the ledger (artifacts/opening_range_trial_20261117/campaign_state.json) before any price is read for scoring
+# create the ledger (artifacts/opening_range_trial_20261118/campaign_state.json) before any price is read for scoring
 $RUN --acquire         # one download, 2 to 3 hours, market closed; needs credentials; never claims
 $RUN --support-audit   # days, names and times only; never reads prices or claims
 $RUN --preflight       # file hashes, date bounds, price validity, rebuilds the daily picks; never claims

@@ -145,6 +145,51 @@ alone permits nothing.
 - Rollback: revert the config edits and this record. Keep any ledger as
   evidence.
 
+## Addendum, November 18, 2026: one session unscored, trial re-registered
+
+- **Refusal.** The one-time acquisition ran on November 17 and refused at its
+  last check, writing no manifest:
+  `opening bars cover too few names:2022-03-08:returned=1041:asked=1161`
+  (89.7% against the 0.90 floor). No trial was claimed.
+- **Finding (bar counts only; no price, volume total or return looked at).**
+  On 2022-03-08 the provider's archive (Alpaca SIP) has no intraday bars for
+  NYSE-listed stocks after the 09:30 minute for the whole session: JPM, XOM,
+  GE and F have exactly one one-minute bar, at 09:30; KO and BAC have none;
+  116 names with an opening bar on 03-07 and 03-09 have none on 03-08, all
+  NYSE-listed. AAPL, MSFT, SPY and IWM are complete, so the incomplete-SPY
+  rule does not mark the session. It is the only such session of the 2,513;
+  the only larger shortfall, 2020-03-16, is already unscored.
+- **Decision (owner, November 18, 2026, on data availability, before any
+  scoring).** 2022-03-08 is unscored as a documented provider outage, treated
+  the same way as a session with an incomplete SPY record. The 0.90 floor is
+  not lowered and no other rule changes. The contract carries the session in
+  `excluded_sessions` with its reason and evidence; the runner leaves it out
+  of the trades of every fill model, the exposure-matched SPY comparison and
+  the support counts, records it in the acquisition manifest
+  (`excluded_sessions`, with its asked/returned/failed counts and whether it
+  fell short) and shows it in the support audit's `pre_claim_review`. A
+  listed session with full coverage is still unscored and the manifest says
+  so. Fetch-failure limits and the floor on every other session are
+  unchanged. Stated consequence, as for 2020-03-16: names without the
+  2022-03-08 opening bar are unranked through 2022-03-28, and a truncated
+  opening bar on that day lowers the 14-session volume average used by the
+  ranking on those sessions.
+- **Registration.** A registered contract is immutable in the ledger, so the
+  amended contract is registered as `opening_range_trial_20261118` with its
+  own directory `artifacts/opening_range_trial_20261118/`.
+  `opening_range_trial_20261117` is withdrawn before any claim: it is removed
+  from `registered_trials` and listed under `withdrawn_trials` in
+  `config/research_reset.json` with zero trials claimed and no budget
+  consumed or carried over. Its ledger and refused partial download stay on
+  disk as evidence and are not read by the new campaign.
+- **Hashes.** Withdrawn contract:
+  `bd0ab065cf1460873df8c85fa30a5eb1894840ac4819e9368b18440fc4c75998`.
+  New contract:
+  `3c767e3abbc5a7212e2047ee684502c3f42c2f3f2486cb102b8cccc9f0582363`.
+- **Not yet done at the time of this record:** the new ledger
+  (`artifacts/opening_range_trial_20261118/campaign_state.json`) and a fresh
+  acquisition, each on the owner's word, outside market hours.
+
 ## Result
 
 _Empty. To be filled once, after the single `--fit`, with the decision, the

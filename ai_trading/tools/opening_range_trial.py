@@ -90,6 +90,9 @@ MAX_FAILED_FETCH_FRACTION = 0.01
 MAX_INCOMPLETE_SESSION_FRACTION = 0.01
 MIN_OPENING_COVERAGE = 0.90  # of the names asked for on one session; the probe returned 599 of 600 for current liquid names
 SPLIT_TOLERANCE = 0.01  # a raw/split-adjusted close ratio that moves by more than this marks a split
+EXCLUDED = "excluded_provider_outage"  # a session status: listed in the contract, unscored like market_incomplete
+EXCLUDED_REASONS = frozenset({"provider_outage"})
+EXCLUDED_KEYS = frozenset({"session", "reason", "decision", "evidence"})
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,7 @@ class OrbSpec:
     replicates: int
     seed: int
     lower_quantile: float
+    excluded: tuple[str, ...] = ()  # sessions the contract leaves unscored as documented provider outages
 
     @property
     def first_index(self) -> int:
@@ -163,7 +167,8 @@ def contract_spec(contract: dict[str, Any]) -> OrbSpec:
         raise ValueError("contract campaign_id must name its artifact directory")
     if contract.get("promotion_authority") is not False or contract.get("runtime_authority") is not False:
         raise ValueError("a development trial never carries promotion or runtime authority")
-    daily_development_dates(contract)  # Holdout and holdout-year refusal precede any file read.
+    development = daily_development_dates(contract)  # Holdout and holdout-year refusal precede any file read.
+    excluded = excluded_sessions(contract, {day.isoformat() for day in development})
     if (contract.get("feed") != "sip" or contract.get("adjustment") != "raw"
             or contract.get("timeframes") != {"opening_range": "5Min", "path": "1Min", "filters": "1Day"}):
         raise ValueError("contract must use raw SIP bars: 5Min opening range, 1Min path, 1Day filters")
@@ -237,7 +242,36 @@ def contract_spec(contract: dict[str, Any]) -> OrbSpec:
         min_selected=integer(support.get("minimum_median_selected_names"), "minimum_median_selected_names"),
         min_positive_years=integer(acceptance.get("minimum_positive_years"), "minimum_positive_years", minimum=0),
         block=integer(bootstrap.get("block_days"), "bootstrap block_days"), replicates=replicates, seed=seed,
-        lower_quantile=number(bootstrap.get("lower_quantile"), "lower_quantile", low=0, high=0.5))
+        lower_quantile=number(bootstrap.get("lower_quantile"), "lower_quantile", low=0, high=0.5), excluded=excluded)
+
+
+def excluded_sessions(contract: dict[str, Any], development: set[str]) -> tuple[str, ...]:
+    """The sessions the contract leaves unscored as documented provider outages, validated; any doubt refuses.
+
+    Each entry names one development session, the reason ``provider_outage``, the owner's decision
+    and the evidence counts, and nothing else. The list is the rule: a listed session is unscored
+    even if its data turn out complete.
+    """
+    entries = contract.get("excluded_sessions")
+    if not isinstance(entries, list):
+        raise ValueError("contract must list excluded_sessions, empty if there are none")
+    sessions = []
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != EXCLUDED_KEYS:
+            raise ValueError(f"excluded_sessions entry must have exactly the keys {sorted(EXCLUDED_KEYS)}")
+        session = entry["session"]
+        if not isinstance(session, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session) or session not in development:
+            raise ValueError(f"excluded session is not a development session:{session}")
+        if entry["reason"] not in EXCLUDED_REASONS:
+            raise ValueError(f"excluded session reason must be one of {sorted(EXCLUDED_REASONS)}:{session}")
+        if not isinstance(entry["decision"], str) or not entry["decision"].strip():
+            raise ValueError(f"excluded session needs the owner's decision:{session}")
+        if not isinstance(entry["evidence"], dict) or not entry["evidence"]:
+            raise ValueError(f"excluded session needs its evidence counts:{session}")
+        sessions.append(session)
+    if len(set(sessions)) != len(sessions):
+        raise ValueError("excluded_sessions lists a session twice")
+    return tuple(sorted(sessions))
 
 
 # --- pure core: calendar and session eligibility ---------------------------------------------------
@@ -254,11 +288,17 @@ def session_statuses(calendar: SessionCalendar, market_bars: Counter[str], spec:
     A session is eligible when it has a full lookback behind it and the market proxy has a
     one-minute bar for every minute of its regular hours. The proxy trades every minute, so a
     gap in it means the provider's record of that session is incomplete and no name is traded.
+    A session the contract lists under ``excluded_sessions`` (a documented provider outage that
+    the market proxy does not show) is unscored the same way, whatever its market record.
     """
+    if set(spec.excluded) - set(calendar.sessions):
+        raise ValueError(f"excluded session is not on the exchange calendar:{sorted(set(spec.excluded) - set(calendar.sessions))}")
     statuses = []
     for index, session in enumerate(calendar.sessions):
         if index < spec.first_index:
             statuses.append("insufficient_history")
+        elif session in spec.excluded:
+            statuses.append(EXCLUDED)
         elif market_bars.get(session, 0) != calendar.regular_minutes(index):
             statuses.append("market_incomplete")
         else:
@@ -817,6 +857,8 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
     if manifest_path.exists():
         raise ValueError("acquisition already exists and is immutable")
     calendar = session_calendar(contract)
+    if set(spec.excluded) - set(calendar.sessions):
+        raise ValueError(f"excluded session is not on the exchange calendar:{sorted(set(spec.excluded) - set(calendar.sessions))}")
     sessions, clients = calendar.sessions, client_factory()
     start, end = contract["development_start"], contract["development_end"]
     sources: dict[str, dict[str, Any]] = {}
@@ -939,9 +981,15 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
         sources[f"market/{month}"] = _write_table(root, directory / "market" / f"{month}.csv.gz", market)
         market_parts += len(market)
     for session in thin:
-        if session not in incomplete:
+        # A session the contract excludes is unscored like one with an incomplete SPY record; every other one refuses.
+        if session not in incomplete and session not in spec.excluded:
             asked_here, returned, _ = coverage[session]
             raise ValueError(f"opening bars cover too few names:{session}:returned={returned}:asked={asked_here}")
+    excluded = {session: dict(reason="contract_excluded_session", opening_asked_returned_failed=coverage.get(session),
+                              opening_shortfall=session in thin, market_record_complete=session not in incomplete,
+                              note=("opening bars below the coverage floor; unscored because the contract lists it" if session in thin
+                                    else "opening bars met the coverage floor; unscored anyway because the contract lists it"))
+                for session in spec.excluded}
     # ``without_bars`` already counts a name whose request failed: it has no bars either.
     if without_bars > MAX_FAILED_FETCH_FRACTION * len(orders):
         raise ValueError(f"too many selected names without minute bars:{without_bars}:orders={len(orders)}")
@@ -960,11 +1008,12 @@ def acquire(root: Path, contract: dict[str, Any], spec: OrbSpec, canonical: str,
                       opening_bars_requested=asked, opening_bars=opening_bars, selected_name_days=len(selection),
                       orders=len(orders), orders_without_minute_bars=without_bars, market_bars=market_parts,
                       incomplete_market_sessions=len(incomplete), opening_shortfall_sessions_unscored=len(thin),
+                      excluded_sessions=len(excluded),
                       selected_inactive_symbols=len({row["symbol"] for row in assets if row["status"] == "inactive"} & set(selection.symbol)))
     manifest = dict(campaign_id=contract["campaign_id"], contract_hash=canonical, feed="sip", adjustment="raw",
                     request=dict(start=start, end=end), fetched_at=datetime.now(NEW_YORK).isoformat(), sources=sources,
                     frozen=frozen, counts=counts_out, failed=failed, opening_coverage=coverage, opening_shortfall_sessions=thin,
-                    prices_read_for_analysis=False,
+                    excluded_sessions=excluded, prices_read_for_analysis=False,
                     quality_passed=True)
     write_json(manifest_path, manifest)
     return dict(status="acquisition_written", manifest=str(manifest_path), counts=counts_out, trial_claimed=False)
@@ -1146,6 +1195,8 @@ def run(root: Path, *, mode: str, contract_path: Path, client_factory: Callable[
     manifest = json.loads((root / contract["acquisition_manifest"]).read_text())
     if manifest.get("contract_hash") != canonical or manifest.get("quality_passed") is not True:
         raise ValueError("acquisition manifest does not belong to this registered contract")
+    if sorted(manifest.get("excluded_sessions", {})) != list(spec.excluded):
+        raise ValueError("acquisition manifest does not record the contract's excluded sessions")
     market_bars, selected, with_minutes, seen = load_stamps(root, manifest)
     daily.check_development_sessions({"sources": seen}, contract)
     calendar = session_calendar(contract)
@@ -1159,6 +1210,8 @@ def run(root: Path, *, mode: str, contract_path: Path, client_factory: Callable[
     audit["pre_claim_review"] = dict(  # counts to be looked at before the claim; none is a price or an outcome
         split_events=manifest.get("counts", {}).get("split_events"),
         opening_shortfall_sessions=manifest.get("opening_shortfall_sessions", []),
+        excluded_sessions={session: dict(manifest["excluded_sessions"][session], session_status=statuses[sessions.index(session)])
+                           for session in spec.excluded},
         opening_coverage_asked_returned_failed={session: manifest.get("opening_coverage", {}).get(session) for session in watched},
         session_status={session: statuses[sessions.index(session)] for session in watched if session in sessions})
     write_json(directory / "support_audit.json", audit)
@@ -1209,6 +1262,7 @@ def run(root: Path, *, mode: str, contract_path: Path, client_factory: Callable[
     survivorship = contract["survivorship"]
     report.update(signature=signature, contract_hash=canonical, output_sha256=hashes,
                   rejection_counts=rejected, skipped_sessions=dict(sorted(Counter(s for s in statuses if s != ELIGIBLE).items())),
+                  excluded_sessions=list(spec.excluded),
                   acquisition_counts=manifest.get("counts", {}), survivorship_probe_status=survivorship.get("probe_status"),
                   survivorship_label=PROBE_STATUSES[survivorship["probe_status"]], holdout_evaluated=False,
                   promotion_authority=False, runtime_authority=False, orders_sent=0, models_fitted=0,

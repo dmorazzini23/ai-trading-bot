@@ -1,13 +1,22 @@
 {
-  "campaign_id": "opening_range_trial_20261117",
+  "campaign_id": "opening_range_trial_20261118",
   "status": "registered",
-  "authorization": "owner approved the written rules 'as recommended' on 2026-11-17 and adopted docs/RESEARCH_RESET_AMENDMENT_20261117_OPENING_RANGE.md: one registered development trial, no promotion or runtime authority",
+  "supersedes": {
+    "campaign_id": "opening_range_trial_20261117",
+    "status": "withdrawn_before_any_claim",
+    "withdrawn": "2026-11-18",
+    "reason": "Its one-time acquisition on 2026-11-17 refused at the last check and wrote no manifest: 'opening bars cover too few names:2022-03-08:returned=1041:asked=1161' (89.7 percent against the 0.90 floor). The provider's archive lacks intraday bars for NYSE-listed stocks on that session (see excluded_sessions). Adding the exclusion changes the contract hash, and a registered contract is immutable in the ledger, so the trial is registered again under this id. The withdrawn ledger (artifacts/opening_range_trial_20261117/campaign_state.json) holds no claim: no trial was used, no budget is consumed and none is carried over. Its refused partial download stays on disk and is not read by this campaign.",
+    "contract_hash": "bd0ab065cf1460873df8c85fa30a5eb1894840ac4819e9368b18440fc4c75998",
+    "changes": "excluded_sessions added; campaign_id, acquisition_manifest and artifact paths moved to the new id; text describing the exclusion. Every parameter, threshold, fill model, cost, acceptance rule, bootstrap setting and the seed are unchanged."
+  },
+  "authorization": "owner approved the written rules 'as recommended' on 2026-11-17 and adopted docs/RESEARCH_RESET_AMENDMENT_20261117_OPENING_RANGE.md: one registered development trial, no promotion or runtime authority. Amended 2026-11-18 on the owner's word, before any scoring: 2022-03-08 is unscored as a documented provider outage (excluded_sessions); no other rule changed. Registered under a new campaign id because the 2026-11-17 registration is immutable; it was withdrawn before any claim (see supersedes)",
   "owner_decisions": {
     "date": "2026-11-17",
     "deciding_cost": "Run the test with 5 bps per side as the deciding cost, knowing that by the arithmetic in cost_scale a fail is the likely outcome.",
     "conservative_fill_model": "Reported only. It is not a pass condition for either version. The deciding fill model stays bar_executable.",
     "delisted_companies": "The gap is accepted with the label incomplete_direction_unknown. No vendor list of delisted tickers is added.",
-    "everything_else": "As drafted in docs/OPENING_RANGE_TRIAL_RULES_20261117.md: the slot reading of the sizing sentence decides and equal-notional sizing is reported; the trading-halt rule and the short-sale restriction stand."
+    "everything_else": "As drafted in docs/OPENING_RANGE_TRIAL_RULES_20261117.md: the slot reading of the sizing sentence decides and equal-notional sizing is reported; the trading-halt rule and the short-sale restriction stand.",
+    "provider_outage_2022_03_08": "2026-11-18: 2022-03-08 is unscored as a documented provider outage, treated the same way as a session with an incomplete SPY record. The 0.90 opening-coverage floor is not lowered and no other rule changes. Decided on data availability (bar counts) before any return was computed or any session scored."
   },
   "max_trials": 1,
   "hypotheses": [
@@ -76,7 +85,7 @@
     "minimum_relative_volume": 1.0,
     "top_names": 20,
     "doji": "no_order",
-    "rule": "The opening range is the provider's five-minute bar stamped 09:30 New York time (09:30:00 to 09:34:59). Relative volume on session t is that bar's volume on t divided by the mean of that bar's volume over sessions t-14 to t-1; the bar must exist on all 14; a name missing any of them is unranked until it has 14 in a row again. Consequence, stated before any data: a name with no opening bar on 2020-03-16 is unranked on the next 14 sessions, through 2020-04-03, so the selection in those weeks draws on fewer names. Among the names that pass the universe filters on t, those with relative volume of at least 1.0 are ranked highest first, ties by symbol, and the top 20 are selected. Direction: bar close above bar open is a buy; below is a sell; equal (a doji) keeps its rank and places no order. The selection uses nothing after 09:35 on t.",
+    "rule": "The opening range is the provider's five-minute bar stamped 09:30 New York time (09:30:00 to 09:34:59). Relative volume on session t is that bar's volume on t divided by the mean of that bar's volume over sessions t-14 to t-1; the bar must exist on all 14; a name missing any of them is unranked until it has 14 in a row again. Consequence, stated before any data: a name with no opening bar on 2020-03-16 is unranked on the next 14 sessions, through 2020-04-03, so the selection in those weeks draws on fewer names. Among the names that pass the universe filters on t, those with relative volume of at least 1.0 are ranked highest first, ties by symbol, and the top 20 are selected. Direction: bar close above bar open is a buy; below is a sell; equal (a doji) keeps its rank and places no order. The selection uses nothing after 09:35 on t. The same holds for 2022-03-08 (excluded_sessions): a name with no opening bar that session is unranked through 2022-03-28. That session's opening bars stay in the frozen data and in the 14-session volume history of later sessions, exactly as 2020-03-16's do; where the provider's 09:30 bar holds less than the full five minutes, a name's average opening volume over the following 14 sessions is lower than it would be. This is a stated consequence of leaving the day unscored rather than changing the ranking rule, which the owner did not change.",
     "computed_at_acquisition": "The selection is computed once at acquisition from raw volumes and the opening bars, frozen with a hash, and rebuilt and compared before scoring. It decides which minute bars are downloaded. It contains no outcome."
   },
   "trade": {
@@ -280,7 +289,8 @@
     "eligible_session": "A session is scored when it has 15 earlier sessions in the window and SPY has a one-minute bar for every minute of that session's regular hours. SPY trades every minute, so a gap means the provider's record of that session is incomplete or trading was halted market-wide; the session is skipped and counted. This is expected to drop the four market-wide circuit-breaker days of March 2020 (9, 12, 16 and 18), which were among the most volatile sessions in the window; the support audit will show the count.",
     "early_closes": "Traded like any other session, with the exit at the early close (the bar stamped 12:59). Bars stamped at or after the session's close are discarded.",
     "sparse_bars": "A stock has no one-minute bar for a minute with no trade. That is normal and is not a gap. A selected name with no bar at all from 09:35 on gets no order.",
-    "first_sessions": "2016-01-04 to 2016-01-25 (15 sessions) only supply history."
+    "first_sessions": "2016-01-04 to 2016-01-25 (15 sessions) only supply history.",
+    "excluded_sessions": "A session listed under excluded_sessions is not scored, whatever its SPY record: it is skipped and counted like a session with an incomplete SPY record (status excluded_provider_outage), in the selection's scoring, every fill model, the exposure-matched SPY comparison and the support counts. The list is the rule: a listed session whose data turn out complete is still unscored, and the manifest says so. Each entry must name a development session, the reason provider_outage, the owner's decision and its evidence, or the runner refuses."
   },
   "folds": "calendar_year_of_session",
   "support_thresholds": {
@@ -290,18 +300,18 @@
     "minimum_filled_trades": 5000,
     "minimum_median_selected_names": 10
   },
-  "support_rationale": "The exchange calendar has 2,514 development sessions; less the first 15 that leaves at most 2,499 eligible days, 237 in 2016 and 250 to 252 in later years. The thresholds allow about 8 percent of days to be lost and one thin year. The median eligible day must have at least 10 selected names, half the 20 slots. Each version must also fill at least 5,000 trades (about two a day); this depends on prices, so it is checked only after the claim.",
+  "support_rationale": "The exchange calendar has 2,514 development sessions; less the first 15 that leaves at most 2,499 eligible days, 237 in 2016 and 250 to 252 in later years. The thresholds allow about 8 percent of days to be lost and one thin year. The median eligible day must have at least 10 selected names, half the 20 slots. Each version must also fill at least 5,000 trades (about two a day); this depends on prices, so it is checked only after the claim. Excluding 2022-03-08 removes one more possible day (2,498).",
   "support_audit": {
     "required_before_claim": true,
     "kind": "session_symbol_and_bar_time_only",
-    "rule": "`--support-audit` reads sessions, symbols and bar times only and writes artifacts/opening_range_trial_20261117/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial.",
+    "rule": "`--support-audit` reads sessions, symbols and bar times only and writes artifacts/opening_range_trial_20261118/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial.",
     "report_opening_coverage_for": [
       "2020-03-09",
       "2020-03-12",
       "2020-03-16",
       "2020-03-18"
     ],
-    "pre_claim_review": "The support audit output carries pre_claim_review: the number of split events found, the sessions whose opening-bar shortfall was waived because they are unscored, and the opening-bar counts (asked, returned, failed) and eligibility status for the sessions listed in report_opening_coverage_for. Counts only. They are to be read before the claim; an implausible figure (no splits, or a waived session that is not a market-wide halt) is a reason to stop and ask, not to adjust."
+    "pre_claim_review": "The support audit output carries pre_claim_review: the number of split events found, the sessions whose opening-bar shortfall was waived because they are unscored, each session in excluded_sessions with its reason, its opening-bar counts, whether it fell short of the floor, whether its SPY record was complete and its status, and the opening-bar counts (asked, returned, failed) and eligibility status for the sessions listed in report_opening_coverage_for. Counts only. They are to be read before the claim; an implausible figure (no splits, or a waived session that is not a market-wide halt) is a reason to stop and ask, not to adjust."
   },
   "acceptance": {
     "positive_lower_bound_vs_cash_at_primary": true,
@@ -354,14 +364,15 @@
     "why_not_everything": "One-minute bars for every filtered stock on every day would be about 1,000 names x 390 bars x 2,514 sessions, about a billion rows. The selection needs only the first five-minute bar, and only the 20 selected names need their minute path, which cuts the download to about 2 percent of that without changing a single trade.",
     "memory": "Measured on synthetic data, 2026-11-17: the selection step on 3.67 million opening bars for 3,000 names over 2,514 sessions, read month by month from gzip files, with 1.21 million filter rows, peaked at 515 MB for the whole process (140 MB of that is the program's imports). The first draft built a sessions-by-names table and peaked at 1,641 MB on 3.4 million bars. A unit test bounds the step at 100 bytes per opening bar (64 measured). The acquisition holds the filter rows and one month of bars at a time; that path has been run end to end only on a small synthetic market."
   },
-  "acquisition": "Not done at registration. On the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, pauses 0.6 seconds per page so it uses about half the shared rate limit, and retries a transient error up to four times. It refuses, writing no manifest: any row dated outside development or in 2026; monthly or daily fetch failures for more than 1 percent of the symbols asked for; split-adjusted daily bars that do not cover exactly the raw daily bars (the split guard depends on them); on ANY single session, opening-bar request failures for more than 1 percent of the names asked for that session (refused at once); on any session that will be scored, opening bars missing for more than 10 percent of the names asked for, with one missing name always allowed (this is judged after the SPY bars are fetched: a session whose SPY minute record is incomplete is unscored anyway, so its shortfall is recorded in the manifest under opening_shortfall_sessions and does not refuse); selected names with no minute bars, for any reason including a failed request, above 1 percent of all orders; an incomplete SPY minute record on more than 1 percent of sessions. Every session's opening-bar counts (asked, returned, failed) are written to the manifest. It refuses to overwrite an existing acquisition. It should be run outside market hours, because the running bot uses the same rate limit.",
-  "acquisition_manifest": "artifacts/opening_range_trial_20261117/data/acquisition.json",
+  "acquisition": "Not done at registration. On the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, pauses 0.6 seconds per page so it uses about half the shared rate limit, and retries a transient error up to four times. It refuses, writing no manifest: any row dated outside development or in 2026; monthly or daily fetch failures for more than 1 percent of the symbols asked for; split-adjusted daily bars that do not cover exactly the raw daily bars (the split guard depends on them); on ANY single session, opening-bar request failures for more than 1 percent of the names asked for that session (refused at once); on any session that will be scored, opening bars missing for more than 10 percent of the names asked for, with one missing name always allowed (this is judged after the SPY bars are fetched: a session whose SPY minute record is incomplete is unscored anyway, so its shortfall is recorded in the manifest under opening_shortfall_sessions and does not refuse; a session listed in excluded_sessions is unscored too, so its shortfall does not refuse either, and it is written to the manifest under excluded_sessions with its counts, whether it fell short and whether its SPY record was complete); selected names with no minute bars, for any reason including a failed request, above 1 percent of all orders; an incomplete SPY minute record on more than 1 percent of sessions. Every session's opening-bar counts (asked, returned, failed) are written to the manifest. It refuses to overwrite an existing acquisition. It should be run outside market hours, because the running bot uses the same rate limit.",
+  "acquisition_manifest": "artifacts/opening_range_trial_20261118/data/acquisition.json",
   "availability_check": "data probe only (2026-11-17): bar counts and stamps for 5 symbols on 5 sessions and 21 delisted symbols on one session each; no price was kept and no return was computed",
   "preconditions": [
     "DONE 2026-11-17: owner approved the written rules before any result existed",
     "DONE 2026-11-17: the independent review's blocker (the fill model) and its other findings were closed in commit ed690a39e",
     "DONE 2026-11-17: owner adopted docs/RESEARCH_RESET_AMENDMENT_20261117_OPENING_RANGE.md and config/research_reset.json registered_trials cites this campaign_id",
-    "the contract is registered under artifacts/opening_range_trial_20261117/campaign_state.json before any price is read for scoring",
+    "DONE 2026-11-18: the 2026-11-17 acquisition refused on 2022-03-08 (provider outage, counts only); the owner decided to leave that session unscored; opening_range_trial_20261117 withdrawn before any claim and this contract registered under opening_range_trial_20261118; config/research_reset.json updated",
+    "the contract is registered under artifacts/opening_range_trial_20261118/campaign_state.json before any price is read for scoring",
     "owner approves the one-time acquisition, run outside market hours; manifest written with source hashes",
     "session-and-stamp-only support audit passes",
     "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 row, price validity, the frozen selection equals the selection rebuilt from the frozen bars"
@@ -384,7 +395,33 @@
   ],
   "runner": "ai_trading/tools/opening_range_trial.py",
   "acquisition_thresholds": {
-    "opening_bar_coverage_floor": "0.90 of the names asked for on one session (constant MIN_OPENING_COVERAGE). Every name asked for has a daily bar that session, so it traded; a missing opening bar means no trade between 09:30 and 09:35, which is rare for names averaging a million shares a day. In the probe 599 of 600 current liquid names returned the bar. An outage returns far fewer. Ten percent leaves room for halted opens. One missing name is always allowed, so a session with very few names asked for cannot refuse on a single halted open. The floor refuses only for sessions with a complete SPY record. On 2020-03-16 the market-wide circuit breaker tripped about a second after the open, so the 09:30 bar holds almost no trading for most names; that session has an incomplete SPY record and is unscored, and its shortfall is recorded, not refused.",
+    "opening_bar_coverage_floor": "0.90 of the names asked for on one session (constant MIN_OPENING_COVERAGE). Every name asked for has a daily bar that session, so it traded; a missing opening bar means no trade between 09:30 and 09:35, which is rare for names averaging a million shares a day. In the probe 599 of 600 current liquid names returned the bar. An outage returns far fewer. Ten percent leaves room for halted opens. One missing name is always allowed, so a session with very few names asked for cannot refuse on a single halted open. The floor refuses only for sessions with a complete SPY record. On 2020-03-16 the market-wide circuit breaker tripped about a second after the open, so the 09:30 bar holds almost no trading for most names; that session has an incomplete SPY record and is unscored, and its shortfall is recorded, not refused. A session listed in excluded_sessions is unscored by the contract and its shortfall does not refuse either; this is the only change made after the 2026-11-17 refusal, and the floor itself is unchanged.",
     "failure_fraction": "0.01 (constants MAX_FAILED_FETCH_FRACTION and MAX_INCOMPLETE_SESSION_FRACTION), each in its own units as listed under acquisition."
-  }
+  },
+  "excluded_sessions": [
+    {
+      "session": "2022-03-08",
+      "reason": "provider_outage",
+      "decision": "Unscored on the owner's word of 2026-11-18, treated the same way as a session with an incomplete SPY record. Decided on data availability alone, from bar counts, before any return was computed or any session scored. The 0.90 opening-coverage floor is unchanged and still refuses on every other scored session.",
+      "evidence": {
+        "found_by": "the 2026-11-17 acquisition, which refused at its opening-coverage check and wrote no manifest",
+        "refusal": "opening bars cover too few names:2022-03-08:returned=1041:asked=1161",
+        "opening_bars_asked": 1161,
+        "opening_bars_returned": 1041,
+        "coverage": "89.7 percent against the 0.90 floor",
+        "finding": "The provider's archive (Alpaca SIP) has no intraday bars for NYSE-listed stocks after the 09:30 minute for the whole session. JPM, XOM, GE and F have exactly one one-minute bar, at 09:30, and nothing afterwards; KO and BAC have none.",
+        "names_with_an_opening_bar_on_2022_03_07_and_2022_03_09_but_not_2022_03_08": 116,
+        "exchange_of_those_names": "all NYSE-listed",
+        "complete_on_the_session": [
+          "AAPL",
+          "MSFT",
+          "SPY",
+          "IWM"
+        ],
+        "why_the_spy_test_misses_it": "SPY has a complete minute record that session, so the market-incomplete rule does not mark it.",
+        "other_sessions": "Across all 2,513 sessions with opening requests it is the only such session. The only larger shortfall is 2020-03-16, the market-wide halt, which already has an incomplete SPY record and is unscored.",
+        "data_examined": "bar counts and stamps only; no price, volume total or return was looked at"
+      }
+    }
+  ]
 }

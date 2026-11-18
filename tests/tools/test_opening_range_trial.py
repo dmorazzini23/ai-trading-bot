@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 from collections import Counter
@@ -32,7 +33,8 @@ def small_contract(**changes):
                             "minimum_filled_trades": 50, "minimum_median_selected_names": 2},
         acceptance=payload["acceptance"] | {"minimum_positive_years": 1},
         bootstrap={"unit": "circular_blocks_of_eligible_days", "block_days": 5, "replicates": 200, "seed": 7,
-                   "lower_quantile": 0.0125})
+                   "lower_quantile": 0.0125},
+        excluded_sessions=[])  # the repository's 2022 entry lies outside this window
     return payload | changes
 
 
@@ -56,9 +58,19 @@ def _no_pauses(monkeypatch):
 
 def test_repository_contract_is_registered_with_the_papers_parameters_fixed(tmp_path):
     draft = json.loads(REPO_CONTRACT.read_text())
-    assert draft["status"] == "registered" and "draft_notice" not in draft and draft["campaign_id"] == "opening_range_trial_20261117"
+    assert draft["status"] == "registered" and "draft_notice" not in draft and draft["campaign_id"] == "opening_range_trial_20261118"
     reset = json.loads((REPO_CONTRACT.parents[1] / trial.RESET_CONFIG).read_text())
     assert draft["campaign_id"] in reset["registered_trials"]
+    # The 2026-11-17 registration was withdrawn before any claim; its id can no longer run and no budget carries over.
+    withdrawn = draft["supersedes"]["campaign_id"]
+    assert withdrawn == "opening_range_trial_20261117" and withdrawn not in reset["registered_trials"]
+    assert [(w["campaign_id"], w["trials_claimed"], w["budget_consumed"], w["superseded_by"]) for w in reset["withdrawn_trials"]] == [
+        (withdrawn, 0, False, draft["campaign_id"])]
+    assert draft["acquisition_manifest"].startswith(f"artifacts/{draft['campaign_id']}/")
+    assert [e["session"] for e in draft["excluded_sessions"]] == ["2022-03-08"]
+    outage = draft["excluded_sessions"][0]
+    assert outage["reason"] == "provider_outage" and "2026-11-18" in outage["decision"] and "before any" in outage["decision"]
+    assert (outage["evidence"]["opening_bars_asked"], outage["evidence"]["opening_bars_returned"]) == (1161, 1041)
     assert any(a["campaign_id"] == draft["campaign_id"] and (REPO_CONTRACT.parents[1] / a["record"]).is_file() for a in reset["amendments"])
     assert (draft["holdout_start"], draft["holdout_end"]) == (reset["holdout_start"], reset["holdout_end"]) == ("2026-09-09", "2026-12-08")
     assert draft["promotion_authority"] is False and draft["runtime_authority"] is False and draft["max_trials"] == 1
@@ -78,6 +90,7 @@ def test_repository_contract_is_registered_with_the_papers_parameters_fixed(tmp_
     assert "permits nothing" in draft["versions"]["long_short"]
     assert (full.min_days, full.min_years, full.min_per_year, full.min_trades, full.min_selected) == (2300, 9, 230, 5000, 10)
     assert (full.block, full.replicates, full.seed, full.lower_quantile, full.min_positive_years) == (21, 10000, 20261117, 0.0125, 6)
+    assert full.excluded == ("2022-03-08",) and trial.MIN_OPENING_COVERAGE == 0.90  # the floor was not lowered
     assert (draft["development_start"], draft["development_end"], draft["adjustment"]) == ("2016-01-04", "2025-12-31", "raw")
     assert list(draft["versions"]) == ["long_only", "long_short"] and {k: draft["fills"][k] for k in trial.FILL_RULES} == trial.FILL_RULES
     assert draft["survivorship"]["label"] == trial.PROBE_STATUSES[draft["survivorship"]["probe_status"]]
@@ -140,6 +153,40 @@ def test_every_rule_section_is_checked(section, change, match):
         trial.contract_spec(contract | {section: contract[section] | change})
 
 
+OUTAGE = {"session": "2024-03-08", "reason": "provider_outage", "decision": "owner's word, before any scoring",
+          "evidence": {"opening_bars_asked": 10, "opening_bars_returned": 8}}
+
+
+@pytest.mark.parametrize(
+    ("entries", "match"),
+    [
+        (None, "must list excluded_sessions"),
+        ("2024-03-08", "must list excluded_sessions"),
+        ([OUTAGE | {"session": "2022-03-08"}], "not a development session:2022-03-08"),  # outside this window
+        ([OUTAGE | {"session": "2024-03-09"}], "not a development session"),  # a Saturday
+        ([OUTAGE | {"session": "2024-01-15"}], "not a development session"),  # a holiday
+        ([OUTAGE | {"session": "2026-09-10"}], "not a development session"),  # the holdout
+        ([OUTAGE | {"session": "20240308"}], "not a development session"),
+        ([OUTAGE | {"reason": "thin_data"}], "reason must be one of"),
+        ([OUTAGE | {"note": "extra"}], "exactly the keys"),
+        ([{k: v for k, v in OUTAGE.items() if k != "evidence"}], "exactly the keys"),
+        (["2024-03-08"], "exactly the keys"),
+        ([OUTAGE | {"decision": " "}], "owner's decision"),
+        ([OUTAGE | {"evidence": {}}], "evidence counts"),
+        ([OUTAGE, OUTAGE], "twice"),
+    ],
+)
+def test_a_malformed_or_unknown_excluded_session_refuses_before_any_data(entries, match):
+    contract = small_contract()
+    if entries is None:
+        del contract["excluded_sessions"]
+    else:
+        contract["excluded_sessions"] = entries
+    with pytest.raises(ValueError, match=match):
+        trial.contract_spec(contract)
+    assert trial.contract_spec(small_contract(excluded_sessions=[OUTAGE])).excluded == ("2024-03-08",)
+
+
 # --- calendar ---------------------------------------------------------------------------------------
 
 def test_calendar_has_early_closes_and_the_fallback_calendar_is_refused(monkeypatch):
@@ -168,6 +215,15 @@ def test_a_session_needs_history_and_a_complete_market_record():
     summary = trial.support_summary(spec(), CALENDAR, statuses, selected, selected)
     assert summary["skipped_sessions"] == {"insufficient_history": 15, "market_incomplete": 2}
     assert summary["eligible_days"] == len(SESSIONS) - 17 and summary["status"] == trial.SUPPORT_OK
+    # A listed outage is unscored even with a complete market record, and is counted beside the incomplete sessions.
+    outage = trial.session_statuses(CALENDAR, gappy, spec(excluded_sessions=[OUTAGE | {"session": SESSIONS[30]}]))
+    assert outage[30] == trial.EXCLUDED and [s for i, s in enumerate(outage) if i != 30] == [s for i, s in enumerate(statuses) if i != 30]
+    counted = trial.support_summary(spec(), CALENDAR, outage, selected, selected)
+    assert counted["skipped_sessions"] == {"excluded_provider_outage": 1, "insufficient_history": 15, "market_incomplete": 2}
+    assert counted["eligible_days"] == summary["eligible_days"] - 1
+    off_calendar = dataclasses.replace(spec(), excluded=("2024-03-09",))  # validation bypassed: the calendar check still refuses
+    with pytest.raises(ValueError, match="not on the exchange calendar"):
+        trial.session_statuses(CALENDAR, full, off_calendar)
     thin = trial.support_summary(spec(), CALENDAR, statuses, Counter({session: 1 for session in SESSIONS}), selected)
     assert thin["status"] == "blocked_sampling_support" and thin["blocking_reasons"] == ["selected_names_below_minimum"]
     short = small_contract()
@@ -1308,6 +1364,73 @@ def test_a_thin_opening_on_an_unscored_session_is_recorded_and_only_a_scored_ses
         _run(scored, "acquire", clients)
     assert any(r.timeframe.value == "1Min" and r.symbol_or_symbols == ["SPY"] for r in clients.data.requests)
     assert not (scored / f"artifacts/{CAMPAIGN}/data/acquisition.json").exists()
+
+
+def test_an_excluded_outage_session_is_recorded_unscored_everywhere_and_the_floor_still_refuses_any_other(tmp_path):
+    """The 2022-03-08 case: the provider lacks most opening bars on one session while SPY's record is complete."""
+    outage, other = SESSIONS[70], SESSIONS[80]
+    contract = small_contract(excluded_sessions=[OUTAGE | {"session": outage}])
+    contract["support_audit"] = contract["support_audit"] | {"report_opening_coverage_for": [outage]}
+    _register(tmp_path, contract)
+    result = _run(tmp_path, "acquire", _clients(thin_opening=[outage]))
+    manifest = _manifest(tmp_path)
+    asked, returned, lost = manifest["opening_coverage"][outage]
+    assert result["status"] == "acquisition_written" and (returned, lost) == (1, 0) and asked > 2
+    assert result["counts"]["incomplete_market_sessions"] == 0 and result["counts"]["excluded_sessions"] == 1
+    record = manifest["excluded_sessions"][outage]
+    assert record["opening_asked_returned_failed"] == [asked, 1, 0] and record["opening_shortfall"] is True
+    assert record["market_record_complete"] is True and "below the coverage floor" in record["note"]
+    assert manifest["opening_shortfall_sessions"] == [outage]
+
+    audit = _run(tmp_path, "support-audit")
+    review = audit["pre_claim_review"]
+    assert review["excluded_sessions"] == {outage: record | {"session_status": trial.EXCLUDED}}
+    assert review["session_status"] == {outage: trial.EXCLUDED} and audit["prices_read_for_analysis"] is False
+    assert audit["skipped_sessions"] == {"excluded_provider_outage": 1, "insufficient_history": 15}
+    assert audit["eligible_days"] == len(SESSIONS) - 16
+
+    report = _run(tmp_path, "fit")
+    directory = tmp_path / f"artifacts/{CAMPAIGN}"
+    for model in trial.FILL_MODELS:  # no fill model scores the session
+        assert outage not in set(pd.read_csv(directory / f"trades_{model}.csv").session)
+    assert report["skipped_sessions"]["excluded_provider_outage"] == 1 and report["excluded_sessions"] == [outage]
+    long_only = report["versions"]["long_only"]  # the exposure-matched SPY comparison runs over the same eligible days
+    assert long_only["benchmark"] == "exposure_matched_market" and long_only["eligible_days"] == len(SESSIONS) - 16
+    assert sum(year["eligible_days"] for year in long_only["by_year"].values()) == len(SESSIONS) - 16
+    assert all(v["eligible_days"] == len(SESSIONS) - 16 for table in report["reported_only"]["fill_models"].values() for v in table.values())
+
+    # The exclusion covers its own session only: the same shortfall on any other scored session still refuses.
+    second = tmp_path / "second"
+    second.mkdir()
+    _register(second, contract)
+    with pytest.raises(ValueError, match=f"opening bars cover too few names:{other}:returned=1"):
+        _run(second, "acquire", _clients(thin_opening=[outage, other]))
+    assert not (second / f"artifacts/{CAMPAIGN}/data/acquisition.json").exists()
+    # Fetch failures on an excluded session are not waived either.
+    third = tmp_path / "third"
+    third.mkdir()
+    _register(third, contract)
+    with pytest.raises(ValueError, match=f"too many opening-bar fetch failures:{outage}"):
+        _run(third, "acquire", _clients(fail_opening=[outage]))
+
+
+def test_a_listed_session_with_full_coverage_is_still_unscored_and_the_manifest_says_so(tmp_path):
+    listed = SESSIONS[70]
+    _register(tmp_path, small_contract(excluded_sessions=[OUTAGE | {"session": listed}]))
+    _run(tmp_path, "acquire", _clients())
+    manifest = _manifest(tmp_path)
+    record = manifest["excluded_sessions"][listed]
+    asked, returned, lost = manifest["opening_coverage"][listed]
+    assert asked == returned and lost == 0 and record["opening_shortfall"] is False and manifest["opening_shortfall_sessions"] == []
+    assert "met the coverage floor; unscored anyway" in record["note"]
+    audit = _run(tmp_path, "support-audit")
+    assert audit["pre_claim_review"]["excluded_sessions"][listed]["session_status"] == trial.EXCLUDED
+    assert audit["skipped_sessions"]["excluded_provider_outage"] == 1
+    # A manifest that does not record the contract's list is not this contract's acquisition.
+    path = tmp_path / f"artifacts/{CAMPAIGN}/data/acquisition.json"
+    path.write_text(json.dumps({k: v for k, v in manifest.items() if k != "excluded_sessions"}))
+    with pytest.raises(ValueError, match="does not record the contract's excluded sessions"):
+        _run(tmp_path, "support-audit")
 
 
 def test_a_selected_name_whose_minute_request_failed_is_counted_once(acquired_template, tmp_path):
