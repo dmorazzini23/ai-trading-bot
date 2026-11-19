@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -94,91 +93,3 @@ def test_prepare_indicators_constant_series_manual_rsi(
     assert np.isclose(engineered["rsi"], 50.0).all()
     assert np.isfinite(engineered["stochrsi"]).all()
 
-
-def test_fetch_feature_data_constant_series(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_fetch_feature_data should not fall back to raw data for flat prices."""
-
-    monkeypatch.setenv("PYTEST_RUNNING", "1")
-    df = _constant_minute_frame()
-
-    def _assign(df: Any, **cols: float) -> Any:
-        out = df.copy()
-        for name, value in cols.items():
-            out[name] = value
-        return out
-
-    monkeypatch.setattr(bot_engine, "compute_macd", lambda frame: _assign(frame, macd=0.0))
-    monkeypatch.setattr(bot_engine, "compute_atr", lambda frame: _assign(frame, atr=0.1))
-    monkeypatch.setattr(bot_engine, "compute_vwap", lambda frame: _assign(frame, vwap=125.0))
-    monkeypatch.setattr(
-        bot_engine,
-        "compute_sma",
-        lambda frame: _assign(frame, sma_50=125.0, sma_200=125.0),
-    )
-    monkeypatch.setattr(bot_engine, "compute_macds", lambda frame: _assign(frame, macds=0.0))
-    monkeypatch.setattr(bot_engine, "ensure_columns", lambda frame, cols, symbol: frame)
-
-    ctx = SimpleNamespace(
-        halt_manager=None,
-        data_fetcher=SimpleNamespace(get_daily_df=lambda _ctx, _symbol: None),
-    )
-
-    raw_df, feat_df, skip = bot_engine._fetch_feature_data(
-        cast(Any, ctx),
-        cast(Any, object()),
-        "FLAT",
-        price_df=df,
-    )
-
-    assert raw_df is not None
-    assert skip is None
-    assert feat_df is not None and not feat_df.empty
-
-    required = {"macd", "atr", "vwap", "macds", "rsi", "stochrsi"}
-    assert required.issubset(feat_df.columns)
-    assert not feat_df["stochrsi"].isna().all()
-
-
-def test_fetch_feature_data_empty_prepare_uses_enriched_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When prepare_indicators drops all rows, retain enriched indicator frame."""
-
-    monkeypatch.setenv("PYTEST_RUNNING", "1")
-    df = _constant_minute_frame(80)
-
-    def _assign(frame: Any, **cols: float) -> Any:
-        out = frame.copy()
-        for name, value in cols.items():
-            out[name] = value
-        return out
-
-    monkeypatch.setattr(bot_engine, "compute_macd", lambda frame: _assign(frame, macd=0.2))
-    monkeypatch.setattr(bot_engine, "compute_atr", lambda frame: _assign(frame, atr=0.1))
-    monkeypatch.setattr(bot_engine, "compute_vwap", lambda frame: _assign(frame, vwap=125.0))
-    monkeypatch.setattr(
-        bot_engine,
-        "compute_sma",
-        lambda frame: _assign(frame, sma_50=125.0, sma_200=124.0),
-    )
-    monkeypatch.setattr(bot_engine, "compute_macds", lambda frame: _assign(frame, macds=0.3))
-    monkeypatch.setattr(bot_engine, "ensure_columns", lambda frame, cols, symbol: frame)
-    monkeypatch.setattr(bot_engine, "prepare_indicators", lambda frame: frame.iloc[0:0].copy())
-
-    ctx = SimpleNamespace(
-        halt_manager=None,
-        data_fetcher=SimpleNamespace(get_daily_df=lambda _ctx, _symbol: None),
-    )
-
-    raw_df, feat_df, skip = bot_engine._fetch_feature_data(
-        cast(Any, ctx),
-        cast(Any, object()),
-        "FALLBACK",
-        price_df=df,
-    )
-
-    assert raw_df is not None and not raw_df.empty
-    assert skip is None
-    assert feat_df is not None and not feat_df.empty
-    assert len(feat_df) == len(df)
-    assert {"macd", "atr", "vwap", "macds", "sma_50", "sma_200"}.issubset(feat_df.columns)

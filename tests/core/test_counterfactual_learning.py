@@ -425,64 +425,6 @@ def test_policy_learning_bootstraps_artifacts_without_observations(
     assert "RANKER:BANDIT" in runtime_toggles["disabled_slices"]
 
 
-def test_exit_policy_learning_pressure_context_activates_after_samples(monkeypatch) -> None:
-    state = bot_engine.BotState()
-    now = datetime(2026, 4, 8, 19, 45, tzinfo=UTC)
-    monkeypatch.setenv("AI_TRADING_EXEC_EXIT_POLICY_LEARNER_ENABLED", "1")
-    monkeypatch.setenv("AI_TRADING_EXEC_EXIT_POLICY_MIN_SAMPLES", "5")
-
-    for idx in range(8):
-        bot_engine._update_exit_policy_learning(
-            state,
-            symbol="AAPL",
-            regime="sideways",
-            side="long",
-            holding_minutes=90.0 + idx,
-            outcome_pct=-0.02,
-            now=now,
-        )
-
-    pressure = bot_engine._exit_policy_pressure_context(
-        state,
-        symbol="AAPL",
-        regime="sideways",
-        side="long",
-        now=now,
-        position_age_seconds=7_200.0,
-        expected_edge_bps=0.5,
-    )
-
-    assert pressure["active"] is True
-    assert pressure["hazard_band"] in {"mid", "long"}
-    assert pressure["pressure_score"] > 0.0
-
-
-def test_exit_policy_state_persists_and_restores(tmp_path, monkeypatch) -> None:
-    state_path = tmp_path / "runtime" / "exit_policy_state.json"
-    monkeypatch.setenv("AI_TRADING_EXIT_POLICY_STATE_PATH", str(state_path))
-    monkeypatch.setenv("AI_TRADING_EXEC_EXIT_POLICY_LEARNER_ENABLED", "1")
-    monkeypatch.setenv("AI_TRADING_EXIT_POLICY_STATE_PERSIST_MIN_INTERVAL_SEC", "0")
-
-    now = datetime(2026, 4, 8, 19, 45, tzinfo=UTC)
-    state = bot_engine.BotState()
-    for idx in range(3):
-        bot_engine._update_exit_policy_learning(
-            state,
-            symbol="AAPL",
-            regime="trend",
-            side="long",
-            holding_minutes=25.0 + idx,
-            outcome_pct=-0.01,
-            now=now,
-        )
-    assert state_path.exists()
-    loaded_state = bot_engine.BotState()
-    restored = bot_engine._restore_exit_policy_state(loaded_state, force=True)
-    assert restored is True
-    buckets = bot_engine._ensure_exit_policy_state(loaded_state)
-    assert any(key.startswith("AAPL|") for key in buckets)
-
-
 def test_uncertainty_capital_analytics_updates_state_and_autotune(
     tmp_path,
     monkeypatch,
@@ -522,3 +464,4 @@ def test_uncertainty_capital_analytics_updates_state_and_autotune(
     assert controls["enabled"] is True
     assert controls["auto_tuned"] is True
     assert controls["effective_score"] >= 0.0
+

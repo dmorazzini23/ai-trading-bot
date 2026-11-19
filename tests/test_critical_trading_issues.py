@@ -137,7 +137,6 @@ class TestOrderExecutionTracking(unittest.TestCase):
                 # and doesn't communicate back to the main slicing logic
 
 
-
 class TestMetaLearningLogFormat(unittest.TestCase):
     """Test meta-learning trade log format parsing and conversion."""
 
@@ -211,22 +210,6 @@ class TestLiquidityManagement(unittest.TestCase):
         self.mock_ctx.data_client = Mock()
         self.mock_ctx.volume_threshold = 100000  # Default volume threshold
 
-    def test_conservative_spread_threshold(self):
-        """Test that 0.05 spread threshold is too conservative."""
-
-        symbol = "AAPL"
-
-        # Mock quote with moderate spread
-        mock_quote = Mock()
-        mock_quote.ask_price = 150.05
-        mock_quote.bid_price = 150.00
-        mock_quote.spread = 0.05  # Exactly at threshold
-
-        # Mock volume data
-
-        with patch.object(self.mock_ctx.data_client, 'get_stock_latest_quote', return_value=mock_quote):
-            if hasattr(bot_engine, 'liquidity_factor'):
-                bot_engine.liquidity_factor(self.mock_ctx, symbol)
 
                 # With current logic, spread of 0.05 reduces liquidity factor significantly
                 # This is too conservative for normal market conditions
@@ -315,3 +298,4 @@ class TestResourceManagement(unittest.TestCase):
 if __name__ == '__main__':
     # Run tests with verbose output to see the issues
     unittest.main(verbosity=2)
+

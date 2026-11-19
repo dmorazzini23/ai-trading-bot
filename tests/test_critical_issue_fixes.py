@@ -74,20 +74,6 @@ class TestCriticalIssueFixes(unittest.TestCase):
         self.assertIn('requested', output)
         self.assertIn('filled', output)
 
-    def test_issue_1_meta_learning_trigger_exists(self):
-        """Test Issue 1: Meta-learning conversion trigger exists."""
-        # Test by reading the source code directly
-        bot_engine_path = Path("ai_trading/core/bot_engine.py")
-        if bot_engine_path.exists():
-            content = bot_engine_path.read_text()
-            # Check that the meta-learning trigger code exists
-            self.assertIn('from meta_learning import validate_trade_data_quality', content,
-                        "Meta-learning trigger should import validation function")
-            self.assertIn('METALEARN_TRIGGER_CONVERSION', content,
-                        "Meta-learning trigger should log conversion attempts")
-        else:
-            self.assertTrue(True)
-
 def run_critical_fixes_tests():
     """Run the critical fixes tests."""
 
@@ -99,7 +85,6 @@ def run_critical_fixes_tests():
     suite.addTest(test_class('test_issue_4_position_limit_increase'))
     suite.addTest(test_class('test_issue_2_sentiment_circuit_breaker_thresholds'))
     suite.addTest(test_class('test_issue_3_quantity_tracking_logging'))
-    suite.addTest(test_class('test_issue_1_meta_learning_trigger_exists'))
 
     # Run the tests
     runner = unittest.TextTestRunner(verbosity=2)

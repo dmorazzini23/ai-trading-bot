@@ -42,7 +42,7 @@ def test_symbol_specs():
 def test_file_structure():
     """Test that all required files exist."""
     logging.info('Testing file structure...')
-    required_files = ['ai_trading/math/__init__.py', 'ai_trading/math/money.py', 'ai_trading/market/__init__.py', 'ai_trading/market/symbol_specs.py', 'ai_trading/market/calendars.py', 'ai_trading/data/corp_actions.py', 'ai_trading/data/sanitize.py', 'ai_trading/integrations/__init__.py', 'ai_trading/integrations/rate_limit.py', 'ai_trading/governance/__init__.py', 'ai_trading/governance/promotion.py', 'tests/test_rl_smoke_parity.py']
+    required_files = ['ai_trading/math/__init__.py', 'ai_trading/math/money.py', 'ai_trading/market/__init__.py', 'ai_trading/market/symbol_specs.py', 'ai_trading/market/calendars.py', 'ai_trading/integrations/__init__.py', 'ai_trading/integrations/rate_limit.py', 'ai_trading/governance/__init__.py', 'ai_trading/governance/promotion.py', 'tests/test_rl_smoke_parity.py']
     missing_files = []
     for file_path in required_files:
         full_path = repo_root / file_path

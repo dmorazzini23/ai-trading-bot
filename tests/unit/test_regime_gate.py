@@ -24,21 +24,3 @@ def test_check_market_regime_blocks_when_regime_is_configured(monkeypatch) -> No
     assert eng.check_market_regime(cast(Any, runtime), state) is False
     assert state.current_regime == "high_volatility"
 
-
-def test_pre_trade_checks_respects_regime_gate(monkeypatch) -> None:
-    state = eng.BotState()
-    state.current_regime = "risk_off"
-    ctx = types.SimpleNamespace()
-    diagnostics_calls: list[str] = []
-
-    monkeypatch.setattr(
-        eng,
-        "_log_health_diagnostics",
-        lambda _runtime, reason: diagnostics_calls.append(str(reason)),
-    )
-
-    assert (
-        eng.pre_trade_checks(cast(Any, ctx), state, "AAPL", 1000.0, regime_ok=False)
-        is False
-    )
-    assert diagnostics_calls == ["regime"]

@@ -3,8 +3,6 @@
 from ai_trading.services.control_plane import ControlPlaneService
 from ai_trading.services.execution import (
     ExecutionService,
-    execute_signal_orders,
-    execute_trade_cycle,
     submit_order,
 )
 from ai_trading.services.governance import GovernanceService
@@ -34,8 +32,6 @@ __all__ = [
     "compute_portfolio_weights",
     "ensure_portfolio_weights",
     "evaluate_signal_and_confirm",
-    "execute_signal_orders",
-    "execute_trade_cycle",
     "generate_directional_signals",
     "require_success",
     "reconcile_position_targets",

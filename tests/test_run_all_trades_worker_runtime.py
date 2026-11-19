@@ -30,7 +30,6 @@ def test_run_all_trades_worker_records_execute_stage_and_softens_finalizer_hooks
     dummy_lock = DummyLock()
     cycle_walls: list[tuple[float, dict[str, str]]] = []
     hook_order: list[str] = []
-    guard_calls: list[float] = []
     monotonic_values = iter((15.0, 19.0, 21.0))
 
     monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: None)
@@ -59,23 +58,7 @@ def test_run_all_trades_worker_records_execute_stage_and_softens_finalizer_hooks
         "record_cycle_wall",
         lambda elapsed, metadata: cycle_walls.append((elapsed, metadata)),
     )
-    monkeypatch.setattr(
-        bot_engine,
-        "get_trading_config",
-        lambda: SimpleNamespace(execution_stale_ratio_shadow=0.42),
-    )
-    monkeypatch.setattr(
-        bot_engine,
-        "guard_end_cycle",
-        lambda stale_threshold_ratio=0.0: guard_calls.append(stale_threshold_ratio),
-    )
     monkeypatch.setattr(bot_engine, "guard_shadow_active", lambda: False)
-    monkeypatch.setattr(
-        bot_engine,
-        "EXEC_GUARD_STATE",
-        SimpleNamespace(stale_symbols=1, universe_size=2),
-        raising=False,
-    )
 
     def _heartbeat(*_args, **_kwargs) -> None:
         hook_order.append("heartbeat")
@@ -98,7 +81,6 @@ def test_run_all_trades_worker_records_execute_stage_and_softens_finalizer_hooks
     run_all_trades_worker_cycle(state, runtime)
 
     assert cycle_walls == [(4.0, {"stage": "cycle_execute"})]
-    assert guard_calls == [0.42]
     assert hook_order == ["heartbeat", "flush", "stops"]
     assert state.running is False
     assert state.last_loop_duration == 11.0

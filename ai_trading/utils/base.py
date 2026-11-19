@@ -524,36 +524,6 @@ def safe_to_datetime(
     return index
 
 
-def validate_ohlcv(df: DataFrame, required: list[str] | None = None, require_monotonic: bool = True) -> None:
-    """
-    Validate an OHLCV-like DataFrame in-place. Raises ValueError on failure.
-    Required columns default to ['timestamp','open','high','low','close','volume'].
-    Ensures timestamp is parseable and, if requested, monotonic increasing.
-    """
-    try:
-        import pandas as pd  # pylint: disable=import-error
-    except ImportError as exc:  # pragma: no cover - pandas missing
-        raise ImportError(
-            "pandas is required for validate_ohlcv. Install with `pip install ai-trading-bot[pandas]`."
-        ) from exc
-    required = required or ["timestamp", "open", "high", "low", "close", "volume"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"missing columns: {missing}")
-    if len(df) == 0:
-        raise ValueError("no rows")
-    ts = df["timestamp"]
-    timestamp_types = (pd.Timestamp, datetime)
-    if not isinstance(ts.iloc[0], timestamp_types):
-        ts = safe_to_datetime(ts, context="ohlcv validation")
-    if ts.isna().any():
-        raise ValueError("timestamp contains NaT/invalid values")
-    if require_monotonic and (not ts.is_monotonic_increasing):
-        raise ValueError("timestamp is not monotonic increasing")
-    if not {"open", "high", "low", "close"}.issubset(df.columns):
-        raise ValueError("OHLC columns incomplete")
-
-
 def health_check(df: DataFrame, resolution: str | None = None) -> bool:
     """Return True if ``df`` has at least ``HEALTH_MIN_ROWS`` rows."""
     min_rows = int(get_env("HEALTH_MIN_ROWS", "0", cast=str, resolve_aliases=False))

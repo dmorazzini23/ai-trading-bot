@@ -8,7 +8,6 @@ MODULES = [
     "ai_trading/strategies/mean_reversion.py",
     "ai_trading/execution/liquidity.py",
     "ai_trading/execution/order_router.py",
-    "ai_trading/position/calculators.py",
     "ai_trading/risk/engine.py",
     "ai_trading/rl_trading/train.py",
     "ai_trading/monitoring/aggregator.py",

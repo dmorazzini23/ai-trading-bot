@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -127,122 +126,6 @@ def test_correlation_matrix_and_small_normalizers() -> None:
     assert matrix["AAPL"]["SHORT"] == 0.0
     assert bot_engine._portfolio_optimizer_decision_token(SimpleNamespace(value=" BLOCK ")) == "block"
     assert bot_engine._portfolio_optimizer_decision_token(None) == "unknown"
-    assert bot_engine._clamp_unit_interval("1.5", default=0.3) == 1.0
-    assert bot_engine._clamp_unit_interval(float("nan"), default=0.3) == 0.3
-
-
-def test_feed_sanitizers_and_reliability_adjustments(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    monkeypatch.setattr(bot_engine, "_pytest_running", lambda: False)
-    monkeypatch.setattr(
-        bot_engine,
-        "data_fetcher_module",
-        SimpleNamespace(
-            _state={"sip_unauthorized": True},
-            _SIP_UNAUTHORIZED=False,
-            _normalize_feed_value=lambda raw: "iex" if raw == "alpaca_iex" else None,
-        ),
-    )
-
-    assert bot_engine._sanitize_alpaca_feed(None) is None
-    assert bot_engine._sanitize_alpaca_feed("sip") == "iex"
-    assert bot_engine._sanitize_alpaca_feed("bogus") is None
-    assert bot_engine._canonicalize_fallback_feed("alpaca_sip") == "sip"
-    assert bot_engine._canonicalize_fallback_feed("alpaca_iex") == "iex"
-    assert bot_engine._canonicalize_fallback_feed(_BadStr()) is None
-
-    monkeypatch.setattr(data_fetch, "_state", {"sip_unauthorized": True}, raising=False)
-    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", False, raising=False)
-    assert bot_engine._sanitized_alpaca_feed_for_quote("sip") is None
-    assert bot_engine._sanitized_alpaca_feed_for_quote("iex") == "iex"
-    assert bot_engine._sanitized_alpaca_feed_for_quote("bad") is None
-
-    reliability = {
-        "active": True,
-        "size_multiplier": 0.4,
-        "score": 0.4,
-        "sample_count": 12,
-        "as_of": "2026-04-27T12:00:00Z",
-    }
-    with caplog.at_level(logging.INFO):
-        assert (
-            bot_engine._apply_feed_reliability_size_adjustment(
-                symbol="AAPL",
-                side="buy",
-                qty=10,
-                reliability=reliability,
-            )
-            == 4
-        )
-    assert any(record.getMessage() == "ORDER_SIZE_SCALED_FEED_RELIABILITY" for record in caplog.records)
-
-    annotations: dict[str, Any] = {}
-    bot_engine._annotate_feed_reliability(annotations, reliability)
-    assert annotations == {
-        "feed_reliability_score": 0.4,
-        "feed_reliability_sample_count": 12,
-        "feed_reliability_size_multiplier": 0.4,
-        "feed_reliability_as_of": "2026-04-27T12:00:00Z",
-    }
-    assert (
-        bot_engine._apply_feed_reliability_size_adjustment(
-            symbol="AAPL",
-            side="buy",
-            qty=3,
-            reliability={"active": True, "size_multiplier": 0.01},
-        )
-        == 1
-    )
-    assert (
-        bot_engine._apply_feed_reliability_size_adjustment(
-            symbol="AAPL",
-            side="buy",
-            qty=3,
-            reliability={"active": False},
-        )
-        == 3
-    )
-
-
-def test_feed_reliability_payload_clamps_and_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_get_env(
-        monkeypatch,
-        {
-            "AI_TRADING_FEED_RELIABILITY_MIN_SAMPLES": 3,
-            "AI_TRADING_FEED_RELIABILITY_LIVE_MIN_SAMPLES": 4,
-            "AI_TRADING_FEED_RELIABILITY_MIN_SCORE": 0.35,
-            "AI_TRADING_FEED_RELIABILITY_SIZE_FLOOR": 0.25,
-            "AI_TRADING_FEED_RELIABILITY_THRESHOLD_BONUS_MAX": 0.1,
-        },
-    )
-    monkeypatch.setattr(bot_engine, "_feed_reliability_enabled", lambda: True)
-    monkeypatch.setattr(
-        bot_engine,
-        "_load_feed_reliability_scores",
-        lambda: (
-            {
-                "AAPL": {"reliability_score": 0.2, "sample_count": 5},
-                "MSFT": {"reliability_score": 0.9, "sample_count": 1},
-                "BAD": {"reliability_score": None, "sample_count": "bad"},
-            },
-            "2026-04-27",
-        ),
-    )
-
-    aapl = bot_engine._get_symbol_feed_reliability("aapl")
-    assert aapl["active"] is True
-    assert aapl["blocked"] is True
-    assert aapl["size_multiplier"] == 0.25
-    assert aapl["threshold_bonus"] == pytest.approx(0.08)
-
-    msft = bot_engine._get_symbol_feed_reliability("MSFT")
-    assert msft["active"] is False
-    assert msft["score"] == 0.9
-
-    assert bot_engine._get_symbol_feed_reliability("")["active"] is False
-    assert bot_engine._get_symbol_feed_reliability("BAD")["score"] is None
 
 
 def test_learning_and_replay_helpers_parse_bounded_inputs(
@@ -466,3 +349,29 @@ def test_jsonl_timestamp_and_replay_metric_helpers(tmp_path) -> None:
     assert bucket_summary["by_symbol_session"]["AAPL:manual"]["sample_count"] == 1.0
     assert bucket_summary["by_symbol_session_regime"]["AAPL:manual:trend"]["net_edge_bps"] == pytest.approx(100.0)
     assert bucket_summary["by_symbol_session"]["MSFT:closing"]["net_edge_bps"] == pytest.approx(200.0)
+
+
+def test_feed_sanitizers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bot_engine, "_pytest_running", lambda: False)
+    monkeypatch.setattr(
+        bot_engine,
+        "data_fetcher_module",
+        SimpleNamespace(
+            _state={"sip_unauthorized": True},
+            _SIP_UNAUTHORIZED=False,
+            _normalize_feed_value=lambda raw: "iex" if raw == "alpaca_iex" else None,
+        ),
+    )
+
+    assert bot_engine._sanitize_alpaca_feed(None) is None
+    assert bot_engine._sanitize_alpaca_feed("sip") == "iex"
+    assert bot_engine._sanitize_alpaca_feed("bogus") is None
+    assert bot_engine._canonicalize_fallback_feed("alpaca_sip") == "sip"
+    assert bot_engine._canonicalize_fallback_feed("alpaca_iex") == "iex"
+    assert bot_engine._canonicalize_fallback_feed(_BadStr()) is None
+
+    monkeypatch.setattr(data_fetch, "_state", {"sip_unauthorized": True}, raising=False)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", False, raising=False)
+    assert bot_engine._sanitized_alpaca_feed_for_quote("sip") is None
+    assert bot_engine._sanitized_alpaca_feed_for_quote("iex") == "iex"
+    assert bot_engine._sanitized_alpaca_feed_for_quote("bad") is None

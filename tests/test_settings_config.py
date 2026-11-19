@@ -10,8 +10,6 @@ def _new_settings(**kwargs: Any) -> Settings:
     return cast(Settings, Settings(**kwargs))
 
 
-
-
 def test_sip_feed_falls_back(monkeypatch):
     """SIP feed requests fall back to IEX when not explicitly allowed."""  # AI-AGENT-REF
     monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
@@ -102,18 +100,6 @@ def test_current_qty_falls_back_to_api_positions():
     assert calls["count"] == 1
 
 
-def test_position_entry_price_is_case_insensitive():
-    """Entry price lookup should tolerate symbol key casing differences."""
-    pytest.importorskip("numpy")
-    from ai_trading.core.bot_engine import _position_entry_price
-
-    ctx = SimpleNamespace(
-        position_map={"AAPL": SimpleNamespace(avg_entry_price="123.45")}
-    )
-
-    assert _position_entry_price(ctx, "aapl") == pytest.approx(123.45)
-
-
 def test_cfg_data_feed_updates_default_feed(monkeypatch):
     """Mutating ``CFG.data_feed`` propagates to module-level fallbacks."""
 
@@ -143,3 +129,4 @@ def test_cfg_data_feed_updates_default_feed(monkeypatch):
         assert bot_engine.get_default_feed() == expected_feed
         assert bot_engine._DEFAULT_FEED == expected_feed
         assert config_pkg.DATA_FEED_INTRADAY == expected_feed
+

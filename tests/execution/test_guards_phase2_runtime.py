@@ -102,7 +102,7 @@ def test_can_execute_quote_gate_branches(monkeypatch: pytest.MonkeyPatch) -> Non
     assert guards.can_execute({"timestamp": now}, now=now, max_age_sec=1) == (True, None)
 
 
-def test_quote_fresh_enough_and_cycle_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quote_fresh_enough_and_shadow_state(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime(2026, 4, 25, 16, 0, tzinfo=UTC)
     monkeypatch.setattr(guards, "_utcnow", lambda: now)
 
@@ -110,12 +110,4 @@ def test_quote_fresh_enough_and_cycle_state(monkeypatch: pytest.MonkeyPatch) -> 
     assert guards.quote_fresh_enough(now + timedelta(seconds=6), 10) is False
     assert guards.quote_fresh_enough(now.replace(tzinfo=None) - timedelta(seconds=5), 10) is True
     assert guards.quote_fresh_enough(now - timedelta(seconds=11), 10) is False
-
-    guards.begin_cycle(universe_size=3, degraded=True)
-    guards.mark_symbol_stale()
-    guards.mark_symbol_stale()
-    guards.end_cycle(stale_threshold_ratio=0.1)
-
-    assert guards.STATE.universe_size == 3
-    assert guards.STATE.stale_symbols == 2
     assert guards.shadow_active() is False

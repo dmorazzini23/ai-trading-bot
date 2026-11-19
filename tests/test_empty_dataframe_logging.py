@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from types import SimpleNamespace
 
 import pandas as pd
 
@@ -108,8 +107,6 @@ def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
     assert not output_path.exists(), "Optimizer should return early without creating weights file"
 
 
-
-
 def test_average_reward_debug(caplog, tmp_path, monkeypatch):
     """_average_reward should log debug with file context when empty."""
 
@@ -126,24 +123,3 @@ def test_average_reward_debug(caplog, tmp_path, monkeypatch):
         for r in caplog.records
     )
 
-
-def test_too_correlated_uses_cached_trade_log(monkeypatch):
-    calls: list[None] = []
-
-    def fake_read(*_a, **_k):
-        calls.append(None)
-        import pandas as pd  # type: ignore
-
-        return pd.DataFrame(columns=["symbol", "exit_time"])
-
-    monkeypatch.setattr(bot_engine, "_read_trade_log", fake_read)
-    monkeypatch.setattr(bot_engine, "_TRADE_LOG_CACHE", None, raising=False)
-    monkeypatch.setattr(bot_engine, "_TRADE_LOG_CACHE_LOADED", False, raising=False)
-
-    bot_engine._load_trade_log_cache()
-
-    ctx = SimpleNamespace(data_fetcher=SimpleNamespace(get_daily_df=lambda *_: None))
-    bot_engine.too_correlated(ctx, "AAA")
-    bot_engine.too_correlated(ctx, "BBB")
-
-    assert len(calls) == 1

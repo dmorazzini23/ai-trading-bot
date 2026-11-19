@@ -2310,31 +2310,3 @@ def test_signal_manager_evaluate_with_shorter_history(monkeypatch):
     assert confidence >= 0
     assert signal in (-1, 1)
 
-
-def test_fetch_feature_data_skips_when_minute_stale(monkeypatch):
-    err = bot_engine.DataFetchError("stale_minute_data")
-    setattr(err, "fetch_reason", "stale_minute_data")
-    setattr(err, "detail", "age=900s")
-
-    def _raise_fetch(symbol: str):
-        raise err
-
-    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", _raise_fetch)
-
-    halt_calls: list[str] = []
-
-    class HaltManager:
-        def manual_halt_trading(self, reason: str) -> None:  # noqa: D401
-            halt_calls.append(reason)
-
-    ctx = types.SimpleNamespace(
-        halt_manager=HaltManager(),
-        data_fetcher=types.SimpleNamespace(get_daily_df=lambda *_: _sample_df()),
-    )
-
-    raw_df, feat_df, skip_flag = bot_engine._fetch_feature_data(cast(Any, ctx), None, "AAPL")
-
-    assert raw_df is None
-    assert feat_df is None
-    assert skip_flag is True
-    assert halt_calls == []

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from json import JSONDecodeError
 from typing import Any
 
 from ai_trading.config.management import get_env, is_test_runtime
@@ -9,17 +8,9 @@ from ai_trading.core.runtime_contract import (
     normalize_execution_mode,
 )
 
-_NON_ACCEPTED_ORDER_STATUSES = {"rejected", "canceled", "cancelled", "expired", "done_for_day"}
-
 
 class NonNettingLiveExecutionBlockedError(RuntimeError):
     """Raised when non-netting execution is attempted in live mode."""
-
-
-def _order_status_token(order: Any) -> str:
-    status = getattr(order, "status", None)
-    status_value = getattr(status, "value", status)
-    return str(status_value or "").strip().lower()
 
 
 def _execution_mode(ctx: Any) -> str:
@@ -42,7 +33,6 @@ class ExecutionService:
     boundary_type = "facade"
     canonical_runtime_owner = (
         "ai_trading.core.submit_runtime.submit_order_runtime",
-        "ai_trading.core.trade_cycle.execute_trade_logic",
     )
 
     @staticmethod
@@ -78,84 +68,6 @@ class ExecutionService:
             **exec_kwargs,
         )
 
-    def execute_trade_cycle(
-        self,
-        ctx: Any,
-        state: Any,
-        symbol: str,
-        balance: float,
-        model: Any,
-        regime_ok: bool,
-        *,
-        price_df: Any = None,
-        now_provider: Any = None,
-    ) -> bool:
-        """Run the shared non-netting trade cycle only outside blocked live mode."""
-
-        self._require_supported_mode(ctx=ctx, operation="trade_logic")
-        from ai_trading.core.trade_cycle import execute_trade_logic
-
-        return bool(
-            execute_trade_logic(
-                ctx,
-                state,
-                symbol,
-                balance,
-                model,
-                regime_ok,
-                price_df=price_df,
-                now_provider=now_provider,
-            )
-        )
-
-    def execute_signal_orders(
-        self,
-        ctx: Any,
-        signals: Any,
-        *,
-        logger: Any,
-    ) -> list[tuple[str, str]]:
-        """Submit simple directional test/runtime orders through the attached broker client."""
-
-        self._require_supported_mode(ctx=ctx, operation="execute_signal_orders")
-        orders: list[tuple[str, str]] = []
-        items = getattr(signals, "items", None)
-        if not callable(items):
-            return orders
-        for symbol, sig in items():
-            if sig == 0:
-                continue
-            side = "buy" if sig > 0 else "sell"
-            try:
-                order = self.submit_order(ctx, str(symbol), 1, side)
-                status_token = _order_status_token(order)
-                if status_token in _NON_ACCEPTED_ORDER_STATUSES:
-                    logger.error(
-                        "Broker did not accept test order for %s %s: status=%s",
-                        symbol,
-                        side,
-                        status_token,
-                    )
-                    continue
-                orders.append((str(symbol), side))
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as exc:
-                logger.error(
-                    "Failed to submit test order for %s %s: %s",
-                    symbol,
-                    side,
-                    exc,
-                )
-        return orders
-
 
 def submit_order(
     ctx: Any,
@@ -176,44 +88,10 @@ def submit_order(
     )
 
 
-def execute_trade_cycle(
-    ctx: Any,
-    state: Any,
-    symbol: str,
-    balance: float,
-    model: Any,
-    regime_ok: bool,
-    *,
-    price_df: Any = None,
-    now_provider: Any = None,
-) -> bool:
-    return ExecutionService().execute_trade_cycle(
-        ctx,
-        state,
-        symbol,
-        balance,
-        model,
-        regime_ok,
-        price_df=price_df,
-        now_provider=now_provider,
-    )
-
-
-def execute_signal_orders(
-    ctx: Any,
-    signals: Any,
-    *,
-    logger: Any,
-) -> list[tuple[str, str]]:
-    return ExecutionService().execute_signal_orders(ctx, signals, logger=logger)
-
-
 __all__ = [
     "ExecutionService",
     "NonNettingLiveExecutionBlockedError",
     "UnknownExecutionModeError",
-    "execute_signal_orders",
-    "execute_trade_cycle",
     "normalize_execution_mode",
     "submit_order",
 ]
