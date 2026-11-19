@@ -216,6 +216,20 @@ def _extend_gates(gates: list[str], added: Sequence[str]) -> None:
         gates.append(gate)
 
 
+def _thin_max_order_dollars() -> float:
+    return float(get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float))
+
+
+def _protective_exit_cap_qty(delta_shares: int, price: float, cap_dollars: float) -> int:
+    """Signed exit size clipped to the thin-order dollar cap: at least one
+    share, never more than the exit. With no cap configured the exit is whole."""
+
+    if cap_dollars <= 0:
+        return int(delta_shares)
+    cap_qty = max(1, int(cap_dollars // max(price, 1e-9)))
+    return int(math.copysign(min(cap_qty, abs(int(delta_shares))), delta_shares))
+
+
 def _terminal_metrics(
     metrics: Mapping[str, Any] | None,
     *,
@@ -659,6 +673,7 @@ def process_netting_symbol(
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
+    protective_volume_capped = False
     if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
         participation_block_mode = str(
             get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")
@@ -675,7 +690,21 @@ def process_netting_symbol(
         participation_block_bypassed = False
         if not allowed_participation:
             participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
-            if participation_block_mode == "block" or _gate_blocks(processor, str(participation_gate)):
+            rolling_volume_value = float(liq_features.rolling_volume or 0.0)
+            if protective_exit and not rolling_volume_value > 0.0:
+                # No volume (or no liquidity entry): a backstop exit is not held
+                # back; it goes out capped like a thin-liquidity exit and the lock
+                # finishes the rest. Positive volume keeps the normal path.
+                delta_shares = _protective_exit_cap_qty(
+                    int(delta_shares), float(price), _thin_max_order_dollars()
+                )
+                net_target.target_shares = current_shares + delta_shares
+                net_target.target_dollars = net_target.target_shares * price
+                gates.append(str(participation_gate))
+                _note_protective_override()
+                participation_block_bypassed = True
+                protective_volume_capped = True
+            elif participation_block_mode == "block" or _gate_blocks(processor, str(participation_gate)):
                 gates.append(str(participation_gate))
                 _record_decision(
                     symbol=symbol,
@@ -686,18 +715,19 @@ def process_netting_symbol(
                     config_snapshot=symbol_snapshot,
                 )
                 return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
-            adjusted_qty_int = int(round(float(adjusted_qty)))
-            if adjusted_qty_int == 0:
-                adjusted_qty_int = 1 if delta_shares > 0 else -1
-            delta_shares = adjusted_qty_int
-            net_target.target_shares = current_shares + delta_shares
-            net_target.target_dollars = net_target.target_shares * price
-            gates.append("LIQ_PARTICIPATION_BLOCK_BYPASSED")
-            participation_block_bypassed = True
-            symbol_snapshot["gate_auto_disable"] = {
-                "gate": str(participation_gate),
-                "reason": "non_positive_marginal_contribution",
-            }
+            else:
+                adjusted_qty_int = int(round(float(adjusted_qty)))
+                if adjusted_qty_int == 0:
+                    adjusted_qty_int = 1 if delta_shares > 0 else -1
+                delta_shares = adjusted_qty_int
+                net_target.target_shares = current_shares + delta_shares
+                net_target.target_dollars = net_target.target_shares * price
+                gates.append("LIQ_PARTICIPATION_BLOCK_BYPASSED")
+                participation_block_bypassed = True
+                symbol_snapshot["gate_auto_disable"] = {
+                    "gate": str(participation_gate),
+                    "reason": "non_positive_marginal_contribution",
+                }
         if not participation_block_bypassed:
             adjusted_qty_int = int(round(adjusted_qty))
             if adjusted_qty_int != delta_shares:
@@ -709,7 +739,9 @@ def process_netting_symbol(
         if liq_regime is LiquidityRegime.THIN and "LIQ_REGIME_THIN_SCALE" not in gates:
             gates.append("LIQ_REGIME_THIN_SCALE")
 
-    if liq_regime is LiquidityRegime.THIN:
+    # A protective exit already capped for missing volume is not scaled or
+    # clipped again by the thin-liquidity rules.
+    if liq_regime is LiquidityRegime.THIN and not protective_volume_capped:
         thin_cost_mult = float(get_env("AI_TRADING_LIQ_THIN_COST_MULT", 1.3, cast=float))
         if thin_cost_mult > 1.0:
             scaled_qty = int(round(delta_shares / thin_cost_mult))
@@ -718,9 +750,7 @@ def process_netting_symbol(
                 net_target.target_shares = current_shares + delta_shares
                 net_target.target_dollars = net_target.target_shares * price
                 gates.append("LIQ_THIN_COST_MULT_SCALE")
-        thin_max_order_dollars = float(
-            get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float)
-        )
+        thin_max_order_dollars = _thin_max_order_dollars()
         if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
             thin_block_applies = _gate_blocks(processor, "LIQ_THIN_MAX_ORDER_BLOCK")
             if thin_block_applies and not protective_exit:
@@ -743,7 +773,7 @@ def process_netting_symbol(
             if protective_exit:
                 # A backstop exit goes out clipped to the thin-order cap (at least
                 # one share, never more than the exit); the lock finishes the rest.
-                thin_cap_qty = int(math.copysign(min(abs(thin_cap_qty), abs(delta_shares)), delta_shares))
+                thin_cap_qty = _protective_exit_cap_qty(int(delta_shares), float(price), thin_max_order_dollars)
             delta_shares = thin_cap_qty
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price

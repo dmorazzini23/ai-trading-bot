@@ -1432,3 +1432,93 @@ def test_restart_with_a_flipped_side_starts_a_new_episode(tmp_path: Path) -> Non
 
     assert restarted.store.episodes["AAPL"] == Episode(NOW, "first_seen", "short")
     assert restarted.store.episodes["MSFT"].opened_at == opened
+
+
+# ---- owner-approved: zero-volume participation block on a protective exit -----
+
+
+@pytest.fixture
+def real_participation_cap(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    from ai_trading.risk.liquidity_regime import enforce_participation_cap
+
+    monkeypatch.setenv("AI_TRADING_PARTICIPATION_CAP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")
+    monkeypatch.setenv("AI_TRADING_MAX_PARTICIPATION_PCT", "0.015")
+    monkeypatch.setenv("AI_TRADING_LIQ_THIN_COST_MULT", "1.3")
+    monkeypatch.setenv("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", "5000")
+    return {"enforce_participation_cap_func": enforce_participation_cap}
+
+
+@pytest.mark.parametrize("thin", [False, True])
+def test_zero_volume_protective_exit_goes_out_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, real_participation_cap: dict[str, Any], thin: bool
+) -> None:
+    if thin:  # whatever regime is computed, the cap applies once
+        from ai_trading.risk.liquidity_regime import LiquidityRegime
+
+        monkeypatch.setattr(netting_symbol_cycle, "classify_liquidity_regime", lambda *a, **k: LiquidityRegime.THIN)
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 1000}, liq_regime_enabled=thin, **real_participation_cap
+    )
+    processor.latest_liquidity = {}  # no liquidity entry: rolling volume defaults to 0
+
+    _process(processor, target_dollars=0.0)
+
+    assert submitted == [-500]  # $5,000 cap at $10
+    gates = records[0]["gates"]
+    assert gates[:3] == ["POSITION_STOP_LOSS_EXIT", "LIQ_PARTICIPATION_BLOCK", "PROTECTIVE_EXIT_OVERRIDE"]
+    assert gates[-1] == "OK_TRADE"
+    assert "LIQ_THIN_COST_MULT_SCALE" not in gates and "LIQ_THIN_MAX_ORDER_BLOCK" not in gates
+    assert "AAPL" in processor.position_backstop.store.locks
+
+
+def test_zero_volume_protective_exit_sends_at_least_one_share(
+    tmp_path: Path, real_participation_cap: dict[str, Any]
+) -> None:
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 3}, avg_entry=7000.0, **real_participation_cap
+    )
+    processor.latest_price = {"AAPL": 6000.0}
+    processor.latest_liquidity = {}
+
+    _process(processor, target_dollars=0.0)
+
+    assert submitted == [-1]
+    assert "LIQ_PARTICIPATION_BLOCK" in records[0]["gates"]
+
+
+def test_zero_volume_normal_exit_is_still_blocked(tmp_path: Path, real_participation_cap: dict[str, Any]) -> None:
+    normal, normal_records, normal_submitted = _processor(
+        tmp_path, positions={"AAPL": 1000}, avg_entry=10.2, **real_participation_cap
+    )
+    plain, plain_records = _make_processor(positions={"AAPL": 1000}, **real_participation_cap)
+    plain.now = NOW
+    normal.latest_liquidity = {}
+    plain.latest_liquidity = {}
+
+    assert _process(normal, target_dollars=0.0) == _process(plain, target_dollars=0.0)
+    assert normal_submitted == []
+    assert normal_records[0]["gates"] == plain_records[0]["gates"] == ["LIQ_PARTICIPATION_BLOCK"]
+    assert normal_records[0]["config_snapshot"] == plain_records[0]["config_snapshot"]
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("block", []), ("scale", [-25])])
+def test_positive_volume_participation_cap_still_applies_to_protective_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_participation_cap: dict[str, Any],
+    mode: str,
+    expected: list[int],
+) -> None:
+    monkeypatch.setenv("AI_TRADING_PARTICIPATION_BLOCK_MODE", mode)
+    # 1000 shares of volume at 1.5% allows 15 shares; the exit is 100.
+    processor, records, submitted = _processor(tmp_path, positions={"AAPL": 100}, **real_participation_cap)
+
+    _process(processor, target_dollars=0.0)
+
+    assert submitted == expected
+    assert "PROTECTIVE_EXIT_OVERRIDE" not in records[0]["gates"]
+    if mode == "block":
+        assert records[0]["gates"] == ["POSITION_STOP_LOSS_EXIT", "LIQ_PARTICIPATION_BLOCK"]
+    else:
+        assert "LIQ_REGIME_THIN_SCALE" in records[0]["gates"]
