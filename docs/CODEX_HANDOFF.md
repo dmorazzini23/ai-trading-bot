@@ -1,6 +1,31 @@
 # Current handoff
 
-## November 18: drawdown breaker deployed (`d4803827b`) (start here)
+## November 19: legacy-path removal phase 3 deployed (`b0b2f8b59`) (start here)
+
+- **Running service:** `b0b2f8b59` since Thu Nov 19 21:23 UTC (market closed),
+  owner-approved. It is `d4803827b` (drawdown breaker) plus the
+  `claude/legacy-path-phase3` merge. What phase 3 removed is in the phase 3
+  section below.
+- **Breaker's first session (Nov 19, on `d4803827b`):** normal. One error
+  (the standing `MODEL_REGISTRY_STALE`), orders submitted, no restarts, no
+  breaker trip.
+- **Validation:** full suite on `b0b2f8b59` after the close with the editable
+  finder stripped: 6,393 passed, 2 skipped, 0 failed. `release_identity`
+  passed both phases against a scratch spec (config hash unchanged). Spec
+  backup `runtime/release_spec.d4803827b.bak.json` (SHA only).
+- **Startup:** `IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`,
+  `DrawdownCircuitBreaker initialized`, `BROKER_SYNC` x3, 0 errors, no import
+  errors, NRestarts=0 after four minutes. `/healthz` 503 with only the
+  preserved `required_model_stale` and `replay_live_parity_gate_failed`.
+- **Not yet observed:** a market-hours cycle on this commit (first one is
+  Fri Nov 20 14:30 UTC).
+- **Rollback:** `git checkout --detach d4803827b`, restore the spec backup,
+  `sudo systemctl restart ai-trading.service`.
+- **Next:** position backstop (`claude/position-backstop`, built on phase 3,
+  reviewed, full suite clean apart from a test this merge already deleted);
+  deploy needs the owner's go-ahead.
+
+## November 18: drawdown breaker deployed (`d4803827b`)
 
 - **Running service:** `d4803827b` since Wed Nov 18 21:26 UTC (market closed),
   owner-approved. It is `8fca5a4b6` (phase 2 + Slack journal alerts) plus the
