@@ -55,9 +55,15 @@ not merged, not deployed; no service restart.
   message per marker type listing symbols. Phase-2 baseline still
   `5bd1a138...`; scenario (a) now exits 34 of 42 on the arming bar and the
   last 8 one bar later (the thin-block delay is gone).
-- **Open owner questions:** the zero-volume `LIQ_PARTICIPATION_BLOCK`, hard
-  risk blocks and a missing quote (pretrade `DERISK_DATA_QUALITY_BLOCK`) can
-  still hold a protective exit.
+- **Zero-volume participation block (owner-approved, November 19):** a
+  protective exit blocked only because rolling volume is zero or missing now
+  goes out clipped to the thin-order dollar cap (at least one share), with
+  `LIQ_PARTICIPATION_BLOCK` plus `PROTECTIVE_EXIT_OVERRIDE`; the thin rules do
+  not clip it again. Positive-volume participation and normal orders are
+  unchanged.
+- **Still holds a protective exit:** positive-volume participation cap, hard
+  risk blocks, a missing price and a missing quote (pretrade
+  `DERISK_DATA_QUALITY_BLOCK`).
 - **Next:** owner review, then a deploy decision. Check the release config
   hash before restarting (no ConfigSpec change was made).
 

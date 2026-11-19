@@ -564,9 +564,17 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   (including the daily and weekly loss stop), a missing price, the kill switch,
   bar dedup, the participation cap, sell-to-available, duplicate intent, broker
   breakers or pretrade checks. Normal exits are unchanged.
+- **Zero rolling volume:** when the participation cap blocks because rolling
+  volume is zero or the symbol has no liquidity entry, a protective exit is
+  not held back. It goes out clipped to the thin-order dollar cap
+  (`AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS`, at least one share, never more than
+  the exit; the whole exit if the cap is 0), recorded as
+  `LIQ_PARTICIPATION_BLOCK` plus `PROTECTIVE_EXIT_OVERRIDE`, and the thin rules
+  do not clip it again. With positive volume the participation cap applies
+  to protective exits exactly as to other orders.
 - **What can still hold a protective exit back:** the participation cap with
-  zero rolling volume (`LIQ_PARTICIPATION_BLOCK`; owner decision pending),
-  approval hard risk blocks (`RISK_*_HARD_BLOCK`), a missing quote (pretrade
+  positive volume (block mode, or scaling), approval hard risk blocks
+  (`RISK_*_HARD_BLOCK`), a missing price, a missing quote (pretrade
   `DERISK_DATA_QUALITY_BLOCK`), and a move above 40% from entry, which is
   treated as bad data so the stop loss does not arm. The stall alert
   (`POSITION_BACKSTOP_EXIT_STALLED`) only fires on bars the symbol is
