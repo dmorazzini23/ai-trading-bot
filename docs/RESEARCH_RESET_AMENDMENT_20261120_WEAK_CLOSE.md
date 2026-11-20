@@ -235,3 +235,35 @@ claim (a second fit, or any stage after the claim, returns
   and preflight follow. No claim until the owner's separate word.
 - The running bot's checkout and data directory are not touched.
 - Rollback: revert the config edits and this record; keep the ledger as evidence.
+
+## Registration, acquisition and checks, November 20, 2026 (nothing scored)
+
+- **Registered** at 20:27 UTC with `experiment_ledger.register_campaign`. Contract
+  hash `77e145c4950f55827704d9a02e080605ebc6f8b029b4928f9cd69e0b58f6c5b6`; the
+  ledger holds no trial.
+- **Acquisition** after the close, 21:01 to 21:06 UTC, on the owner's word: 22 bar
+  requests (10 fifteen-minute and 1 daily per fund), paced 3 seconds apart.
+  Credentials were hydrated in memory only. Manifest
+  `artifacts/weak_close_trial_20261120/data/acquisition.json` (sha256
+  `b34a742e...49301a0a`). Every file runs 2016-01-04 to 2025-12-31 with no 2026
+  row. Daily bars: 2,514 per fund, every session. Fifteen-minute bars kept: SPY
+  65,111, QQQ 65,110 of 65,112 expected (2,493 full sessions, 21 early closes).
+- **Gaps (bar stamps only):** SPY 2019-08-12 lacks its 15:45 bar, which the signal
+  does not use; QQQ 2016-02-22 lacks its 10:30 and 10:45 bars, so QQQ gives no
+  signal that session (`missing_snapshot_bars`). Both are within the 1% limit;
+  nothing was waived.
+- **Support audit** (stamps only): passed. 2,513 observations, 250 to 253 a year,
+  10 supported years; sessions with a complete snapshot: SPY 2,492, QQQ 2,491.
+- **Preflight** (no claim): passed. No invalid bars. Signature
+  `b260067991d8ad267afc173ff2879313711735cd22eb529b80e97fc63c7044a7`.
+- **Close cross-check (a data check, not a result):** the daily close and the last
+  regular fifteen-minute close differ by a median 0.8 bps and a 99th percentile of
+  8 bps for SPY. Two SPY sessions differ by more than 1%: 2020-03-12 (+2.9%) and
+  2020-03-18 (−2.2%), both market-wide circuit-breaker days in March 2020; QQQ has
+  none. Two of 2,514 sessions is under the 1% limit, so the preflight passes. The
+  test fills at the daily close, so on those two sessions the result depends on
+  the provider's daily close being the official closing price. Recorded before
+  any scoring; no rule changed.
+
+No signal, return or strategy figure was computed. The claim (`--fit`) waits for the
+owner's separate word.
