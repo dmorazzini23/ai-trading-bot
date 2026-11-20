@@ -1,6 +1,43 @@
 # Current handoff
 
-## November 19: legacy-path removal phase 3 deployed (`b0b2f8b59`) (start here)
+## November 20: position backstop deployed (`d22babac4`) (start here)
+
+- **Running service:** `d22babac4` since Fri Nov 20 21:24 UTC (market closed),
+  owner-approved. It is `b0b2f8b59` (phase 3) plus the
+  `claude/position-backstop` merge. Design and behaviour are in the position
+  backstop section below and in `docs/OPERATIONS.md`.
+- **As deployed:** 5% stop from the broker's average entry price, 5-session
+  max hold, position cap from `max_portfolio_positions` (10 in the env), all
+  as constants. Protective exits bypass the entry-quality gates, go out
+  capped under the thin-order cap and on zero rolling volume, keep full size
+  under soft throttles, and still respect halts, the kill switch, hard risk
+  blocks, missing price and pretrade checks.
+- **Phase 3's first session (Nov 20, on `b0b2f8b59`):** no errors beyond the
+  standing `MODEL_REGISTRY_STALE`, no restarts, 89 decision records, 0 orders
+  (every earlier session Nov 9-19 had 2-8). Only 8 long proposals that day
+  against 13-28 on Nov 17-19, with the same gate set, so it reads as
+  market-driven; not proven. Watch the order count on Nov 23.
+- **Validation:** full suite on `d22babac4` after the close with the editable
+  finder stripped: 6,489 passed, 2 skipped, 0 failed. `release_identity`
+  passed both phases (config hash unchanged). Spec backup
+  `runtime/release_spec.b0b2f8b59.bak.json` (SHA only).
+- **Startup:** `IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`,
+  `DrawdownCircuitBreaker initialized`, `BROKER_SYNC` x3, 0 errors,
+  NRestarts=0 after four minutes. `/healthz` 503 with only the preserved
+  `required_model_stale` and `replay_live_parity_gate_failed`.
+- **Not yet observed:** any backstop activity. The backstop loads on the
+  first market-hours cycle (Mon Nov 23 14:30 UTC); expect one
+  `POSITION_BACKSTOP_STATE_LOAD_FAILED` warning with reason `missing` then,
+  and `runtime/position_backstop_state.json` once a position is held.
+- **Not tested:** live-engine pricing and cancel/replace of an exit order;
+  how often the stop would have fired historically.
+- **Rollback:** `git checkout --detach b0b2f8b59`, restore the spec backup,
+  `sudo systemctl restart ai-trading.service`.
+- **Next:** stop entry-quality gates from blocking normal exits (owner
+  approved as a separate change); phase 4 settings cleanup (config-hash
+  change, needs explicit approval).
+
+## November 19: legacy-path removal phase 3 deployed (`b0b2f8b59`)
 
 - **Running service:** `b0b2f8b59` since Thu Nov 19 21:23 UTC (market closed),
   owner-approved. It is `d4803827b` (drawdown breaker) plus the
