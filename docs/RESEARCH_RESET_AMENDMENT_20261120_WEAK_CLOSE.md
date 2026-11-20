@@ -1,0 +1,222 @@
+# Research reset amendment: November 20, 2026 (weak-close trial) — DRAFT
+
+**Status: draft for the owner's sign-off. Not adopted.** Nothing is registered:
+`config/research_reset.json` is unchanged, no ledger exists, and no data has been
+probed, acquired, audited, preflighted, claimed or scored. The contract
+(`config/weak_close_trial_campaign.json`) carries `status: draft_not_registered`,
+and every mode of the runner (`ai_trading/tools/weak_close_trial.py`) refuses it.
+
+If adopted, this would authorize one registered development trial,
+`weak_close_trial_20261120`, under the `registered_strategy_research` allowance of
+the [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). Scheduled training
+stays blocked, the holdout stays unscored, consumed budgets stay consumed and the
+real-money gate is unchanged.
+
+## Hypothesis
+
+The owner picked it: a "weak close" in a broad index fund tends to be followed by
+a rebound. For SPY and for QQQ, each on its own: when the price at 15:45 New York
+time sits in the bottom fifth of the session's range so far, buy in that session's
+closing auction and sell in the next session's closing auction, holding on without
+a trade while the signal repeats. It must earn more than cash after 1 bp per side,
+and more than holding each fund every session at the same average weight.
+
+The measure is internal bar strength, IBS = (close − low) / (high − low). The
+common reference is Pagonidis, "The IBS Effect: Mean Reversion in Equity ETFs"
+(NAAIM Wagner Award paper, 2014). **The paper was not re-read for this draft** (no
+network access was allowed while drafting); reading it and recording any
+difference from the rule below is a precondition of registration.
+
+## The fixed specification
+
+One specification; no grid, no tuning.
+
+| Item | Fixed value | Why |
+| --- | --- | --- |
+| Instruments | SPY and QQQ, each judged separately | The owner's choice |
+| Signal | IBS < 0.2 (strictly) at 15:45, from the 15-minute bars stamped 09:30 to 15:30: high and low of those bars, price = close of the 15:30 bar | The published bucket; the close itself cannot be known before the close |
+| Zero range | No signal | IBS is undefined |
+| Entry | Market-on-close order in the same session, filled at the daily close | The broker's closing-auction cut-off is 15:50; 15:45 leaves five minutes |
+| Exit | Market-on-close the next session; if the fund signals again at 15:45 that day, no sale (one round trip per run of signals) | The published one-session hold, without selling and rebuying at the same price |
+| No entry | Early closes (13:00), sessions missing a snapshot bar, the last development session | No reliable snapshot, or an exit in 2026 |
+| Sizing | Half of equity per fund; both signal = 100% invested; one signals = the other half in cash; no leverage, no resizing while held | No sizing parameter to fit |
+| Costs | 1 bp per side decides; 2 bps per side must still beat the control; 0.5 and 5 bps reported | Auction fills pay no spread against the auction price; fees on sales are under 0.3 bps |
+| Benchmarks | Cash; and the **exposure-matched control**: each fund at the strategy's average weight in it, every session, no cost | A long-only rule in a rising market beats cash with no skill; against the control only timing counts |
+| Statistic | Mean net return per close-to-close interval (all ~2,513 of them, zero when in cash), and the mean paired difference against the control | |
+| Uncertainty | Circular block bootstrap, 21-session blocks, 10,000 replicates, seed 20261120; lower bound = 1.25th percentile | As in the last three contracts; see multiple testing |
+
+**Pass (all required):** adequate support; lower bound of the mean net return
+above zero at 1 bp; lower bound of the mean paired difference against the
+exposure-matched control above zero at 1 bp; mean paired difference above zero at
+2 bps; mean paired difference above zero in at least 6 of 10 calendar years; mean
+paired difference above zero for SPY alone and for QQQ alone.
+
+**Retire:** support adequate and any criterion failed. No change to the
+threshold, snapshot time, exit, instruments, sizing, costs or acceptance follows.
+The textbook version (final daily IBS, entry at that same close) is reported as
+an upper bound and cannot rescue a fail.
+
+**Inconclusive (budget still consumed):** support inadequate after the claim, for
+example fewer than 300 signal sessions for either fund.
+
+**Support thresholds:** 2,300 observations, 9 years with at least 230, 2,300
+sessions per fund with a complete snapshot (checked from time stamps before the
+claim), 300 signal sessions per fund (checked after the claim).
+
+**A pass permits** one check on the reserved holdout (about 60 sessions, about 12
+signal sessions per fund: a consistency check, not significance), then at least
+eight weeks on the paper account. No promotion, runtime or real-money authority.
+
+## How this differs from the retired swing-reversal trial
+
+| | `swing_reversal_trial_20261115` (retired) | This trial |
+| --- | --- | --- |
+| Universe | 300 most liquid US common stocks; funds excluded by name | Two index ETFs, SPY and QQQ |
+| Signal | Trailing 5-session return relative to the stock's sector, ranked across 300 names; buy the bottom 30 | Where today's 15:45 price sits in today's range (one session, intraday shape); no ranking; each fund on its own |
+| Entry | Next session's **open** | Today's **closing auction** |
+| Horizon | 5 sessions on a fixed grid, with a hold band | To the next close; about 1.25 to 1.4 sessions on average |
+| Benchmark | SPY at the same weight on the same days | The same fund at the same average weight on every day |
+| Data | Daily bars of ~760 stocks, 2016–2025 | Daily and 15-minute bars of SPY and QQQ, 2016–2025 |
+
+Both belong to the "buy recent weakness" family and both use 2016–2025, and SPY
+was the swing trial's control series. But the instruments do not overlap (the swing
+universe excluded funds), the signal is a different quantity measured over a
+different period, and the trade is entered at a different time and held for a
+quarter of the time. This is not the swing-reversal hypothesis under a new name.
+
+## Overlap with the other contracts
+
+- `liquidity_reversal_foundation_20260908` (inconclusive, budget consumed) is the
+  **closest relative**: it bought six ETFs including SPY and QQQ after a large fall
+  in the first 30 minutes and sold two hours later, the same day, on 2024–2025
+  data. Same reversal family, same two funds among its six, overlapping years. It
+  differs in trigger (an opening shock against a range-scaled threshold, not the
+  close's position in the range), timing (intraday only, no overnight hold) and
+  window. The owner should confirm this is a separate hypothesis.
+- `intraday_momentum_trial_20261115` (retired): SPY last half hour after a
+  positive first half hour, 2016–2025. Different signal and an opposite
+  (momentum) mechanism, but the same SPY bars, and a weak close is partly a weak
+  last half hour.
+- `research_reset_trend_20260908`, `cross_sectional_momentum_trial_20261018`:
+  60- and 63-session trend rules on six ETFs including SPY and QQQ, 2024–2025.
+- `volatility_target_core_trial_20261025`: SPY sized by trailing volatility,
+  2016–2025.
+- `day_model_replacement_20260921`, `day_sleeve_horizon_trial_20261018`: intraday
+  models on three stocks. `opening_range_trial_20261118`: intraday breakout in
+  single stocks.
+- Unregistered drafts `turn_of_month_exposure_trial_20261114` and
+  `fixed_mix_trial_20261115`: calendar and allocation rules.
+
+None tests where the close sits in the day's range.
+
+## Usable date range
+
+**2016-01-04 to 2025-12-31.** The provider serves intraday SIP bars from
+2016-01-04, and the shared development-date check refuses every 2026 row (the
+holdout, September 9 to December 8, 2026, is never read). No part of that window is
+untouched: SPY 2016–2025 was read by four trials and SPY and QQQ 2024–2025 by three
+more. QQQ for 2016–2023 has not been read by any registered trial. Budgets are
+spent per hypothesis, not per date range, so the window can be reused for a
+distinct hypothesis; the reuse is counted under multiple testing.
+
+## Data needed
+
+From Alpaca, SIP feed, `adjustment=all`, 2016-01-04 to 2025-12-31, SPY and QQQ
+only: daily bars (one request per fund) and 15-minute bars (one request per fund
+per calendar year). About 22 requests, about 45 pages with extended-hours bars, well
+under a minute of the shared rate limit. Kept: about 65,000 fifteen-minute bars and
+2,514 daily bars per fund, about 5 MB. Acquired once, after registration, outside
+market hours, with a hash manifest.
+
+The acquisition refuses, writing nothing: any 2026 or out-of-window row; a regular-
+hours bar off the 15-minute grid or on a non-session date; any missing or
+duplicated daily bar; more than 1% of full sessions missing a snapshot bar. The
+preflight blocks without a claim if a daily bar is invalid or if more than 1% of
+sessions have a daily close more than 1% away from the last 15-minute close.
+
+## Expected counts (from the definition, not from data)
+
+About 2,492 sessions per fund can carry a signal. If IBS is roughly uniform, about
+20% signal: about 500 per fund. With a 20–30% chance that a signal repeats the next
+session, about 350–400 round trips per fund, 700–800 in all (70–80 a year), average
+hold 1.25–1.4 sessions. The funds will often signal together; the account would hold
+something on roughly a quarter of sessions, at an average exposure of about 0.2 of
+equity.
+
+**Power, stated before any data (assumptions, not measurements):** with about 500
+signal sessions per fund, a next-session standard deviation near 1.3% and the two
+funds strongly correlated, the lower bound clears zero only if a signal session
+beats the average session by roughly 12 bps or more. Costs (about 0.3 bps of equity
+per session) do not decide this; decay of the effect does. If it has halved since
+publication, a fail is the likely outcome.
+
+## Multiple testing
+
+One hypothesis. By the opening-range contract's count, eleven hypotheses had been
+tested on overlapping data and none passed; this is the twelfth. The lower bound
+stays at the 1.25th percentile; the chance of at least one false pass in twelve
+independent attempts at that level is roughly 14%.
+
+## Known weaknesses
+
+- **Widely published and reportedly weakened.** IBS and "buy a close near the low"
+  rules are standard practitioner material. The test asks whether anything is
+  left, net, in 2016–2025.
+- **Two instruments that move together.** SPY and QQQ will often signal on the same
+  day; the effective sample is closer to one fund than two.
+- **Closing-auction execution through a retail API.** The order must reach the
+  broker before its 15:50 cut-off and be routed to the auction; whole shares only.
+  A late or rejected order means no trade or an after-hours fill, neither
+  modelled. The paper account cannot confirm auction fills.
+- **15:45 is not the close.** The last 15 minutes are among the busiest of the day;
+  the 15:45 signal and the final IBS will disagree on some sessions (reported).
+- **The daily close is taken to be the auction price.** The preflight check (1%)
+  would not detect a systematic difference of a few basis points.
+- **Not untouched data**, and a related reversal rule on the same funds was tested.
+- Overnight and weekend gap risk is in the returns; no stop, by design. Taxes are
+  ignored.
+
+## Decisions for the owner before registration
+
+1. Read the source paper; confirm or replace the next-close exit and the 0.2
+   threshold, and record any departures in the contract.
+2. Entry at the closing auction on a 15:45 signal (chosen) rather than the next
+   open. The next-open entry would forgo the overnight part of the return, where
+   much of this effect is reported to sit; it is not scored. The overnight share is
+   reported.
+3. Exit at the next close, holding through repeated signals (chosen), rather than
+   an exit on a later condition (for example a close above the prior day's high).
+4. Two fixed half-equity slots (chosen) rather than putting all of equity into a
+   single signal.
+5. 1 bp per side decides, 2 bps required (chosen); the single-stock contracts used
+   5 bps, which is reported.
+6. The exposure-matched control as the decision benchmark, plus a per-fund
+   criterion (SPY alone and QQQ alone must each beat their control).
+7. The 1.25th-percentile lower bound for a single hypothesis (kept for
+   comparability and because of the twelve-attempt count).
+8. Whether the 2024–2025 opening-shock ETF trial is far enough from this one.
+9. Re-check in the broker's documentation: the closing-auction cut-off (15:50) and
+   that such orders need whole shares.
+
+## Validation of the draft
+
+Synthetic data only; no network or provider call. `tests/tools/test_weak_close_trial.py`
+covers the signal (strict threshold, zero range, the 15:45 snapshot), no look-ahead
+(changing everything from 15:45 on, including the day's final daily bar, moves no
+decision), entry and exit at daily closes, costs (two sides per round trip,
+nothing for a repeated signal), the exposure-matched control (drift alone fails),
+the per-fund and stress and year criteria, inconclusive support, holdout and 2026
+refusal at every stage, degraded downloads, the close cross-check, and a single
+claim (a second fit, or any stage after the claim, returns
+`budget_already_claimed`; a crash after the claim consumes the budget).
+
+## Change record (if adopted)
+
+- `config/research_reset.json`: campaign appended to `registered_trials`, this
+  record appended to `amendments`.
+- `config/weak_close_trial_campaign.json`: `draft_not_registered` → `registered`,
+  `draft_notice` removed, the owner's decisions and the paper's departures
+  recorded, before the ledger is created.
+- Ledger: `artifacts/weak_close_trial_20261120/campaign_state.json`, created
+  before any price is read for scoring.
+- Rollback: revert the config edits and this record; keep any ledger as evidence.
