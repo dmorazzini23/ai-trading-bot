@@ -75,20 +75,20 @@ def _row(frame, session):
 
 # --- contract ---------------------------------------------------------------------------------------
 
-def test_repository_contract_is_an_unregistered_draft_with_every_parameter_fixed(tmp_path):
+def test_repository_contract_is_registered_with_every_parameter_fixed(tmp_path):
     draft = json.loads(REPO_CONTRACT.read_text())
     reset = json.loads((REPO / trial.RESET_CONFIG).read_text())
-    assert draft["status"] == "draft_not_registered" and draft["draft_notice"]
-    assert draft["campaign_id"] == "weak_close_trial_20261120" and draft["campaign_id"] not in reset["registered_trials"]
-    assert not any(a["campaign_id"] == draft["campaign_id"] for a in reset["amendments"])
-    assert not (REPO / "artifacts" / draft["campaign_id"]).exists()
+    assert draft["status"] == "registered" and "draft_notice" not in draft
+    assert draft["campaign_id"] == "weak_close_trial_20261120" and draft["campaign_id"] in reset["registered_trials"]
+    assert any(a["campaign_id"] == draft["campaign_id"] and (REPO / a["record"]).is_file() for a in reset["amendments"])
+    assert draft["open_items_before_paper"] and "UNREAD" in draft["source"]["read_status"]
     assert draft["promotion_authority"] is False and draft["runtime_authority"] is False
     assert (draft["development_start"], draft["development_end"]) == ("2016-01-04", "2025-12-31")
     assert (draft["holdout_start"], draft["holdout_end"]) == (reset["holdout_start"], reset["holdout_end"]) == ("2026-09-09", "2026-12-08")
     assert draft["max_trials"] == 1 and len(draft["hypotheses"]) == 1 and list(draft["versions"]) == ["long_only"]
     assert draft["runner"] == "ai_trading/tools/weak_close_trial.py"
     (tmp_path / "config").mkdir()
-    (tmp_path / "config/draft.json").write_text(json.dumps(draft))
+    (tmp_path / "config/draft.json").write_text(json.dumps(draft | {"status": "draft_not_registered"}))
     for mode in ("acquire", "support-audit", "preflight", "fit"):
         with pytest.raises(ValueError, match="not registered"):
             trial.run(tmp_path, mode=mode, contract_path=Path("config/draft.json"), client_factory=lambda: pytest.fail("fetched"))

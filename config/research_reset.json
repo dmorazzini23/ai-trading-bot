@@ -10,7 +10,7 @@
   "holdout_end": "2026-12-08",
   "allowed_work": ["evidence_reconciliation", "correctness_fixes", "weekly_scorecard", "registered_development_trial", "portfolio_manager_mode_build", "registered_strategy_research"],
   "paused_work": ["unregistered_search", "scheduled_training", "day_sleeve_retraining", "holdout_evaluation"],
-  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025", "swing_reversal_trial_20261115", "intraday_momentum_trial_20261115", "opening_range_trial_20261118"],
+  "registered_trials": ["day_sleeve_horizon_trial_20261018", "cross_sectional_momentum_trial_20261018", "volatility_target_core_trial_20261025", "swing_reversal_trial_20261115", "intraday_momentum_trial_20261115", "opening_range_trial_20261118", "weak_close_trial_20261120"],
   "withdrawn_trials": [
     {
       "campaign_id": "opening_range_trial_20261117",
@@ -80,6 +80,14 @@
       "contract": "config/opening_range_trial_campaign.json",
       "ledger": "artifacts/opening_range_trial_20261118/campaign_state.json",
       "scope": "re-registration of the opening-range trial after a provider outage on 2022-03-08: that session is unscored, no other rule changed; replaces opening_range_trial_20261117, withdrawn before any claim; training block, holdout and real-money gate unchanged"
+    },
+    {
+      "date": "2026-11-20",
+      "record": "docs/RESEARCH_RESET_AMENDMENT_20261120_WEAK_CLOSE.md",
+      "campaign_id": "weak_close_trial_20261120",
+      "contract": "config/weak_close_trial_campaign.json",
+      "ledger": "artifacts/weak_close_trial_20261120/campaign_state.json",
+      "scope": "one registered development trial of buying SPY and QQQ in the closing auction after a 15:45 internal bar strength below 0.2 and selling at the next close, 2016-2025 daily and fifteen-minute bars, long-only; training block, holdout and real-money gate unchanged"
     }
   ],
   "promotion_authority": false

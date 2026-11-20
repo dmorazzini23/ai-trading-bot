@@ -1,16 +1,16 @@
-# Research reset amendment: November 20, 2026 (weak-close trial) — DRAFT
+# Research reset amendment: November 20, 2026 (weak-close trial)
 
-**Status: draft for the owner's sign-off. Not adopted.** Nothing is registered:
-`config/research_reset.json` is unchanged, no ledger exists, and no data has been
-probed, acquired, audited, preflighted, claimed or scored. The contract
-(`config/weak_close_trial_campaign.json`) carries `status: draft_not_registered`,
-and every mode of the runner (`ai_trading/tools/weak_close_trial.py`) refuses it.
-
-If adopted, this would authorize one registered development trial,
+**Decision:** the owner approved the specification as drafted on November 20
+("Sounds good. Let's do it") and authorizes one registered development trial,
 `weak_close_trial_20261120`, under the `registered_strategy_research` allowance of
-the [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). Scheduled training
-stays blocked, the holdout stays unscored, consumed budgets stay consumed and the
+the [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). The claim and the
+single scoring (`--fit`) need the owner's separate word. Scheduled training stays
+blocked, the holdout stays unscored, consumed budgets stay consumed and the
 real-money gate is unchanged.
+
+- Contract: `config/weak_close_trial_campaign.json`, `status: registered`.
+- Runner: `ai_trading/tools/weak_close_trial.py`.
+- Ledger: `artifacts/weak_close_trial_20261120/campaign_state.json` (gitignored).
 
 ## Hypothesis
 
@@ -22,10 +22,14 @@ a trade while the signal repeats. It must earn more than cash after 1 bp per sid
 and more than holding each fund every session at the same average weight.
 
 The measure is internal bar strength, IBS = (close − low) / (high − low). The
-common reference is Pagonidis, "The IBS Effect: Mean Reversion in Equity ETFs"
-(NAAIM Wagner Award paper, 2014). **The paper was not re-read for this draft** (no
-network access was allowed while drafting); reading it and recording any
-difference from the rule below is a precondition of registration.
+reference is A. S. Pagonidis, "The IBS Effect: Mean Reversion in Equity ETFs"
+(2013); a replication is Pandey and Joshi (2023, arXiv 2306.12434). **The original
+paper could not be found and remains unread.** The source precondition was met from
+secondary sources only: they confirm the citation (2013; the first draft said
+2014), the IBS below 0.2 long threshold and a next-session rise, with a reported
+average of +0.35% after IBS below 0.20 and −0.13% after IBS above 0.80. A detail of
+the original that the secondary sources omit (for example a different exit) cannot
+be ruled out; it would not change the registered contract.
 
 ## The fixed specification
 
@@ -165,7 +169,7 @@ independent attempts at that level is roughly 14%.
 - **Two instruments that move together.** SPY and QQQ will often signal on the same
   day; the effective sample is closer to one fund than two.
 - **Closing-auction execution through a retail API.** The order must reach the
-  broker before its 15:50 cut-off and be routed to the auction; whole shares only.
+  broker before its cut-off (assumed 15:50, unverified) and be routed to the auction; whole shares only.
   A late or rejected order means no trade or an after-hours fill, neither
   modelled. The paper account cannot confirm auction fills.
 - **15:45 is not the close.** The last 15 minutes are among the busiest of the day;
@@ -176,29 +180,36 @@ independent attempts at that level is roughly 14%.
 - Overnight and weekend gap risk is in the returns; no stop, by design. Taxes are
   ignored.
 
-## Decisions for the owner before registration
+## Owner decisions, November 20, 2026
 
-1. Read the source paper; confirm or replace the next-close exit and the 0.2
-   threshold, and record any departures in the contract.
-2. Entry at the closing auction on a 15:45 signal (chosen) rather than the next
-   open. The next-open entry would forgo the overnight part of the return, where
-   much of this effect is reported to sit; it is not scored. The overnight share is
-   reported.
-3. Exit at the next close, holding through repeated signals (chosen), rather than
-   an exit on a later condition (for example a close above the prior day's high).
-4. Two fixed half-equity slots (chosen) rather than putting all of equity into a
-   single signal.
-5. 1 bp per side decides, 2 bps required (chosen); the single-stock contracts used
-   5 bps, which is reported.
-6. The exposure-matched control as the decision benchmark, plus a per-fund
-   criterion (SPY alone and QQQ alone must each beat their control).
-7. The 1.25th-percentile lower bound for a single hypothesis (kept for
-   comparability and because of the twelve-attempt count).
-8. Whether the 2024–2025 opening-shock ETF trial is far enough from this one.
-9. Re-check in the broker's documentation: the closing-auction cut-off (15:50) and
-   that such orders need whole shares.
+Accepted as drafted:
 
-## Validation of the draft
+- entry in the closing auction on a 15:45 signal, not the next open (the overnight
+  share of the return is reported);
+- exit at the next close, holding through a repeated signal;
+- two fixed half-equity slots;
+- 1 bp per side decides, 2 bps required; 0.5 and 5 bps reported;
+- the exposure-matched same-fund control decides, with a per-fund criterion;
+- the 1.25th-percentile lower bound;
+- the 2024–2025 opening-shock ETF trial (`liquidity_reversal_foundation_20260908`)
+  is a separate hypothesis from this one;
+- a missing daily bar refuses the acquisition, with no automatic tolerance; any
+  gap goes back to the owner before scoring;
+- no probe mode.
+
+Settled or recorded:
+
+- **Source:** met from secondary sources only; the original is unread (above).
+- **Close price:** the daily close is taken to be the auction price, as drafted;
+  it remains a known weakness.
+- **Open before any paper run (does not block the historical test):** the broker's
+  closing-auction cut-off (assumed 15:50) and its handling of fractional or
+  whole-share market-on-close orders are UNVERIFIED. Its documentation does not
+  list market-on-close among fractional order types, and a forum report describes
+  partial fills of such orders on the paper account. Recorded in the contract under
+  `open_items_before_paper`.
+
+## Validation of the runner
 
 Synthetic data only; no network or provider call. `tests/tools/test_weak_close_trial.py`
 covers the signal (strict threshold, zero range, the 15:45 snapshot), no look-ahead
@@ -210,13 +221,17 @@ refusal at every stage, degraded downloads, the close cross-check, and a single
 claim (a second fit, or any stage after the claim, returns
 `budget_already_claimed`; a crash after the claim consumes the budget).
 
-## Change record (if adopted)
+## Change record
 
 - `config/research_reset.json`: campaign appended to `registered_trials`, this
   record appended to `amendments`.
-- `config/weak_close_trial_campaign.json`: `draft_not_registered` → `registered`,
-  `draft_notice` removed, the owner's decisions and the paper's departures
-  recorded, before the ledger is created.
-- Ledger: `artifacts/weak_close_trial_20261120/campaign_state.json`, created
-  before any price is read for scoring.
-- Rollback: revert the config edits and this record; keep any ledger as evidence.
+- `config/weak_close_trial_campaign.json`: `draft_not_registered` → `registered`;
+  `draft_notice` removed; `owner_decisions` and `open_items_before_paper` added;
+  the source corrected to 2013 and its read status recorded; preconditions marked.
+  Every rule, parameter, threshold, cost and the seed are unchanged from the draft.
+- Ledger: `artifacts/weak_close_trial_20261120/campaign_state.json`, created with
+  `experiment_ledger.register_campaign` before any data is acquired.
+- Acquisition after the close on November 20, on the owner's word; support audit
+  and preflight follow. No claim until the owner's separate word.
+- The running bot's checkout and data directory are not touched.
+- Rollback: revert the config edits and this record; keep the ledger as evidence.

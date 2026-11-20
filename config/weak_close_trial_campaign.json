@@ -1,8 +1,15 @@
 {
   "campaign_id": "weak_close_trial_20261120",
-  "status": "draft_not_registered",
-  "draft_notice": "Draft for the owner's sign-off (docs/RESEARCH_RESET_AMENDMENT_20261120_WEAK_CLOSE.md). Not adopted, not listed in config/research_reset.json registered_trials, no ledger exists, and nothing has been probed, acquired, audited, preflighted, claimed or scored. Every runner mode refuses a contract whose status is not 'registered'.",
-  "authorization": "none; requires the owner's approval of the written rules and an adopted research-reset amendment before status may change",
+  "status": "registered",
+  "authorization": "owner approved the specification as drafted on 2026-11-20 ('Sounds good. Let's do it') and adopted docs/RESEARCH_RESET_AMENDMENT_20261120_WEAK_CLOSE.md: one registered development trial, no promotion or runtime authority. The claim and scoring need the owner's separate word.",
+  "owner_decisions": {
+    "date": "2026-11-20",
+    "accepted_as_drafted": "Entry in the closing auction on a 15:45 signal; exit at the next close, holding through a repeated signal; two fixed half-equity slots; 1 bp per side deciding and 2 bps required; the exposure-matched same-fund control with a per-fund criterion; the 1.25th-percentile lower bound; a missing daily bar refuses the acquisition (no automatic tolerance); no probe mode.",
+    "opening_shock_etf_trial": "liquidity_reversal_foundation_20260908 (opening-shock reversal in six ETFs, 2024-2025) is treated as a separate hypothesis from this one.",
+    "source_precondition": "Met from secondary sources only; the original paper was not found and remains unread (see source.read_status).",
+    "close_price": "The daily close is taken to be the closing auction price, as drafted; it stays a known weakness (limitations).",
+    "broker_open_item": "The broker's closing-auction cut-off and its whole-share or fractional handling of market-on-close orders are unverified. This does not block the historical test; it must be resolved before any paper run (open_items_before_paper)."
+  },
   "max_trials": 1,
   "hypotheses": [
     "weak_close_ibs_below_0_2_spy_qqq_market_on_close_to_next_close_long_only_v1"
@@ -14,12 +21,12 @@
   "ledger_note": "One hypothesis id, one claim. The reported-only variants are computed from the same frozen data in the same run and decide nothing.",
   "source": {
     "definition": "Internal bar strength (IBS), also called the close location value: (close - low) / (high - low) of one daily bar, between 0 (closed at the low) and 1 (closed at the high).",
-    "literature": "Pagonidis, A. S., 'The IBS Effect: Mean Reversion in Equity ETFs', NAAIM Wagner Award paper (2014). It reports that the next-day return of US equity index ETFs is highest after closes in the lowest fifth of the day's range (IBS below 0.2) and lowest after closes in the highest fifth, and trades the lowest bucket long at the close with an exit at the next close. The same rule is widely repeated by practitioners.",
-    "read_status": "NOT re-read for this draft: no network access was permitted while drafting. The citation, the 0.2 threshold and the next-close exit are written from the commonly published form. Before registration the paper must be read and any difference from the rule below recorded under departures_from_the_published_rule, as the opening-range contract did; if the published exit is different, the owner decides which one is registered, before any data is acquired.",
-    "published_result": "Not quoted here, because the paper was not re-read. What matters for this contract is the direction (positive next-day return after IBS below 0.2) and that the effect is reported to have weakened since publication."
+    "literature": "Pagonidis, A. S., 'The IBS Effect: Mean Reversion in Equity ETFs' (2013). As reported by secondary sources: the next-session return of US equity index ETFs is highest after closes in the lowest fifth of the day's range (IBS below 0.20) and lowest after closes in the highest fifth (above 0.80), and the long rule buys IBS below 0.2 for the next session. Replication: Pandey and Joshi (2023), arXiv 2306.12434. The same rule is widely repeated by practitioners.",
+    "read_status": "Precondition met from secondary sources only (2026-11-20). The original paper could not be found and remains UNREAD. Secondary sources confirm the citation (2013, not 2014 as first drafted), the IBS below 0.2 long threshold and a next-session rise. No departure beyond departures_from_the_published_rule was identified, but one in the original that the secondary sources omit (for example a different exit) cannot be ruled out; it would not change this registered contract.",
+    "published_result": "As reported by secondary sources, not read in the original: an average next-session return of +0.35 percent after IBS below 0.20 and -0.13 percent after IBS above 0.80. The effect is reported to have weakened since publication."
   },
   "departures_from_the_published_rule": [
-    "Executable signal. The textbook rule knows the final high, low and close before buying at that close, which no order can do. Here the signal is taken at 15:45 from the session so far and the order goes to the closing auction, whose cut-off at the broker is 15:50. The textbook version is scored beside it as an upper bound that decides nothing.",
+    "Executable signal. The textbook rule knows the final high, low and close before buying at that close, which no order can do. Here the signal is taken at 15:45 from the session so far and the order goes to the closing auction, whose cut-off at the broker is taken to be 15:50 (unverified; see open_items_before_paper). The textbook version is scored beside it as an upper bound that decides nothing.",
     "Sizing. Two fixed slots, half of equity each; an ETF without a signal leaves its slot in cash. The published rule trades one instrument at a time fully invested.",
     "Early closes. No entry on a session that closes at 13:00; a position held into one is sold at that early close.",
     "Costs. 1 bp per side decides; the published test charges no cost or a nominal one."
@@ -60,7 +67,7 @@
     "comparison": "strictly_below",
     "zero_range": "no_signal",
     "rule": "At 15:45 on full session t, for each ETF on its own: H = the highest high and L = the lowest low of the fifteen-minute bars stamped 09:30 to 15:30 (09:30:00 to 15:44:59); P = the close of the bar stamped 15:30 (the last trade before 15:45). IBS = (P - L) / (H - L). A signal is IBS < 0.2. H = L gives no signal. Nothing after 15:45 on t is used: not the 15:45 bar, not the daily bar of t, not any later session.",
-    "why_15_45": "The broker's documented cut-off for closing-auction orders is 15:50 (to be re-checked against its current documentation before registration). A snapshot at 15:45 leaves five minutes to compute and send the order. Fifteen-minute bars give exactly the 09:30-15:45 window and keep the download small.",
+    "why_15_45": "The broker's cut-off for closing-auction orders is taken to be 15:50; this is unverified and listed under open_items_before_paper. If it is earlier, the historical test is unchanged but the rule cannot be traded as written. A snapshot at 15:45 leaves five minutes to compute and send the order. Fifteen-minute bars give exactly the 09:30-15:45 window and keep the download small.",
     "snapshot_versus_textbook": "The 15:45 IBS is not the final IBS: the last 15 minutes can move the close, the high or the low. The number of sessions where the two disagree is reported."
   },
   "trade": {
@@ -75,7 +82,7 @@
   },
   "sizing": {
     "rule": "Two slots of 0.5 of equity, one per ETF. Returns are stated per dollar of equity per session, without compounding inside the test. Cash earns nothing.",
-    "account": "Written for a cash or margin account of 80,000 to 100,000 dollars. Closing-auction orders at the broker require whole shares (fractional orders are day orders only); see trade.fill_price."
+    "account": "Written for a cash or margin account of 80,000 to 100,000 dollars. Whether the broker accepts fractional market-on-close orders is unverified (its documentation does not list them among fractional order types); whole shares are assumed, see trade.fill_price and open_items_before_paper."
   },
   "primary_per_side_cost_bps": 1,
   "cost_tiers": [
@@ -156,7 +163,7 @@
   },
   "parameter_justifications": {
     "signal.threshold=0.2": "The lowest fifth of the range: the published bucket and the commonly used number. Not chosen from data.",
-    "signal.snapshot_time=15:45": "The latest fifteen-minute boundary that leaves time to send a closing-auction order before the broker's 15:50 cut-off.",
+    "signal.snapshot_time=15:45": "The latest fifteen-minute boundary that leaves time to send a closing-auction order before the broker's closing-auction cut-off, taken to be 15:50 (unverified).",
     "trade.exit=next close, hold while the signal repeats": "The published holding period (one session, close to close). Holding on through a repeated signal is the same rule applied every day without paying for a sale and a purchase at the same price.",
     "trade.slot_weight=0.5": "Two instruments, two equal slots, no leverage, no reallocation when only one signals: no sizing parameter is fitted.",
     "cost_tiers=1/2 decide; 0.5/5 reported": "See cost_basis.",
@@ -172,13 +179,19 @@
   "acquisition_manifest": "artifacts/weak_close_trial_20261120/data/acquisition.json",
   "availability_check": "none; no request has been made",
   "preconditions": [
-    "the source paper is read and departures_from_the_published_rule is completed; the broker's closing-auction cut-off and whole-share requirement are re-checked in its documentation",
-    "owner approves these written rules before any result exists",
-    "owner adopts a research-reset amendment and config/research_reset.json registered_trials cites this campaign_id",
-    "status set to registered, draft_notice removed, and the contract registered under artifacts/weak_close_trial_20261120/campaign_state.json before any price is read",
-    "owner approves the one-time acquisition, run outside market hours; manifest written with source hashes",
+    "DONE 2026-11-20: source precondition met from secondary sources only (the original paper remains unread; see source.read_status)",
+    "DONE 2026-11-20: owner approved the written rules as drafted before any data was acquired",
+    "DONE 2026-11-20: owner adopted docs/RESEARCH_RESET_AMENDMENT_20261120_WEAK_CLOSE.md and config/research_reset.json registered_trials cites this campaign_id",
+    "the contract is registered under artifacts/weak_close_trial_20261120/campaign_state.json before any price is read",
+    "owner approves the one-time acquisition, run after the close; manifest written with source hashes",
     "timestamp-only support audit passes",
-    "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 row, price validity, daily close against the last fifteen-minute close, support after invalid bars are dropped"
+    "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 row, price validity, daily close against the last fifteen-minute close, support after invalid bars are dropped",
+    "owner's separate word for the single claim and scoring (--fit)"
+  ],
+  "open_items_before_paper": [
+    "UNVERIFIED: the broker's cut-off for closing-auction (market-on-close) orders, assumed 15:50 New York time.",
+    "UNVERIFIED: whether the broker accepts fractional market-on-close orders; its documentation does not list them among fractional order types, and a forum report describes partial fills of such orders on the paper account.",
+    "These do not affect the historical test. Both must be resolved before any paper run that a pass would permit."
   ],
   "stop_rule": "Claim once immediately before scoring; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires the hypothesis and authorizes no tuning of any parameter, variant, cost or acceptance rule.",
   "holdout_policy": "2026-09-09 to 2026-12-08 is not read during development. It is reserved as the single final check if this trial passes: about 60 sessions and so about 12 signal sessions per ETF, scored once with these rules unchanged. That is a consistency check that cannot establish significance. If it agrees, at least eight weeks on the paper account follow before any further decision.",
