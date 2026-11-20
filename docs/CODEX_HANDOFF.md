@@ -54,6 +54,73 @@
   (`claude/legacy-path-phase3`, full suite not yet run), then the position
   backstop (`claude/position-backstop`, in build).
 
+## November 18: position backstop built, not deployed (`8bb0ec7ba`)
+
+Branch `claude/position-backstop` from `f76f3c397` (phase 3 tip). Not pushed,
+not merged, not deployed; no service restart.
+- **What:** owner-approved safety backstops in the netting cycle
+  (`ai_trading/core/netting_position_backstop.py`, constants only, no
+  ConfigSpec/Settings/env change): 5% stop loss against broker
+  `avg_entry_price`, maximum hold of 5 NYSE sessions, position cap on new
+  openings at `cfg.max_portfolio_positions`. A fired backstop forces a flat
+  target through the normal netting submission and locks the symbol until the
+  next session open (`runtime/position_backstop_state.json`). Operator notes in
+  `docs/OPERATIONS.md` ("Position Backstop").
+- **Protective exit passes:** policy ablation, quarantine block mode, event
+  blackout (also not re-raised to pretrade), adaptive sizing, approval soft
+  blocks (net edge, spread, calibration, pacing, stale order), capacity
+  throttle, portfolio optimizer; recorded as the original gate plus
+  `PROTECTIVE_EXIT_OVERRIDE`. **Still respects:** halts (daily/weekly loss
+  included), missing price, kill switch, bar dedup, participation cap,
+  `LIQ_THIN_MAX_ORDER_BLOCK`, sell-to-available, duplicate intent, broker
+  breakers, pretrade. Normal exits unchanged.
+- **Not wired on purpose:** `state.position_entry_times` / `_position_opened_at`
+  (would switch on the alpha time stop), `STOP_LOCK`, re-entry cooldown, the
+  dead `AI_TRADING_LIVE_STOP_LOSS_BPS` / `AI_TRADING_MAX_POSITION_HOLD_SECONDS`.
+- **Log markers:** per-symbol markers log as `MARKER | symbol=SYM`; the
+  runtime log throttle drops identical messages within 5 s, so a bare marker
+  lost every symbol after the first in a cycle. Journal alerts match the
+  part before ` | `.
+- **Decision parity:** phase-2 harness `backstop_412ffd8d0` and
+  `backstop_8bb0ec7ba` give
+  `COMBINED_DECISIONS 5bd1a138...dbdf0b192`; all six files identical to
+  `post_phase2_4e9d951a1` (nothing arms in the harness).
+- **Scenarios** (`/home/aiuser/ai-trading-baselines/backstop_scenarios`, a copy
+  of the harness; runs 1, 2 and a third on `8bb0ec7ba` identical): stop fires on the AAPL dip, the
+  exit sells 42 to 0 reduce-only one bar later (the arming bar was held by
+  `LIQ_THIN_MAX_ORDER_BLOCK`), re-entry blocked the rest of the day, AAPL
+  bought again next session; stop + kill switch: no orders, lock kept, one
+  `EXIT_STALLED`; hold (constant 1): every held symbol exits on day 2's first
+  bar, with `PROTECTIVE_EXIT_OVERRIDE` over `SPREAD_TOO_WIDE_BLOCK`,
+  `NET_EDGE_FLOOR_BLOCK` and the capacity throttle; cap 2: never more than 2
+  open, `POSITION_CAP_BLOCK` only on openings.
+- **Validation:** 78 tests in `tests/test_netting_position_backstop.py`, 3 new
+  in `tests/tools/test_journal_alerts.py`; `agent_validate_changed.sh
+  --market-hours` (463 tests, live `/healthz`, incident snapshot); ruff, mypy,
+  `typecheck_strict.sh`, vulture clean. Full suite after the close: 6465
+  passed, 10 failed; 9 also fail on `f76f3c397` (research automation script,
+  runtime backup sync, `test_issue_1_meta_learning_trigger_exists`), the tenth
+  (an order-dependent short test of this branch) is fixed in `a82adfb07`.
+- **Review follow-up (`1ea5dd677`, `80d1c98bf`, `bde6f5ec8`):** a protective
+  exit is clipped to the thin-order cap instead of blocked (at least one
+  share) and keeps its full size under approval soft throttles; a malformed
+  store row drops only itself; a failed calendar lookup is not cached; a
+  restart with a flipped side starts a `first_seen` episode; Slack sends one
+  message per marker type listing symbols. Phase-2 baseline still
+  `5bd1a138...`; scenario (a) now exits 34 of 42 on the arming bar and the
+  last 8 one bar later (the thin-block delay is gone).
+- **Zero-volume participation block (owner-approved, November 19):** a
+  protective exit blocked only because rolling volume is zero or missing now
+  goes out clipped to the thin-order dollar cap (at least one share), with
+  `LIQ_PARTICIPATION_BLOCK` plus `PROTECTIVE_EXIT_OVERRIDE`; the thin rules do
+  not clip it again. Positive-volume participation and normal orders are
+  unchanged.
+- **Still holds a protective exit:** positive-volume participation cap, hard
+  risk blocks, a missing price and a missing quote (pretrade
+  `DERISK_DATA_QUALITY_BLOCK`).
+- **Next:** owner review, then a deploy decision. Check the release config
+  hash before restarting (no ConfigSpec change was made).
+
 ## November 18: legacy-path removal phase 3 built, not deployed (`28292960e`)
 
 Branch `claude/legacy-path-phase3` from `d4803827b` (main with the drawdown

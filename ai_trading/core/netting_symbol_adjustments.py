@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
+from ai_trading.core.netting_position_backstop import GATE_PROTECTIVE_EXIT_OVERRIDE
 
 
 @dataclass(slots=True)
@@ -40,6 +41,7 @@ def apply_symbol_adjustments(
     resolve_uncertainty_capital_auto_controls_func: Callable[..., dict[str, Any]],
     clip_delta_to_symbol_notional_cap_func: Callable[..., tuple[int, dict[str, Any] | None]],
     logger: Any,
+    protective_exit: bool = False,
 ) -> SymbolAdjustmentResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
@@ -51,7 +53,15 @@ def apply_symbol_adjustments(
     if adaptive_profile and delta_shares != 0:
         adaptive_scale = safe_float(adaptive_profile.get("scale")) or 1.0
         adaptive_scale = max(0.05, min(adaptive_scale, 1.0))
-        if adaptive_scale < 1.0:
+        if adaptive_scale < 1.0 and protective_exit:
+            # A backstop exit keeps its full size, even when scaling would round it to zero.
+            scaled_qty = int(round(float(delta_shares) * adaptive_scale))
+            gates_added.append(
+                "SYMBOL_EXPECTANCY_SLIPPAGE_BLOCK" if scaled_qty == 0 else "SYMBOL_EXPECTANCY_SLIPPAGE_SCALE"
+            )
+            gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+            snapshot_updates["symbol_adaptive_sizing"] = dict(adaptive_profile)
+        elif adaptive_scale < 1.0:
             scaled_qty = int(round(float(delta_shares) * adaptive_scale))
             if scaled_qty == 0:
                 blocked_reason = "SYMBOL_EXPECTANCY_SLIPPAGE_BLOCK"

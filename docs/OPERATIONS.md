@@ -527,6 +527,76 @@ to the drawdown breaker.
   start, and it measures drawdown since the last restart, not all-time. A
   cash withdrawal reads as drawdown. `peak_equity.txt` is not used.
 
+### Position Backstop (Stop Loss, Maximum Hold, Position Cap)
+
+Safety backstops in the netting cycle, not strategy rules. Code:
+`ai_trading/core/netting_position_backstop.py` (named constants, no env keys).
+
+- **Stop loss:** a held position is exited when the cycle's netting price (last
+  finalized bar close) is 5% against the broker's `avg_entry_price`
+  (`POSITION_STOP_LOSS_PCT`, shorts symmetric). The entry price comes from the
+  execution engine's broker-sync snapshot; with no fresh snapshot (600 s), a
+  quantity that differs from the cycle's position, or no usable price the
+  symbol is unarmed for the cycle (`POSITION_BACKSTOP_UNARMED`, once per symbol
+  and session). A move above 40% from entry is not trusted
+  (`POSITION_BACKSTOP_PRICE_SUSPECT`).
+- **Maximum hold:** exit after 5 NYSE session closes since the episode opened
+  (`POSITION_MAX_HOLD_SESSIONS`; weekends, holidays and early closes counted on
+  the NYSE calendar). A position the bot finds without a record starts its
+  clock when first seen.
+- **Exit and lock:** the decision record gets `POSITION_STOP_LOSS_EXIT` or
+  `POSITION_MAX_HOLD_EXIT` and a `position_backstop` snapshot entry; the target
+  goes to flat and the order goes through the normal netting submission (no
+  resting broker stop). The symbol is locked until the next session open: the
+  exit keeps being forced while held, and a flat symbol cannot reopen
+  (`POSITION_BACKSTOP_REENTRY_BLOCK`). Markers: `POSITION_STOP_LOSS_BREACH`,
+  `POSITION_MAX_HOLD_BREACH`, `POSITION_BACKSTOP_EXIT_STALLED` (still held two
+  bars after arming), `POSITION_BACKSTOP_LOCK_EXPIRED`. Per-symbol markers log
+  as `MARKER | symbol=SYM` so the runtime log throttle keeps one line per symbol.
+- **What a protective exit passes / respects:** it passes the policy ablation
+  block, quarantine block mode, event blackout, adaptive sizing, approval soft
+  blocks (net edge floor, spread, calibration, pacing, stale orders) and
+  approval soft-throttle scaling, capacity throttle and portfolio optimizer,
+  recorded as the original gate plus `PROTECTIVE_EXIT_OVERRIDE`. In thin
+  liquidity it is clipped to the thin-order dollar cap
+  (`LIQ_THIN_MAX_ORDER_BLOCK` plus the override, at least one share) instead of
+  blocked; the lock exits the rest on later bars. It does not pass halts
+  (including the daily and weekly loss stop), a missing price, the kill switch,
+  bar dedup, the participation cap, sell-to-available, duplicate intent, broker
+  breakers or pretrade checks. Normal exits are unchanged.
+- **Zero rolling volume:** when the participation cap blocks because rolling
+  volume is zero or the symbol has no liquidity entry, a protective exit is
+  not held back. It goes out clipped to the thin-order dollar cap
+  (`AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS`, at least one share, never more than
+  the exit; the whole exit if the cap is 0), recorded as
+  `LIQ_PARTICIPATION_BLOCK` plus `PROTECTIVE_EXIT_OVERRIDE`, and the thin rules
+  do not clip it again. With positive volume the participation cap applies
+  to protective exits exactly as to other orders.
+- **What can still hold a protective exit back:** the participation cap with
+  positive volume (block mode, or scaling), approval hard risk blocks
+  (`RISK_*_HARD_BLOCK`), a missing price, a missing quote (pretrade
+  `DERISK_DATA_QUALITY_BLOCK`), and a move above 40% from entry, which is
+  treated as bad data so the stop loss does not arm. The stall alert
+  (`POSITION_BACKSTOP_EXIT_STALLED`) only fires on bars the symbol is
+  evaluated; a resting, unfilled exit order keeps the symbol out of the cycle
+  (pending-order filter), so it suppresses the stall alert.
+- **Position cap:** a new opening is blocked (`POSITION_CAP_BLOCK`) when held
+  positions plus flat symbols with pending orders plus openings already sent
+  this cycle reach `AI_TRADING_MAX_PORTFOLIO_POSITIONS`. Adds, trims, exits and
+  flips are never blocked and nothing is force-closed; if already over the cap,
+  `POSITION_CAP_EXCEEDED` logs once per session.
+- **State:** `runtime/position_backstop_state.json` under the runtime data dir
+  (episodes and locks; written atomically only when it changes). It survives a
+  restart; a missing or unreadable file starts empty
+  (`POSITION_BACKSTOP_STATE_LOAD_FAILED`) and every held position restarts its
+  hold clock. One malformed row drops only that row
+  (`POSITION_BACKSTOP_STATE_ROWS_DROPPED`). After a restart a stored episode
+  is kept when the broker position has the same side and replaced
+  (`first_seen`) when the side differs; a same-side close and reopen while
+  the bot was down cannot be detected and keeps the old entry time. To clear
+  a lock early, stop the service, delete the symbol's entry under `locks`,
+  and start it again.
+
 ### Runtime JSONL retention
 
 `ai-trading-runtime-prune.timer` (every 30 minutes) runs
@@ -774,7 +844,7 @@ Non-sending preview: build the text with
 
 The connector timer (`scripts/connector_incident_dispatch.py`, every minute) also
 reads the `ai-trading.service` journal with `journalctl` (the `aiuser` account is
-in `systemd-journal`; no sudo) and sends three alert kinds through the same Slack
+in `systemd-journal`; no sudo) and sends four alert kinds through the same Slack
 webhook. Code: `ai_trading/monitoring/journal_alerts.py`, sender
 `tools/mcp_slack_alerts_server.py:tool_notify_journal_alerts`.
 
@@ -785,6 +855,11 @@ webhook. Code: `ai_trading/monitoring/journal_alerts.py`, sender
   `DISASTER_HALT_TRIGGERED`, `ALERT_HALT_TRADING`, `HALT_FLAG_WRITTEN`,
   `DATA_KILL_SWITCH_ACTIVATED` (stopped) and `DRAWDOWN_BREAKER_RESET`,
   `HALT_FLAG_REMOVED`, `TRANSIENT_HALT_CLEARED` (resumed). 15 minute hold per marker.
+- **Position backstop**: `POSITION_STOP_LOSS_BREACH`, `POSITION_MAX_HOLD_BREACH`,
+  `POSITION_BACKSTOP_EXIT_STALLED` (WARNING), one message per marker type per
+  dispatcher run listing the symbols (a single symbol reads like "Safety
+  backstop: AAPL long stop-loss exit, -5.3% vs entry"). 15 minute hold per
+  marker and symbol.
 - **New error**: each ERROR/CRITICAL log line type (logger plus message with
   numbers collapsed) alerts once, then at most hourly with an occurrence count. The standing `MODEL_REGISTRY_STALE` error repeats at most once a day.
 
