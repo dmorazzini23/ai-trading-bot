@@ -554,9 +554,14 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   bars after arming), `POSITION_BACKSTOP_LOCK_EXPIRED`. Per-symbol markers log
   as `MARKER | symbol=SYM` so the runtime log throttle keeps one line per symbol.
 - **Exits and the entry-quality gates:** two kinds of exit get the same
-  treatment: a protective (backstop) exit, and any other pure reduction (an
-  order on the opposite side of the held position that never goes past flat:
-  a full exit, a trim, or the end of a flip). Gate code:
+  treatment: a protective (backstop) exit, and a full close (an order that
+  takes the held position, long or short, exactly to flat, including the exit
+  leg of a flip). Whether an order is a full close is decided on the intended
+  order before any liquidity clip; a full close that is clipped or scaled
+  keeps the treatment on what remains, and on a later bar the remainder is
+  again a full close of the smaller position. Positions are counted in whole
+  shares, so a position under one share counts as flat. A partial trim (a
+  reduction that leaves a position) is gated exactly like an entry. Gate code:
   `exit_override_gate()` in the backstop module.
   - **Skipped:** policy ablation block, quarantine block mode, event blackout
     (and the pretrade event flag), adaptive sizing, approval blocks for net edge
@@ -568,28 +573,27 @@ Safety backstops in the netting cycle, not strategy rules. Code:
     (`LIQ_THIN_MAX_ORDER_BLOCK`), and the participation cap when rolling volume
     is zero or the symbol has no liquidity entry (`LIQ_PARTICIPATION_BLOCK`).
     Both clip to `AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS` (at least one share,
-    never more than the exit, the whole exit if the cap is 0); the thin rules do
-    not scale or clip a volume-capped exit again. Later bars (or the backstop lock) exit
-    the rest.
+    never more than the exit, the whole exit if the cap is 0); the thin rules
+    do not scale or clip a volume-capped exit again. Later bars (or the
+    backstop lock) exit the rest.
   - **Still applies:** halts (including the daily and weekly loss stop), a
     missing price, the kill switch, bar dedup, the participation cap with
-    positive volume (block or scale), the thin-liquidity cost multiplier
-    (not on a volume-capped exit),
-    approval hard risk blocks (`RISK_*_HARD_BLOCK`), sell-to-available,
-    duplicate intent, broker breakers and all other pretrade checks (for
-    example `DERISK_DATA_QUALITY_BLOCK` on a missing quote, stale quote,
-    slippage ceiling). The end-of-day flatten is a separate path and does not
-    meet these gates.
+    positive volume (block or scale), the thin-liquidity cost multiplier (not
+    on a volume-capped exit), approval hard risk blocks (`RISK_*_HARD_BLOCK`),
+    sell-to-available, duplicate intent, broker breakers and all other
+    pretrade checks (for example `DERISK_DATA_QUALITY_BLOCK` on a missing
+    quote, stale quote, slippage ceiling). The end-of-day flatten is a
+    separate path and does not meet these gates.
   - **Journal:** the original gate name stays in the decision record, followed
     by `PROTECTIVE_EXIT_OVERRIDE` for a backstop exit or
-    `REDUCING_EXIT_OVERRIDE` for any other reduction. A decision carrying
-    `REDUCING_EXIT_OVERRIDE` logs `REDUCING_EXIT_OVERRIDE | symbol=SYM` at INFO
+    `CLOSING_EXIT_OVERRIDE` for a full close. A decision carrying
+    `CLOSING_EXIT_OVERRIDE` logs `CLOSING_EXIT_OVERRIDE | symbol=SYM` at INFO
     (no alert).
 - **Flips:** the cycle never trades through flat in one order. Right after the
   backstop step, an order that would cross zero is cut to its exit leg (target
   flat, `FLAT_BEFORE_REVERSAL`, `POSITION_REVERSAL_CLAMP` log), so every gate
-  judges the reduction to flat. The new side is an opening from flat on a later
-  bar and meets every entry gate.
+  judges a full close. The new side is an opening from flat on a later bar and
+  meets every entry gate.
 - **Backstop specifics:** a move above 40% from entry is treated as bad data so
   the stop loss does not arm. The stall alert
   (`POSITION_BACKSTOP_EXIT_STALLED`) only fires on bars the symbol is
