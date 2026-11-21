@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
-from ai_trading.core.netting_position_backstop import exit_override_gate
+from ai_trading.core.netting_position_backstop import exit_override_gate, is_full_close
 
 
 @dataclass(slots=True)
@@ -42,11 +42,16 @@ def apply_symbol_adjustments(
     clip_delta_to_symbol_notional_cap_func: Callable[..., tuple[int, dict[str, Any] | None]],
     logger: Any,
     protective_exit: bool = False,
-    full_close_exit: bool = False,
+    full_close_exit: bool | None = None,
 ) -> SymbolAdjustmentResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
     blocked_reason: str | None = None
+    # The cycle passes its full-close decision; a direct caller gets it taken
+    # once here, on the order as received, never on a resized order below.
+    full_close_decided = (
+        is_full_close(int(current_shares), int(delta_shares)) if full_close_exit is None else bool(full_close_exit)
+    )
     blocked_metrics: dict[str, Any] | None = None
     uncertainty_event: dict[str, Any] | None = None
 
@@ -56,7 +61,7 @@ def apply_symbol_adjustments(
         adaptive_scale = max(0.05, min(adaptive_scale, 1.0))
         override_gate = exit_override_gate(
             protective_exit=protective_exit,
-            full_close=full_close_exit,
+            full_close=full_close_decided,
             current_shares=int(current_shares),
             delta_shares=int(delta_shares),
         )

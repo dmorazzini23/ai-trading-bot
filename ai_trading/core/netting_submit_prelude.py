@@ -10,7 +10,7 @@ from ai_trading.config.management import get_env
 from ai_trading.core.evidence_lineage import normalize_evidence_timestamp
 from ai_trading.core.execution_guards import build_portfolio_optimizer_positions, build_pretrade_validation_cfg
 from ai_trading.core.execution_intent import ExecutionIntentContext, build_execution_intent_context
-from ai_trading.core.netting_position_backstop import exit_override_gate
+from ai_trading.core.netting_position_backstop import exit_override_gate, is_full_close
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,14 +92,19 @@ def prepare_netting_submit_prelude(
     safe_validate_pretrade_func: Callable[..., tuple[bool, str, dict[str, Any]]],
     get_sector_func: Callable[[str], str | None],
     protective_exit: bool = False,
-    full_close_exit: bool = False,
+    full_close_exit: bool | None = None,
 ) -> NettingSubmitPreludeResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
+    # The cycle passes its full-close decision; a direct caller gets it taken
+    # once here, on the order as received, never on a resized order below.
+    full_close_decided = (
+        is_full_close(int(current_shares), int(delta_shares)) if full_close_exit is None else bool(full_close_exit)
+    )
     # The optimizer never holds an exit (backstop exit or full close) back.
     override_gate = exit_override_gate(
         protective_exit=protective_exit,
-        full_close=full_close_exit,
+        full_close=full_close_decided,
         current_shares=int(current_shares),
         delta_shares=int(delta_shares),
     )

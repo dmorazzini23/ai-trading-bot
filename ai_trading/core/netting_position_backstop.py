@@ -126,22 +126,25 @@ def exit_override_gate(
     protective_exit: bool,
     current_shares: int,
     delta_shares: int,
-    full_close: bool = False,
+    full_close: bool | None = None,
 ) -> str | None:
     """Marker for an order the entry-quality gates must not hold back.
 
     A backstop exit records ``PROTECTIVE_EXIT_OVERRIDE``. A normal exit records
-    ``CLOSING_EXIT_OVERRIDE`` when it takes the position to flat, or when the
-    caller decided it was a full close before a liquidity clip or scale and
-    what remains still only reduces the position (``full_close``). Anything
-    else, including a partial trim, gets ``None`` and stays fully gated.
+    ``CLOSING_EXIT_OVERRIDE`` only if it is a full close and what remains still
+    only reduces the position. ``full_close`` is the decision taken once on the
+    intended order, before any clip, scale or upsizing; whenever a caller has
+    it, it is the only source. With ``full_close=None`` (a caller ahead of that
+    decision) the order as given is judged. Anything else, including a
+    partial trim, gets ``None`` and stays fully gated.
     """
 
     if protective_exit:
         return GATE_PROTECTIVE_EXIT_OVERRIDE
     current = int(current_shares)
     delta = int(delta_shares)
-    if is_full_close(current, delta) or (full_close and _reduces_without_crossing(current, delta)):
+    closing = is_full_close(current, delta) if full_close is None else bool(full_close)
+    if closing and _reduces_without_crossing(current, delta):
         return GATE_CLOSING_EXIT_OVERRIDE
     return None
 

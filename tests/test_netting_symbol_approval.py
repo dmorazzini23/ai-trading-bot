@@ -345,17 +345,14 @@ def test_prepare_netting_symbol_approval_keeps_flip_close_as_sell_after_throttle
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
-    # Was: the throttle shrank the close to -2. The close is a pure reduction,
-    # so it now keeps its full size and records the override.
     assert result.side == "sell"
-    assert result.delta_shares == -5
-    assert result.target_shares == 0
+    assert result.delta_shares == -2
+    assert result.target_shares == 3
     assert result.opening_trade is False
     assert "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION" in result.gates_added
     assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
-    assert "CLOSING_EXIT_OVERRIDE" in result.gates_added
     assert result.snapshot_updates["capacity_throttle"]["before_delta_shares"] == -5
-    assert result.snapshot_updates["capacity_throttle"]["after_delta_shares"] == -5
+    assert result.snapshot_updates["capacity_throttle"]["after_delta_shares"] == -2
 
 
 def test_prepare_netting_symbol_approval_still_throttles_an_add() -> None:
@@ -561,3 +558,23 @@ def test_paper_floor_still_samples_one_share_of_a_throttled_add_or_partial_cover
     assert result.delta_shares == 1
     assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" in result.gates_added
     assert "CLOSING_EXIT_OVERRIDE" not in result.gates_added
+
+
+def test_overridable_block_passes_a_protective_exit_whatever_else_the_approval_lists() -> None:
+    # As on main: when the approval is held only by overridable blocks, a
+    # protective exit goes out at full size even next to another reason.
+    kwargs = _real_approval_kwargs(
+        10,
+        -3,
+        _risk_policy(),
+        protective_exit=True,
+        approve_execution_candidate_func=lambda policy, candidate: ExecutionApproval(
+            False, 0, -3.0, ("NET_EDGE_FLOOR_BLOCK", "SOME_OTHER_REASON")
+        ),
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.delta_shares == -3
+    assert "PROTECTIVE_EXIT_OVERRIDE" in result.gates_added

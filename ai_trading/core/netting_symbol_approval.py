@@ -7,7 +7,7 @@ import math
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
-from ai_trading.core.netting_position_backstop import EXIT_OVERRIDE_GATES, exit_override_gate
+from ai_trading.core.netting_position_backstop import EXIT_OVERRIDE_GATES, exit_override_gate, is_full_close
 from ai_trading.policy.compiler import ExecutionApproval, SafetyTier
 
 
@@ -146,11 +146,16 @@ def prepare_netting_symbol_approval(
     evaluate_execution_approval_func: Callable[..., Any],
     approve_execution_candidate_func: Callable[..., Any],
     protective_exit: bool = False,
-    full_close_exit: bool = False,
+    full_close_exit: bool | None = None,
 ) -> NettingSymbolApprovalResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
     delta_shares_value = int(delta_shares)
+    # The cycle passes its full-close decision; a direct caller gets it taken
+    # once here, on the order as received, never on a resized order below.
+    full_close_decided = (
+        is_full_close(int(current_shares), int(delta_shares)) if full_close_exit is None else bool(full_close_exit)
+    )
     target_shares = int(current_shares + delta_shares_value)
     target_dollars = float(target_shares * price)
     side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
@@ -609,7 +614,7 @@ def prepare_netting_symbol_approval(
                 gates_added.append(reason)
     override_gate = exit_override_gate(
         protective_exit=protective_exit,
-        full_close=full_close_exit,
+        full_close=full_close_decided,
         current_shares=int(current_shares),
         delta_shares=int(delta_shares_value),
     )
@@ -617,18 +622,21 @@ def prepare_netting_symbol_approval(
         not approval.allowed
         or abs(int(approval_context.adjusted_delta_shares)) < abs(int(delta_shares_value))
     ):
-        # An exit is approved at its full size when the approval only held or
-        # shrank it through overridable blocks and soft throttles (including a
-        # soft throttle that rounded it to ZERO_QTY). The original reason names
-        # stay in the journal; any other block or scaling reason is left as is.
+        # An exit is approved at its full size when the approval held it only
+        # through overridable blocks, or held or shrank it only through soft
+        # throttles (including a soft throttle that rounded it to ZERO_QTY).
+        # The original reason names stay in the journal; any other block, or a
+        # shrink with any other scaling reason, is left as is.
         approval_reasons = {str(reason) for reason in approval.reasons} - EXIT_OVERRIDE_GATES - {"ZERO_QTY"}
         approval_blocks = {reason for reason in approval_reasons if reason.endswith("_BLOCK")}
         scaling_reasons = approval_reasons - approval_blocks
-        if (
-            approval_reasons
-            and approval_blocks <= EXIT_OVERRIDABLE_APPROVAL_BLOCKS
-            and all(reason.endswith("_SOFT_THROTTLE") for reason in scaling_reasons)
-        ):
+        if approval_blocks:
+            exit_keeps_full_size = (not approval.allowed) and approval_blocks <= EXIT_OVERRIDABLE_APPROVAL_BLOCKS
+        else:
+            exit_keeps_full_size = bool(scaling_reasons) and all(
+                reason.endswith("_SOFT_THROTTLE") for reason in scaling_reasons
+            )
+        if exit_keeps_full_size:
             if override_gate not in gates_added:
                 gates_added.append(override_gate)
             approval = ExecutionApproval(
@@ -790,7 +798,7 @@ def prepare_netting_symbol_approval(
             capacity_scale = min(capacity_scale, feed_derisk_scale)
         capacity_override_gate = exit_override_gate(
             protective_exit=protective_exit,
-            full_close=full_close_exit,
+            full_close=full_close_decided,
             current_shares=int(current_shares),
             delta_shares=int(delta_shares_value),
         )

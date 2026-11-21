@@ -309,9 +309,11 @@ def process_netting_symbol(
 
     backstop = processor.position_backstop
     protective_exit = False
-    # Set just before the liquidity clips: the intended order was a full close,
-    # so what remains after a clip or scale is still an exit in progress.
-    full_close_exit = False
+    # Decided once, just before the liquidity clips, on the intended order: a
+    # full close stays an exit in progress through any later clip, scale or
+    # upsizing, and nothing after that point re-derives it from the live delta.
+    # None until then: earlier gates judge the order as it stands.
+    full_close_exit: bool | None = None
     current_shares = 0
     delta_shares = 0
 

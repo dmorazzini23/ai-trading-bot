@@ -1806,3 +1806,146 @@ def test_positive_volume_participation_cap_still_applies_to_exits(
         assert records[0]["gates"] == [*backstop_gates, "LIQ_PARTICIPATION_BLOCK"]
     else:
         assert "LIQ_REGIME_THIN_SCALE" in records[0]["gates"]
+
+
+# ---- ATTACK tier: approval upsizing a trim to flat must not make it a full close ----
+
+
+def _attack_policy() -> Any:
+    big = 1e12
+    return SimpleNamespace(
+        objective=SimpleNamespace(fee_bps=0.0, borrow_bps=0.0, min_expected_net_edge_bps=-1000.0),
+        execution=SimpleNamespace(
+            stale_order_block_sec=1e9, max_spread_bps=1000.0, min_rolling_volume=0.0, calibration_block_enabled=False
+        ),
+        risk_budgets=SimpleNamespace(
+            symbol_hard_dollars=big, symbol_soft_dollars=big,
+            portfolio_hard_gross_dollars=big, portfolio_soft_gross_dollars=big,
+            sleeve_hard_dollars=big, sleeve_soft_dollars=big,
+            factor_soft_ratio=10.0, factor_hard_ratio=20.0,
+        ),
+        calibration=SimpleNamespace(
+            max_ece_normal=1.0, max_brier_normal=1.0, max_ece_stress=1.0, max_brier_stress=1.0, min_samples=10
+        ),
+        # Relaxed ATTACK sizing: x1.05, so a 96-share trim of 100 becomes 101, clipped to 100.
+        safety=SimpleNamespace(
+            attack_size_multiplier=1.15,
+            attack_relax_reject_rate_pct=2.0,
+            attack_relax_size_multiplier=1.05,
+            attack_degrade_reject_rate_pct=8.0,
+            attack_degrade_size_multiplier=1.0,
+        ),
+    )
+
+
+def _attack_processor(tmp_path: Path, current: int, **overrides: Any) -> tuple[Any, list[dict[str, Any]], list[int]]:
+    from ai_trading.policy.compiler import approve_execution_candidate
+    from ai_trading.risk.liquidity_regime import LiquidityFeatures
+
+    processor, records, submitted = _processor(
+        tmp_path,
+        positions={"AAPL": current},
+        avg_entry=10.2,
+        effective_policy=_attack_policy(),
+        evaluate_execution_approval_func=evaluate_execution_approval,
+        approve_execution_candidate_func=approve_execution_candidate,
+        prepare_symbol_approval_func=prepare_netting_symbol_approval,
+        clip_sell_qty_to_available_position_func=lambda **k: (
+            min(int(k["requested_qty"]), abs(int(k["current_shares"]))),
+            None,
+        ),
+        latest_liquidity={"AAPL": LiquidityFeatures(rolling_volume=1e6, spread_bps=5.0, volatility_proxy=0.0)},
+        **overrides,
+    )
+    processor.state.operational_safety_tier = "attack"
+    return processor, records, submitted
+
+
+_ATTACK_CAPACITY = {
+    "capacity_throttle_enabled": True,
+    "capacity_spread_soft_bps": 1.0,
+    "capacity_spread_hard_bps": 2.0,
+    "capacity_min_scale": 0.5,
+}
+
+
+@pytest.mark.parametrize(
+    ("current", "target_shares", "expected"),
+    [(100, 4, [-50]), (-100, -3, [50])],
+    ids=["long_trim_96", "short_cover_97"],
+)
+def test_attack_upsized_trim_is_still_capacity_throttled_as_on_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, current: int, target_shares: int, expected: list[int]
+) -> None:
+    monkeypatch.setattr(netting_symbol_cycle, "_short_openings_allowed", lambda _cfg: True)
+    processor, records, submitted = _attack_processor(tmp_path, current, **_ATTACK_CAPACITY)
+
+    _process(processor, target_dollars=target_shares * 10.0)
+
+    # Main: ATTACK upsizes the trim to 101/100, the close-only clip makes it
+    # exactly flat, and the capacity throttle still halves it.
+    assert submitted == expected
+    assert "CAPACITY_THROTTLE_SCALE" in records[0]["gates"]
+    assert "SAFETY_TIER_ATTACK_SCALE" in records[0]["gates"]
+    assert not _OVERRIDE_MARKERS & set(records[0]["gates"])
+
+
+@pytest.mark.parametrize(("current", "expected"), [(100, [-100]), (-100, [100])], ids=["long", "short"])
+def test_attack_full_close_still_passes_the_capacity_throttle(
+    tmp_path: Path, current: int, expected: list[int]
+) -> None:
+    processor, records, submitted = _attack_processor(tmp_path, current, **_ATTACK_CAPACITY)
+
+    _process(processor, target_dollars=0.0)
+
+    assert submitted == expected
+    assert "CAPACITY_THROTTLE_SCALE" in records[0]["gates"]
+    assert records[0]["gates"].count("CLOSING_EXIT_OVERRIDE") == 1
+
+
+def _real_optimizer_prelude(**kwargs: Any) -> Any:
+    # The real submit prelude with an optimizer that rejects, fed the cycle's order.
+    keys = ("side", "delta_shares", "current_shares", "opening_trade", "protective_exit", "full_close_exit")
+    return prepare_netting_submit_prelude(**_exit_prelude_kwargs(**{k: kwargs[k] for k in keys if k in kwargs}))
+
+
+@pytest.mark.parametrize(
+    ("current", "target_shares", "expected_full_close", "submitted_expected"),
+    [
+        (100, 4, False, []),  # trim 96, upsized to flat: rejected as on main
+        (-100, -3, False, []),  # cover 97, upsized to flat: rejected as on main
+        (100, 0, True, [-100]),  # full close: passes
+        (-100, 0, True, [100]),
+    ],
+    ids=["long_trim_96", "short_cover_97", "long_close", "short_close"],
+)
+def test_attack_optimizer_reject_holds_an_upsized_trim_and_passes_a_full_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    current: int,
+    target_shares: int,
+    expected_full_close: bool,
+    submitted_expected: list[int],
+) -> None:
+    monkeypatch.setattr(netting_symbol_cycle, "_short_openings_allowed", lambda _cfg: True)
+    seen: list[tuple[int, bool]] = []
+
+    def _prelude(**kwargs: Any) -> Any:
+        seen.append((int(kwargs["delta_shares"]), bool(kwargs["full_close_exit"])))
+        return _real_optimizer_prelude(**kwargs)
+
+    processor, records, submitted = _attack_processor(tmp_path, current, prepare_submit_prelude_func=_prelude)
+
+    _process(processor, target_dollars=target_shares * 10.0)
+
+    # The order reaching the optimizer is flat-sized either way; only the
+    # decision taken on the intended order tells them apart.
+    assert seen == [(-current, expected_full_close)]
+    assert submitted == submitted_expected
+    gates = records[0]["gates"]
+    assert "PORTFOLIO_OPTIMIZER_REJECT" in gates
+    if expected_full_close:
+        assert gates.count("CLOSING_EXIT_OVERRIDE") == 1
+    else:
+        assert not _OVERRIDE_MARKERS & set(gates)
+        assert records[0]["metrics"]["terminal_reason"] == "PORTFOLIO_OPTIMIZER_REJECT"
