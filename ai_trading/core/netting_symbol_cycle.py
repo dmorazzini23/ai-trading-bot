@@ -453,6 +453,27 @@ def process_netting_symbol(
                 config_snapshot=symbol_snapshot,
             )
             return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
+    if int(current_shares) != 0 and (int(current_shares) + int(delta_shares)) * int(current_shares) < 0:
+        # The cycle never trades through flat in one order (FLAT_BEFORE_REVERSAL).
+        # Clamp the flip to its exit leg here, so the gates below judge a
+        # reduction to flat; the entry leg is a fresh opening on a later bar,
+        # gated in full from flat.
+        requested_flip_delta = int(delta_shares)
+        delta_shares = -int(current_shares)
+        net_target.target_shares = 0
+        net_target.target_dollars = 0.0
+        gates.append("FLAT_BEFORE_REVERSAL")
+        processor.logger.info(
+            "POSITION_REVERSAL_CLAMP",
+            extra={
+                "symbol": symbol,
+                "current_shares": int(current_shares),
+                "requested_delta_shares": requested_flip_delta,
+                "adjusted_delta_shares": int(delta_shares),
+                "target_shares": 0,
+                "reason": "FLAT_BEFORE_REVERSAL",
+            },
+        )
     symbol_prelude = processor.prepare_symbol_prelude_func(
         state=processor.state,
         symbol=symbol,

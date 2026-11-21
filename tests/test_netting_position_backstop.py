@@ -817,6 +817,32 @@ def test_bypassed_gate_passes_protective_and_normal_exits_and_still_holds_an_ent
     assert not _OVERRIDE_MARKERS & set(entry_records[0]["gates"])
 
 
+@pytest.mark.parametrize("case", sorted(_BYPASS_CASES))
+def test_flip_goes_out_as_its_exit_leg_and_the_entry_leg_stays_gated(tmp_path: Path, case: str) -> None:
+    overrides = _BYPASS_CASES[case]["overrides"]
+    gate = _BYPASS_CASES[case]["gate"]
+    # Short one share, the sleeves want long 10: the reduction to flat passes the
+    # gate; the long entry is not part of this order.
+    flip, flip_records, flip_submitted = _processor(
+        tmp_path / "flip", positions={"AAPL": -1}, avg_entry=10.2, **overrides
+    )
+
+    _process(flip, target_dollars=100.0)
+
+    assert flip_submitted == [1]
+    flip_gates = flip_records[0]["gates"]
+    assert flip_gates[0] == "FLAT_BEFORE_REVERSAL"
+    assert gate in flip_gates
+    assert flip_gates.count("REDUCING_EXIT_OVERRIDE") == 1
+    assert flip_records[0]["net_target"].target_shares == 0
+    # The entry leg, from flat on a later bar, meets the gate exactly as any entry.
+    entry, entry_records, entry_submitted = _entry_processor(tmp_path / "entry", overrides)
+    _process(entry, target_dollars=100.0)
+    assert entry_submitted == []
+    assert entry_records[0]["gates"][-1] == gate
+    assert not _OVERRIDE_MARKERS & set(entry_records[0]["gates"])
+
+
 def test_reducing_exit_override_logs_a_per_symbol_marker(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1375,6 +1401,24 @@ def test_thin_max_order_clips_exits_and_still_blocks_an_entry(tmp_path: Path) ->
     ]
     # The lock finishes the rest on later bars.
     assert "AAPL" in protective.position_backstop.store.locks
+
+
+@pytest.mark.usefixtures("thin_regime")
+def test_flip_is_judged_on_its_exit_leg_by_the_thin_cap(tmp_path: Path) -> None:
+    # Nov 19 AAPL: long 1, sleeves want short ~1000. The whole flip ($7,700 after
+    # the cost multiplier) used to hit LIQ_THIN_MAX_ORDER_BLOCK, holding the
+    # one-share exit; the exit leg alone is far under the cap.
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 1}, avg_entry=10.2, liq_regime_enabled=True
+    )
+
+    _process(processor, target_dollars=-10_000.0)
+
+    assert submitted == [-1]
+    assert records[0]["gates"][0] == "FLAT_BEFORE_REVERSAL"
+    assert "LIQ_THIN_MAX_ORDER_BLOCK" not in records[0]["gates"]
+    assert records[0]["gates"][-1] == "OK_TRADE"
+    assert records[0]["net_target"].target_shares == 0
 
 
 @pytest.mark.usefixtures("thin_regime")
