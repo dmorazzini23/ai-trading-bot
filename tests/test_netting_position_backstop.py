@@ -843,6 +843,34 @@ def test_flip_goes_out_as_its_exit_leg_and_the_entry_leg_stays_gated(tmp_path: P
     assert not _OVERRIDE_MARKERS & set(entry_records[0]["gates"])
 
 
+@pytest.mark.parametrize("case", ["spread_too_wide_block", "event_blackout", "capacity_throttle"])
+def test_partial_trim_passes_and_the_same_size_add_is_still_gated(tmp_path: Path, case: str) -> None:
+    overrides = _BYPASS_CASES[case]["overrides"]
+    gate = _BYPASS_CASES[case]["gate"]
+    # Long 10 at $10: trimming to 5 is a pure reduction; adding 5 (to 15) is not.
+    trim, trim_records, trim_submitted = _processor(
+        tmp_path / "trim", positions={"AAPL": 10}, avg_entry=10.2, **overrides
+    )
+    add, add_records, add_submitted = _processor(
+        tmp_path / "add",
+        positions={"AAPL": 10},
+        avg_entry=10.2,
+        ineffective_gate_blocklist={"COST_AWARE_ENTRY_GUARD"},
+        **overrides,
+    )
+
+    _process(trim, target_dollars=50.0)
+    _process(add, target_dollars=150.0)
+
+    assert trim_submitted == [-5]
+    assert gate in trim_records[0]["gates"]
+    assert trim_records[0]["gates"].count("REDUCING_EXIT_OVERRIDE") == 1
+    assert trim_records[0]["net_target"].target_shares == 5
+    assert add_submitted == []
+    assert add_records[0]["gates"][-1] == gate
+    assert not _OVERRIDE_MARKERS & set(add_records[0]["gates"])
+
+
 def test_reducing_exit_override_logs_a_per_symbol_marker(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

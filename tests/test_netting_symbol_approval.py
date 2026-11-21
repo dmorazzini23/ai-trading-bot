@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from ai_trading.core.execution_guards import ExecutionApprovalContext
 from ai_trading.core.netting_symbol_approval import prepare_netting_symbol_approval
 from ai_trading.policy.compiler import ExecutionApproval
@@ -372,4 +374,140 @@ def test_prepare_netting_symbol_approval_still_throttles_an_add() -> None:
     assert result.side == "buy"
     assert result.delta_shares == 2
     assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
+    assert "REDUCING_EXIT_OVERRIDE" not in result.gates_added
+
+
+# ---- exits under the compiler's soft throttles (real approve_execution_candidate) ----
+
+
+def _risk_policy(**budgets: float) -> Any:
+    big = 1e12
+    risk_budgets = {
+        "symbol_hard_dollars": big,
+        "symbol_soft_dollars": big,
+        "portfolio_hard_gross_dollars": big,
+        "portfolio_soft_gross_dollars": big,
+        "sleeve_hard_dollars": big,
+        "sleeve_soft_dollars": big,
+        "factor_soft_ratio": 10.0,
+        "factor_hard_ratio": 20.0,
+    }
+    risk_budgets.update(budgets)
+    return SimpleNamespace(
+        objective=SimpleNamespace(fee_bps=0.0, borrow_bps=0.0, min_expected_net_edge_bps=-1000.0),
+        execution=SimpleNamespace(
+            stale_order_block_sec=1e9, max_spread_bps=1000.0, min_rolling_volume=0.0, calibration_block_enabled=False
+        ),
+        risk_budgets=SimpleNamespace(**risk_budgets),
+        calibration=SimpleNamespace(
+            max_ece_normal=1.0, max_brier_normal=1.0, max_ece_stress=1.0, max_brier_stress=1.0, min_samples=10
+        ),
+        safety=SimpleNamespace(attack_size_multiplier=1.0),
+    )
+
+
+def _real_approval_kwargs(current: int, delta: int, policy: Any, **extra: Any) -> dict[str, Any]:
+    from ai_trading.core.execution_guards import evaluate_execution_approval
+    from ai_trading.policy.compiler import approve_execution_candidate
+
+    kwargs = _base_kwargs()
+    kwargs.update(
+        current_shares=current,
+        delta_shares=delta,
+        price=10.0,
+        effective_policy=policy,
+        evaluate_execution_approval_func=evaluate_execution_approval,
+        approve_execution_candidate_func=approve_execution_candidate,
+        clip_sell_qty_to_available_position_func=lambda **k: (int(k["requested_qty"]), None),
+        gate_blocks_func=lambda gate: gate != "COST_AWARE_ENTRY_GUARD",
+    )
+    kwargs.update(extra)
+    return kwargs
+
+
+@pytest.mark.parametrize("protective", [False, True], ids=["reducing", "protective"])
+def test_soft_throttle_rounding_an_exit_to_zero_keeps_it_whole(protective: bool) -> None:
+    # Long 100 at $10, sell 1: post notional $990 against a $100 soft limit scales
+    # the order to 0 (ZERO_QTY), which used to block the exit outright.
+    kwargs = _real_approval_kwargs(100, -1, _risk_policy(symbol_soft_dollars=100.0), protective_exit=protective)
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    marker = "PROTECTIVE_EXIT_OVERRIDE" if protective else "REDUCING_EXIT_OVERRIDE"
+    assert result.blocked_reason is None
+    assert result.delta_shares == -1
+    assert "RISK_SYMBOL_SOFT_THROTTLE" in result.gates_added
+    assert marker in result.gates_added
+
+
+def test_soft_throttle_rounding_a_protective_exit_to_zero_on_portfolio_gross_keeps_it_whole() -> None:
+    kwargs = _real_approval_kwargs(
+        1,
+        -1,
+        _risk_policy(portfolio_soft_gross_dollars=1000.0),
+        portfolio_current_gross=100_000.0,
+        protective_exit=True,
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.delta_shares == -1
+    assert "PROTECTIVE_EXIT_OVERRIDE" in result.gates_added
+
+
+def test_soft_throttle_shrinking_an_exit_is_restored_to_full_size() -> None:
+    kwargs = _real_approval_kwargs(100, -50, _risk_policy(symbol_soft_dollars=100.0))
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.delta_shares == -50
+    assert "REDUCING_EXIT_OVERRIDE" in result.gates_added
+
+
+@pytest.mark.parametrize("protective", [False, True], ids=["reducing", "protective"])
+def test_hard_block_with_a_soft_throttle_still_holds_an_exit(protective: bool) -> None:
+    kwargs = _real_approval_kwargs(
+        100,
+        -10,
+        _risk_policy(symbol_soft_dollars=100.0, portfolio_hard_gross_dollars=1.0),
+        protective_exit=protective,
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "EXECUTION_APPROVAL_BLOCK"
+    assert "RISK_PORTFOLIO_HARD_BLOCK" in result.gates_added
+    assert not {"REDUCING_EXIT_OVERRIDE", "PROTECTIVE_EXIT_OVERRIDE"} & set(result.gates_added)
+
+
+def test_paper_floor_does_not_shrink_a_short_cover(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED", "1")
+    # Short 100 at $10, cover 4: the soft throttle rounds it to 0; the paper floor
+    # used to turn that into a 1-share order before the exit override could act.
+    kwargs = _real_approval_kwargs(-100, 4, _risk_policy(symbol_soft_dollars=100.0))
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.delta_shares == 4
+    assert "REDUCING_EXIT_OVERRIDE" in result.gates_added
+    assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" not in result.gates_added
+
+
+def test_paper_floor_still_samples_one_share_of_a_throttled_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS", "0.10")
+    # Long 100 at $10, add 4: the same soft throttle rounds the add to 0; the
+    # floor sends one share, exactly as before.
+    kwargs = _real_approval_kwargs(100, 4, _risk_policy(symbol_soft_dollars=100.0))
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason is None
+    assert result.delta_shares == 1
+    assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" in result.gates_added
     assert "REDUCING_EXIT_OVERRIDE" not in result.gates_added
