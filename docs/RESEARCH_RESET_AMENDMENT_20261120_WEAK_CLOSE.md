@@ -265,5 +265,37 @@ claim (a second fit, or any stage after the claim, returns
   the provider's daily close being the official closing price. Recorded before
   any scoring; no rule changed.
 
-No signal, return or strategy figure was computed. The claim (`--fit`) waits for the
-owner's separate word.
+No signal, return or strategy figure was computed before the claim.
+
+## Result: retired (November 21, 2026)
+
+The owner accepted the two March 2020 SPY closes as recorded and gave the word
+("run the fit"). The single claim ran on 2026-11-21 04:10 UTC with evidence
+signature `b260067991d8ad267afc173ff2879313711735cd22eb529b80e97fc63c7044a7`;
+report SHA-256 `39837b55e4e22e21011adff7163cea28dcee14624158de87da4ed60e4776d6a5`.
+The budget is consumed. The trial is **retired**: it met five of the six
+conditions and missed one.
+
+| Condition (deciding cost 1 bp per side unless stated) | Value | Met |
+| --- | --- | --- |
+| Adequate support | 2,513 sessions, 824 signals, 702 round trips | yes |
+| Lower bound against cash | +0.87 bps per session | yes |
+| Lower bound against the exposure-matched same-fund control | −0.13 bps per session | **no** |
+| Mean difference against the control at 2 bps per side | +1.36 bps per session | yes |
+| Positive years | 9 of 10 (2018 negative) | yes |
+| Each fund positive against the control | SPY +0.77, QQQ +0.87 bps | yes |
+
+Reported figures at the deciding cost: net 2.81 bps per session (about 7.1% a
+year, Sharpe 0.79, maximum drawdown 11.9%) at an average exposure of 16%; mean
+difference against the control 1.64 bps per session. The yearly difference
+against the control is 7.9 bps per session in 2020 and 4.8 in 2025, between 0.1
+and 2.4 in seven other years, and −4.2 in 2018; the advantage is concentrated in
+a few periods, which is why the lower bound is not above zero. Of the two
+disputed SPY closes, 2020-03-12 was the entry price of a SPY trade held on
+2020-03-13 (recorded return +5.9%); 2020-03-18 was not a traded close. They were
+not checked against a second source.
+
+Per the contract there is no re-run, no threshold change and no variant scored
+on this data under this registration. The holdout was not read, no model was
+fitted and no order was sent. Any follow-up needs a new pre-registered contract
+and the owner's word.
