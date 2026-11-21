@@ -7,12 +7,14 @@ import math
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
-from ai_trading.core.netting_position_backstop import GATE_PROTECTIVE_EXIT_OVERRIDE
+from ai_trading.core.netting_position_backstop import EXIT_OVERRIDE_GATES, exit_override_gate, is_full_close
 from ai_trading.policy.compiler import ExecutionApproval, SafetyTier
 
 
-# Approval blocks a protective (backstop) exit may pass; any other block holds it.
-PROTECTIVE_EXIT_OVERRIDABLE_APPROVAL_BLOCKS = frozenset(
+# Approval blocks an exit (backstop exit or full close) may pass; any other
+# block holds it. SPREAD_TOO_WIDE reads the last bar's high-low range, not the
+# quote the limit order is priced from, so it does not hold an exit either.
+EXIT_OVERRIDABLE_APPROVAL_BLOCKS = frozenset(
     {
         "NET_EDGE_FLOOR_BLOCK",
         "SPREAD_TOO_WIDE_BLOCK",
@@ -144,10 +146,16 @@ def prepare_netting_symbol_approval(
     evaluate_execution_approval_func: Callable[..., Any],
     approve_execution_candidate_func: Callable[..., Any],
     protective_exit: bool = False,
+    full_close_exit: bool | None = None,
 ) -> NettingSymbolApprovalResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
     delta_shares_value = int(delta_shares)
+    # The cycle passes its full-close decision; a direct caller gets it taken
+    # once here, on the order as received, never on a resized order below.
+    full_close_decided = (
+        is_full_close(int(current_shares), int(delta_shares)) if full_close_exit is None else bool(full_close_exit)
+    )
     target_shares = int(current_shares + delta_shares_value)
     target_dollars = float(target_shares * price)
     side = _side_for_delta(delta_shares_value, int(current_shares), target_shares)
@@ -604,7 +612,47 @@ def prepare_netting_symbol_approval(
         for reason in approval.reasons:
             if reason not in gates and reason not in gates_added:
                 gates_added.append(reason)
-    if not approval.allowed:
+    override_gate = exit_override_gate(
+        protective_exit=protective_exit,
+        full_close=full_close_decided,
+        current_shares=int(current_shares),
+        delta_shares=int(delta_shares_value),
+    )
+    if override_gate and (
+        not approval.allowed
+        or abs(int(approval_context.adjusted_delta_shares)) < abs(int(delta_shares_value))
+    ):
+        # An exit is approved at its full size when the approval held it only
+        # through overridable blocks, or held or shrank it only through soft
+        # throttles (including a soft throttle that rounded it to ZERO_QTY).
+        # The original reason names stay in the journal; any other block, or a
+        # shrink with any other scaling reason, is left as is.
+        approval_reasons = {str(reason) for reason in approval.reasons} - EXIT_OVERRIDE_GATES - {"ZERO_QTY"}
+        approval_blocks = {reason for reason in approval_reasons if reason.endswith("_BLOCK")}
+        scaling_reasons = approval_reasons - approval_blocks
+        if approval_blocks:
+            exit_keeps_full_size = (not approval.allowed) and approval_blocks <= EXIT_OVERRIDABLE_APPROVAL_BLOCKS
+        else:
+            exit_keeps_full_size = bool(scaling_reasons) and all(
+                reason.endswith("_SOFT_THROTTLE") for reason in scaling_reasons
+            )
+        if exit_keeps_full_size:
+            if override_gate not in gates_added:
+                gates_added.append(override_gate)
+            approval = ExecutionApproval(
+                True,
+                int(delta_shares_value),
+                float(approval.expected_net_edge_bps),
+                tuple(approval.reasons) + (override_gate,),
+            )
+            approval_context = replace(
+                approval_context,
+                approval=approval,
+                adjusted_delta_shares=int(delta_shares_value),
+                adjusted_side=side,
+            )
+    if not approval.allowed and override_gate is None:
+        # The paper sampling floor is for entries; an exit keeps its own size above.
         paper_floor_delta = _paper_sample_soft_throttle_floor_delta(
             current_shares=int(current_shares),
             requested_delta_shares=int(delta_shares_value),
@@ -631,25 +679,6 @@ def prepare_netting_symbol_approval(
                 adjusted_delta_shares=int(delta_shares_value),
                 adjusted_side=side,
             )
-    if protective_exit and not approval.allowed:
-        # Same pattern as the paper floor: the original block names stay in the
-        # journal and the backstop exit is approved at its full size.
-        approval_blocks = {str(reason) for reason in approval.reasons if str(reason).endswith("_BLOCK")}
-        if approval_blocks and approval_blocks <= PROTECTIVE_EXIT_OVERRIDABLE_APPROVAL_BLOCKS:
-            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
-                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
-            approval = ExecutionApproval(
-                True,
-                int(delta_shares_value),
-                float(approval.expected_net_edge_bps),
-                tuple(approval.reasons) + (GATE_PROTECTIVE_EXIT_OVERRIDE,),
-            )
-            approval_context = replace(
-                approval_context,
-                approval=approval,
-                adjusted_delta_shares=int(delta_shares_value),
-                adjusted_side=side,
-            )
     if not approval.allowed:
         return NettingSymbolApprovalResult(
             delta_shares=delta_shares_value,
@@ -664,32 +693,6 @@ def prepare_netting_symbol_approval(
             approval=approval,
             approval_context=approval_context,
         )
-    if (
-        protective_exit
-        and abs(int(approval_context.adjusted_delta_shares)) < abs(int(delta_shares_value))
-    ):
-        # Soft throttles only shrink a backstop exit; keep its full size. Any
-        # other scaling reason (or a hard block) is left as approved.
-        scaling_reasons = {
-            str(reason)
-            for reason in approval.reasons
-            if str(reason) != GATE_PROTECTIVE_EXIT_OVERRIDE and not str(reason).endswith("_BLOCK")
-        }
-        if scaling_reasons and all(reason.endswith("_SOFT_THROTTLE") for reason in scaling_reasons):
-            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
-                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
-            approval = ExecutionApproval(
-                True,
-                int(delta_shares_value),
-                float(approval.expected_net_edge_bps),
-                tuple(approval.reasons) + (GATE_PROTECTIVE_EXIT_OVERRIDE,),
-            )
-            approval_context = replace(
-                approval_context,
-                approval=approval,
-                adjusted_delta_shares=int(delta_shares_value),
-                adjusted_side=side,
-            )
     if int(approval_context.adjusted_delta_shares) != int(delta_shares_value):
         delta_shares_value = int(approval_context.adjusted_delta_shares)
         target_shares = int(current_shares + delta_shares_value)
@@ -793,19 +796,26 @@ def prepare_netting_symbol_approval(
             capacity_scale = min(capacity_scale, slo_derisk_scale)
         if feed_derisk_scale < 1.0:
             capacity_scale = min(capacity_scale, feed_derisk_scale)
-        if capacity_scale < 1.0 and protective_exit:
-            # A backstop exit keeps its full size; record what the throttle would have done.
+        capacity_override_gate = exit_override_gate(
+            protective_exit=protective_exit,
+            full_close=full_close_decided,
+            current_shares=int(current_shares),
+            delta_shares=int(delta_shares_value),
+        )
+        if capacity_scale < 1.0 and capacity_override_gate:
+            # An exit keeps its full size; record what the throttle would have done.
             throttled_qty = int(round(float(delta_shares_value) * capacity_scale))
             gates_added.append(
                 "CAPACITY_THROTTLE_BLOCK" if throttled_qty == 0 else "CAPACITY_THROTTLE_SCALE"
             )
-            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
-                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+            if capacity_override_gate not in gates_added:
+                gates_added.append(capacity_override_gate)
             snapshot_updates["capacity_throttle"] = {
                 "scale": capacity_scale,
                 "before_delta_shares": capacity_before_qty,
                 "after_delta_shares": int(delta_shares_value),
-                "protective_exit": True,
+                "protective_exit": bool(protective_exit),
+                "exit_override": capacity_override_gate,
             }
         elif capacity_scale < 1.0:
             throttled_qty = int(round(float(delta_shares_value) * capacity_scale))

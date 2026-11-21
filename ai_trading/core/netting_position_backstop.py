@@ -43,6 +43,9 @@ GATE_MAX_HOLD_EXIT = "POSITION_MAX_HOLD_EXIT"
 GATE_REENTRY_BLOCK = "POSITION_BACKSTOP_REENTRY_BLOCK"
 GATE_CAP_BLOCK = "POSITION_CAP_BLOCK"
 GATE_PROTECTIVE_EXIT_OVERRIDE = "PROTECTIVE_EXIT_OVERRIDE"
+# A normal (non-backstop) full close passed an entry-quality gate.
+GATE_CLOSING_EXIT_OVERRIDE = "CLOSING_EXIT_OVERRIDE"
+EXIT_OVERRIDE_GATES = frozenset({GATE_PROTECTIVE_EXIT_OVERRIDE, GATE_CLOSING_EXIT_OVERRIDE})
 
 REASON_STOP_LOSS = "stop_loss"
 REASON_MAX_HOLD = "max_hold"
@@ -101,6 +104,49 @@ def _symbol_marker(marker: str, symbol: str) -> str:
     within a few seconds, so per-symbol markers carry the symbol in the text."""
 
     return f"{marker} | symbol={symbol}"
+
+
+def _reduces_without_crossing(current: int, delta: int) -> bool:
+    return current != 0 and delta != 0 and (current > 0) != (delta > 0) and abs(delta) <= abs(current)
+
+
+def is_full_close(current_shares: int, delta_shares: int) -> bool:
+    """True when the order takes the held position exactly to flat (long or short).
+
+    Share counts are truncated to whole shares, so a sub-one-share position
+    counts as flat and is never a full close here.
+    """
+
+    current = int(current_shares)
+    return current != 0 and int(delta_shares) == -current
+
+
+def exit_override_gate(
+    *,
+    protective_exit: bool,
+    current_shares: int,
+    delta_shares: int,
+    full_close: bool | None = None,
+) -> str | None:
+    """Marker for an order the entry-quality gates must not hold back.
+
+    A backstop exit records ``PROTECTIVE_EXIT_OVERRIDE``. A normal exit records
+    ``CLOSING_EXIT_OVERRIDE`` only if it is a full close and what remains still
+    only reduces the position. ``full_close`` is the decision taken once on the
+    intended order, before any clip, scale or upsizing; whenever a caller has
+    it, it is the only source. With ``full_close=None`` (a caller ahead of that
+    decision) the order as given is judged. Anything else, including a
+    partial trim, gets ``None`` and stays fully gated.
+    """
+
+    if protective_exit:
+        return GATE_PROTECTIVE_EXIT_OVERRIDE
+    current = int(current_shares)
+    delta = int(delta_shares)
+    closing = is_full_close(current, delta) if full_close is None else bool(full_close)
+    if closing and _reduces_without_crossing(current, delta):
+        return GATE_CLOSING_EXIT_OVERRIDE
+    return None
 
 
 def _side_of(qty: float) -> str:
@@ -647,11 +693,13 @@ class PositionBackstop:
 
 __all__ = [
     "BackstopStore",
+    "EXIT_OVERRIDE_GATES",
     "Episode",
     "Evaluation",
     "GATE_CAP_BLOCK",
     "GATE_MAX_HOLD_EXIT",
     "GATE_PROTECTIVE_EXIT_OVERRIDE",
+    "GATE_CLOSING_EXIT_OVERRIDE",
     "GATE_REENTRY_BLOCK",
     "GATE_STOP_LOSS_EXIT",
     "Lock",
@@ -662,6 +710,8 @@ __all__ = [
     "PositionBasis",
     "SymbolStep",
     "evaluate",
+    "exit_override_gate",
+    "is_full_close",
     "load_store",
     "next_session_open",
     "save_store",

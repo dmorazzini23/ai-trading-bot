@@ -449,11 +449,13 @@ def test_open_breaker_turns_a_reversal_into_an_exit() -> None:
 
     result = _process(processor, target_dollars=-200.0)
 
+    # Every reversal is now clamped to its exit leg before the gates run
+    # (FLAT_BEFORE_REVERSAL), so the breaker sees a plain reduction and lets it
+    # through; it no longer has to turn the reversal into an exit itself.
     assert result.submitted_increment == 1
     assert submitted == [(-10, 0)]
-    assert records[0]["gates"] == ["DRAWDOWN_BREAKER_REDUCE_ONLY", "OK_TRADE"]
+    assert records[0]["gates"] == ["FLAT_BEFORE_REVERSAL", "OK_TRADE"]
     assert records[0]["net_target"].target_dollars == 0.0
-    assert records[0]["config_snapshot"]["drawdown_breaker"] == OPEN_BREAKER
 
 
 def test_stop_lock_exit_is_not_held_back_by_an_open_breaker() -> None:

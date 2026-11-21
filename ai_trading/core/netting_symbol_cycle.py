@@ -11,8 +11,11 @@ from ai_trading.config.management import get_env
 from ai_trading.config.launch_profiles import resolve_launch_profile
 from ai_trading.core.evidence_lineage import deterministic_opportunity_correlation_id
 from ai_trading.core.netting_position_backstop import (
+    EXIT_OVERRIDE_GATES,
     GATE_CAP_BLOCK,
-    GATE_PROTECTIVE_EXIT_OVERRIDE,
+    GATE_CLOSING_EXIT_OVERRIDE,
+    exit_override_gate,
+    is_full_close,
 )
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
@@ -208,10 +211,10 @@ def _short_openings_allowed(cfg: Any) -> bool:
 
 
 def _extend_gates(gates: list[str], added: Sequence[str]) -> None:
-    """Extend ``gates``; a protective-exit override is recorded only once."""
+    """Extend ``gates``; an exit override marker is recorded only once."""
 
     for gate in added:
-        if gate == GATE_PROTECTIVE_EXIT_OVERRIDE and gate in gates:
+        if gate in EXIT_OVERRIDE_GATES and gate in gates:
             continue
         gates.append(gate)
 
@@ -220,7 +223,7 @@ def _thin_max_order_dollars() -> float:
     return float(get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float))
 
 
-def _protective_exit_cap_qty(delta_shares: int, price: float, cap_dollars: float) -> int:
+def _exit_cap_qty(delta_shares: int, price: float, cap_dollars: float) -> int:
     """Signed exit size clipped to the thin-order dollar cap: at least one
     share, never more than the exit. With no cap configured the exit is whole."""
 
@@ -290,14 +293,43 @@ def process_netting_symbol(
         kwargs["metrics"] = metrics
         if backstop is not None:
             backstop.note_decision(symbol, kwargs.get("gates", ()))
+        recorded_gates = [str(gate) for gate in kwargs.get("gates", ())]
+        if GATE_CLOSING_EXIT_OVERRIDE in recorded_gates:
+            processor.logger.info(
+                f"{GATE_CLOSING_EXIT_OVERRIDE} | symbol={symbol}",
+                extra={
+                    "symbol": symbol,
+                    "current_shares": int(current_shares),
+                    "delta_shares": int(delta_shares),
+                    "gates": recorded_gates,
+                    "submitted": bool(kwargs.get("order")),
+                },
+            )
         return processor.record_decision_func(**kwargs)
 
     backstop = processor.position_backstop
     protective_exit = False
+    # Decided once, just before the liquidity clips, on the intended order: a
+    # full close stays an exit in progress through any later clip, scale or
+    # upsizing, and nothing after that point re-derives it from the live delta.
+    # None until then: earlier gates judge the order as it stands.
+    full_close_exit: bool | None = None
+    current_shares = 0
+    delta_shares = 0
 
-    def _note_protective_override() -> None:
-        if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates:
-            gates.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+    def _exit_override() -> str | None:
+        """Override marker when the order as it now stands is an exit, else ``None``."""
+
+        return exit_override_gate(
+            protective_exit=protective_exit,
+            current_shares=int(current_shares),
+            delta_shares=int(delta_shares),
+            full_close=full_close_exit,
+        )
+
+    def _note_exit_override(override_gate: str) -> None:
+        if override_gate not in gates:
+            gates.append(override_gate)
 
     liq_features = processor.latest_liquidity.get(
         symbol,
@@ -428,6 +460,27 @@ def process_netting_symbol(
                 config_snapshot=symbol_snapshot,
             )
             return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
+    if int(current_shares) != 0 and (int(current_shares) + int(delta_shares)) * int(current_shares) < 0:
+        # The cycle never trades through flat in one order (FLAT_BEFORE_REVERSAL).
+        # Clamp the flip to its exit leg here, so the gates below judge a
+        # reduction to flat; the entry leg is a fresh opening on a later bar,
+        # gated in full from flat.
+        requested_flip_delta = int(delta_shares)
+        delta_shares = -int(current_shares)
+        net_target.target_shares = 0
+        net_target.target_dollars = 0.0
+        gates.append("FLAT_BEFORE_REVERSAL")
+        processor.logger.info(
+            "POSITION_REVERSAL_CLAMP",
+            extra={
+                "symbol": symbol,
+                "current_shares": int(current_shares),
+                "requested_delta_shares": requested_flip_delta,
+                "adjusted_delta_shares": int(delta_shares),
+                "target_shares": 0,
+                "reason": "FLAT_BEFORE_REVERSAL",
+            },
+        )
     symbol_prelude = processor.prepare_symbol_prelude_func(
         state=processor.state,
         symbol=symbol,
@@ -527,9 +580,9 @@ def process_netting_symbol(
                 net_target.target_dollars = 0.0
                 net_target.target_shares = 0
                 delta_shares = -current_shares
-            elif protective_exit:
-                # Block mode would hold the backstop exit back; the exit goes on.
-                _note_protective_override()
+            elif (quarantine_override := _exit_override()) is not None:
+                # Block mode would hold the exit back; the exit goes on.
+                _note_exit_override(quarantine_override)
             else:
                 _record_decision(
                     symbol=symbol,
@@ -646,9 +699,11 @@ def process_netting_symbol(
             processor.event_blackout_cache[symbol] = cached_event_risk
         event_risk_near = bool(cached_event_risk)
         symbol_snapshot["event_risk_near"] = event_risk_near
-        if event_risk_near and protective_exit:
+        event_override = _exit_override() if event_risk_near else None
+        if event_override is not None:
+            # Event risk is a reason to reduce, never to hold an exit.
             gates.append("EVENT_RISK_BLACKOUT_BLOCK")
-            _note_protective_override()
+            _note_exit_override(event_override)
         elif event_risk_near:
             gates.append("EVENT_RISK_BLACKOUT_BLOCK")
             _record_decision(
@@ -673,7 +728,8 @@ def process_netting_symbol(
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
-    protective_volume_capped = False
+    full_close_exit = is_full_close(int(current_shares), int(delta_shares))
+    exit_volume_capped = False
     if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
         participation_block_mode = str(
             get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")
@@ -691,19 +747,20 @@ def process_netting_symbol(
         if not allowed_participation:
             participation_gate = liq_reason or "LIQ_PARTICIPATION_BLOCK"
             rolling_volume_value = float(liq_features.rolling_volume or 0.0)
-            if protective_exit and not rolling_volume_value > 0.0:
-                # No volume (or no liquidity entry): a backstop exit is not held
-                # back; it goes out capped like a thin-liquidity exit and the lock
-                # finishes the rest. Positive volume keeps the normal path.
-                delta_shares = _protective_exit_cap_qty(
+            volume_override = _exit_override()
+            if volume_override is not None and not rolling_volume_value > 0.0:
+                # No volume (or no liquidity entry): an exit is not held back; it
+                # goes out capped like a thin-liquidity exit and later bars (or the
+                # backstop lock) finish the rest. Positive volume keeps the normal path.
+                delta_shares = _exit_cap_qty(
                     int(delta_shares), float(price), _thin_max_order_dollars()
                 )
                 net_target.target_shares = current_shares + delta_shares
                 net_target.target_dollars = net_target.target_shares * price
                 gates.append(str(participation_gate))
-                _note_protective_override()
+                _note_exit_override(volume_override)
                 participation_block_bypassed = True
-                protective_volume_capped = True
+                exit_volume_capped = True
             elif participation_block_mode == "block" or _gate_blocks(processor, str(participation_gate)):
                 gates.append(str(participation_gate))
                 _record_decision(
@@ -739,9 +796,9 @@ def process_netting_symbol(
         if liq_regime is LiquidityRegime.THIN and "LIQ_REGIME_THIN_SCALE" not in gates:
             gates.append("LIQ_REGIME_THIN_SCALE")
 
-    # A protective exit already capped for missing volume is not scaled or
-    # clipped again by the thin-liquidity rules.
-    if liq_regime is LiquidityRegime.THIN and not protective_volume_capped:
+    # An exit already capped for missing volume is not scaled or clipped again
+    # by the thin-liquidity rules.
+    if liq_regime is LiquidityRegime.THIN and not exit_volume_capped:
         thin_cost_mult = float(get_env("AI_TRADING_LIQ_THIN_COST_MULT", 1.3, cast=float))
         if thin_cost_mult > 1.0:
             scaled_qty = int(round(delta_shares / thin_cost_mult))
@@ -753,7 +810,8 @@ def process_netting_symbol(
         thin_max_order_dollars = _thin_max_order_dollars()
         if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
             thin_block_applies = _gate_blocks(processor, "LIQ_THIN_MAX_ORDER_BLOCK")
-            if thin_block_applies and not protective_exit:
+            thin_override = _exit_override()
+            if thin_block_applies and thin_override is None:
                 gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
                 _record_decision(
                     symbol=symbol,
@@ -770,16 +828,16 @@ def process_netting_symbol(
                     delta_shares,
                 )
             )
-            if protective_exit:
-                # A backstop exit goes out clipped to the thin-order cap (at least
-                # one share, never more than the exit); the lock finishes the rest.
-                thin_cap_qty = _protective_exit_cap_qty(int(delta_shares), float(price), thin_max_order_dollars)
+            if thin_override is not None:
+                # An exit goes out clipped to the thin-order cap (at least one
+                # share, never more than the exit); later bars finish the rest.
+                thin_cap_qty = _exit_cap_qty(int(delta_shares), float(price), thin_max_order_dollars)
             delta_shares = thin_cap_qty
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price
-            if protective_exit and thin_block_applies:
+            if thin_override is not None and thin_block_applies:
                 gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
-                _note_protective_override()
+                _note_exit_override(thin_override)
             else:
                 gates.append("LIQ_THIN_MAX_ORDER_BLOCK_BYPASSED")
 
@@ -805,6 +863,7 @@ def process_netting_symbol(
         clip_delta_to_symbol_notional_cap_func=processor.clip_delta_to_symbol_notional_cap_func,
         logger=processor.logger,
         protective_exit=protective_exit,
+        full_close_exit=full_close_exit,
     )
     if adjustment_result.uncertainty_event is not None:
         processor.uncertainty_cycle_events.append(dict(adjustment_result.uncertainty_event))
@@ -869,6 +928,7 @@ def process_netting_symbol(
         evaluate_execution_approval_func=processor.evaluate_execution_approval_func,
         approve_execution_candidate_func=processor.approve_execution_candidate_func,
         protective_exit=protective_exit,
+        full_close_exit=full_close_exit,
     )
     _extend_gates(gates, approval_result.gates_added)
     symbol_snapshot.update(approval_result.snapshot_updates)
@@ -923,9 +983,9 @@ def process_netting_symbol(
         symbol_snapshot=symbol_snapshot,
         execution_model_lineage=dict(processor.execution_model_lineage),
         correlation_id=opportunity_correlation_id,
-        # Pretrade repeats the event-risk blackout on this flag; a protective
-        # exit already passed that blackout above, so it is not raised again.
-        event_risk_near=event_risk_near and not protective_exit,
+        # Pretrade repeats the event-risk blackout on this flag; an exit already
+        # passed that blackout above, so it is not raised again.
+        event_risk_near=event_risk_near and _exit_override() is None,
         opening_trade=bool(opening_trade),
         portfolio_optimizer_enabled=bool(processor.portfolio_optimizer_enabled),
         portfolio_optimizer=processor.portfolio_optimizer,
@@ -944,6 +1004,7 @@ def process_netting_symbol(
         safe_validate_pretrade_func=processor.safe_validate_pretrade_func,
         get_sector_func=processor.get_sector_func,
         protective_exit=protective_exit,
+        full_close_exit=full_close_exit,
     )
     _extend_gates(gates, submit_prelude.gates_added)
     symbol_snapshot.update(submit_prelude.snapshot_updates)

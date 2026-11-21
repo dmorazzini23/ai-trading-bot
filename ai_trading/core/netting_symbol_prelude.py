@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Callable, Collection, Mapping
 
 from ai_trading.config.management import get_env
-from ai_trading.core.netting_position_backstop import GATE_PROTECTIVE_EXIT_OVERRIDE
+from ai_trading.core.netting_position_backstop import exit_override_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,9 +73,15 @@ def prepare_netting_symbol_prelude(
                 "disabled_sleeves_for_symbol": disabled_for_symbol,
                 "disabled_slices": sorted(policy_rollback_disabled_slices),
             }
-        if disabled_for_symbol and protective_exit:
-            # A backstop exit is not a sleeve trade; the ablation block does not hold it.
-            gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+        override_gate = exit_override_gate(
+            protective_exit=protective_exit,
+            current_shares=int(current_shares),
+            delta_shares=delta_shares_value,
+        )
+        if disabled_for_symbol and override_gate:
+            # An exit (backstop exit or full close) is not a new sleeve trade; the
+            # ablation block does not hold it.
+            gates_added.append(override_gate)
         elif disabled_for_symbol:
             return NettingSymbolPreludeResult(
                 delta_shares=delta_shares_value,
