@@ -556,19 +556,21 @@ Safety backstops in the netting cycle, not strategy rules. Code:
 - **Exits and the entry-quality gates:** two kinds of exit get the same
   treatment: a protective (backstop) exit, and a full close (an order that
   takes the held position, long or short, exactly to flat, including the exit
-  leg of a flip). Whether an order is a full close is decided on the intended
-  order before any liquidity clip; a full close that is clipped or scaled
-  keeps the treatment on what remains, and on a later bar the remainder is
-  again a full close of the smaller position. Positions are counted in whole
-  shares, so a position under one share counts as flat. A partial trim (a
-  reduction that leaves a position) is gated exactly like an entry. Gate code:
-  `exit_override_gate()` in the backstop module.
+  leg of a flip). Whether an order is a full close is decided once, on the
+  intended order before any liquidity clip; a full close that is clipped or
+  scaled keeps the treatment on what remains, and on a later bar the remainder
+  is again a full close of the smaller position. A trim that a later step
+  resizes to exactly flat (for example ATTACK-tier upsizing) is still a trim.
+  Positions are counted in whole shares, so a position under one share counts
+  as flat. A partial trim (a reduction that leaves a position) is gated
+  exactly like an entry. Gate code: `exit_override_gate()` in the backstop
+  module.
   - **Skipped:** policy ablation block, quarantine block mode, event blackout
     (and the pretrade event flag), adaptive sizing, approval blocks for net edge
     floor, spread, calibration, pacing and stale orders, approval soft
-    throttles (including one that rounds the order to `ZERO_QTY`), capacity
-    throttle, the paper sampling floor, and the portfolio optimizer. The exit
-    keeps its full size.
+    throttles when every scaling reason is a soft throttle (including one that
+    rounds the order to `ZERO_QTY`), capacity throttle, the paper sampling
+    floor, and the portfolio optimizer. The exit keeps its full size.
   - **Clipped instead of blocked:** the thin-order dollar cap
     (`LIQ_THIN_MAX_ORDER_BLOCK`), and the participation cap when rolling volume
     is zero or the symbol has no liquidity entry (`LIQ_PARTICIPATION_BLOCK`).
@@ -580,8 +582,9 @@ Safety backstops in the netting cycle, not strategy rules. Code:
     missing price, the kill switch, bar dedup, the participation cap with
     positive volume (block or scale), the thin-liquidity cost multiplier (not
     on a volume-capped exit), approval hard risk blocks (`RISK_*_HARD_BLOCK`),
-    sell-to-available, duplicate intent, broker breakers and all other
-    pretrade checks (for example `DERISK_DATA_QUALITY_BLOCK` on a missing
+    any other approval scaling reason, `RISK_CAP_SYMBOL` (symbol notional cap
+    and minimum quantity), sell-to-available, duplicate intent, broker
+    breakers and all other pretrade checks (for example `DERISK_DATA_QUALITY_BLOCK` on a missing
     quote, stale quote, slippage ceiling). The end-of-day flatten is a
     separate path and does not meet these gates.
   - **Journal:** the original gate name stays in the decision record, followed
