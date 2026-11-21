@@ -145,7 +145,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
         runtime=SimpleNamespace(),
         cfg=SimpleNamespace(seed="seed"),
         now=now,
-        logger=SimpleNamespace(debug=lambda *a, **k: None),
+        logger=SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None),
         decision_snapshot_template={"liquidity_regime": "normal"},
         latest_price={"AAPL": 10.0},
         latest_liquidity={"AAPL": LiquidityFeatures(rolling_volume=1000.0, spread_bps=2.0, volatility_proxy=0.01)},

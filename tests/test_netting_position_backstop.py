@@ -766,8 +766,19 @@ for _gate in (
     }
 
 
+_OVERRIDE_MARKERS = {"PROTECTIVE_EXIT_OVERRIDE", "REDUCING_EXIT_OVERRIDE"}
+
+
+def _entry_processor(tmp_path: Path, overrides: dict[str, Any]) -> tuple[Any, list[dict[str, Any]], list[int]]:
+    # The test proposals carry 1 bps of edge against 4 bps of cost; keep the
+    # cost-aware entry guard out of the way so the gate under test decides.
+    return _processor(
+        tmp_path, positions={}, ineffective_gate_blocklist={"COST_AWARE_ENTRY_GUARD"}, **overrides
+    )
+
+
 @pytest.mark.parametrize("case", sorted(_BYPASS_CASES))
-def test_bypassed_gate_passes_a_protective_exit_and_still_holds_a_normal_one(
+def test_bypassed_gate_passes_protective_and_normal_exits_and_still_holds_an_entry(
     tmp_path: Path, case: str
 ) -> None:
     overrides = _BYPASS_CASES[case]["overrides"]
@@ -776,33 +787,88 @@ def test_bypassed_gate_passes_a_protective_exit_and_still_holds_a_normal_one(
     normal, normal_records, normal_submitted = _processor(
         tmp_path / "normal", positions={"AAPL": 1}, avg_entry=10.2, **overrides
     )
-    plain, plain_records = _make_processor(positions={"AAPL": 1}, **overrides)
-    plain.now = NOW
     protective, records, submitted = _processor(tmp_path / "protective", positions={"AAPL": 1}, **overrides)
+    entry, entry_records, entry_submitted = _entry_processor(tmp_path / "entry", overrides)
 
-    normal_result = _process(normal, target_dollars=0.0)
-    plain_result = _process(plain, target_dollars=0.0)
+    _process(normal, target_dollars=0.0)
     _process(protective, target_dollars=0.0)
+    entry_result = _process(entry, target_dollars=10.0)  # one share at $10
 
-    # Normal exit: blocked exactly as without the backstop.
-    assert normal_submitted == []
-    assert normal_result == plain_result
-    assert normal_records[0]["gates"] == plain_records[0]["gates"]
-    assert gate in normal_records[0]["gates"]
-    assert "PROTECTIVE_EXIT_OVERRIDE" not in normal_records[0]["gates"]
-    # Protective exit: full size, original gate name kept, override recorded once.
+    # Normal exit (was: blocked exactly as without the backstop): now a pure
+    # reduction goes out at full size, original gate name kept, own marker once.
+    assert normal_submitted == [-1]
+    normal_gates = normal_records[0]["gates"]
+    assert gate in normal_gates
+    assert normal_gates.count("REDUCING_EXIT_OVERRIDE") == 1
+    assert "PROTECTIVE_EXIT_OVERRIDE" not in normal_gates
+    assert normal_gates[-1] == "OK_TRADE"
+    # Protective exit: unchanged.
     assert submitted == [-1]
     gates = records[0]["gates"]
     assert gates[0] == "POSITION_STOP_LOSS_EXIT"
     assert gate in gates
     assert gates.count("PROTECTIVE_EXIT_OVERRIDE") == 1
+    assert "REDUCING_EXIT_OVERRIDE" not in gates
     assert gates[-1] == "OK_TRADE"
+    # Entry: still held by the gate, no override.
+    assert entry_submitted == []
+    assert entry_result.submitted_increment == 0
+    assert entry_records[0]["gates"][-1] == gate
+    assert not _OVERRIDE_MARKERS & set(entry_records[0]["gates"])
 
 
-def test_event_blackout_is_not_raised_again_by_pretrade_for_a_protective_exit(tmp_path: Path) -> None:
+def test_reducing_exit_override_logs_a_per_symbol_marker(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    overrides = _BYPASS_CASES["spread_too_wide_block"]["overrides"]
+    normal, _records, _submitted = _processor(tmp_path / "normal", positions={"AAPL": 1}, avg_entry=10.2, **overrides)
+    protective, _p_records, _p_submitted = _processor(tmp_path / "protective", positions={"AAPL": 1}, **overrides)
+    entry, _e_records, _e_submitted = _entry_processor(tmp_path / "entry", overrides)
+
+    with caplog.at_level(logging.INFO):
+        _process(normal, target_dollars=0.0)
+        _process(protective, target_dollars=0.0)
+        _process(entry, target_dollars=10.0)
+
+    (marker,) = _messages(caplog, "REDUCING_EXIT_OVERRIDE")
+    assert marker.getMessage() == "REDUCING_EXIT_OVERRIDE | symbol=AAPL"
+    assert marker.levelno == logging.INFO
+    assert (marker.current_shares, marker.delta_shares, marker.submitted) == (1, -1, True)
+    assert "SPREAD_TOO_WIDE_BLOCK" in marker.gates
+
+
+@pytest.mark.parametrize(
+    ("current", "delta", "expected"),
+    [
+        (10, -10, True),
+        (10, -3, True),
+        (-10, 4, True),
+        (10, -11, False),  # flip
+        (-10, 11, False),  # flip
+        (10, 5, False),  # add
+        (0, -5, False),  # opening
+        (10, 0, False),
+    ],
+)
+def test_pure_reduction_never_opens_or_flips(current: int, delta: int, expected: bool) -> None:
+    assert nbp.is_pure_reduction(current, delta) is expected
+    gate = nbp.exit_override_gate(protective_exit=False, current_shares=current, delta_shares=delta)
+    assert gate == ("REDUCING_EXIT_OVERRIDE" if expected else None)
+    assert (
+        nbp.exit_override_gate(protective_exit=True, current_shares=current, delta_shares=delta)
+        == "PROTECTIVE_EXIT_OVERRIDE"
+    )
+
+
+@pytest.mark.parametrize("avg_entry", [11.0, 10.2], ids=["protective", "normal"])
+def test_event_blackout_is_not_raised_again_by_pretrade_for_an_exit(tmp_path: Path, avg_entry: float) -> None:
     seen: list[bool] = []
     processor, records, submitted = _processor(
-        tmp_path, positions={"AAPL": 10}, event_blackout_enabled=True, is_near_event_func=lambda *a, **k: True
+        tmp_path,
+        positions={"AAPL": 10},
+        avg_entry=avg_entry,
+        event_blackout_enabled=True,
+        is_near_event_func=lambda *a, **k: True,
     )
     real_prelude = processor.prepare_submit_prelude_func
 
@@ -819,10 +885,12 @@ def test_event_blackout_is_not_raised_again_by_pretrade_for_a_protective_exit(tm
     assert records[0]["config_snapshot"]["event_risk_near"] is True
 
 
-def test_approval_block_outside_the_override_list_still_holds_a_protective_exit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("avg_entry", [11.0, 10.2], ids=["protective", "normal"])
+def test_approval_block_outside_the_override_list_still_holds_an_exit(tmp_path: Path, avg_entry: float) -> None:
     processor, records, submitted = _processor(
         tmp_path,
         positions={"AAPL": 10},
+        avg_entry=avg_entry,
         effective_policy=_approval_policy(),
         evaluate_execution_approval_func=evaluate_execution_approval,
         approve_execution_candidate_func=lambda policy, candidate: ExecutionApproval(
@@ -834,7 +902,7 @@ def test_approval_block_outside_the_override_list_still_holds_a_protective_exit(
     _process(processor, target_dollars=0.0)
 
     assert submitted == []
-    assert "PROTECTIVE_EXIT_OVERRIDE" not in records[0]["gates"]
+    assert not _OVERRIDE_MARKERS & set(records[0]["gates"])
     assert records[0]["metrics"]["terminal_reason"] == "EXECUTION_APPROVAL_BLOCK"
 
 
@@ -875,19 +943,30 @@ def _exit_prelude_kwargs(**overrides: Any) -> dict[str, Any]:
         ),
     ],
 )
-def test_portfolio_optimizer_passes_a_protective_exit_and_holds_a_normal_one(
-    overrides: dict[str, Any], gate: str
-) -> None:
+def test_portfolio_optimizer_passes_exits_and_holds_an_entry(overrides: dict[str, Any], gate: str) -> None:
     normal = prepare_netting_submit_prelude(**cast(Any, _exit_prelude_kwargs(**overrides)))
     protective = prepare_netting_submit_prelude(
         **cast(Any, _exit_prelude_kwargs(**overrides)), protective_exit=True
     )
+    entry = prepare_netting_submit_prelude(
+        **cast(
+            Any,
+            _exit_prelude_kwargs(
+                **{"side": "buy", "delta_shares": 10, "current_shares": 0.0, "opening_trade": True, **overrides}
+            ),
+        )
+    )
 
-    assert normal.blocked_reason == gate
-    assert normal.execution_intent_context is None
+    # Normal exit (was: blocked): a pure reduction now passes with its own marker.
+    assert normal.blocked_reason is None
+    assert normal.execution_intent_context is not None
+    assert list(normal.gates_added) == [gate, "REDUCING_EXIT_OVERRIDE"]
     assert protective.blocked_reason is None
     assert protective.execution_intent_context is not None
     assert list(protective.gates_added) == [gate, "PROTECTIVE_EXIT_OVERRIDE"]
+    assert entry.blocked_reason == gate
+    assert entry.execution_intent_context is None
+    assert list(entry.gates_added) == [gate]
 
 
 @pytest.mark.parametrize(
@@ -897,15 +976,20 @@ def test_portfolio_optimizer_passes_a_protective_exit_and_holds_a_normal_one(
         ({"state": SimpleNamespace(halt_trading=False, halt_reason=None, stop_lock={}, last_order_bar_ts={"AAPL": NOW}, degraded_providers=set())}, ["BAR_DEDUP"]),
     ],
 )
-def test_protective_exit_still_respects_participation_cap_and_bar_dedup(
+def test_exits_still_respect_participation_cap_and_bar_dedup(
     tmp_path: Path, overrides: dict[str, Any], gates: list[str]
 ) -> None:
-    processor, records, submitted = _processor(tmp_path, positions={"AAPL": 10}, **overrides)
+    processor, records, submitted = _processor(tmp_path / "protective", positions={"AAPL": 10}, **overrides)
+    normal, normal_records, normal_submitted = _processor(
+        tmp_path / "normal", positions={"AAPL": 10}, avg_entry=10.2, **overrides
+    )
 
     _process(processor, target_dollars=0.0)
+    _process(normal, target_dollars=0.0)
 
-    assert submitted == []
+    assert submitted == normal_submitted == []
     assert records[0]["gates"] == ["POSITION_STOP_LOSS_EXIT", *gates]
+    assert normal_records[0]["gates"] == gates
 
 
 def test_backstop_gates_cannot_be_auto_disabled(tmp_path: Path) -> None:
@@ -1256,24 +1340,31 @@ def thin_regime(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("thin_regime")
-def test_thin_max_order_clips_a_protective_exit_and_still_blocks_a_normal_one(tmp_path: Path) -> None:
+def test_thin_max_order_clips_exits_and_still_blocks_an_entry(tmp_path: Path) -> None:
     # 1000 shares at $10: the thin cost multiplier makes it 769 shares ($7,690),
     # above the $5,000 thin cap.
     normal, normal_records, normal_submitted = _processor(
         tmp_path / "normal", positions={"AAPL": 1000}, avg_entry=10.2, liq_regime_enabled=True
     )
-    plain, plain_records = _make_processor(positions={"AAPL": 1000}, liq_regime_enabled=True)
-    plain.now = NOW
     protective, records, submitted = _processor(
         tmp_path / "protective", positions={"AAPL": 1000}, liq_regime_enabled=True
     )
+    entry, entry_records, entry_submitted = _processor(tmp_path / "entry", positions={}, liq_regime_enabled=True)
 
-    assert _process(normal, target_dollars=0.0) == _process(plain, target_dollars=0.0)
+    _process(normal, target_dollars=0.0)
     _process(protective, target_dollars=0.0)
+    _process(entry, target_dollars=10_000.0)
 
-    assert normal_submitted == []
-    assert normal_records[0]["gates"] == plain_records[0]["gates"]
-    assert normal_records[0]["gates"][-1] == "LIQ_THIN_MAX_ORDER_BLOCK"
+    # Normal exit (was: blocked): clipped to the cap like a protective exit.
+    assert normal_submitted == [-500]
+    assert normal_records[0]["gates"] == [
+        "LIQ_THIN_COST_MULT_SCALE",
+        "LIQ_THIN_MAX_ORDER_BLOCK",
+        "REDUCING_EXIT_OVERRIDE",
+        "OK_TRADE",
+    ]
+    assert entry_submitted == []
+    assert entry_records[0]["gates"] == ["LIQ_THIN_COST_MULT_SCALE", "LIQ_THIN_MAX_ORDER_BLOCK"]
     assert submitted == [-500]
     assert records[0]["gates"] == [
         "POSITION_STOP_LOSS_EXIT",
@@ -1335,40 +1426,46 @@ def _real_approval(policy: Any) -> dict[str, Any]:
     }
 
 
-def test_soft_throttle_keeps_a_protective_exit_full_and_scales_a_normal_one(tmp_path: Path) -> None:
+def test_soft_throttle_keeps_exits_full_and_still_scales_an_entry(tmp_path: Path) -> None:
     overrides = _real_approval(_throttle_policy())
     normal, normal_records, normal_submitted = _processor(
         tmp_path / "normal", positions={"AAPL": 100}, avg_entry=10.2, **overrides
     )
-    plain, plain_records = _make_processor(positions={"AAPL": 100}, **overrides)
-    plain.now = NOW
     protective, records, submitted = _processor(tmp_path / "protective", positions={"AAPL": 100}, **overrides)
-    plain_submitted: list[int] = []
-    real_plain_submit = plain.execute_submission_func
-    plain.execute_submission_func = lambda **kw: plain_submitted.append(int(kw["delta_shares"])) or real_plain_submit(**kw)
+    entry_overrides = _real_approval(_throttle_policy(factor_hard_ratio=0.99))
+    entry, entry_records, entry_submitted = _entry_processor(tmp_path / "entry", entry_overrides)
 
     _process(normal, target_dollars=0.0)
-    _process(plain, target_dollars=0.0)
     _process(protective, target_dollars=0.0)
+    _process(entry, target_dollars=1000.0)
 
-    assert normal_submitted == plain_submitted == [-10]
-    assert normal_records[0]["gates"] == plain_records[0]["gates"]
+    # Normal exit (was: scaled to a tenth): full size, own marker.
+    assert normal_submitted == [-100]
     assert "RISK_FACTOR_SOFT_THROTTLE" in normal_records[0]["gates"]
+    assert normal_records[0]["gates"].count("REDUCING_EXIT_OVERRIDE") == 1
+    # Entry of 100 shares: still scaled by the soft throttle, no override.
+    assert len(entry_submitted) == 1 and 0 < entry_submitted[0] < 100
+    assert "RISK_FACTOR_SOFT_THROTTLE" in entry_records[0]["gates"]
+    assert not _OVERRIDE_MARKERS & set(entry_records[0]["gates"])
     assert submitted == [-100]
     assert "RISK_FACTOR_SOFT_THROTTLE" in records[0]["gates"]
     assert records[0]["gates"].count("PROTECTIVE_EXIT_OVERRIDE") == 1
 
 
-def test_hard_risk_block_still_holds_a_protective_exit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("avg_entry", [11.0, 10.2], ids=["protective", "normal"])
+def test_hard_risk_block_still_holds_an_exit(tmp_path: Path, avg_entry: float) -> None:
     processor, records, submitted = _processor(
-        tmp_path, positions={"AAPL": 100}, **_real_approval(_throttle_policy(factor_hard_ratio=0.2))
+        tmp_path,
+        positions={"AAPL": 100},
+        avg_entry=avg_entry,
+        **_real_approval(_throttle_policy(factor_hard_ratio=0.2)),
     )
 
     _process(processor, target_dollars=0.0)
 
     assert submitted == []
     assert "RISK_FACTOR_HARD_BLOCK" in records[0]["gates"]
-    assert "PROTECTIVE_EXIT_OVERRIDE" not in records[0]["gates"]
+    assert not _OVERRIDE_MARKERS & set(records[0]["gates"])
 
 
 def test_malformed_row_drops_only_that_row(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -1487,38 +1584,50 @@ def test_zero_volume_protective_exit_sends_at_least_one_share(
     assert "LIQ_PARTICIPATION_BLOCK" in records[0]["gates"]
 
 
-def test_zero_volume_normal_exit_is_still_blocked(tmp_path: Path, real_participation_cap: dict[str, Any]) -> None:
+def test_zero_volume_normal_exit_goes_out_capped_and_an_entry_is_still_blocked(
+    tmp_path: Path, real_participation_cap: dict[str, Any]
+) -> None:
     normal, normal_records, normal_submitted = _processor(
-        tmp_path, positions={"AAPL": 1000}, avg_entry=10.2, **real_participation_cap
+        tmp_path / "normal", positions={"AAPL": 1000}, avg_entry=10.2, **real_participation_cap
     )
-    plain, plain_records = _make_processor(positions={"AAPL": 1000}, **real_participation_cap)
-    plain.now = NOW
+    entry, entry_records, entry_submitted = _processor(tmp_path / "entry", positions={}, **real_participation_cap)
     normal.latest_liquidity = {}
-    plain.latest_liquidity = {}
+    entry.latest_liquidity = {}
 
-    assert _process(normal, target_dollars=0.0) == _process(plain, target_dollars=0.0)
-    assert normal_submitted == []
-    assert normal_records[0]["gates"] == plain_records[0]["gates"] == ["LIQ_PARTICIPATION_BLOCK"]
-    assert normal_records[0]["config_snapshot"] == plain_records[0]["config_snapshot"]
+    _process(normal, target_dollars=0.0)
+    entry_result = _process(entry, target_dollars=10_000.0)
+
+    # Normal exit (was: blocked): capped at $5,000 like a protective exit.
+    assert normal_submitted == [-500]
+    assert normal_records[0]["gates"][:2] == ["LIQ_PARTICIPATION_BLOCK", "REDUCING_EXIT_OVERRIDE"]
+    assert normal_records[0]["gates"][-1] == "OK_TRADE"
+    assert entry_submitted == []
+    assert entry_result.submitted_increment == 0
+    assert entry_records[0]["gates"] == ["LIQ_PARTICIPATION_BLOCK"]
 
 
+@pytest.mark.parametrize("avg_entry", [11.0, 10.2], ids=["protective", "normal"])
 @pytest.mark.parametrize(("mode", "expected"), [("block", []), ("scale", [-25])])
-def test_positive_volume_participation_cap_still_applies_to_protective_exits(
+def test_positive_volume_participation_cap_still_applies_to_exits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     real_participation_cap: dict[str, Any],
     mode: str,
     expected: list[int],
+    avg_entry: float,
 ) -> None:
     monkeypatch.setenv("AI_TRADING_PARTICIPATION_BLOCK_MODE", mode)
     # 1000 shares of volume at 1.5% allows 15 shares; the exit is 100.
-    processor, records, submitted = _processor(tmp_path, positions={"AAPL": 100}, **real_participation_cap)
+    processor, records, submitted = _processor(
+        tmp_path, positions={"AAPL": 100}, avg_entry=avg_entry, **real_participation_cap
+    )
 
     _process(processor, target_dollars=0.0)
 
     assert submitted == expected
-    assert "PROTECTIVE_EXIT_OVERRIDE" not in records[0]["gates"]
+    assert not _OVERRIDE_MARKERS & set(records[0]["gates"])
     if mode == "block":
-        assert records[0]["gates"] == ["POSITION_STOP_LOSS_EXIT", "LIQ_PARTICIPATION_BLOCK"]
+        backstop_gates = ["POSITION_STOP_LOSS_EXIT"] if avg_entry == 11.0 else []
+        assert records[0]["gates"] == [*backstop_gates, "LIQ_PARTICIPATION_BLOCK"]
     else:
         assert "LIQ_REGIME_THIN_SCALE" in records[0]["gates"]

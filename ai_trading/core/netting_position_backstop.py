@@ -43,6 +43,9 @@ GATE_MAX_HOLD_EXIT = "POSITION_MAX_HOLD_EXIT"
 GATE_REENTRY_BLOCK = "POSITION_BACKSTOP_REENTRY_BLOCK"
 GATE_CAP_BLOCK = "POSITION_CAP_BLOCK"
 GATE_PROTECTIVE_EXIT_OVERRIDE = "PROTECTIVE_EXIT_OVERRIDE"
+# A normal (non-backstop) exit passed an entry-quality gate as a pure reduction.
+GATE_REDUCING_EXIT_OVERRIDE = "REDUCING_EXIT_OVERRIDE"
+EXIT_OVERRIDE_GATES = frozenset({GATE_PROTECTIVE_EXIT_OVERRIDE, GATE_REDUCING_EXIT_OVERRIDE})
 
 REASON_STOP_LOSS = "stop_loss"
 REASON_MAX_HOLD = "max_hold"
@@ -101,6 +104,30 @@ def _symbol_marker(marker: str, symbol: str) -> str:
     within a few seconds, so per-symbol markers carry the symbol in the text."""
 
     return f"{marker} | symbol={symbol}"
+
+
+def is_pure_reduction(current_shares: int, delta_shares: int) -> bool:
+    """True when the order only reduces the held position: opposite side and
+    never past flat, so it can neither open nor flip a position."""
+
+    current = int(current_shares)
+    delta = int(delta_shares)
+    return current != 0 and delta != 0 and (current > 0) != (delta > 0) and abs(delta) <= abs(current)
+
+
+def exit_override_gate(*, protective_exit: bool, current_shares: int, delta_shares: int) -> str | None:
+    """Marker for an order the entry-quality gates must not hold back.
+
+    A backstop exit records ``PROTECTIVE_EXIT_OVERRIDE``; any other pure
+    reduction records ``REDUCING_EXIT_OVERRIDE``; anything else gets ``None``
+    and stays fully gated.
+    """
+
+    if protective_exit:
+        return GATE_PROTECTIVE_EXIT_OVERRIDE
+    if is_pure_reduction(current_shares, delta_shares):
+        return GATE_REDUCING_EXIT_OVERRIDE
+    return None
 
 
 def _side_of(qty: float) -> str:
@@ -647,11 +674,13 @@ class PositionBackstop:
 
 __all__ = [
     "BackstopStore",
+    "EXIT_OVERRIDE_GATES",
     "Episode",
     "Evaluation",
     "GATE_CAP_BLOCK",
     "GATE_MAX_HOLD_EXIT",
     "GATE_PROTECTIVE_EXIT_OVERRIDE",
+    "GATE_REDUCING_EXIT_OVERRIDE",
     "GATE_REENTRY_BLOCK",
     "GATE_STOP_LOSS_EXIT",
     "Lock",
@@ -662,6 +691,8 @@ __all__ = [
     "PositionBasis",
     "SymbolStep",
     "evaluate",
+    "exit_override_gate",
+    "is_pure_reduction",
     "load_store",
     "next_session_open",
     "save_store",

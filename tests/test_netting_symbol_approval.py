@@ -343,11 +343,33 @@ def test_prepare_netting_symbol_approval_keeps_flip_close_as_sell_after_throttle
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
+    # Was: the throttle shrank the close to -2. The close is a pure reduction,
+    # so it now keeps its full size and records the override.
     assert result.side == "sell"
-    assert result.delta_shares == -2
-    assert result.target_shares == 3
+    assert result.delta_shares == -5
+    assert result.target_shares == 0
     assert result.opening_trade is False
     assert "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION" in result.gates_added
     assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
+    assert "REDUCING_EXIT_OVERRIDE" in result.gates_added
     assert result.snapshot_updates["capacity_throttle"]["before_delta_shares"] == -5
-    assert result.snapshot_updates["capacity_throttle"]["after_delta_shares"] == -2
+    assert result.snapshot_updates["capacity_throttle"]["after_delta_shares"] == -5
+
+
+def test_prepare_netting_symbol_approval_still_throttles_an_add() -> None:
+    kwargs = _base_kwargs()
+    kwargs["current_shares"] = 5
+    kwargs["delta_shares"] = 5
+    kwargs["exec_engine"] = SimpleNamespace()
+    kwargs["capacity_throttle_enabled"] = True
+    kwargs["capacity_spread_soft_bps"] = 1.0
+    kwargs["capacity_spread_hard_bps"] = 2.0
+    kwargs["capacity_min_scale"] = 0.5
+    kwargs["liq_features"] = SimpleNamespace(spread_bps=5.0, rolling_volume=10000.0)
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.side == "buy"
+    assert result.delta_shares == 2
+    assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
+    assert "REDUCING_EXIT_OVERRIDE" not in result.gates_added

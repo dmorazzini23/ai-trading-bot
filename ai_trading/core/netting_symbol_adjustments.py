@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from ai_trading.config.management import get_env
-from ai_trading.core.netting_position_backstop import GATE_PROTECTIVE_EXIT_OVERRIDE
+from ai_trading.core.netting_position_backstop import exit_override_gate
 
 
 @dataclass(slots=True)
@@ -53,13 +53,19 @@ def apply_symbol_adjustments(
     if adaptive_profile and delta_shares != 0:
         adaptive_scale = safe_float(adaptive_profile.get("scale")) or 1.0
         adaptive_scale = max(0.05, min(adaptive_scale, 1.0))
-        if adaptive_scale < 1.0 and protective_exit:
-            # A backstop exit keeps its full size, even when scaling would round it to zero.
+        override_gate = exit_override_gate(
+            protective_exit=protective_exit,
+            current_shares=int(current_shares),
+            delta_shares=int(delta_shares),
+        )
+        if adaptive_scale < 1.0 and override_gate:
+            # An exit (backstop or pure reduction) keeps its full size, even when
+            # scaling would round it to zero.
             scaled_qty = int(round(float(delta_shares) * adaptive_scale))
             gates_added.append(
                 "SYMBOL_EXPECTANCY_SLIPPAGE_BLOCK" if scaled_qty == 0 else "SYMBOL_EXPECTANCY_SLIPPAGE_SCALE"
             )
-            gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+            gates_added.append(override_gate)
             snapshot_updates["symbol_adaptive_sizing"] = dict(adaptive_profile)
         elif adaptive_scale < 1.0:
             scaled_qty = int(round(float(delta_shares) * adaptive_scale))

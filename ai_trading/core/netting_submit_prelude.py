@@ -10,7 +10,7 @@ from ai_trading.config.management import get_env
 from ai_trading.core.evidence_lineage import normalize_evidence_timestamp
 from ai_trading.core.execution_guards import build_portfolio_optimizer_positions, build_pretrade_validation_cfg
 from ai_trading.core.execution_intent import ExecutionIntentContext, build_execution_intent_context
-from ai_trading.core.netting_position_backstop import GATE_PROTECTIVE_EXIT_OVERRIDE
+from ai_trading.core.netting_position_backstop import exit_override_gate
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,14 +95,19 @@ def prepare_netting_submit_prelude(
 ) -> NettingSubmitPreludeResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
+    # The optimizer never holds an exit (backstop exit or pure reduction) back.
+    override_gate = exit_override_gate(
+        protective_exit=protective_exit,
+        current_shares=int(current_shares),
+        delta_shares=int(delta_shares),
+    )
 
     if portfolio_optimizer_enabled and portfolio_optimizer is None:
         opt_runtime_context = dict(portfolio_optimizer_context)
         if bool(opt_runtime_context.get("init_failed")):
             snapshot_updates["portfolio_optimizer"] = opt_runtime_context
-            if not bool(opt_runtime_context.get("init_fail_open")) and protective_exit:
-                # The optimizer never holds a backstop exit back.
-                gates_added.extend(["PORTFOLIO_OPTIMIZER_INIT_FAILED", GATE_PROTECTIVE_EXIT_OVERRIDE])
+            if not bool(opt_runtime_context.get("init_fail_open")) and override_gate:
+                gates_added.extend(["PORTFOLIO_OPTIMIZER_INIT_FAILED", override_gate])
             elif not bool(opt_runtime_context.get("init_fail_open")):
                 blocked_reason = "PORTFOLIO_OPTIMIZER_INIT_FAILED"
                 gates_added.append(blocked_reason)
@@ -150,10 +155,10 @@ def prepare_netting_submit_prelude(
                 ),
             }
             snapshot_updates["portfolio_optimizer"] = dict(portfolio_optimizer_context | opt_context)
-            if bool(opt_context["fail_closed"]) and protective_exit:
+            if bool(opt_context["fail_closed"]) and override_gate:
                 gates_added.append("PORTFOLIO_OPTIMIZER_DECISION_ERROR")
-                if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
-                    gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+                if override_gate not in gates_added:
+                    gates_added.append(override_gate)
             elif bool(opt_context["fail_closed"]):
                 blocked_reason = "PORTFOLIO_OPTIMIZER_DECISION_ERROR"
                 gates_added.append(blocked_reason)
@@ -177,9 +182,9 @@ def prepare_netting_submit_prelude(
             gate_token = "".join(ch if ch.isalnum() else "_" for ch in decision_token.upper()).strip("_") or "REJECT"
             blocked_reason = f"PORTFOLIO_OPTIMIZER_{gate_token}"
             gates_added.append(blocked_reason)
-        if not opt_allowed and protective_exit:
-            if GATE_PROTECTIVE_EXIT_OVERRIDE not in gates_added:
-                gates_added.append(GATE_PROTECTIVE_EXIT_OVERRIDE)
+        if not opt_allowed and override_gate:
+            if override_gate not in gates_added:
+                gates_added.append(override_gate)
         elif not opt_allowed:
             return NettingSubmitPreludeResult(
                 execution_intent_context=None,
