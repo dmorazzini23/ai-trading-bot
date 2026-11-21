@@ -553,30 +553,45 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   `POSITION_MAX_HOLD_BREACH`, `POSITION_BACKSTOP_EXIT_STALLED` (still held two
   bars after arming), `POSITION_BACKSTOP_LOCK_EXPIRED`. Per-symbol markers log
   as `MARKER | symbol=SYM` so the runtime log throttle keeps one line per symbol.
-- **What a protective exit passes / respects:** it passes the policy ablation
-  block, quarantine block mode, event blackout, adaptive sizing, approval soft
-  blocks (net edge floor, spread, calibration, pacing, stale orders) and
-  approval soft-throttle scaling, capacity throttle and portfolio optimizer,
-  recorded as the original gate plus `PROTECTIVE_EXIT_OVERRIDE`. In thin
-  liquidity it is clipped to the thin-order dollar cap
-  (`LIQ_THIN_MAX_ORDER_BLOCK` plus the override, at least one share) instead of
-  blocked; the lock exits the rest on later bars. It does not pass halts
-  (including the daily and weekly loss stop), a missing price, the kill switch,
-  bar dedup, the participation cap, sell-to-available, duplicate intent, broker
-  breakers or pretrade checks. Normal exits are unchanged.
-- **Zero rolling volume:** when the participation cap blocks because rolling
-  volume is zero or the symbol has no liquidity entry, a protective exit is
-  not held back. It goes out clipped to the thin-order dollar cap
-  (`AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS`, at least one share, never more than
-  the exit; the whole exit if the cap is 0), recorded as
-  `LIQ_PARTICIPATION_BLOCK` plus `PROTECTIVE_EXIT_OVERRIDE`, and the thin rules
-  do not clip it again. With positive volume the participation cap applies
-  to protective exits exactly as to other orders.
-- **What can still hold a protective exit back:** the participation cap with
-  positive volume (block mode, or scaling), approval hard risk blocks
-  (`RISK_*_HARD_BLOCK`), a missing price, a missing quote (pretrade
-  `DERISK_DATA_QUALITY_BLOCK`), and a move above 40% from entry, which is
-  treated as bad data so the stop loss does not arm. The stall alert
+- **Exits and the entry-quality gates:** two kinds of exit get the same
+  treatment: a protective (backstop) exit, and any other pure reduction (an
+  order on the opposite side of the held position that never goes past flat:
+  a full exit, a trim, or the end of a flip). Gate code:
+  `exit_override_gate()` in the backstop module.
+  - **Skipped:** policy ablation block, quarantine block mode, event blackout
+    (and the pretrade event flag), adaptive sizing, approval blocks for net edge
+    floor, spread, calibration, pacing and stale orders, approval soft
+    throttles (including one that rounds the order to `ZERO_QTY`), capacity
+    throttle, the paper sampling floor, and the portfolio optimizer. The exit
+    keeps its full size.
+  - **Clipped instead of blocked:** the thin-order dollar cap
+    (`LIQ_THIN_MAX_ORDER_BLOCK`), and the participation cap when rolling volume
+    is zero or the symbol has no liquidity entry (`LIQ_PARTICIPATION_BLOCK`).
+    Both clip to `AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS` (at least one share,
+    never more than the exit, the whole exit if the cap is 0); the thin rules do
+    not scale or clip a volume-capped exit again. Later bars (or the backstop lock) exit
+    the rest.
+  - **Still applies:** halts (including the daily and weekly loss stop), a
+    missing price, the kill switch, bar dedup, the participation cap with
+    positive volume (block or scale), the thin-liquidity cost multiplier
+    (not on a volume-capped exit),
+    approval hard risk blocks (`RISK_*_HARD_BLOCK`), sell-to-available,
+    duplicate intent, broker breakers and all other pretrade checks (for
+    example `DERISK_DATA_QUALITY_BLOCK` on a missing quote, stale quote,
+    slippage ceiling). The end-of-day flatten is a separate path and does not
+    meet these gates.
+  - **Journal:** the original gate name stays in the decision record, followed
+    by `PROTECTIVE_EXIT_OVERRIDE` for a backstop exit or
+    `REDUCING_EXIT_OVERRIDE` for any other reduction. A decision carrying
+    `REDUCING_EXIT_OVERRIDE` logs `REDUCING_EXIT_OVERRIDE | symbol=SYM` at INFO
+    (no alert).
+- **Flips:** the cycle never trades through flat in one order. Right after the
+  backstop step, an order that would cross zero is cut to its exit leg (target
+  flat, `FLAT_BEFORE_REVERSAL`, `POSITION_REVERSAL_CLAMP` log), so every gate
+  judges the reduction to flat. The new side is an opening from flat on a later
+  bar and meets every entry gate.
+- **Backstop specifics:** a move above 40% from entry is treated as bad data so
+  the stop loss does not arm. The stall alert
   (`POSITION_BACKSTOP_EXIT_STALLED`) only fires on bars the symbol is
   evaluated; a resting, unfilled exit order keeps the symbol out of the cycle
   (pending-order filter), so it suppresses the stall alert.
