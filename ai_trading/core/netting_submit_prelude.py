@@ -92,12 +92,14 @@ def prepare_netting_submit_prelude(
     safe_validate_pretrade_func: Callable[..., tuple[bool, str, dict[str, Any]]],
     get_sector_func: Callable[[str], str | None],
     protective_exit: bool = False,
+    full_close_exit: bool = False,
 ) -> NettingSubmitPreludeResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
-    # The optimizer never holds an exit (backstop exit or pure reduction) back.
+    # The optimizer never holds an exit (backstop exit or full close) back.
     override_gate = exit_override_gate(
         protective_exit=protective_exit,
+        full_close=full_close_exit,
         current_shares=int(current_shares),
         delta_shares=int(delta_shares),
     )

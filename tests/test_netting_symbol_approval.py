@@ -353,7 +353,7 @@ def test_prepare_netting_symbol_approval_keeps_flip_close_as_sell_after_throttle
     assert result.opening_trade is False
     assert "PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION" in result.gates_added
     assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
-    assert "REDUCING_EXIT_OVERRIDE" in result.gates_added
+    assert "CLOSING_EXIT_OVERRIDE" in result.gates_added
     assert result.snapshot_updates["capacity_throttle"]["before_delta_shares"] == -5
     assert result.snapshot_updates["capacity_throttle"]["after_delta_shares"] == -5
 
@@ -374,7 +374,7 @@ def test_prepare_netting_symbol_approval_still_throttles_an_add() -> None:
     assert result.side == "buy"
     assert result.delta_shares == 2
     assert "CAPACITY_THROTTLE_SCALE" in result.gates_added
-    assert "REDUCING_EXIT_OVERRIDE" not in result.gates_added
+    assert "CLOSING_EXIT_OVERRIDE" not in result.gates_added
 
 
 # ---- exits under the compiler's soft throttles (real approve_execution_candidate) ----
@@ -425,89 +425,139 @@ def _real_approval_kwargs(current: int, delta: int, policy: Any, **extra: Any) -
     return kwargs
 
 
-@pytest.mark.parametrize("protective", [False, True], ids=["reducing", "protective"])
+@pytest.mark.parametrize("protective", [False, True], ids=["closing", "protective"])
 def test_soft_throttle_rounding_an_exit_to_zero_keeps_it_whole(protective: bool) -> None:
-    # Long 100 at $10, sell 1: post notional $990 against a $100 soft limit scales
-    # the order to 0 (ZERO_QTY), which used to block the exit outright.
-    kwargs = _real_approval_kwargs(100, -1, _risk_policy(symbol_soft_dollars=100.0), protective_exit=protective)
-
-    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
-
-    marker = "PROTECTIVE_EXIT_OVERRIDE" if protective else "REDUCING_EXIT_OVERRIDE"
-    assert result.blocked_reason is None
-    assert result.delta_shares == -1
-    assert "RISK_SYMBOL_SOFT_THROTTLE" in result.gates_added
-    assert marker in result.gates_added
-
-
-def test_soft_throttle_rounding_a_protective_exit_to_zero_on_portfolio_gross_keeps_it_whole() -> None:
+    # Close 1 share with portfolio gross far above its soft limit: the throttle
+    # scales the order to 0 (ZERO_QTY), which used to block the exit outright.
     kwargs = _real_approval_kwargs(
         1,
         -1,
         _risk_policy(portfolio_soft_gross_dollars=1000.0),
         portfolio_current_gross=100_000.0,
-        protective_exit=True,
+        protective_exit=protective,
     )
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
+    marker = "PROTECTIVE_EXIT_OVERRIDE" if protective else "CLOSING_EXIT_OVERRIDE"
     assert result.blocked_reason is None
     assert result.delta_shares == -1
-    assert "PROTECTIVE_EXIT_OVERRIDE" in result.gates_added
+    assert "RISK_PORTFOLIO_SOFT_THROTTLE" in result.gates_added
+    assert marker in result.gates_added
 
 
-def test_soft_throttle_shrinking_an_exit_is_restored_to_full_size() -> None:
-    kwargs = _real_approval_kwargs(100, -50, _risk_policy(symbol_soft_dollars=100.0))
+@pytest.mark.parametrize("protective", [False, True], ids=["trim", "protective"])
+def test_soft_throttle_rounding_a_one_share_trim_to_zero(protective: bool) -> None:
+    # Long 100 at $10, sell 1: post notional $990 against a $100 soft limit
+    # rounds the order to 0. A partial trim stays blocked as on main; a
+    # protective exit of the same size goes out.
+    kwargs = _real_approval_kwargs(100, -1, _risk_policy(symbol_soft_dollars=100.0), protective_exit=protective)
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
-    assert result.blocked_reason is None
-    assert result.delta_shares == -50
-    assert "REDUCING_EXIT_OVERRIDE" in result.gates_added
+    assert "RISK_SYMBOL_SOFT_THROTTLE" in result.gates_added
+    if protective:
+        assert result.blocked_reason is None
+        assert result.delta_shares == -1
+        assert "PROTECTIVE_EXIT_OVERRIDE" in result.gates_added
+    else:
+        assert result.blocked_reason == "EXECUTION_APPROVAL_BLOCK"
+        assert "ZERO_QTY" in result.gates_added
+        assert not {"CLOSING_EXIT_OVERRIDE", "PROTECTIVE_EXIT_OVERRIDE"} & set(result.gates_added)
 
 
-@pytest.mark.parametrize("protective", [False, True], ids=["reducing", "protective"])
-def test_hard_block_with_a_soft_throttle_still_holds_an_exit(protective: bool) -> None:
+def test_soft_throttle_shrinking_a_full_close_is_restored_and_a_trim_is_scaled() -> None:
+    close = prepare_netting_symbol_approval(
+        **cast(
+            Any,
+            _real_approval_kwargs(
+                100, -100, _risk_policy(portfolio_soft_gross_dollars=1000.0), portfolio_current_gross=4000.0
+            ),
+        )
+    )
+    trim = prepare_netting_symbol_approval(
+        **cast(Any, _real_approval_kwargs(100, -50, _risk_policy(symbol_soft_dollars=100.0)))
+    )
+
+    assert close.blocked_reason is None
+    assert close.delta_shares == -100
+    assert "RISK_PORTFOLIO_SOFT_THROTTLE" in close.gates_added
+    assert "CLOSING_EXIT_OVERRIDE" in close.gates_added
+    # The trim is scaled exactly as on main: $500 post notional over a $100 limit.
+    assert trim.blocked_reason is None
+    assert trim.delta_shares == -10
+    assert "RISK_SYMBOL_SOFT_THROTTLE" in trim.gates_added
+    assert "CLOSING_EXIT_OVERRIDE" not in trim.gates_added
+
+
+def test_hard_block_with_a_soft_throttle_still_holds_a_protective_exit() -> None:
     kwargs = _real_approval_kwargs(
         100,
         -10,
         _risk_policy(symbol_soft_dollars=100.0, portfolio_hard_gross_dollars=1.0),
-        protective_exit=protective,
+        protective_exit=True,
     )
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
     assert result.blocked_reason == "EXECUTION_APPROVAL_BLOCK"
     assert "RISK_PORTFOLIO_HARD_BLOCK" in result.gates_added
-    assert not {"REDUCING_EXIT_OVERRIDE", "PROTECTIVE_EXIT_OVERRIDE"} & set(result.gates_added)
+    assert "PROTECTIVE_EXIT_OVERRIDE" not in result.gates_added
 
 
-def test_paper_floor_does_not_shrink_a_short_cover(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hard_block_with_a_soft_throttle_still_holds_a_full_close() -> None:
+    # The compiler never sets both for a full close with these budgets, so feed
+    # the combination directly: a hard block always holds the exit.
+    kwargs = _real_approval_kwargs(
+        10,
+        -10,
+        _risk_policy(),
+        approve_execution_candidate_func=lambda policy, candidate: ExecutionApproval(
+            False, 0, 5.0, ("RISK_SYMBOL_SOFT_THROTTLE", "RISK_PORTFOLIO_HARD_BLOCK", "ZERO_QTY")
+        ),
+    )
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
+    assert result.blocked_reason == "EXECUTION_APPROVAL_BLOCK"
+    assert "CLOSING_EXIT_OVERRIDE" not in result.gates_added
+
+
+def _paper_floor_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXECUTION_MODE", "paper")
     monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED", "1")
-    # Short 100 at $10, cover 4: the soft throttle rounds it to 0; the paper floor
-    # used to turn that into a 1-share order before the exit override could act.
-    kwargs = _real_approval_kwargs(-100, 4, _risk_policy(symbol_soft_dollars=100.0))
+    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS", "0.10")
+
+
+def test_paper_floor_does_not_shrink_a_full_short_cover(monkeypatch: pytest.MonkeyPatch) -> None:
+    _paper_floor_env(monkeypatch)
+    # Cover a 100-share short with portfolio gross far above its soft limit: the
+    # throttle rounds it to 0; the paper floor used to send 1 share before the
+    # exit override could act.
+    kwargs = _real_approval_kwargs(
+        -100, 100, _risk_policy(portfolio_soft_gross_dollars=1000.0), portfolio_current_gross=1_000_000.0
+    )
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
     assert result.blocked_reason is None
-    assert result.delta_shares == 4
-    assert "REDUCING_EXIT_OVERRIDE" in result.gates_added
+    assert result.delta_shares == 100
+    assert "CLOSING_EXIT_OVERRIDE" in result.gates_added
     assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" not in result.gates_added
 
 
-def test_paper_floor_still_samples_one_share_of_a_throttled_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EXECUTION_MODE", "paper")
-    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_SOFT_THROTTLE_FLOOR_ENABLED", "1")
-    monkeypatch.setenv("AI_TRADING_PAPER_SAMPLING_MIN_EXPECTED_NET_EDGE_BPS", "0.10")
-    # Long 100 at $10, add 4: the same soft throttle rounds the add to 0; the
-    # floor sends one share, exactly as before.
-    kwargs = _real_approval_kwargs(100, 4, _risk_policy(symbol_soft_dollars=100.0))
+@pytest.mark.parametrize(("current", "delta"), [(100, 4), (-100, 4)], ids=["add", "partial_cover"])
+def test_paper_floor_still_samples_one_share_of_a_throttled_add_or_partial_cover(
+    monkeypatch: pytest.MonkeyPatch, current: int, delta: int
+) -> None:
+    _paper_floor_env(monkeypatch)
+    # The symbol soft limit rounds a 4-share buy to 0; the floor sends one
+    # share, exactly as on main, for an add and for a partial cover.
+    kwargs = _real_approval_kwargs(current, delta, _risk_policy(symbol_soft_dollars=100.0))
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
     assert result.blocked_reason is None
     assert result.delta_shares == 1
     assert "PAPER_SAMPLE_SOFT_THROTTLE_FLOOR" in result.gates_added
-    assert "REDUCING_EXIT_OVERRIDE" not in result.gates_added
+    assert "CLOSING_EXIT_OVERRIDE" not in result.gates_added

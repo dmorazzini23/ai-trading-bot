@@ -42,6 +42,7 @@ def apply_symbol_adjustments(
     clip_delta_to_symbol_notional_cap_func: Callable[..., tuple[int, dict[str, Any] | None]],
     logger: Any,
     protective_exit: bool = False,
+    full_close_exit: bool = False,
 ) -> SymbolAdjustmentResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
@@ -55,11 +56,12 @@ def apply_symbol_adjustments(
         adaptive_scale = max(0.05, min(adaptive_scale, 1.0))
         override_gate = exit_override_gate(
             protective_exit=protective_exit,
+            full_close=full_close_exit,
             current_shares=int(current_shares),
             delta_shares=int(delta_shares),
         )
         if adaptive_scale < 1.0 and override_gate:
-            # An exit (backstop or pure reduction) keeps its full size, even when
+            # An exit (backstop exit or full close) keeps its full size, even when
             # scaling would round it to zero.
             scaled_qty = int(round(float(delta_shares) * adaptive_scale))
             gates_added.append(

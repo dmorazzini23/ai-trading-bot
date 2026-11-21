@@ -43,9 +43,9 @@ GATE_MAX_HOLD_EXIT = "POSITION_MAX_HOLD_EXIT"
 GATE_REENTRY_BLOCK = "POSITION_BACKSTOP_REENTRY_BLOCK"
 GATE_CAP_BLOCK = "POSITION_CAP_BLOCK"
 GATE_PROTECTIVE_EXIT_OVERRIDE = "PROTECTIVE_EXIT_OVERRIDE"
-# A normal (non-backstop) exit passed an entry-quality gate as a pure reduction.
-GATE_REDUCING_EXIT_OVERRIDE = "REDUCING_EXIT_OVERRIDE"
-EXIT_OVERRIDE_GATES = frozenset({GATE_PROTECTIVE_EXIT_OVERRIDE, GATE_REDUCING_EXIT_OVERRIDE})
+# A normal (non-backstop) full close passed an entry-quality gate.
+GATE_CLOSING_EXIT_OVERRIDE = "CLOSING_EXIT_OVERRIDE"
+EXIT_OVERRIDE_GATES = frozenset({GATE_PROTECTIVE_EXIT_OVERRIDE, GATE_CLOSING_EXIT_OVERRIDE})
 
 REASON_STOP_LOSS = "stop_loss"
 REASON_MAX_HOLD = "max_hold"
@@ -106,27 +106,43 @@ def _symbol_marker(marker: str, symbol: str) -> str:
     return f"{marker} | symbol={symbol}"
 
 
-def is_pure_reduction(current_shares: int, delta_shares: int) -> bool:
-    """True when the order only reduces the held position: opposite side and
-    never past flat, so it can neither open nor flip a position."""
-
-    current = int(current_shares)
-    delta = int(delta_shares)
+def _reduces_without_crossing(current: int, delta: int) -> bool:
     return current != 0 and delta != 0 and (current > 0) != (delta > 0) and abs(delta) <= abs(current)
 
 
-def exit_override_gate(*, protective_exit: bool, current_shares: int, delta_shares: int) -> str | None:
+def is_full_close(current_shares: int, delta_shares: int) -> bool:
+    """True when the order takes the held position exactly to flat (long or short).
+
+    Share counts are truncated to whole shares, so a sub-one-share position
+    counts as flat and is never a full close here.
+    """
+
+    current = int(current_shares)
+    return current != 0 and int(delta_shares) == -current
+
+
+def exit_override_gate(
+    *,
+    protective_exit: bool,
+    current_shares: int,
+    delta_shares: int,
+    full_close: bool = False,
+) -> str | None:
     """Marker for an order the entry-quality gates must not hold back.
 
-    A backstop exit records ``PROTECTIVE_EXIT_OVERRIDE``; any other pure
-    reduction records ``REDUCING_EXIT_OVERRIDE``; anything else gets ``None``
-    and stays fully gated.
+    A backstop exit records ``PROTECTIVE_EXIT_OVERRIDE``. A normal exit records
+    ``CLOSING_EXIT_OVERRIDE`` when it takes the position to flat, or when the
+    caller decided it was a full close before a liquidity clip or scale and
+    what remains still only reduces the position (``full_close``). Anything
+    else, including a partial trim, gets ``None`` and stays fully gated.
     """
 
     if protective_exit:
         return GATE_PROTECTIVE_EXIT_OVERRIDE
-    if is_pure_reduction(current_shares, delta_shares):
-        return GATE_REDUCING_EXIT_OVERRIDE
+    current = int(current_shares)
+    delta = int(delta_shares)
+    if is_full_close(current, delta) or (full_close and _reduces_without_crossing(current, delta)):
+        return GATE_CLOSING_EXIT_OVERRIDE
     return None
 
 
@@ -680,7 +696,7 @@ __all__ = [
     "GATE_CAP_BLOCK",
     "GATE_MAX_HOLD_EXIT",
     "GATE_PROTECTIVE_EXIT_OVERRIDE",
-    "GATE_REDUCING_EXIT_OVERRIDE",
+    "GATE_CLOSING_EXIT_OVERRIDE",
     "GATE_REENTRY_BLOCK",
     "GATE_STOP_LOSS_EXIT",
     "Lock",
@@ -692,7 +708,7 @@ __all__ = [
     "SymbolStep",
     "evaluate",
     "exit_override_gate",
-    "is_pure_reduction",
+    "is_full_close",
     "load_store",
     "next_session_open",
     "save_store",

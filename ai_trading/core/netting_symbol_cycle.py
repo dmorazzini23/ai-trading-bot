@@ -13,8 +13,9 @@ from ai_trading.core.evidence_lineage import deterministic_opportunity_correlati
 from ai_trading.core.netting_position_backstop import (
     EXIT_OVERRIDE_GATES,
     GATE_CAP_BLOCK,
-    GATE_REDUCING_EXIT_OVERRIDE,
+    GATE_CLOSING_EXIT_OVERRIDE,
     exit_override_gate,
+    is_full_close,
 )
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
@@ -293,9 +294,9 @@ def process_netting_symbol(
         if backstop is not None:
             backstop.note_decision(symbol, kwargs.get("gates", ()))
         recorded_gates = [str(gate) for gate in kwargs.get("gates", ())]
-        if GATE_REDUCING_EXIT_OVERRIDE in recorded_gates:
+        if GATE_CLOSING_EXIT_OVERRIDE in recorded_gates:
             processor.logger.info(
-                f"{GATE_REDUCING_EXIT_OVERRIDE} | symbol={symbol}",
+                f"{GATE_CLOSING_EXIT_OVERRIDE} | symbol={symbol}",
                 extra={
                     "symbol": symbol,
                     "current_shares": int(current_shares),
@@ -308,6 +309,9 @@ def process_netting_symbol(
 
     backstop = processor.position_backstop
     protective_exit = False
+    # Set just before the liquidity clips: the intended order was a full close,
+    # so what remains after a clip or scale is still an exit in progress.
+    full_close_exit = False
     current_shares = 0
     delta_shares = 0
 
@@ -318,6 +322,7 @@ def process_netting_symbol(
             protective_exit=protective_exit,
             current_shares=int(current_shares),
             delta_shares=int(delta_shares),
+            full_close=full_close_exit,
         )
 
     def _note_exit_override(override_gate: str) -> None:
@@ -721,6 +726,7 @@ def process_netting_symbol(
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
+    full_close_exit = is_full_close(int(current_shares), int(delta_shares))
     exit_volume_capped = False
     if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
         participation_block_mode = str(
@@ -855,6 +861,7 @@ def process_netting_symbol(
         clip_delta_to_symbol_notional_cap_func=processor.clip_delta_to_symbol_notional_cap_func,
         logger=processor.logger,
         protective_exit=protective_exit,
+        full_close_exit=full_close_exit,
     )
     if adjustment_result.uncertainty_event is not None:
         processor.uncertainty_cycle_events.append(dict(adjustment_result.uncertainty_event))
@@ -919,6 +926,7 @@ def process_netting_symbol(
         evaluate_execution_approval_func=processor.evaluate_execution_approval_func,
         approve_execution_candidate_func=processor.approve_execution_candidate_func,
         protective_exit=protective_exit,
+        full_close_exit=full_close_exit,
     )
     _extend_gates(gates, approval_result.gates_added)
     symbol_snapshot.update(approval_result.snapshot_updates)
@@ -994,6 +1002,7 @@ def process_netting_symbol(
         safe_validate_pretrade_func=processor.safe_validate_pretrade_func,
         get_sector_func=processor.get_sector_func,
         protective_exit=protective_exit,
+        full_close_exit=full_close_exit,
     )
     _extend_gates(gates, submit_prelude.gates_added)
     symbol_snapshot.update(submit_prelude.snapshot_updates)

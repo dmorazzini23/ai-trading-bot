@@ -79,7 +79,7 @@ def prepare_netting_symbol_prelude(
             delta_shares=delta_shares_value,
         )
         if disabled_for_symbol and override_gate:
-            # An exit (backstop or pure reduction) is not a new sleeve trade; the
+            # An exit (backstop exit or full close) is not a new sleeve trade; the
             # ablation block does not hold it.
             gates_added.append(override_gate)
         elif disabled_for_symbol:

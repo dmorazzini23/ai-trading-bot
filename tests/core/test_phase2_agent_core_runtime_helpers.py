@@ -122,18 +122,30 @@ def _capacity_throttle_kwargs(*, current_shares: int, delta_shares: int) -> dict
     return kwargs
 
 
-def test_approval_capacity_throttle_keeps_a_reduction_whole_when_scaling_rounds_to_zero() -> None:
-    # Was: CAPACITY_THROTTLE_BLOCK held the one-share reduction of a 5-share
-    # position. A pure reduction now keeps its full size and records the override.
+def test_approval_capacity_throttle_blocks_when_scaled_close_rounds_to_zero() -> None:
+    # A partial trim (sell 1 of 5) is gated like an entry, as on main.
     kwargs = _capacity_throttle_kwargs(current_shares=5, delta_shares=-1)
 
     result = prepare_netting_symbol_approval(**cast(Any, kwargs))
 
+    assert result.blocked_reason == "CAPACITY_THROTTLE_BLOCK"
+    assert result.gates_added == ("CAPACITY_THROTTLE_BLOCK",)
+    metrics = cast(dict[str, Any], result.blocked_metrics)
+    assert metrics["capacity_scale"] == pytest.approx(0.1)
+    assert metrics["spread_bps"] == 5.0
+
+
+def test_approval_capacity_throttle_keeps_a_full_close_whole_when_scaling_rounds_to_zero() -> None:
+    # Closing all 5: scaling by 0.1 rounds to 0; the full close keeps its size.
+    kwargs = _capacity_throttle_kwargs(current_shares=5, delta_shares=-5)
+
+    result = prepare_netting_symbol_approval(**cast(Any, kwargs))
+
     assert result.blocked_reason is None
-    assert result.delta_shares == -1
-    assert result.gates_added == ("CAPACITY_THROTTLE_BLOCK", "REDUCING_EXIT_OVERRIDE")
+    assert result.delta_shares == -5
+    assert result.gates_added == ("CAPACITY_THROTTLE_BLOCK", "CLOSING_EXIT_OVERRIDE")
     assert result.snapshot_updates["capacity_throttle"]["scale"] == pytest.approx(0.1)
-    assert result.snapshot_updates["capacity_throttle"]["exit_override"] == "REDUCING_EXIT_OVERRIDE"
+    assert result.snapshot_updates["capacity_throttle"]["exit_override"] == "CLOSING_EXIT_OVERRIDE"
 
 
 def test_approval_capacity_throttle_blocks_an_entry_when_scaling_rounds_to_zero() -> None:

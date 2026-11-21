@@ -11,7 +11,7 @@ from ai_trading.core.netting_position_backstop import EXIT_OVERRIDE_GATES, exit_
 from ai_trading.policy.compiler import ExecutionApproval, SafetyTier
 
 
-# Approval blocks an exit (backstop exit or pure reduction) may pass; any other
+# Approval blocks an exit (backstop exit or full close) may pass; any other
 # block holds it. SPREAD_TOO_WIDE reads the last bar's high-low range, not the
 # quote the limit order is priced from, so it does not hold an exit either.
 EXIT_OVERRIDABLE_APPROVAL_BLOCKS = frozenset(
@@ -146,6 +146,7 @@ def prepare_netting_symbol_approval(
     evaluate_execution_approval_func: Callable[..., Any],
     approve_execution_candidate_func: Callable[..., Any],
     protective_exit: bool = False,
+    full_close_exit: bool = False,
 ) -> NettingSymbolApprovalResult:
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
@@ -608,6 +609,7 @@ def prepare_netting_symbol_approval(
                 gates_added.append(reason)
     override_gate = exit_override_gate(
         protective_exit=protective_exit,
+        full_close=full_close_exit,
         current_shares=int(current_shares),
         delta_shares=int(delta_shares_value),
     )
@@ -788,6 +790,7 @@ def prepare_netting_symbol_approval(
             capacity_scale = min(capacity_scale, feed_derisk_scale)
         capacity_override_gate = exit_override_gate(
             protective_exit=protective_exit,
+            full_close=full_close_exit,
             current_shares=int(current_shares),
             delta_shares=int(delta_shares_value),
         )
