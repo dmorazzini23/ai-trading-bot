@@ -1,6 +1,42 @@
 # Current handoff
 
-## November 20: position backstop deployed (`d22babac4`) (start here)
+## November 21: full-close exit fix merged, not deployed (`db356eb49`) (start here)
+
+- **Running service:** still `d22babac4` (position backstop). Nothing was
+  restarted. Deploy of `db356eb49` is planned for after the close on Mon
+  Nov 23, once the backstop's first market session looks clean (order count
+  back to 2-8, backstop state loads); it needs the owner's go-ahead on the
+  day.
+- **Change (`claude/exit-gate-fix`, 8 commits):** an order that takes a
+  position exactly to flat passes the entry-quality gates the way protective
+  exits do (marker `CLOSING_EXIT_OVERRIDE`); partial trims, adds and entries
+  are gated as before. A flip is cut to its exit leg before the gates run and
+  the new side is judged from flat on a later bar. For protective exits and
+  full closes, a soft throttle that rounds the order to zero no longer blocks
+  it and the paper sampling floor no longer shrinks it. No settings changed;
+  config hash untouched. Behaviour is in `docs/OPERATIONS.md`.
+- **Evidence:** Nov 9-20 records had 8 blocked and 1 shrunk reductions, all
+  full closes or flip exit legs. A 4,320-case differential against
+  `00c2fa65c` (script in the session scratchpad, not kept) gave trims 864/864,
+  adds, entries, holds and flats identical; protective exits differ only by
+  the two fixes above.
+- **Validation:** full suite on `db356eb49` 6,687 passed, 2 skipped. Decision
+  baseline reference is now
+  `dccac9978868dd3a7de64503e0e7a8c400eb2e97b5dddac833fe5ee80120975b`
+  (`runs/exit_gate_fix_f6891059a`); the old `5bd1a138...` no longer applies.
+- **Left as is:** `SPREAD_TOO_WIDE` (a bar-range measure) is bypassed for full
+  closes; the thin cost multiplier still slices larger exits; hard risk blocks
+  can still hold a full close; engine limit-price construction for exits and
+  the timing of open-order versus position reads were not traced.
+- **Research:** weak-close trial scored once and retired (Nov 21); its record
+  and the opening-range trial are on main (`230906cb2`). Next direction is
+  many individual stocks, waiting on a delisting-inclusive data source
+  (Sharadar SEP preferred; Norgate needs Windows); the owner decides the
+  subscription.
+- **Still open:** the systemd `OnFailure` crash alert is not installed (two
+  `sudo` commands in `docs/OPERATIONS.md`, owner to run).
+
+## November 20: position backstop deployed (`d22babac4`)
 
 - **Running service:** `d22babac4` since Fri Nov 20 21:24 UTC (market closed),
   owner-approved. It is `b0b2f8b59` (phase 3) plus the
