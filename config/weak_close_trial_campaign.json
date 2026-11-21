@@ -1,0 +1,212 @@
+{
+  "campaign_id": "weak_close_trial_20261120",
+  "status": "registered",
+  "authorization": "owner approved the specification as drafted on 2026-11-20 ('Sounds good. Let's do it') and adopted docs/RESEARCH_RESET_AMENDMENT_20261120_WEAK_CLOSE.md: one registered development trial, no promotion or runtime authority. The claim and scoring need the owner's separate word.",
+  "owner_decisions": {
+    "date": "2026-11-20",
+    "accepted_as_drafted": "Entry in the closing auction on a 15:45 signal; exit at the next close, holding through a repeated signal; two fixed half-equity slots; 1 bp per side deciding and 2 bps required; the exposure-matched same-fund control with a per-fund criterion; the 1.25th-percentile lower bound; a missing daily bar refuses the acquisition (no automatic tolerance); no probe mode.",
+    "opening_shock_etf_trial": "liquidity_reversal_foundation_20260908 (opening-shock reversal in six ETFs, 2024-2025) is treated as a separate hypothesis from this one.",
+    "source_precondition": "Met from secondary sources only; the original paper was not found and remains unread (see source.read_status).",
+    "close_price": "The daily close is taken to be the closing auction price, as drafted; it stays a known weakness (limitations).",
+    "broker_open_item": "The broker's closing-auction cut-off and its whole-share or fractional handling of market-on-close orders are unverified. This does not block the historical test; it must be resolved before any paper run (open_items_before_paper)."
+  },
+  "max_trials": 1,
+  "hypotheses": [
+    "weak_close_ibs_below_0_2_spy_qqq_market_on_close_to_next_close_long_only_v1"
+  ],
+  "hypothesis": "For SPY and QQQ separately, on a full session whose internal bar strength at 15:45 New York time, (price at 15:45 minus the session low so far) divided by (the session high so far minus the session low so far), is below 0.2, buying in that session's closing auction and selling in the next session's closing auction (holding on, with no trade, while the signal repeats), with half of equity per ETF, earns more than cash after 1 bp per side, and more than holding each ETF every session at the same average weight.",
+  "versions": {
+    "long_only": "The only version and the decision. No short side is scored: the account cannot short, and the published short side (strong closes) is a separate hypothesis."
+  },
+  "ledger_note": "One hypothesis id, one claim. The reported-only variants are computed from the same frozen data in the same run and decide nothing.",
+  "source": {
+    "definition": "Internal bar strength (IBS), also called the close location value: (close - low) / (high - low) of one daily bar, between 0 (closed at the low) and 1 (closed at the high).",
+    "literature": "Pagonidis, A. S., 'The IBS Effect: Mean Reversion in Equity ETFs' (2013). As reported by secondary sources: the next-session return of US equity index ETFs is highest after closes in the lowest fifth of the day's range (IBS below 0.20) and lowest after closes in the highest fifth (above 0.80), and the long rule buys IBS below 0.2 for the next session. Replication: Pandey and Joshi (2023), arXiv 2306.12434. The same rule is widely repeated by practitioners.",
+    "read_status": "Precondition met from secondary sources only (2026-11-20). The original paper could not be found and remains UNREAD. Secondary sources confirm the citation (2013, not 2014 as first drafted), the IBS below 0.2 long threshold and a next-session rise. No departure beyond departures_from_the_published_rule was identified, but one in the original that the secondary sources omit (for example a different exit) cannot be ruled out; it would not change this registered contract.",
+    "published_result": "As reported by secondary sources, not read in the original: an average next-session return of +0.35 percent after IBS below 0.20 and -0.13 percent after IBS above 0.80. The effect is reported to have weakened since publication."
+  },
+  "departures_from_the_published_rule": [
+    "Executable signal. The textbook rule knows the final high, low and close before buying at that close, which no order can do. Here the signal is taken at 15:45 from the session so far and the order goes to the closing auction, whose cut-off at the broker is taken to be 15:50 (unverified; see open_items_before_paper). The textbook version is scored beside it as an upper bound that decides nothing.",
+    "Sizing. Two fixed slots, half of equity each; an ETF without a signal leaves its slot in cash. The published rule trades one instrument at a time fully invested.",
+    "Early closes. No entry on a session that closes at 13:00; a position held into one is sold at that early close.",
+    "Costs. 1 bp per side decides; the published test charges no cost or a nominal one."
+  ],
+  "economic_motivation": "Liquidity provision at the daily horizon: a close at the bottom of the day's range in a broad index fund often reflects selling that had to be done that day (fund flows, hedging, margin) rather than news about the index, and the price tends to recover part of it overnight and the next day. Index ETFs have no single-company news, which is why the effect is reported to be strongest in them. The same family as the short-term reversal tested in single stocks, but a different signal, instrument and holding period (see distinct_from_consumed).",
+  "distinct_from_consumed": "Compared with the retired swing_reversal_trial_20261115: that trial ranked 300 single US common stocks (funds excluded by name) by their trailing 5-session return relative to their sector, bought the 30 lowest at the next session's OPEN and held 5 sessions on a fixed grid. This trial uses no ranking and no stocks: two index ETFs, each judged on its own; the signal is where today's price sits inside today's range (one session, intraday shape), not a 5-session return; entry is today's closing auction, not tomorrow's open; the hold is to the next close, about 1.3 sessions on average. The two share the 'buy recent weakness' family and the 2016-2025 window, and SPY was the swing trial's control. Other campaigns: liquidity_reversal_foundation_20260908 bought six ETFs including SPY and QQQ after a large fall in the first 30 minutes and sold 2 hours later the same day (2024-2025, inconclusive, budget consumed): the same reversal family on the same instruments, but intraday, a different trigger and no overnight hold; intraday_momentum_trial_20261115 held SPY over the last half hour after a positive first half hour (2016-2025, retired): a different signal and an opposite (momentum) mechanism, but the same SPY bars; research_reset_trend_20260908 and cross_sectional_momentum_trial_20261018 were 60- and 63-session trend rules on six ETFs including SPY and QQQ (2024-2025); volatility_target_core_trial_20261025 sized SPY by trailing volatility (2016-2025); day_model_replacement_20260921 and day_sleeve_horizon_trial_20261018 were intraday models on three stocks; opening_range_trial_20261118 was an intraday breakout in single stocks. The draft (unregistered) turn-of-month and fixed-mix contracts are calendar and allocation rules. None tests where the close sits in the day's range.",
+  "development_start": "2016-01-04",
+  "development_end": "2025-12-31",
+  "holdout_start": "2026-09-09",
+  "holdout_end": "2026-12-08",
+  "data_window_note": "2016-01-04 is the first session the provider serves intraday SIP bars for (opening-range probe, 2026-11-17), and every 2026 row is refused by the shared development-date check, so 2016-2025 is the whole usable window. It is not untouched: SPY daily and intraday bars for 2016-2025 were read by the volatility-target, intraday-momentum, swing-reversal and opening-range trials, and SPY and QQQ for 2024-2025 by the three September and October ETF trials. QQQ for 2016-2023 has not been read by any registered trial. Budgets are spent per hypothesis, not per date range: no range is 'consumed', and the reuse is counted under multiple_testing.",
+  "symbols": {
+    "instruments": [
+      "SPY",
+      "QQQ"
+    ]
+  },
+  "feed": "sip",
+  "adjustment": "all",
+  "timeframes": {
+    "signal": "15Min",
+    "prices": "1Day"
+  },
+  "annualization": 252,
+  "session_rules": {
+    "timezone": "America/New_York (stdlib zoneinfo)",
+    "calendar": "The exchange calendar is required; the runner refuses the rule-based fallback.",
+    "regular_session": "09:30 to 16:00. A full session has 26 fifteen-minute bars stamped 09:30, 09:45, ..., 15:45; an early close (13:00) has 14. Bars outside regular hours are discarded at acquisition and counted.",
+    "early_closes": "No signal is evaluated and no position is opened. A position held into an early close is sold in its closing auction (the order can be sent at the open). About 21 sessions in the window.",
+    "missing_bars": "A full session whose 25 snapshot bars (09:30 to 15:30) are not all present with valid prices gives no signal for that ETF; a position held into it is sold at its close. Counted by reason.",
+    "last_session": "No position is opened on 2025-12-31: its exit would be in 2026, which is never read.",
+    "daily_bars": "Every development session must have a daily bar for both ETFs; the acquisition refuses otherwise. These funds trade on every session, so a gap is a provider defect for the owner to decide on before any scoring, as with 2022-03-08 in the opening-range trial."
+  },
+  "signal": {
+    "bar_minutes": 15,
+    "snapshot_time": "15:45",
+    "threshold": 0.2,
+    "comparison": "strictly_below",
+    "zero_range": "no_signal",
+    "rule": "At 15:45 on full session t, for each ETF on its own: H = the highest high and L = the lowest low of the fifteen-minute bars stamped 09:30 to 15:30 (09:30:00 to 15:44:59); P = the close of the bar stamped 15:30 (the last trade before 15:45). IBS = (P - L) / (H - L). A signal is IBS < 0.2. H = L gives no signal. Nothing after 15:45 on t is used: not the 15:45 bar, not the daily bar of t, not any later session.",
+    "why_15_45": "The broker's cut-off for closing-auction orders is taken to be 15:50; this is unverified and listed under open_items_before_paper. If it is earlier, the historical test is unchanged but the rule cannot be traded as written. A snapshot at 15:45 leaves five minutes to compute and send the order. Fifteen-minute bars give exactly the 09:30-15:45 window and keep the download small.",
+    "snapshot_versus_textbook": "The 15:45 IBS is not the final IBS: the last 15 minutes can move the close, the high or the low. The number of sessions where the two disagree is reported."
+  },
+  "trade": {
+    "entry": "market_on_close_same_session",
+    "exit": "market_on_close_next_session",
+    "price": "daily_bar_close",
+    "repeat_signal": "hold_without_trading",
+    "slot_weight": 0.5,
+    "early_close_sessions": "no_entry",
+    "rule": "A signal at 15:45 on session t is a market-on-close buy of that ETF for half of equity, filled at t's closing price. The position is held to the close of t+1. If the ETF signals again at 15:45 on t+1, the sell order is not sent and the position is held to the close of t+2, and so on: a run of signals is one round trip. Otherwise it is sold in t+1's closing auction. The two ETFs are traded independently; when both signal, both slots are filled (100 percent invested, no leverage); when one signals, the other slot stays in cash. Weights are reset to half of equity at each entry; a held position is not resized.",
+    "fill_price": "The daily bar's close (adjustment=all), taken to be the official closing auction price for these funds. The preflight checks it against the last regular fifteen-minute bar and blocks if more than 1 percent of sessions differ by more than 1 percent. Whole-share rounding is ignored: a half-equity slot of 40,000 to 50,000 dollars is about 60 to 100 shares of either fund, so rounding moves the weight by under 1 percent."
+  },
+  "sizing": {
+    "rule": "Two slots of 0.5 of equity, one per ETF. Returns are stated per dollar of equity per session, without compounding inside the test. Cash earns nothing.",
+    "account": "Written for a cash or margin account of 80,000 to 100,000 dollars. Whether the broker accepts fractional market-on-close orders is unverified (its documentation does not list them among fractional order types); whole shares are assumed, see trade.fill_price and open_items_before_paper."
+  },
+  "primary_per_side_cost_bps": 1,
+  "cost_tiers": [
+    {
+      "name": "primary",
+      "per_side_bps": 1,
+      "role": "decision"
+    },
+    {
+      "name": "stress_high",
+      "per_side_bps": 2,
+      "role": "required_positive_at_stress"
+    },
+    {
+      "name": "half",
+      "per_side_bps": 0.5,
+      "role": "reported_only",
+      "caveat": "A result that holds at 0.5 bps but not at 1 bp is not established."
+    },
+    {
+      "name": "five",
+      "per_side_bps": 5,
+      "role": "reported_only",
+      "caveat": "The single-stock contracts' base cost; far above what an auction fill in these funds should cost. Reported to show how much cost the result can carry."
+    }
+  ],
+  "cost_basis": "A closing-auction order fills at the auction price, which is the price the test uses, so there is no half-spread to pay against it. What is left is commission (zero at the broker), the SEC and FINRA fees on sales (under 0.3 bps), and the order's own effect on the auction, which for 50,000 dollars in SPY or QQQ is negligible. 1 bp per side is the intraday-momentum contract's SPY cost and sits between the bot's measured median (0.2 bps) and mean (0.9 bps) cost against the mid ('measured_costs_from_fills', 2026-11-15); 2 bps per side is required as stress. None of those fills was a closing-auction order, and the paper account does not model the auction.",
+  "cost_accounting": "Each round trip pays two sides on its slot weight (0.5 x per_side_bps at entry and at exit), whatever its length; holding on through a repeated signal costs nothing. Both sides are charged to the sessions the position is held, so every round trip is complete inside the window. The exposure-matched control pays no cost. No borrow, no interest on cash.",
+  "cost_scale": "Stated before any data. About 350 to 400 round trips per ETF in ten years (see expected_counts), each costing 2 x 1 bp x 0.5 = 1 bp of equity: about 0.3 bps of equity per session on average, against an effect that must be several basis points per session to pass. Costs are not what decides this trial; whether the next-close return after a weak close still exceeds the unconditional return is.",
+  "cost_status": "fixed_scenarios_not_calibrated_execution_costs",
+  "controls": {
+    "cash": "Zero return.",
+    "exposure_matched_same_etf": "The decision benchmark. For each ETF, a constant weight equal to the strategy's average weight in that ETF over all observations, held every session (close to close), charged no cost. Its mean return is the average weight times the ETF's mean return, so the paired difference measures timing only: whether the sessions after a weak close earn more than the average session. A long-only rule in a rising market looks profitable against cash with no timing skill; against this control it does not.",
+    "buy_and_hold": "Each ETF at full weight every session. Reported only."
+  },
+  "paired_difference": "Per observation: the strategy's net return minus the exposure-matched control's return, summed over both ETFs. Also computed per ETF.",
+  "observation_unit": "One observation per close-to-close interval between consecutive development sessions (session t-1 close to session t close), whether or not a position is held: a session in cash is an observation with return zero, so the series keeps its calendar order for the block bootstrap. About 2,513 observations.",
+  "test_statistic": "The mean net return per observation, in bps of equity, at the decision cost, and the mean paired difference against the exposure-matched control. Uncertainty: the 1.25th percentile of 10,000 circular block-bootstrap means with 21-session blocks.",
+  "expected_counts": "Estimated from the definition, not from data. The calendar has 2,514 development sessions, 21 early closes and the last session excluded: about 2,492 sessions per ETF on which a signal can occur. If IBS is close to uniform between 0 and 1 (it is, roughly, for liquid index funds), about 20 percent of them signal: about 500 signal sessions per ETF, 1,000 in all. If a signal repeats the next session with probability 0.2 to 0.3, that is about 350 to 400 round trips per ETF, 700 to 800 in all (70 to 80 a year), with an average hold of 1.25 to 1.4 sessions. SPY and QQQ move together, so they will often signal on the same session: the account will hold something on roughly a quarter of sessions, and the average exposure will be about 0.2 of equity. These are expectations, not thresholds; the thresholds are in support_thresholds.",
+  "power_note": "Stated before any data, from assumptions, not measurements. With about 500 signal sessions per ETF, a next-session return standard deviation of about 1.3 percent on those sessions and SPY and QQQ strongly correlated (worth perhaps 600 independent signal sessions together), the lower bound clears zero only if a signal session beats the average session by roughly 12 bps or more. The published effect was well above that in the decades before publication; if it has halved since, a fail is the likely outcome.",
+  "folds": "calendar_year_of_session",
+  "support_thresholds": {
+    "minimum_observations": 2300,
+    "minimum_supported_years": 9,
+    "minimum_observations_per_year": 230,
+    "minimum_snapshot_sessions_per_symbol": 2300,
+    "minimum_signal_sessions_per_symbol": 300
+  },
+  "support_rationale": "2,513 observations at most, 250 to 252 a year. The snapshot thresholds allow about 7 percent of full sessions to be lost to missing bars and one thin year. Each ETF must also signal on at least 300 sessions (expected about 500); this depends on prices, so it is checked only after the claim, and a shortfall makes the result inconclusive, not a pass.",
+  "support_audit": {
+    "required_before_claim": true,
+    "kind": "fifteen_minute_and_daily_bar_timestamp_only",
+    "rule": "`--support-audit` reads sessions and bar times only and writes artifacts/weak_close_trial_20261120/support_audit.json with prices_read_for_analysis=false and strategy_outcomes_computed=false. A failed audit blocks without consuming the trial."
+  },
+  "acceptance": {
+    "positive_lower_bound_vs_cash_at_primary": true,
+    "positive_lower_bound_vs_exposure_matched_at_primary": true,
+    "positive_paired_mean_at_stress": true,
+    "each_symbol_positive_paired_mean_at_primary": true,
+    "minimum_positive_years": 6,
+    "summary": "All of: adequate support; the bootstrap lower bound of the mean net return per observation at 1 bp per side is above zero; the bootstrap lower bound of the mean paired difference against the exposure-matched control at 1 bp is above zero; the mean paired difference is above zero at 2 bps per side; the mean paired difference at 1 bp is above zero in at least 6 of the 10 calendar years; the mean paired difference at 1 bp is above zero for SPY alone and for QQQ alone.",
+    "reported_only": "The 0.5 and 5 bps tiers; the textbook variant (final daily IBS, same close); the agreement between the 15:45 and final signals; the overnight and next-day parts of the gross return; buy-and-hold of each ETF; Sharpe ratio, maximum drawdown, annualized percent, average exposure, round trips, holding lengths, sessions where both signal and per-year figures.",
+    "pass_means": "In 2016-2025, buying SPY and QQQ in the closing auction after a weak 15:45 reading and selling at the next close, after 1 bp per side, made money by a margin a block bootstrap separates from zero, beat the same average exposure to the same funds by a margin it also separates from zero, still beat it at 2 bps per side, in most years and in each fund. It permits one check on the untouched holdout and, if that agrees, at least eight weeks on the paper account. It does not permit real-money trading.",
+    "fail_means": "Retired: the data were adequate and at least one criterion failed. No tuning of the threshold, snapshot time, exit, instruments, sizing, costs or acceptance follows, and the textbook variant cannot rescue it. Inconclusive: support was inadequate after the claim; the budget is still consumed."
+  },
+  "multiple_testing": "One hypothesis in this contract. By the opening-range contract's count eleven hypotheses had been tested on overlapping data and none passed; this is the twelfth. The lower bound is kept at the 1.25th percentile used by the last three contracts, rather than the 2.5th a single hypothesis would allow, because of that count: at this level the chance of at least one false pass in twelve independent attempts is roughly 14 percent. Requiring two lower bounds (against cash and against the matched control) is an intersection and needs no further correction.",
+  "bootstrap": {
+    "unit": "circular_blocks_of_observations",
+    "block_days": 21,
+    "replicates": 10000,
+    "seed": 20261120,
+    "lower_quantile": 0.0125
+  },
+  "decisions": {
+    "all_criteria_met": "eligible_for_untouched_test_planning",
+    "adequate_support_any_criterion_failed": "retired",
+    "inadequate_support_after_claim": "inconclusive_budget_consumed"
+  },
+  "parameter_justifications": {
+    "signal.threshold=0.2": "The lowest fifth of the range: the published bucket and the commonly used number. Not chosen from data.",
+    "signal.snapshot_time=15:45": "The latest fifteen-minute boundary that leaves time to send a closing-auction order before the broker's closing-auction cut-off, taken to be 15:50 (unverified).",
+    "trade.exit=next close, hold while the signal repeats": "The published holding period (one session, close to close). Holding on through a repeated signal is the same rule applied every day without paying for a sale and a purchase at the same price.",
+    "trade.slot_weight=0.5": "Two instruments, two equal slots, no leverage, no reallocation when only one signals: no sizing parameter is fitted.",
+    "cost_tiers=1/2 decide; 0.5/5 reported": "See cost_basis.",
+    "acceptance.minimum_positive_years=6": "A majority of ten years, as in the earlier contracts.",
+    "acceptance.each_symbol": "With only two instruments, a pooled result carried by one of them would be one instrument's history.",
+    "bootstrap.block_days=21": "One trading month, as in the intraday and opening-range contracts: weak closes cluster in sell-offs that last weeks.",
+    "bootstrap.lower_quantile=0.0125": "See multiple_testing.",
+    "adjustment=all": "Holding over an ex-dividend date earns the dividend; adjusted closes include it. IBS is a ratio within one session, so adjustment does not change it."
+  },
+  "data_required": "From Alpaca, SIP feed, adjustment=all, 2016-01-04 to 2025-12-31, for SPY and QQQ: (1) daily bars, one request per ETF; (2) fifteen-minute bars, one request per ETF per calendar year. Nothing else: no asset list, no other symbol, no 2026 row.",
+  "data_size_estimate": "Not measured. Daily: 2 requests, about 2,514 bars each, one page each. Fifteen-minute: 20 requests; the provider also returns extended-hours bars (up to 64 a session), about 16,000 bars a year per ETF, two pages per request: about 40 pages. About 45 HTTP calls in all, well under a minute of the shared rate limit. Rows kept: about 65,000 fifteen-minute bars per ETF (26 x 2,493 + 14 x 21) and 2,514 daily bars per ETF: four CSV files of about 5 MB together.",
+  "acquisition": "Not done. After registration and on the owner's word only, `--acquire` runs once, needs the Alpaca data credentials, retries a transient error up to four times, and refuses, writing no manifest: any row dated outside development or in 2026; a regular-hours bar on a date the exchange calendar lacks or off the fifteen-minute grid; a missing or duplicated daily bar for any development session; more than 1 percent of full sessions missing any snapshot bar, per ETF. It refuses to overwrite an existing acquisition. It should be run outside market hours, because the running bot shares the provider's rate limit.",
+  "acquisition_manifest": "artifacts/weak_close_trial_20261120/data/acquisition.json",
+  "availability_check": "none; no request has been made",
+  "preconditions": [
+    "DONE 2026-11-20: source precondition met from secondary sources only (the original paper remains unread; see source.read_status)",
+    "DONE 2026-11-20: owner approved the written rules as drafted before any data was acquired",
+    "DONE 2026-11-20: owner adopted docs/RESEARCH_RESET_AMENDMENT_20261120_WEAK_CLOSE.md and config/research_reset.json registered_trials cites this campaign_id",
+    "the contract is registered under artifacts/weak_close_trial_20261120/campaign_state.json before any price is read",
+    "owner approves the one-time acquisition, run after the close; manifest written with source hashes",
+    "timestamp-only support audit passes",
+    "non-claiming preflight passes: source hashes, 2016-2025 date bounds, no 2026 row, price validity, daily close against the last fifteen-minute close, support after invalid bars are dropped",
+    "owner's separate word for the single claim and scoring (--fit)"
+  ],
+  "open_items_before_paper": [
+    "UNVERIFIED: the broker's cut-off for closing-auction (market-on-close) orders, assumed 15:50 New York time.",
+    "UNVERIFIED: whether the broker accepts fractional market-on-close orders; its documentation does not list them among fractional order types, and a forum report describes partial fills of such orders on the paper account.",
+    "These do not affect the historical test. Both must be resolved before any paper run that a pass would permit."
+  ],
+  "stop_rule": "Claim once immediately before scoring; no retry after a claim, even after a crash. A failed support audit or preflight blocks without consuming the trial. A failed or inconclusive result retires the hypothesis and authorizes no tuning of any parameter, variant, cost or acceptance rule.",
+  "holdout_policy": "2026-09-09 to 2026-12-08 is not read during development. It is reserved as the single final check if this trial passes: about 60 sessions and so about 12 signal sessions per ETF, scored once with these rules unchanged. That is a consistency check that cannot establish significance. If it agrees, at least eight weeks on the paper account follow before any further decision.",
+  "promotion_authority": false,
+  "runtime_authority": false,
+  "execution_assumption": "Historical fifteen-minute and daily bars on adjusted prices with fixed costs. The entry and exit are assumed to fill at the daily bar's close, taken to be the closing auction price. The auction itself, the broker's handling of closing-auction orders and the paper account's simulation of them are not modelled.",
+  "limitations": [
+    "The effect is widely published (IBS and the closely related 'buy a close near the low' rules are standard practitioner material) and has reportedly weakened since publication. The test is of whether anything is left, net, in 2016-2025.",
+    "Two instruments that move together. SPY and QQQ will often signal on the same session, so the effective sample is closer to one instrument than to two, and a pass would rest on about 500 to 600 independent signal sessions.",
+    "Close-auction execution through a retail API: the order must reach the broker before its cut-off and the broker must route it to the auction. A late or rejected order means no trade or a fill in the after-hours market, neither of which is modelled. The paper account cannot confirm auction fills.",
+    "The signal at 15:45 differs from the final IBS that the published rule uses; the last 15 minutes are often the most active of the day. The textbook version is reported as an upper bound only.",
+    "The test assumes the provider's daily close is the official closing auction price. The preflight checks only that it is within 1 percent of the last fifteen-minute bar, which would not detect a systematic difference of a few basis points.",
+    "Earlier research read SPY for 2016-2025 and SPY and QQQ for 2024-2025, and a related reversal rule on these ETFs (opening shock, 2024-2025) was tested; the window is not untouched.",
+    "Positions are held overnight and sometimes over weekends; gap risk is included in the returns but no stop is modelled, by design.",
+    "Paper trading and this test both ignore taxes on short-term gains."
+  ],
+  "runner": "ai_trading/tools/weak_close_trial.py"
+}
