@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from collections import Counter, OrderedDict, deque
 from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from statistics import NormalDist
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import lru_cache
@@ -8658,16 +8659,45 @@ def save_portfolio_snapshot(
         json.dump(data, f, indent=2)
 
 
+def _whole_share_position_qty(symbol: Any, raw_qty: Any) -> int:
+    """Broker position quantity as whole shares, truncated toward zero.
+
+    alpaca-py reports ``qty`` as a decimal string ("10", "-3", "10.5"). A
+    fractional remainder is dropped with a warning naming the symbol; an
+    unparseable quantity raises ``ValueError``.
+    """
+
+    try:
+        qty = Decimal(str(raw_qty).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"unparseable position qty for {symbol}: {raw_qty!r}") from exc
+    if not qty.is_finite():
+        raise ValueError(f"non-finite position qty for {symbol}: {raw_qty!r}")
+    whole = int(qty)  # int() on a Decimal truncates toward zero
+    if qty != whole:
+        logger.warning(
+            "POSITION_FRACTIONAL_QTY_TRUNCATED | symbol=%s",
+            symbol,
+            extra={
+                "symbol": str(symbol),
+                "broker_qty": str(qty),
+                "whole_share_qty": whole,
+                "dropped_qty": str(qty - whole),
+            },
+        )
+    return whole
+
+
 def compute_current_positions(ctx: Any) -> dict[str, int]:
     try:
         if hasattr(ctx.api, "list_positions"):
             positions = ctx.api.list_positions()
             logger.debug("Raw Alpaca positions: %s", positions)
-            return {p.symbol: int(p.qty) for p in positions}
+            return {p.symbol: _whole_share_position_qty(p.symbol, p.qty) for p in positions}
         if hasattr(ctx.api, "get_all_positions"):
             positions = ctx.api.get_all_positions()
             logger.debug("Raw Alpaca positions: %s", positions)
-            return {p.symbol: int(p.qty) for p in positions}
+            return {p.symbol: _whole_share_position_qty(p.symbol, p.qty) for p in positions}
         engine = getattr(ctx, "execution_engine", None)
         if engine is not None:
             ledger = getattr(engine, "position_ledger", {})
