@@ -525,22 +525,54 @@ to the drawdown breaker.
   left as it was.
 - **State survives restarts.** Peak equity, when it was set, open/closed, the
   trip time and the broker account id are kept in
-  `runtime/drawdown_breaker_state.json` under the data dir, written atomically
+  `runtime/drawdown_breaker_state.json` under the data dir
+  (`/var/lib/ai-trading-bot` for the packaged service), written atomically
   only when one of them changes. The first equity reading after a start
-  restores it (`DRAWDOWN_BREAKER_STATE_RESTORED`, with `peak_age_days`), so a
-  drawdown spread over several restarts trips and a restart does not close an
-  open breaker. A missing, unreadable or implausible file (wrong
+  restores it, so a drawdown spread over several restarts trips and a restart
+  does not close an open breaker. A stored peak never expires.
+- **Bad or missing file.** A missing, corrupt or implausible file (wrong
   `schema_version`, non-finite or non-positive peak, future or zone-less
-  timestamp, a different account id) logs `DRAWDOWN_BREAKER_STATE_LOAD_FAILED`
-  with `reason` and starts fresh from the first reading; it never blocks
-  trading. Write errors log `DRAWDOWN_BREAKER_STATE_WRITE_FAILED` and retry at
-  the next reading. A stored peak never expires.
+  timestamp) or one for a different account id logs
+  `DRAWDOWN_BREAKER_STATE_LOAD_FAILED` (warning, with `reason`), starts fresh
+  from the first reading and is overwritten at the next change; it never
+  blocks trading or aborts a cycle. A file that exists but cannot be read
+  (permissions, I/O error; `reason=unreadable`, logged once a day) is not
+  overwritten: the breaker runs in memory, writes nothing, and retries the load
+  at every reading. When it loads, the higher peak wins and the breaker is open
+  if either side was open. A failed write logs
+  `DRAWDOWN_BREAKER_STATE_WRITE_FAILED` and is retried at the next equity
+  reading, also while the breaker stays open.
+- **What each restart shows.** Closed: `DRAWDOWN_BREAKER_STATE_RESTORED`
+  (info, with `peak_equity`, `peak_set_at`, `peak_age_days`). Open:
+  `DRAWDOWN_BREAKER_RESTORED_OPEN` (critical, `reason=restored_from_state`,
+  with peak, equity, drawdown and `tripped_at`) on every start while it stays
+  open. Journal alerts treat it as a trading-stop marker like
+  `DRAWDOWN_BREAKER_TRIPPED` ("Trading stopped"). Entries then show
+  `DRAWDOWN_BREAKER_BLOCK` as before.
+- **A tripped breaker can stay open indefinitely.** While open the bot is
+  reduce-only. Once it is flat, equity stops moving, drawdown cannot recover to
+  the 6.4% reset level, and entries stay blocked across restarts. Only the
+  operator clears that, deliberately:
+
+  ```bash
+  sudo systemctl stop ai-trading.service
+  sudo rm /var/lib/ai-trading-bot/runtime/drawdown_breaker_state.json
+  sudo systemctl start ai-trading.service
+  ```
+
+  The first equity reading after the start becomes the new peak and the
+  breaker is closed (one `DRAWDOWN_BREAKER_STATE_LOAD_FAILED reason=missing`
+  warning). Do the same to re-base after a withdrawal. Do not edit or delete
+  the file while the service runs; it is rewritten from memory.
 - **Deposits and withdrawals are not detected.** A withdrawal reads as
-  drawdown, and a deposit raises the peak. To re-base the peak deliberately
-  (after a withdrawal, or to clear an open breaker), stop the service, delete
-  `runtime/drawdown_breaker_state.json` from the data dir, and start it: the
-  first reading becomes the new peak. Do not edit the file while the service
-  runs; it is rewritten from memory. `peak_equity.txt` is not used.
+  drawdown, and a deposit raises the peak.
+- **Manual runs touch the real file.** The path resolves under
+  `AI_TRADING_DATA_DIR`, then `STATE_DIRECTORY`, then the default data dir
+  `/var/lib/ai-trading-bot`. A manual or ad-hoc run of the bot runtime that
+  feeds equity with no data dir set reads and writes the real state file; set
+  `AI_TRADING_DATA_DIR` to a temporary directory for such runs. A breaker
+  constructed without a state path (tests, `TradingHaltManager`) touches no
+  file. `peak_equity.txt` is not used.
 
 ### Position Backstop (Stop Loss, Maximum Hold, Position Cap)
 
