@@ -192,15 +192,28 @@ def test_missing_file_starts_fresh_with_one_warning(state_path: Path, caplog: py
         ("open_without_trip_time", "timestamp_invalid"),
         ("bad_state", "state_invalid"),
         ("other_account", "account_mismatch"),
+        ("huge_int", "corrupt"),
+        ("year_one", "corrupt"),
+        ("nested", "corrupt"),
+        ("not_utf8", "corrupt"),
     ],
 )
 def test_unusable_file_starts_fresh_and_never_raises(
     state_path: Path, caplog: pytest.LogCaptureFixture, content: str | None, reason: str
 ) -> None:
     future = (circuit_breakers.safe_utcnow() + timedelta(days=1)).isoformat()
-    if content in {"{not json", "[]"}:
+    if content in {"{not json", "[]", "nested"}:
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(content, encoding="utf-8")
+        text = "[" * 100_000 + "]" * 100_000 if content == "nested" else content
+        state_path.write_text(text, encoding="utf-8")
+    elif content == "not_utf8":
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_bytes(b"\xff\xfe{")
+    elif content == "huge_int":
+        _write_state(state_path, peak_equity=10**400)  # float() raises OverflowError
+    elif content == "year_one":
+        # astimezone(UTC) raises OverflowError below datetime.min.
+        _write_state(state_path, peak_set_at="0001-01-01T00:00:00+05:00")
     elif content is None:
         _write_state(state_path, schema_version=99)
     elif content == "nan":
@@ -291,6 +304,7 @@ def test_no_file_access_without_state_path(monkeypatch: pytest.MonkeyPatch, tmp_
 
     monkeypatch.setattr(circuit_breakers, "atomic_write_text", forbidden)
     monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
     workdir = tmp_path / "cwd"
     workdir.mkdir()
     monkeypatch.chdir(workdir)
@@ -324,3 +338,151 @@ def test_runtime_state_path_resolves_under_the_data_dir(
     )
 
     assert resolved == (tmp_path / "runtime" / "drawdown_breaker_state.json").resolve()
+
+
+# ---- follow-ups: retries, merge, restored open state ------------------------
+
+
+def test_failed_write_at_trip_is_retried_while_still_open(
+    state_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    breaker = _breaker(state_path)
+    _feed(breaker, 100_000.0)
+    real = circuit_breakers.atomic_write_text
+
+    def failing(path: Any, content: str, **kwargs: Any) -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(circuit_breakers, "atomic_write_text", failing)
+    _feed(breaker, 91_000.0)  # trips; the write fails
+    assert json.loads(state_path.read_text())["state"] == "closed"
+
+    monkeypatch.setattr(circuit_breakers, "atomic_write_text", real)
+    payload = _feed(breaker, 91_500.0)  # still open (8.5%)
+    assert payload["open"] is True
+    stored = json.loads(state_path.read_text())
+    assert stored["state"] == "open"
+    assert stored["tripped_at"] is not None
+
+
+def _unreadable(monkeypatch: pytest.MonkeyPatch, path: Path, exc: OSError) -> list[int]:
+    calls = [0]
+    real = Path.read_bytes
+
+    def read_bytes(self: Path) -> bytes:
+        if self == path and calls[0] >= 0:
+            calls[0] += 1
+            raise exc
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    return calls
+
+
+def test_unreadable_file_is_retried_not_overwritten(
+    state_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write_state(state_path, state="open", tripped_at=(circuit_breakers.safe_utcnow() - timedelta(days=1)).isoformat())
+    original = state_path.read_text()
+    calls = _unreadable(monkeypatch, state_path, PermissionError("denied"))
+    breaker = _breaker(state_path)
+
+    with caplog.at_level(logging.INFO):
+        first = _feed(breaker, 99_000.0)
+        _feed(breaker, 98_000.0)
+        _feed(breaker, 105_000.0)  # new in-memory peak: still nothing written
+
+    assert calls[0] == 3  # retried at every reading
+    assert state_path.read_text(encoding="utf-8") == original
+    failures = _load_failures(caplog)
+    assert [r.reason for r in failures] == ["unreadable"]  # rate-limited
+    assert first["open"] is False  # in memory only while unreadable
+
+
+def test_deferred_load_merges_higher_peak_and_open_state(
+    state_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    tripped_at = (circuit_breakers.safe_utcnow() - timedelta(days=1)).isoformat()
+    _write_state(state_path, state="open", tripped_at=tripped_at)  # peak 100k, open
+    calls = _unreadable(monkeypatch, state_path, OSError(5, "EIO"))
+    breaker = _breaker(state_path)
+    _feed(breaker, 90_000.0)
+    assert breaker.state is CircuitBreakerState.CLOSED
+
+    calls[0] = -1  # the disk recovers
+    with caplog.at_level(logging.INFO):
+        payload = _feed(breaker, 92_000.0)  # 8% from the stored 100k peak
+
+    assert payload["open"] is True
+    assert payload["peak_equity"] == 100_000.0
+    assert [r for r in caplog.records if r.getMessage() == "DRAWDOWN_BREAKER_RESTORED_OPEN"]
+    stored = json.loads(state_path.read_text())
+    assert stored["state"] == "open" and stored["peak_equity"] == 100_000.0
+
+
+def test_deferred_load_keeps_a_higher_in_memory_peak(
+    state_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_state(state_path)  # peak 100k, closed
+    calls = _unreadable(monkeypatch, state_path, PermissionError("denied"))
+    breaker = _breaker(state_path)
+    _feed(breaker, 110_000.0)
+    in_memory_set_at = breaker.peak_set_at
+
+    calls[0] = -1
+    _feed(breaker, 109_000.0)
+
+    assert breaker.peak_equity == 110_000.0
+    assert breaker.peak_set_at == in_memory_set_at
+    assert json.loads(state_path.read_text())["peak_equity"] == 110_000.0
+
+
+def test_restored_open_logs_a_critical_stop_marker(state_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _write_state(state_path, state="open", tripped_at=(circuit_breakers.safe_utcnow() - timedelta(hours=2)).isoformat())
+    breaker = _breaker(state_path)
+
+    with caplog.at_level(logging.INFO):
+        _feed(breaker, 93_000.0)
+
+    (record,) = [r for r in caplog.records if r.getMessage() == "DRAWDOWN_BREAKER_RESTORED_OPEN"]
+    assert record.levelno == logging.CRITICAL
+    assert record.reason == "restored_from_state"
+    assert record.current_drawdown == pytest.approx(0.07)
+    assert record.peak_equity == 100_000.0
+
+
+def test_restored_open_between_reset_and_trip_level_stays_open(state_path: Path) -> None:
+    _write_state(state_path, state="open", tripped_at=(circuit_breakers.safe_utcnow() - timedelta(hours=2)).isoformat())
+    breaker = _breaker(state_path)
+
+    assert _feed(breaker, 93_000.0)["open"] is True  # 7%
+    assert _feed(breaker, 93_500.0)["open"] is True  # 6.5% > 6.4%
+
+
+def test_restored_open_with_a_new_high_resets_and_persists(state_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _write_state(state_path, state="open", tripped_at=(circuit_breakers.safe_utcnow() - timedelta(hours=2)).isoformat())
+    breaker = _breaker(state_path)
+
+    with caplog.at_level(logging.INFO):
+        payload = _feed(breaker, 101_000.0)
+
+    assert payload["open"] is False
+    assert payload["peak_equity"] == 101_000.0
+    assert [r for r in caplog.records if r.getMessage() == "DRAWDOWN_BREAKER_RESET"]
+    stored = json.loads(state_path.read_text())
+    assert (stored["state"], stored["peak_equity"], stored["tripped_at"]) == ("closed", 101_000.0, None)
+
+
+@pytest.mark.parametrize("text", ["[" * 100_000 + "]" * 100_000, '{"schema_version": 1, "peak_equity": 1' + "0" * 400 + "}"])
+def test_bad_file_cannot_abort_the_cycle_feed(state_path: Path, text: str) -> None:
+    from ai_trading.core import bot_engine
+
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(text, encoding="utf-8")
+    runtime = SimpleNamespace(drawdown_circuit_breaker=_breaker(state_path))
+    exec_engine = SimpleNamespace(_get_account_snapshot=lambda: SimpleNamespace(equity="80000", id=ACCOUNT))
+
+    payload = bot_engine._score_drawdown_breaker(runtime, exec_engine)
+
+    assert payload["open"] is False
+    assert payload["peak_equity"] == 80_000.0
