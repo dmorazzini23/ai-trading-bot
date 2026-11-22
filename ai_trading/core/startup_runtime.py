@@ -300,7 +300,6 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
                             },
                         )
 
-    ctx.initial_rebalance_done = True
     try:
         if hasattr(ctx.api, "list_positions"):
             pos_list = ctx.api.list_positions()
@@ -321,20 +320,12 @@ def initial_rebalance_runtime(ctx: Any, symbols: list[str]) -> None:
                     extra={"symbol": position_symbol},
                 )
         be.state.position_cache = refreshed_positions
-        be.state.long_positions = {
-            symbol for symbol, qty in be.state.position_cache.items() if qty > 0
-        }
-        be.state.short_positions = {
-            symbol for symbol, qty in be.state.position_cache.items() if qty < 0
-        }
     except (be.APIError, TimeoutError, ConnectionError) as exc:
         be.logger.error(
             "Failed to refresh position cache after rebalance",
             extra={"cause": exc.__class__.__name__, "detail": str(exc)},
         )
         be.state.position_cache = {}
-        be.state.long_positions = set()
-        be.state.short_positions = set()
 
 
 def run_main_startup_runtime(ctx: Any) -> None:

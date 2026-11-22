@@ -1139,13 +1139,9 @@ from ai_trading.settings import (
     get_daily_loss_limit,
     get_disaster_dd_limit,
     get_dollar_risk_limit,
-    get_min_position_hold_seconds,
-    get_max_trades_per_day,
-    get_max_trades_per_hour,
     get_regime_signal_profile,
     get_regime_signal_routing_enabled,
     get_rebalance_interval_min,
-    get_sector_exposure_cap,
     get_trade_cooldown_min,
     get_verbose_logging,
     get_volume_threshold,
@@ -1331,8 +1327,6 @@ def _update_acceptance_rate_governor_state(
     if not _acceptance_rate_governor_enabled():
         state.acceptance_rate_governor_active = False
         state.acceptance_rate_governor_streak = 0
-        state.acceptance_rate_governor_last_rate = None
-        state.acceptance_rate_governor_last_records = 0
         return
 
     total = max(0, int(decision_records_total))
@@ -1341,8 +1335,6 @@ def _update_acceptance_rate_governor_state(
         return
     accepted = min(accepted, total)
     acceptance_rate = float(accepted) / float(total)
-    state.acceptance_rate_governor_last_rate = acceptance_rate
-    state.acceptance_rate_governor_last_records = total
 
     min_records = _acceptance_rate_governor_min_records()
     if total < min_records:
@@ -3227,10 +3219,6 @@ _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
 _INTRADAY_FEED_CACHE: str | None = None
 _SIP_LOCKED_SYMBOLS: set[str] = set()
-_FEED_RELIABILITY_CACHE_LOCK = Lock()
-_FEED_RELIABILITY_CACHE_SIGNATURE: tuple[str, int, int] | None = None
-_FEED_RELIABILITY_CACHE_SCORES: dict[str, dict[str, Any]] = {}
-_FEED_RELIABILITY_CACHE_AS_OF: str | None = None
 
 _cycle_feature_cache: dict[tuple[int, tuple[str, object]], pd.DataFrame] = {}
 _cycle_feature_cache_cycle: int | None = None
@@ -11173,26 +11161,16 @@ class BotState:
     across the entire system.
 
     Attributes:
-        loss_streak (int): Current consecutive losing trade count for drawdown protection
-        streak_halt_until (Optional[datetime]): Timestamp until which trading is halted due to streak
         day_start_equity (Optional[tuple[date, float]]): Daily equity baseline for performance tracking
         week_start_equity (Optional[tuple[date, float]]): Weekly equity baseline for performance tracking
         last_drawdown (float): Most recent portfolio drawdown percentage (-1.0 to 0.0)
-        updates_halted (bool): Flag indicating if position updates are temporarily disabled
         running (bool): Current execution state of the trading loop
         current_regime (str): Detected market regime ('bull', 'bear', 'sideways', 'volatile')
-        rolling_losses (list[float]): Sliding window of recent trade P&L for trend analysis
         mode_obj (BotMode): Trading mode configuration (conservative/balanced/aggressive)
-        no_signal_events (int): Count of cycles with insufficient trading signals
-        indicator_failures (int): Count of technical indicator calculation failures
         position_cache (Dict[str, int]): Cached broker positions to avoid redundant API calls
-        long_positions (set[str]): Set of symbols with current long positions
-        short_positions (set[str]): Set of symbols with current short positions
         last_run_at (Optional[datetime]): Timestamp of last trading cycle execution
         last_loop_duration (float): Duration in seconds of the previous trading cycle
         trade_cooldowns (Dict[str, datetime]): Per-symbol cooldown periods to prevent overtrading
-        last_trade_direction (Dict[str, str]): Last trade direction per symbol ('buy'/'sell')
-        skipped_cycles (int): Count of trading cycles skipped due to market/risk conditions
         minute_feed_cache (Dict[str, str]): Preferred minute feed per cycle after failovers
 
     Examples:
@@ -11209,27 +11187,17 @@ class BotState:
     """
 
     # Risk Management State
-    loss_streak: int = 0
-    streak_halt_until: datetime | None = None
     day_start_equity: tuple[date, float] | None = None
     week_start_equity: tuple[date, float] | None = None
     last_drawdown: float = 0.0
-    capital_band: str = "small"
 
     # Operational State
-    updates_halted: bool = False
     running: bool = False
     current_regime: str = "sideways"
-    rolling_losses: list[float] = field(default_factory=list)
     mode_obj: BotMode = field(default_factory=lambda: BotMode(_resolve_runtime_trading_mode()))
 
-    # Signal & Indicator State
-    no_signal_events: int = 0
-    indicator_failures: int = 0
     # Position Management
     position_cache: dict[str, int] = field(default_factory=dict)
-    long_positions: set[str] = field(default_factory=set)
-    short_positions: set[str] = field(default_factory=set)
 
     # Execution Timing
     last_run_at: datetime | None = None
@@ -11238,14 +11206,6 @@ class BotState:
     # Trade Management
     trade_cooldowns: dict[str, datetime] = field(default_factory=dict)
     position_entry_times: dict[str, datetime] = field(default_factory=dict)
-    reversal_signal_streak: dict[str, int] = field(default_factory=dict)
-    entry_flip_signal_streak: dict[str, int] = field(default_factory=dict)
-    last_trade_direction: dict[str, str] = field(default_factory=dict)
-    last_entry_side: dict[str, str] = field(default_factory=dict)
-    entry_expectancy_context: dict[str, dict[str, Any]] = field(default_factory=dict)
-    expectancy_history: dict[str, list[float]] = field(default_factory=dict)
-    skipped_cycles: int = 0
-    auth_skipped_symbols: set[str] = field(default_factory=set)
     cycle_order_intents: dict[str, str] = field(default_factory=dict)
     cycle_submit_compaction: set[tuple[str, str]] = field(default_factory=set)
     auth_forbidden_cooldowns: dict[tuple[str, str], datetime] = field(default_factory=dict)
@@ -11291,7 +11251,6 @@ class BotState:
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
-    primary_fallback_events: set[tuple[str, str]] = field(default_factory=set)
 
     # Minute data feed cache scoped to the active trading cycle
     minute_feed_cache: dict[str, str] = field(default_factory=dict)
@@ -11302,24 +11261,13 @@ class BotState:
         tuple[str, float, float, float, float, float] | None
     ) = None
 
-    # Intraday price reliability metadata populated from fetch_minute_df_safe
-    price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
-    data_quality: dict[str, dict[str, Any]] = field(default_factory=dict)
-
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
         default_factory=list
     )  # (symbol, timestamp)
     exit_policy_state: dict[str, dict[str, Any]] = field(default_factory=dict)
-    profitability_governor_cache_until_mono: float = 0.0
-    profitability_governor_cache: dict[str, Any] = field(default_factory=dict)
-    profitability_governor_symbol_block_until: dict[str, datetime] = field(default_factory=dict)
-    profitability_governor_regime_block_until: dict[str, datetime] = field(default_factory=dict)
-    profitability_governor_global_block_until: datetime | None = None
     acceptance_rate_governor_active: bool = False
     acceptance_rate_governor_streak: int = 0
-    acceptance_rate_governor_last_rate: float | None = None
-    acceptance_rate_governor_last_records: int = 0
 
 
 class _LazyState:
@@ -11390,7 +11338,6 @@ LOOKBACK_DAYS = 60
 MIN_SIGNAL_STRENGTH = 0.1
 # AI-AGENT-REF: Increase default position limit from "10" to "20" for better portfolio utilization
 # REMOVED: module-scope MAX_PORTFOLIO_POSITIONS = CFG.max_portfolio_positions
-CORRELATION_THRESHOLD = 0.60
 # REMOVED: SECTOR_EXPOSURE_CAP = CFG.sector_exposure_cap
 # REMOVED: MAX_OPEN_POSITIONS = CFG.max_open_positions
 # REMOVED: WEEKLY_DRAWDOWN_LIMIT = CFG.weekly_drawdown_limit
@@ -11399,7 +11346,6 @@ MARKET_CLOSE = dt_time(13, 0)
 # REMOVED: VOLUME_THRESHOLD = CFG.volume_threshold
 ENTRY_START_OFFSET = timedelta(minutes=0)
 ENTRY_END_OFFSET = timedelta(minutes=0)
-REGIME_LOOKBACK = 14
 REGIME_ATR_THRESHOLD = 20.0
 RF_ESTIMATORS = 300
 
@@ -11936,20 +11882,10 @@ def __getattr__(name: str) -> Any:
         return prediction_executor
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# EVENT cooldown
-_LAST_EVENT_TS: dict[str, float] = {}
-EVENT_COOLDOWN = 15.0  # seconds
-# AI-AGENT-REF: minimum position hold window (seconds); 0 disables hold gating
-REBALANCE_HOLD_SECONDS = get_min_position_hold_seconds()
+
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
 TRADE_COOLDOWN_MIN = get_trade_cooldown_min()  # minutes
 TRADE_COOLDOWN = timedelta(minutes=TRADE_COOLDOWN_MIN)  # AI-AGENT-REF: validated cooldown
-
-# AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
-MAX_TRADES_PER_HOUR = get_max_trades_per_hour()  # limit high-frequency trading
-MAX_TRADES_PER_DAY = (
-    get_max_trades_per_day()
-)  # daily limit to prevent excessive trading
 
 
 def _paper_sampling_runtime_active() -> bool:
@@ -16459,21 +16395,13 @@ class BotContext:
     trade_logger: TradeLogger
     sem: Semaphore
     volume_threshold: int
-    entry_start_offset: timedelta
-    entry_end_offset: timedelta
     market_open: dt_time
     market_close: dt_time
-    regime_lookback: int
-    regime_atr_threshold: float
     daily_loss_limit: float
     kelly_fraction: float
     capital_scaler: CapitalScalingEngine
-    adv_target_pct: float
     max_position_dollars: float
     params: dict
-    sector_cap: float = get_sector_exposure_cap()
-    correlation_limit: float = CORRELATION_THRESHOLD
-    capital_band: str = "small"
     confirmation_count: dict[str, int] = field(default_factory=dict)
     trailing_extremes: dict[str, float] = field(default_factory=dict)
     take_profit_targets: dict[str, float] = field(default_factory=dict)
@@ -16485,18 +16413,15 @@ class BotContext:
     # AI-AGENT-REF: track client_order_id base for INITIAL_REBALANCE orders
     rebalance_ids: dict[str, str] = field(default_factory=dict)
     rebalance_attempts: dict[str, int] = field(default_factory=dict)
-    trailing_stop_data: dict[str, Any] = field(default_factory=dict)
     risk_engine: RiskEngine | None = None
     allocator: StrategyAllocator | None = None
     strategies: list[Any] = field(default_factory=list)
     execution_engine: Any | None = None
     exec_engine: Any | None = None
     model: Any | None = None
-    initial_rebalance_done: bool = False
     # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
     drawdown_circuit_breaker: DrawdownCircuitBreaker | None = None
     logger: Any = logger
-    liquidity_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
     allow_short_selling: bool = False
 
     # AI-AGENT-REF: Add backward compatibility property for alpaca_client
@@ -16920,16 +16845,11 @@ class LazyBotContext:
             trade_logger=get_trade_logger(),
             sem=Semaphore(4),
             volume_threshold=int(get_volume_threshold()),
-            entry_start_offset=ENTRY_START_OFFSET,
-            entry_end_offset=ENTRY_END_OFFSET,
             market_open=MARKET_OPEN,
             market_close=MARKET_CLOSE,
-            regime_lookback=REGIME_LOOKBACK,
-            regime_atr_threshold=REGIME_ATR_THRESHOLD,
             daily_loss_limit=get_daily_loss_limit(),
             kelly_fraction=params.get("KELLY_FRACTION", 0.6),
             capital_scaler=CapitalScalingEngine(params),
-            adv_target_pct=0.002,
             max_position_dollars=10_000,
             params=params,
             confirmation_count={},
@@ -20122,7 +20042,6 @@ def daily_reset(state: BotState) -> None:
     try:
         _reload_env()
         _slippage_log.clear()
-        state.loss_streak = 0
         logger.info("DAILY_STATE_RESET")
     except (
         FileNotFoundError,
@@ -20629,8 +20548,6 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "git_hash": get_git_hash(),
             }
         )
-        state.updates_halted = False
-        state.rolling_losses.clear()
 
     return mp
 

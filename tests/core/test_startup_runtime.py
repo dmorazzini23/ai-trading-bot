@@ -250,7 +250,6 @@ def test_initial_rebalance_runtime_treats_short_side_as_signed(monkeypatch):
     assert submitted == [("AAPL", 15, "buy")]
     assert ctx.api.positions["AAPL"] == 10
     assert bot_engine.state.position_cache["AAPL"] == 10
-    assert "AAPL" not in bot_engine.state.short_positions
 
 
 def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):

@@ -24,16 +24,6 @@ class RunAllTradesPreludeResult:
 def _ensure_worker_state_fields(state: Any) -> None:
     if not hasattr(state, "trade_cooldowns"):
         state.trade_cooldowns = {}
-    if not hasattr(state, "last_trade_direction"):
-        state.last_trade_direction = {}
-    if not hasattr(state, "entry_flip_signal_streak"):
-        state.entry_flip_signal_streak = {}
-    if not hasattr(state, "last_entry_side"):
-        state.last_entry_side = {}
-    if not hasattr(state, "entry_expectancy_context"):
-        state.entry_expectancy_context = {}
-    if not hasattr(state, "expectancy_history"):
-        state.expectancy_history = {}
     if not hasattr(state, "exit_policy_state"):
         state.exit_policy_state = {}
     if not hasattr(state, "policy_rollback_disabled_slices"):
