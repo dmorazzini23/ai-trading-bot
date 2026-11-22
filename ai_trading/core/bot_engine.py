@@ -328,13 +328,9 @@ from ai_trading.config.management import (
     clear_runtime_env_override,
 )
 try:
-    from ai_trading.execution.guards import shadow_active as guard_shadow_active
     from ai_trading.execution.timing import execution_span, record_cycle_wall
 except (ImportError, ModuleNotFoundError, AttributeError):
     from contextlib import contextmanager
-
-    def guard_shadow_active() -> bool:
-        return False
 
     @contextmanager
     def execution_span(*_a, **_k):

@@ -58,7 +58,6 @@ def test_run_all_trades_worker_records_execute_stage_and_softens_finalizer_hooks
         "record_cycle_wall",
         lambda elapsed, metadata: cycle_walls.append((elapsed, metadata)),
     )
-    monkeypatch.setattr(bot_engine, "guard_shadow_active", lambda: False)
 
     def _heartbeat(*_args, **_kwargs) -> None:
         hook_order.append("heartbeat")

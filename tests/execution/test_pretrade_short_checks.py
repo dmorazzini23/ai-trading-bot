@@ -13,7 +13,6 @@ def _patch_short_prechecks(monkeypatch) -> None:
     monkeypatch.setattr(live_trading, "_safe_mode_guard", lambda *a, **k: False)
     monkeypatch.setattr(live_trading, "_require_bid_ask_quotes", lambda: False)
     monkeypatch.setattr(live_trading, "quote_fresh_enough", lambda *a, **k: True)
-    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
     monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
     monkeypatch.setattr(
         live_trading,

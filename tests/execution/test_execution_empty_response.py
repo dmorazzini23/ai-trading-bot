@@ -110,7 +110,6 @@ def _make_engine(monkeypatch, response):
     )
     monkeypatch.setattr(live_trading.provider_monitor, "is_disabled", lambda *_a, **_k: False)
     monkeypatch.setattr(live_trading, "_require_bid_ask_quotes", lambda: False)
-    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
     monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
     return engine
 
