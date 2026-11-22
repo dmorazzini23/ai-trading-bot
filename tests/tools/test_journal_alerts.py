@@ -115,6 +115,25 @@ def test_drawdown_breaker_fields_as_the_breaker_logs_them() -> None:
     assert "drawdown 8.0%" in text and "81,655" in text and "75,114" in text
 
 
+def test_drawdown_breaker_restored_open_after_restart_is_a_trading_stop() -> None:
+    events = ja.detect(
+        [
+            _app(
+                "DRAWDOWN_BREAKER_RESTORED_OPEN",
+                "CRITICAL",
+                reason="restored_from_state",
+                current_drawdown=0.07,
+                peak_equity=100000.0,
+                equity=93000.0,
+            )
+        ]
+    )
+    assert [(e["alert"], e["kind"]) for e in events] == [("trading", "stopped")]
+    sent, _ = ja.apply_dedupe(events, {}, now=T0)
+    text = _text(ja.build_messages(sent)[0])
+    assert "Trading stopped" in text and "restored_from_state" in text and "drawdown 7.0%" in text
+
+
 def test_drawdown_breaker_tripped_and_reset_messages() -> None:
     trip = ja.detect(
         [_app("DRAWDOWN_BREAKER_TRIPPED", "ERROR", drawdown=0.0612, peak=101234.5, equity=95040.0)]
