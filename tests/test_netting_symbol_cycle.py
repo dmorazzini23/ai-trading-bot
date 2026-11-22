@@ -119,6 +119,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
             blocked_metrics=None,
             blocked_order_intent=None,
             decision_quote_evidence=None,
+            exit_limit_price=None,
         )
 
     def execute_submission_func(**kwargs: Any) -> Any:

@@ -585,8 +585,39 @@ Safety backstops in the netting cycle, not strategy rules. Code:
     any other approval scaling reason, `RISK_CAP_SYMBOL` (symbol notional cap
     and minimum quantity), sell-to-available, duplicate intent, broker
     breakers and all other pretrade checks (for example `DERISK_DATA_QUALITY_BLOCK` on a missing
-    quote, stale quote, slippage ceiling). The end-of-day flatten is a
-    separate path and does not meet these gates.
+    quote or a degraded-data flag, stale quote, crossed quote, slippage
+    ceiling), except as below. The end-of-day flatten is a separate path and
+    does not meet these gates.
+  - **Pricing (urgent exits):** a protective exit or a full close goes out as
+    a marketable DAY limit, never a market order: a sell at the bid less
+    10 bps, a buy-to-cover at the ask plus 10 bps, rounded to the tick away
+    from the touch. The decision is taken once, before the liquidity clips, so
+    a full close later clipped to a partial order stays urgent. The drawdown
+    breaker's reduce-only conversion is treated as a full close, not a
+    protective exit. The flags count only while the order actually reduces the
+    held position; an add, entry or flip carrying them is priced and checked
+    as before. Without a usable quote (missing, crossed or stale), or for a
+    protective exit whose touch is more than 10% from the last bar close
+    (`far_from_bar_close`), the price is the last bar close moved 50 bps the
+    same way. A normal full close whose touch is further from the bar close
+    than the price collar is held with `PRICE_COLLAR_BLOCK`
+    (`basis=touch_vs_bar_close`). Both pretrade checks see this limit, so a
+    move from the bar close inside those bounds does not trip the collar; a
+    protective exit's limit may sit within the collar of either the quote mid
+    or the bar close. `URGENT_EXIT_LIMIT_PRICE | symbol=SYM` logs the price,
+    its basis (`quote` or `bar_close_fallback`) and why the quote was not
+    used; the decision snapshot keeps it as `urgent_exit_pricing`. Trims, adds
+    and entries keep the bar-close limit.
+  - **Quote checks:** a protective exit is not held by `STALE_QUOTE_BLOCK`, a
+    missing quote (`DERISK_DATA_QUALITY_BLOCK`), the execution-quality gate or
+    `SLIPPAGE_CEILING_BLOCK`. A normal full close still meets the stale,
+    missing-quote and slippage-ceiling blocks, but skips the execution-quality
+    gate (judged against the held position). A crossed or nonsense quote still
+    blocks every exit (`QUOTE_SANITY_BLOCK`), as does a degraded-data flag.
+    Trims, adds and entries meet every check as before.
+  - **Fractional positions:** broker quantities are truncated to whole shares
+    (`POSITION_FRACTIONAL_QTY_TRUNCATED` names the symbol); a remainder below
+    one share is never exited by the cycle.
   - **Journal:** the original gate name stays in the decision record, followed
     by `PROTECTIVE_EXIT_OVERRIDE` for a backstop exit or
     `CLOSING_EXIT_OVERRIDE` for a full close. A decision carrying

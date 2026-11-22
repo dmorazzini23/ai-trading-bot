@@ -64,6 +64,17 @@ class OrderIntent:
     broker_ready: bool | None = None
     broker_ready_reason: str | None = None
     broker_cooldown_remaining_sec: float | None = None
+    # Signed shares held in the symbol when the intent was built (None: unknown).
+    position_qty: float | None = None
+    # Decided once by the netting cycle: a full close or a protective exit
+    # (stop / position backstop). They waive checks only while the intent
+    # actually reduces ``position_qty`` (see ``exit_waivers``); anything else,
+    # flags or not, is checked exactly as before.
+    urgent_exit: bool = False
+    protective_exit: bool = False
+    # Last bar close an urgent exit was decided at; the touch it is priced from
+    # must stay within the collar of it (a normal full close).
+    exit_reference_price: float | None = None
 
     def to_contract(self):
         """Return the canonical order intent contract for downstream journals."""
@@ -1361,7 +1372,25 @@ def _intent_spread_bps(intent: OrderIntent) -> tuple[float | None, str | None]:
 
 
 def _intent_reduces_position(intent: OrderIntent, ledger: Any) -> bool:
-    current_qty = _ledger_position_qty(ledger, intent.symbol)
+    return _intent_reduces_qty(intent, _ledger_position_qty(ledger, intent.symbol))
+
+
+def exit_waivers(intent: OrderIntent) -> tuple[bool, bool]:
+    """``(urgent, protective)`` exit waivers that apply to this intent.
+
+    A flag counts only while the order reduces the position the intent was
+    built with (``position_qty``; unknown means no waiver). The OMS ledger
+    carries no positions, so the ledger check above never fires for exits.
+    """
+
+    if not (intent.urgent_exit or intent.protective_exit):
+        return False, False
+    if not _intent_reduces_qty(intent, intent.position_qty):
+        return False, False
+    return bool(intent.urgent_exit or intent.protective_exit), bool(intent.protective_exit)
+
+
+def _intent_reduces_qty(intent: OrderIntent, current_qty: float | None) -> bool:
     if current_qty is None:
         return False
     side = str(intent.side or "").strip().lower()
@@ -1409,7 +1438,11 @@ def _execution_quality_gate(
         True,
         cast=bool,
     )
-    if not bool(enabled) or _intent_reduces_position(intent, ledger):
+    if (
+        not bool(enabled)
+        or _intent_reduces_position(intent, ledger)
+        or exit_waivers(intent)[0]
+    ):
         return None
 
     symbol_token = str(intent.symbol or "").strip().upper()
@@ -1674,6 +1707,31 @@ def _risk_metric_value(intent_value: float | None, ledger: Any, metric: str) -> 
     return value
 
 
+def resolve_quote_max_age_ms(cfg: Any) -> int:
+    """Quote age (ms) beyond which ``STALE_QUOTE_BLOCK`` fires; ``0`` disables it."""
+
+    quote_max_age_ms = int(
+        _cfg_value(
+            cfg,
+            field="quote_max_age_ms",
+            env_keys=("QUOTE_MAX_AGE_MS",),
+            default=0,
+            cast=int,
+        )
+    )
+    if quote_max_age_ms <= 0:
+        quote_max_age_ms = int(
+            _cfg_value(
+                cfg,
+                field="min_quote_freshness_ms",
+                env_keys=("TRADING__MIN_QUOTE_FRESHNESS_MS",),
+                default=0,
+                cast=int,
+            )
+        )
+    return quote_max_age_ms
+
+
 def validate_pretrade(
     intent: OrderIntent,
     *,
@@ -1773,25 +1831,7 @@ def validate_pretrade(
             cast=float,
         )
     )
-    quote_max_age_ms = int(
-        _cfg_value(
-            cfg,
-            field="quote_max_age_ms",
-            env_keys=("QUOTE_MAX_AGE_MS",),
-            default=0,
-            cast=int,
-        )
-    )
-    if quote_max_age_ms <= 0:
-        quote_max_age_ms = int(
-            _cfg_value(
-                cfg,
-                field="min_quote_freshness_ms",
-                env_keys=("TRADING__MIN_QUOTE_FRESHNESS_MS",),
-                default=0,
-                cast=int,
-            )
-        )
+    quote_max_age_ms = resolve_quote_max_age_ms(cfg)
     rth_only = _coerce_bool(getattr(cfg, "rth_only", get_env("RTH_ONLY", True, cast=bool)))
     allow_extended = _coerce_bool(
         getattr(cfg, "allow_extended", get_env("ALLOW_EXTENDED", False, cast=bool))
@@ -1862,8 +1902,13 @@ def validate_pretrade(
             )
 
     effective_quote_age_ms = _effective_quote_age_ms(intent)
+    urgent_exit, protective_exit = exit_waivers(intent)
+    quote_stale = False
     if quote_max_age_ms > 0 and effective_quote_age_ms is not None:
-        if effective_quote_age_ms > float(quote_max_age_ms):
+        quote_stale = effective_quote_age_ms > float(quote_max_age_ms)
+        # A protective exit is never held for a stale quote: it is priced from
+        # the last bar close instead (see netting_exit_pricing).
+        if quote_stale and not protective_exit:
             return (
                 False,
                 "STALE_QUOTE_BLOCK",
@@ -2098,7 +2143,9 @@ def validate_pretrade(
     derisk_enabled = bool(get_env("AI_TRADING_DERISK_ON_DATA_DEGRADED", True, cast=bool))
     derisk_mode = str(get_env("AI_TRADING_DERISK_MODE", "block", cast=str) or "block").strip().lower()
     data_degraded = bool(get_env("AI_TRADING_DATA_DEGRADED", False, cast=bool))
-    quote_quality_bad = intent.quote_quality_ok is False
+    # A missing quote never holds a protective exit (it is priced from the last
+    # bar close); a degraded-data flag still blocks everyone.
+    quote_quality_bad = intent.quote_quality_ok is False and not protective_exit
     if derisk_enabled and (data_degraded or quote_quality_bad) and derisk_mode == "block":
         return (
             False,
@@ -2186,8 +2233,11 @@ def validate_pretrade(
         else bucket_ceiling
     )
     effective_expected_slippage_bps, slippage_source = _effective_expected_slippage_bps(intent)
+    # A protective exit pays the spread to get out; the slippage ceiling is for
+    # orders that can wait.
     if (
-        effective_expected_slippage_bps is not None
+        not protective_exit
+        and effective_expected_slippage_bps is not None
         and slippage_ceiling_bps is not None
         and float(effective_expected_slippage_bps) > float(slippage_ceiling_bps)
     ):
@@ -2285,10 +2335,39 @@ def validate_pretrade(
                 },
             )
 
+    # An urgent exit's limit is built from this same quote (bid/ask plus a small
+    # buffer), so it passes the collar unless the spread itself is absurd. A
+    # protective exit whose quote is stale, missing or far from the bar close
+    # is priced from the bar close instead, so its limit may sit within the
+    # collar of either the quote mid or that bar close.
+    exit_close = _finite_float(intent.exit_reference_price)
     if intent.limit_price is not None and reference and reference > 0:
         deviation = abs(float(intent.limit_price) - float(reference)) / float(reference)
+        if protective_exit and exit_close is not None and exit_close > 0.0:
+            deviation = min(deviation, abs(float(intent.limit_price) - exit_close) / exit_close)
         if deviation > max(0.0, collar_pct):
             return False, "PRICE_COLLAR_BLOCK", {"reference": reference, "limit_price": intent.limit_price, "deviation": deviation}
+    # A normal full close is priced from the touch, so the touch itself must
+    # stay within the collar of the bar close it was decided at (on main the
+    # bar-close limit against the quote held it the same way). A protective
+    # exit bounds the touch in pricing instead (netting_exit_pricing).
+    if urgent_exit and not protective_exit and exit_close is not None and exit_close > 0.0:
+        side_token = str(intent.side or "").strip().lower()
+        touch = _finite_float(intent.ask if side_token in {"buy", "cover", "buy_to_cover"} else intent.bid)
+        if touch is not None and touch > 0.0:
+            touch_deviation = abs(touch - exit_close) / exit_close
+            if touch_deviation > max(0.0, collar_pct):
+                return (
+                    False,
+                    "PRICE_COLLAR_BLOCK",
+                    {
+                        "reference": exit_close,
+                        "touch": touch,
+                        "limit_price": intent.limit_price,
+                        "deviation": touch_deviation,
+                        "basis": "touch_vs_bar_close",
+                    },
+                )
 
     if ledger is not None and intent.client_order_id:
         seen_fn = getattr(ledger, "seen_client_order_id", None)

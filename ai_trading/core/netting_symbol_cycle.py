@@ -729,6 +729,10 @@ def process_netting_symbol(
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
     full_close_exit = is_full_close(int(current_shares), int(delta_shares))
+    # The urgent-exit decision (protective exit or full close), taken once here
+    # and passed explicitly to where the order is priced: it goes out as a
+    # marketable limit, never re-derived from the live delta further down.
+    urgent_exit = bool(protective_exit) or bool(full_close_exit)
     exit_volume_capped = False
     if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
         participation_block_mode = str(
@@ -1005,6 +1009,7 @@ def process_netting_symbol(
         get_sector_func=processor.get_sector_func,
         protective_exit=protective_exit,
         full_close_exit=full_close_exit,
+        urgent_exit=urgent_exit,
     )
     _extend_gates(gates, submit_prelude.gates_added)
     symbol_snapshot.update(submit_prelude.snapshot_updates)
@@ -1093,6 +1098,9 @@ def process_netting_symbol(
         symbol=symbol,
         side=side,
         price=float(price),
+        limit_price=submit_prelude.exit_limit_price,
+        urgent_exit=urgent_exit,
+        protective_exit=protective_exit,
         delta_shares=int(delta_shares),
         now=processor.now,
         net_target=net_target,
