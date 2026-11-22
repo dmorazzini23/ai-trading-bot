@@ -351,6 +351,8 @@ def _resolve_execution_intent_context(
     side_norm: str,
     price: float,
     exec_kwargs: Mapping[str, Any],
+    urgent_exit: bool = False,
+    protective_exit: bool = False,
 ) -> tuple[ExecutionIntentContext, dict[str, Any], dict[str, Any]]:
     now = datetime.now(UTC)
     current_qty = int(be._current_qty(ctx, symbol))
@@ -488,7 +490,12 @@ def _resolve_execution_intent_context(
     resolved_decision_trace_id = (
         explicit_decision_trace_id or intent_context.decision_trace_id
     )
-    pretrade_intent = intent_context.pretrade_intent
+    pretrade_intent = replace(
+        intent_context.pretrade_intent,
+        position_qty=float(current_qty),
+        urgent_exit=bool(urgent_exit),
+        protective_exit=bool(urgent_exit and protective_exit),
+    )
     if resolved_client_order_id != intent_context.client_order_id:
         pretrade_intent = replace(
             pretrade_intent,
@@ -541,6 +548,10 @@ def submit_order_runtime(
 
     be = importlib.import_module("ai_trading.core.bot_engine")
     exec_kwargs = dict(exec_kwargs)
+    # The netting cycle's urgent-exit decision (protective exit or full close);
+    # it only reaches the pretrade intent, never the broker call.
+    urgent_exit_requested = bool(exec_kwargs.pop("urgent_exit", False))
+    protective_exit_requested = bool(exec_kwargs.pop("protective_exit", False))
 
     try:
         validated_qty = int(qty)
@@ -866,6 +877,9 @@ def submit_order_runtime(
         side_norm=side_norm,
         price=float(price),
         exec_kwargs=exec_kwargs,
+        # Exit relaxations apply only to an order that reduces the position.
+        urgent_exit=urgent_exit_requested and reducing_trade,
+        protective_exit=protective_exit_requested and reducing_trade,
     )
     ledger = _resolve_order_ledger(be, cfg)
     rate_limiter = be._pretrade_rate_limiter(be.state)

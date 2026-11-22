@@ -182,13 +182,27 @@ def execute_netting_submission(
     compute_attribution_metrics_func: Callable[..., dict[str, Any]],
     logger: Any,
     breakers: Any,
+    limit_price: float | None = None,
+    urgent_exit: bool = False,
+    protective_exit: bool = False,
 ) -> NettingSubmitExecutionResult:
+    """Submit one netting order and shape its outcome.
+
+    ``price`` is the decision (bar close) price used for TCA and the ledger;
+    ``limit_price``, set only for an urgent exit, is the marketable limit the
+    order is sent at. ``urgent_exit``/``protective_exit`` are the cycle's
+    decision, carried to the submit-time pretrade check.
+    """
     closing_short = _is_short_reducing_buy(side, int(delta_shares), net_target)
     closing_long = _is_long_reducing_sell(side, int(delta_shares), net_target)
     submit_extra: dict[str, Any] = {}
     if closing_short or closing_long:
         submit_extra["closing_position"] = True
         submit_extra["reduce_only"] = True
+    if urgent_exit:
+        submit_extra["urgent_exit"] = True
+        submit_extra["protective_exit"] = bool(protective_exit)
+    order_price = float(limit_price) if limit_price is not None else price
     expected_net_edge_bps = float(approval.expected_net_edge_bps)
     submit_annotations = dict(order_annotations)
     submit_annotations.setdefault("expected_net_edge_bps", expected_net_edge_bps)
@@ -244,7 +258,7 @@ def execute_netting_submission(
             symbol,
             abs(delta_shares),
             side,
-            price=price,
+            price=order_price,
             client_order_id=client_order_id,
             expected_net_edge_bps=expected_net_edge_bps,
             model_id=model_id_for_order or None,

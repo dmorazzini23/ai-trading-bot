@@ -10,7 +10,12 @@ from ai_trading.config.management import get_env
 from ai_trading.core.evidence_lineage import normalize_evidence_timestamp
 from ai_trading.core.execution_guards import build_portfolio_optimizer_positions, build_pretrade_validation_cfg
 from ai_trading.core.execution_intent import ExecutionIntentContext, build_execution_intent_context
+from ai_trading.core.netting_exit_pricing import urgent_exit_limit_price
 from ai_trading.core.netting_position_backstop import exit_override_gate, is_full_close
+from ai_trading.logging import get_logger
+from ai_trading.oms.pretrade import resolve_quote_max_age_ms
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +32,8 @@ class NettingSubmitPreludeResult:
     blocked_metrics: dict[str, Any] | None
     blocked_order_intent: Any | None
     decision_quote_evidence: dict[str, Any] | None = None
+    # Marketable limit for an urgent exit; None keeps the bar-close limit.
+    exit_limit_price: float | None = None
 
 
 def _fail_closed_on_optimizer_error(*, cfg: Any, opening_trade: bool) -> bool:
@@ -93,7 +100,14 @@ def prepare_netting_submit_prelude(
     get_sector_func: Callable[[str], str | None],
     protective_exit: bool = False,
     full_close_exit: bool | None = None,
+    urgent_exit: bool = False,
 ) -> NettingSubmitPreludeResult:
+    """Run the pre-submit broker gates for one netting order.
+
+    ``urgent_exit`` is the cycle's single decision that this order is a
+    protective exit or a full close; it alone prices the order to fill and
+    carries the exit flags into pretrade. It is never re-derived here.
+    """
     snapshot_updates: dict[str, Any] = {}
     gates_added: list[str] = []
     # The cycle passes its full-close decision; a direct caller gets it taken
@@ -329,7 +343,43 @@ def prepare_netting_submit_prelude(
         order_type="limit",
         execution_profile=execution_profile,
     )
-    intent = final_intent_context.pretrade_intent
+    intent = replace(
+        final_intent_context.pretrade_intent,
+        position_qty=float(current_shares),
+        urgent_exit=bool(urgent_exit),
+        protective_exit=bool(urgent_exit and protective_exit),
+    )
+    exit_limit_price: float | None = None
+    if urgent_exit:
+        exit_price = urgent_exit_limit_price(
+            symbol=symbol,
+            side=side,
+            bid=submit_bid_at_arrival,
+            ask=submit_ask_at_arrival,
+            quote_age_ms=intent.quote_age_ms,
+            max_quote_age_ms=resolve_quote_max_age_ms(pretrade_cfg),
+            fallback_price=float(price),
+        )
+        if exit_price is not None:
+            exit_limit_price = float(exit_price.limit_price)
+            # Pretrade (collar included) judges the price the order goes out at.
+            intent = replace(intent, limit_price=exit_limit_price)
+            pricing_evidence = {
+                "limit_price": exit_limit_price,
+                "price_basis": exit_price.basis,
+                "reference_price": exit_price.reference_price,
+                "buffer_bps": exit_price.buffer_bps,
+                "tick": exit_price.tick,
+                "quote_unusable_reason": exit_price.quote_unusable_reason,
+                "bar_close": float(price),
+                "protective_exit": bool(protective_exit),
+            }
+            snapshot_updates["urgent_exit_pricing"] = pricing_evidence
+            logger.info(
+                f"URGENT_EXIT_LIMIT_PRICE | symbol={symbol}",
+                extra={"symbol": symbol, "side": side, "qty": abs(int(delta_shares)), **pricing_evidence},
+            )
+    final_intent_context = replace(final_intent_context, pretrade_intent=intent)
     allowed, pretrade_reason, pretrade_details = safe_validate_pretrade_func(
         intent,
         cfg=pretrade_cfg,
@@ -377,4 +427,5 @@ def prepare_netting_submit_prelude(
         blocked_metrics=None,
         blocked_order_intent=None,
         decision_quote_evidence=decision_quote_evidence,
+        exit_limit_price=exit_limit_price,
     )

@@ -585,8 +585,26 @@ Safety backstops in the netting cycle, not strategy rules. Code:
     any other approval scaling reason, `RISK_CAP_SYMBOL` (symbol notional cap
     and minimum quantity), sell-to-available, duplicate intent, broker
     breakers and all other pretrade checks (for example `DERISK_DATA_QUALITY_BLOCK` on a missing
-    quote, stale quote, slippage ceiling). The end-of-day flatten is a
-    separate path and does not meet these gates.
+    quote or a degraded-data flag, stale quote, crossed quote, slippage
+    ceiling), except as below. The end-of-day flatten is a separate path and
+    does not meet these gates.
+  - **Pricing (urgent exits):** a protective exit or a full close (decided
+    once, before the liquidity clips) goes out as a marketable DAY limit,
+    never a market order: a sell at the bid less 10 bps, a buy-to-cover at the
+    ask plus 10 bps, rounded to the tick away from the touch. Without a usable
+    quote (missing, crossed or stale) it is priced at the last bar close moved
+    50 bps the same way. The price the collar and both pretrade checks see is
+    this limit, so a market gap from the bar close does not trip
+    `PRICE_COLLAR_BLOCK`. `URGENT_EXIT_LIMIT_PRICE | symbol=SYM` logs the
+    price and its basis (`quote` or `bar_close_fallback`), also kept in the
+    decision snapshot as `urgent_exit_pricing`. Trims, adds and entries keep
+    the bar-close limit.
+  - **Quote checks:** a protective exit is not held by `STALE_QUOTE_BLOCK`, a
+    missing quote (`DERISK_DATA_QUALITY_BLOCK`), or the execution-quality gate,
+    and a stale quote is not its collar reference. A normal full close still
+    meets the stale and missing-quote blocks, but skips the execution-quality
+    gate (judged against the held position). Trims, adds and entries meet all
+    three as before.
   - **Journal:** the original gate name stays in the decision record, followed
     by `PROTECTIVE_EXIT_OVERRIDE` for a backstop exit or
     `CLOSING_EXIT_OVERRIDE` for a full close. A decision carrying
