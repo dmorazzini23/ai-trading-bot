@@ -1,6 +1,50 @@
 # Current handoff
 
-## November 22: exit pricing merged, not deployed (`da2570eb4`) (start here)
+## November 22: breaker persistence and Phase 4 merged; four-change deploy approved (`7dffb1379`) (start here)
+
+- **Running service:** still `d22babac4` (position backstop). Nothing was
+  restarted.
+- **Approved deploy (owner, Nov 22):** one restart after the close on Mon
+  Nov 23, provided the backstop's first market session looks clean, carrying
+  all four changes on main: full-close fix (`db356eb49`), exit pricing
+  (`da2570eb4`), drawdown-breaker persistence and Phase 4 cleanup.
+- **Config hash:** Phase 4 removes 12 ConfigSpecs, so `resolved_config_hash`
+  goes from `b46e8e828ec2...` to
+  `49f5e4697a4f298a1b12c21eac0be155211ba7d60e85ddb474310f402c3939a3`. The
+  owner approved this change for this deploy. Re-derive the hash with the
+  `release_identity` pre-check before editing `release_spec.json`; do not
+  type it from this note. The paper burn-in counter resets on the first
+  paper cycle after the restart (it gates real-money mode only).
+- **Breaker persistence (`claude/breaker-peak`):** peak equity and tripped
+  state are saved to `runtime/drawdown_breaker_state.json` and restored on
+  start. First start logs one `DRAWDOWN_BREAKER_STATE_LOAD_FAILED`
+  (`missing`) warning and creates the file. A breaker restored open logs
+  critical `DRAWDOWN_BREAKER_RESTORED_OPEN` (a trading-stop marker for
+  journal alerts). Once tripped (8%) and flat, entries stay blocked across
+  restarts until the operator stops the service, deletes the file and
+  restarts; the owner accepted this. See `docs/OPERATIONS.md`.
+- **Phase 4 (`claude/phase4-cleanup`):** dead settings, state fields,
+  globals and unreachable branches removed (44 files); the retired keys are
+  listed in `docs/OPERATIONS.md` ("Retired Settings Keys"). The operator
+  `.env` still sets 29 of them; they are ignored and can be deleted after
+  the deploy without changing the hash.
+- **Validation:** full suite on the combined tree 6815 passed, 2 skipped;
+  decision baseline unchanged
+  (`COMBINED_DECISIONS 02fa7cd460ac3c191209e944b762b63b480773dd1b48112f46378a5a72dee83a`);
+  each branch independently reviewed (no must-fix), should-fixes done and
+  the reviewers' probes re-run on the final code.
+- **Not covered:** the breaker follow-up commits had no second independent
+  review; breaker fields are not in the health payload yet; ~60 unread env
+  keys and ~13 Settings fields were not proven dead and remain.
+- **Monday checks before deploying:** order count back to 2-8, one
+  `POSITION_BACKSTOP_STATE_LOAD_FAILED` (`missing`) warning, backstop
+  markers, no errors.
+- **Rollback after deploy:** `git checkout --detach d22babac4`, restore the
+  spec backup (it holds the old SHA and the old config hash),
+  `sudo systemctl restart ai-trading.service`. The breaker state file can
+  stay; `d22babac4` does not read it.
+
+## November 22: exit pricing merged, not deployed (`da2570eb4`)
 
 - **Running service:** still `d22babac4` (position backstop). Nothing was
   restarted. The owner approved deploying this together with the full-close
