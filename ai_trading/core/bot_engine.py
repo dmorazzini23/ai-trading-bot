@@ -7263,7 +7263,10 @@ WEEKLY_DRAWDOWN_LIMIT = 0.10
 SEED = 42
 
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
-from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
+from ai_trading.risk.circuit_breakers import (
+    DRAWDOWN_BREAKER_STATE_PATH,
+    DrawdownCircuitBreaker,
+)
 from ai_trading.utils.timefmt import (
     utc_now_iso,  # AI-AGENT-REF: Import UTC timestamp utilities
 )
@@ -16943,7 +16946,11 @@ class LazyBotContext:
             # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
             drawdown_circuit_breaker=(
                 DrawdownCircuitBreaker(
-                    max_drawdown=max_drawdown_threshold, recovery_threshold=0.8
+                    max_drawdown=max_drawdown_threshold,
+                    recovery_threshold=0.8,
+                    state_path=_resolve_runtime_artifact_path(
+                        DRAWDOWN_BREAKER_STATE_PATH
+                    ),
                 )
                 if DrawdownCircuitBreaker
                 else None
