@@ -21488,7 +21488,7 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
 
 
 def _ensure_execution_engine(runtime) -> None:
-    """Ensure an execution engine with check_stops is attached to runtime."""
+    """Ensure an execution engine with the post-cycle check_stops hook is attached."""
     try:
         execution_module = importlib.import_module("ai_trading.execution")
     except ImportError as exc:
@@ -21694,7 +21694,8 @@ def _ensure_execution_engine(runtime) -> None:
             extra=diagnostics,
         )
         raise RuntimeError(
-            "Execution engine missing check_stops(); risk-stop enforcement cannot start."
+            "Execution engine class has no check_stops() post-cycle hook; startup aborted. "
+            "Stop-loss and max-hold exits run in the netting position backstop, not in this hook."
         )
 
     expects_live_engine = status.mode in {"paper", "live"}
@@ -21784,7 +21785,8 @@ def _ensure_execution_engine(runtime) -> None:
             )
     if not hasattr(exec_engine, "check_stops"):
         raise RuntimeError(
-            "Execution engine lacks check_stops(); risk-stop checks disabled"
+            "Execution engine has no check_stops() post-cycle hook; startup aborted. "
+            "Stop-loss and max-hold exits run in the netting position backstop, not in this hook."
         )
 
 

@@ -26490,7 +26490,11 @@ class ExecutionEngine:
         return any(token in normalized for token in tokens)
 
     def check_stops(self) -> None:
-        """Hook for risk-stop enforcement from core loop (currently no-op)."""
+        """Post-cycle hook called by the core loop; a no-op for this engine.
+
+        Stop-loss and max-hold exits run in the netting position backstop
+        (``ai_trading.core.netting_position_backstop``).
+        """
 
         logger.debug(
             "EXEC_ENGINE_CHECK_STOPS_NOOP",
