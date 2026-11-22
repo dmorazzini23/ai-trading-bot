@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -16,15 +17,20 @@ from ai_trading.core import bot_engine
 from ai_trading.core.netting_exit_pricing import (
     PRICE_BASIS_BAR_CLOSE,
     PRICE_BASIS_QUOTE,
-    URGENT_EXIT_FALLBACK_BUFFER_BPS,
-    URGENT_EXIT_QUOTE_BUFFER_BPS,
     urgent_exit_limit_price,
 )
 from ai_trading.core.netting_submit_execution import execute_netting_submission
 from ai_trading.core.netting_submit_prelude import prepare_netting_submit_prelude
 from ai_trading.core.netting_symbol_cycle import process_netting_symbol
-from ai_trading.oms.pretrade import OrderIntent, SlidingWindowRateLimiter, validate_pretrade
+from ai_trading.oms.pretrade import (
+    OrderIntent,
+    SlidingWindowRateLimiter,
+    safe_validate_pretrade,
+    validate_pretrade,
+)
 from tests.core.test_submit_runtime import _base_cfg, _DummyExecEngine, _reset_submit_state
+from tests.test_netting_position_backstop import _process as _backstop_process
+from tests.test_netting_position_backstop import _processor as _backstop_processor
 from tests.test_netting_submit_execution import _base_kwargs as _submission_kwargs
 from tests.test_netting_submit_prelude import _base_kwargs as _prelude_kwargs
 from tests.test_netting_symbol_cycle import _make_net_target, _make_processor
@@ -50,12 +56,6 @@ def _price(side: str, **kwargs: Any) -> Any:
 
 
 # ---- pricing -----------------------------------------------------------------
-
-
-def test_buffers_are_small_and_inside_the_collar() -> None:
-    assert URGENT_EXIT_QUOTE_BUFFER_BPS == 10.0
-    assert URGENT_EXIT_FALLBACK_BUFFER_BPS == 50.0
-    assert URGENT_EXIT_FALLBACK_BUFFER_BPS / 10_000.0 < 0.03
 
 
 def test_sell_is_priced_below_the_bid() -> None:
@@ -146,6 +146,11 @@ _ORDERS: dict[str, dict[str, Any]] = {
     "trim": {"current": 10, "delta": -5, "side": "sell", "urgent": False, "protective": False},
     "add": {"current": 10, "delta": 5, "side": "buy", "urgent": False, "protective": False},
     "entry": {"current": 0, "delta": 10, "side": "buy", "urgent": False, "protective": False},
+    "flip": {"current": 10, "delta": -15, "side": "sell", "urgent": False, "protective": False},
+    # The exit flags on orders that do not reduce: checked exactly like the plain order.
+    "flagged_add": {"current": 10, "delta": 5, "side": "buy", "urgent": True, "protective": True},
+    "flagged_entry": {"current": 0, "delta": 10, "side": "buy", "urgent": True, "protective": True},
+    "flagged_flip": {"current": 10, "delta": -15, "side": "sell", "urgent": True, "protective": True},
 }
 _UNCHANGED = ("trim", "add", "entry")
 
@@ -182,7 +187,7 @@ def _prelude(order: str, *, quote: Any, cfg: SimpleNamespace | None = None) -> t
     def _validate(intent: OrderIntent, **_kwargs: Any) -> tuple[bool, str, dict[str, Any]]:
         seen.append(intent)
         limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
-        return validate_pretrade(intent, cfg=pretrade_cfg, ledger=_Ledger(), rate_limiter=limiter)
+        return safe_validate_pretrade(intent, cfg=pretrade_cfg, ledger=_Ledger(), rate_limiter=limiter)
 
     kwargs = _prelude_kwargs()
     kwargs.update(
@@ -235,13 +240,46 @@ def test_trim_add_and_entry_keep_the_bar_close_limit(order: str) -> None:
 # ---- collar ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("order", ["protective", "full_close"])
-def test_collar_passes_an_urgent_exit_after_a_gap_from_the_bar_close(order: str) -> None:
-    # The market gapped 5% below the 100.00 bar close.
-    result, seen = _prelude(order, quote=_quote(95.0, 95.1))
+@pytest.mark.parametrize(
+    ("order", "quote", "limit"),
+    [
+        ("full_close", (98.0, 98.1), 97.90),  # touch 2% from the close: inside the collar
+        ("cover_close", (101.9, 102.0), 102.11),
+        ("protective", (95.0, 95.1), 94.90),  # a real 5% move
+        ("protective", (91.0, 91.1), 90.90),  # 9%: still inside the protective bound
+    ],
+)
+def test_urgent_exit_follows_a_move_from_the_bar_close(order: str, quote: tuple[float, float], limit: float) -> None:
+    result, seen = _prelude(order, quote=_quote(*quote))
 
     assert result.blocked_reason is None
-    assert seen[0].limit_price == pytest.approx(94.90)
+    assert seen[0].limit_price == pytest.approx(limit)
+    assert result.snapshot_updates["urgent_exit_pricing"]["price_basis"] == PRICE_BASIS_QUOTE
+
+
+@pytest.mark.parametrize("quote", [(95.0, 95.1), (50.0, 50.02)])
+def test_full_close_touch_beyond_the_collar_of_the_bar_close_is_blocked(quote: tuple[float, float]) -> None:
+    result, _seen = _prelude("full_close", quote=_quote(*quote))
+
+    assert result.blocked_reason == "PRICE_COLLAR_BLOCK"
+    assert result.blocked_metrics["pretrade"]["basis"] == "touch_vs_bar_close"
+    assert result.blocked_metrics["pretrade"]["reference"] == CLOSE
+
+
+@pytest.mark.parametrize("quote", [(85.0, 85.1), (50.0, 50.02)])
+def test_protective_exit_touch_far_from_the_bar_close_uses_the_fallback(
+    quote: tuple[float, float], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    result, seen = _prelude("protective", quote=_quote(*quote))
+
+    assert result.blocked_reason is None
+    assert seen[0].limit_price == pytest.approx(99.50)
+    pricing = result.snapshot_updates["urgent_exit_pricing"]
+    assert pricing["price_basis"] == PRICE_BASIS_BAR_CLOSE
+    assert pricing["quote_unusable_reason"] == "far_from_bar_close"
+    marker = next(r for r in caplog.records if r.getMessage().startswith("URGENT_EXIT_LIMIT_PRICE"))
+    assert getattr(marker, "quote_unusable_reason") == "far_from_bar_close"
 
 
 @pytest.mark.parametrize("order", _UNCHANGED)
@@ -287,6 +325,60 @@ def test_missing_quote_still_blocks_a_normal_full_close_trim_add_and_entry(order
     result, _seen = _prelude(order, quote=_quote(None, None))
 
     assert result.blocked_reason == "DERISK_DATA_QUALITY_BLOCK"
+
+
+@pytest.mark.parametrize("order", ["protective", "full_close"])
+def test_unparseable_quote_age_setting_fails_closed(order: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUOTE_MAX_AGE_MS", "abc")
+    result, _seen = _prelude(order, quote=_quote(99.5, 99.6), cfg=_pretrade_cfg(quote_max_age_ms=None))
+
+    assert result.blocked_reason == "PRETRADE_VALIDATION_ERROR"
+    assert result.exit_limit_price is None
+
+
+# ---- slippage ceiling -----------------------------------------------------------
+
+
+def test_slippage_ceiling_waived_for_a_protective_exit_only() -> None:
+    wide = _quote(99.0, 101.0)  # 200 bps spread
+    protective, seen = _prelude("protective", quote=wide)
+    full_close, _ = _prelude("full_close", quote=wide)
+    trim, _ = _prelude("trim", quote=wide)
+
+    assert protective.blocked_reason is None
+    assert seen[0].limit_price == pytest.approx(98.90)
+    assert full_close.blocked_reason == "SLIPPAGE_CEILING_BLOCK"
+    assert trim.blocked_reason == "SLIPPAGE_CEILING_BLOCK"
+
+
+# ---- exit flags on an order that does not reduce --------------------------------
+
+
+_NOT_REDUCING = {"flagged_add": "add", "flagged_entry": "entry", "flagged_flip": "flip"}
+_SCENARIOS: dict[str, dict[str, Any]] = {
+    "fresh": {"quote": (99.5, 99.6)},
+    "stale": {"quote": (99.5, 99.6), "age_s": 10.0},
+    "missing": {"quote": (None, None)},
+    "gap": {"quote": (95.0, 95.1)},
+    "far": {"quote": (50.0, 50.02)},
+    "wide_spread": {"quote": (99.0, 101.0)},
+    "exec_quality": {"quote": (99.5, 99.7), "cfg": {"execution_max_spread_bps": 5.0}},
+}
+
+
+@pytest.mark.parametrize("scenario", sorted(_SCENARIOS))
+@pytest.mark.parametrize("flagged", sorted(_NOT_REDUCING))
+def test_exit_flags_on_an_add_entry_or_flip_change_nothing(flagged: str, scenario: str) -> None:
+    spec = _SCENARIOS[scenario]
+    quote = _quote(*spec["quote"], age_s=spec.get("age_s", 0.1))
+    cfg = _pretrade_cfg(**spec.get("cfg", {}))
+    flagged_result, flagged_seen = _prelude(flagged, quote=quote, cfg=cfg)
+    plain_result, plain_seen = _prelude(_NOT_REDUCING[flagged], quote=quote, cfg=_pretrade_cfg(**spec.get("cfg", {})))
+
+    assert flagged_result.blocked_reason == plain_result.blocked_reason
+    assert flagged_result.exit_limit_price is None
+    assert flagged_seen[0].limit_price == plain_seen[0].limit_price == CLOSE
+    assert "urgent_exit_pricing" not in flagged_result.snapshot_updates
 
 
 def test_hard_gates_still_hold_a_protective_exit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -562,3 +654,73 @@ def test_unparseable_position_qty_still_fails_closed(qty: str) -> None:
 
     with pytest.raises(RuntimeError, match="broker_positions_unavailable"):
         bot_engine.compute_current_positions(ctx)
+
+
+# ---- a stop exit through the real prelude and submission -------------------------
+
+
+def test_stop_exit_carries_the_protective_flag_and_limit_to_the_broker_call(tmp_path: Path) -> None:
+    processor, records, _submitted = _backstop_processor(tmp_path, positions={"AAPL": 10})
+    broker_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def _submit_order(*args: Any, **kwargs: Any) -> Any:
+        broker_calls.append((args, kwargs))
+        return None  # not accepted: the broker call itself is what is checked
+
+    processor.prepare_submit_prelude_func = prepare_netting_submit_prelude
+    processor.execute_submission_func = execute_netting_submission
+    processor.submit_order_func = _submit_order
+    processor.auth_forbidden_cooldown_remaining_seconds_func = lambda *_a, **_k: 0.0
+    processor.breakers = SimpleNamespace(
+        allow=lambda _dep: True,
+        open_reason=lambda _dep: None,
+        record_success=lambda _dep: None,
+        record_failure=lambda *_a: None,
+    )
+
+    _backstop_process(processor, target_dollars=200.0)  # price 10 vs entry 11: stop loss
+
+    assert records[0]["gates"][0] == "POSITION_STOP_LOSS_EXIT"
+    assert records[0]["config_snapshot"]["urgent_exit_pricing"]["price_basis"] == PRICE_BASIS_QUOTE
+    (args, kwargs), = broker_calls
+    assert args[1:4] == ("AAPL", 10, "sell")
+    assert kwargs["price"] == pytest.approx(9.89)  # 9.90 bid - 10 bps, down to the tick
+    assert kwargs["protective_exit"] is True and kwargs["urgent_exit"] is True
+    assert kwargs["exit_reference_price"] == 10.0
+    assert kwargs["closing_position"] is True and kwargs["reduce_only"] is True
+
+
+# ---- the limit reaches the broker request unchanged, as a DAY limit -----------------
+
+
+def test_live_engine_sends_the_urgent_limit_unchanged_as_a_day_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    from ai_trading.execution import live_trading
+    from tests.execution.test_execution_empty_response import (
+        _DummyLimitOrderRequest,
+        _DummyMarketOrderRequest,
+        _make_engine,
+    )
+
+    monkeypatch.setattr(live_trading, "OrderSide", types.SimpleNamespace(BUY="buy", SELL="sell"))
+    monkeypatch.setattr(live_trading, "TimeInForce", types.SimpleNamespace(DAY="day"))
+    monkeypatch.setattr(live_trading, "LimitOrderRequest", _DummyLimitOrderRequest)
+    monkeypatch.setattr(live_trading, "MarketOrderRequest", _DummyMarketOrderRequest)
+    engine = _make_engine(monkeypatch, response={"id": "ok", "status": "accepted", "client_order_id": "cid-exit"})
+    monkeypatch.setattr(engine, "_position_quantity", lambda _symbol: 10.0, raising=False)
+
+    engine.execute_order(
+        "AAPL",
+        "sell",
+        10,
+        price=99.41,
+        closing_position=True,
+        reduce_only=True,
+        client_order_id="cid-exit",
+    )
+
+    request = engine.trading_client.submitted[-1]
+    assert isinstance(request, _DummyLimitOrderRequest)
+    assert float(request.limit_price) == pytest.approx(99.41)
+    assert str(getattr(request, "time_in_force")).lower().endswith("day")
