@@ -202,6 +202,7 @@ def execute_netting_submission(
     if urgent_exit:
         submit_extra["urgent_exit"] = True
         submit_extra["protective_exit"] = bool(protective_exit)
+        submit_extra["exit_reference_price"] = float(price)
     order_price = float(limit_price) if limit_price is not None else price
     expected_net_edge_bps = float(approval.expected_net_edge_bps)
     submit_annotations = dict(order_annotations)

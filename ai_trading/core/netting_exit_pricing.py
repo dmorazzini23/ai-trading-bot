@@ -26,6 +26,12 @@ URGENT_EXIT_QUOTE_BUFFER_BPS = 10.0
 # the buffer is wider (50 bps, still well inside the 3% collar) to stay
 # marketable through a normal one-minute move.
 URGENT_EXIT_FALLBACK_BUFFER_BPS = 50.0
+# A protective exit follows a real fast move: its touch may sit up to 10% from
+# the last bar close (a stop typically fires 5-8% from entry, and a gap can add
+# a few percent). Further than that the quote is treated as bad data and the
+# exit falls back to the bar close. A normal full close is held instead when
+# its touch leaves the regular price collar (pretrade PRICE_COLLAR_BLOCK).
+PROTECTIVE_EXIT_MAX_TOUCH_DEVIATION_PCT = 0.10
 # Used when the symbol spec has no usable tick.
 _DEFAULT_TICK = Decimal("0.01")
 
@@ -113,11 +119,14 @@ def urgent_exit_limit_price(
     quote_age_ms: float | None,
     max_quote_age_ms: int,
     fallback_price: float,
+    max_touch_deviation_pct: float | None = None,
 ) -> UrgentExitPrice | None:
     """Marketable limit for an urgent exit, or ``None`` if it cannot be priced.
 
     ``None`` (unknown side, or no quote and no positive bar close) leaves the
-    order at its bar-close limit, exactly as before.
+    order at its bar-close limit, exactly as before. With
+    ``max_touch_deviation_pct`` (protective exits) a touch further than that
+    from ``fallback_price`` makes the quote unusable (``far_from_bar_close``).
     """
 
     side_token = str(side or "").strip().lower()
@@ -130,6 +139,11 @@ def urgent_exit_limit_price(
     unusable = exit_quote_unusable_reason(
         bid=bid, ask=ask, quote_age_ms=quote_age_ms, max_quote_age_ms=max_quote_age_ms
     )
+    close_for_bound = _finite_positive(fallback_price)
+    if unusable is None and max_touch_deviation_pct is not None and close_for_bound is not None:
+        touch = float(ask) if buy else float(bid)  # type: ignore[arg-type]
+        if abs(touch - close_for_bound) / close_for_bound > float(max_touch_deviation_pct):
+            unusable = "far_from_bar_close"
     if unusable is None:
         reference = float(ask) if buy else float(bid)  # type: ignore[arg-type]
         buffer_bps = URGENT_EXIT_QUOTE_BUFFER_BPS
@@ -156,6 +170,7 @@ def urgent_exit_limit_price(
 __all__ = [
     "PRICE_BASIS_BAR_CLOSE",
     "PRICE_BASIS_QUOTE",
+    "PROTECTIVE_EXIT_MAX_TOUCH_DEVIATION_PCT",
     "URGENT_EXIT_FALLBACK_BUFFER_BPS",
     "URGENT_EXIT_QUOTE_BUFFER_BPS",
     "UrgentExitPrice",

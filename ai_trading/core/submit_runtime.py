@@ -353,6 +353,7 @@ def _resolve_execution_intent_context(
     exec_kwargs: Mapping[str, Any],
     urgent_exit: bool = False,
     protective_exit: bool = False,
+    exit_reference_price: float | None = None,
 ) -> tuple[ExecutionIntentContext, dict[str, Any], dict[str, Any]]:
     now = datetime.now(UTC)
     current_qty = int(be._current_qty(ctx, symbol))
@@ -495,6 +496,7 @@ def _resolve_execution_intent_context(
         position_qty=float(current_qty),
         urgent_exit=bool(urgent_exit),
         protective_exit=bool(urgent_exit and protective_exit),
+        exit_reference_price=exit_reference_price if urgent_exit else None,
     )
     if resolved_client_order_id != intent_context.client_order_id:
         pretrade_intent = replace(
@@ -552,6 +554,7 @@ def submit_order_runtime(
     # it only reaches the pretrade intent, never the broker call.
     urgent_exit_requested = bool(exec_kwargs.pop("urgent_exit", False))
     protective_exit_requested = bool(exec_kwargs.pop("protective_exit", False))
+    exit_reference_price = _safe_float(exec_kwargs.pop("exit_reference_price", None))
 
     try:
         validated_qty = int(qty)
@@ -880,6 +883,7 @@ def submit_order_runtime(
         # Exit relaxations apply only to an order that reduces the position.
         urgent_exit=urgent_exit_requested and reducing_trade,
         protective_exit=protective_exit_requested and reducing_trade,
+        exit_reference_price=exit_reference_price,
     )
     ledger = _resolve_order_ledger(be, cfg)
     rate_limiter = be._pretrade_rate_limiter(be.state)

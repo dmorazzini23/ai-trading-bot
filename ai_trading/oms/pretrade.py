@@ -67,11 +67,14 @@ class OrderIntent:
     # Signed shares held in the symbol when the intent was built (None: unknown).
     position_qty: float | None = None
     # Decided once by the netting cycle: a full close or a protective exit
-    # (stop / position backstop). Only an urgent exit has the execution-quality
-    # gate waived, and only a protective exit has the stale/missing quote checks
-    # waived; everything else is checked exactly as before.
+    # (stop / position backstop). They waive checks only while the intent
+    # actually reduces ``position_qty`` (see ``exit_waivers``); anything else,
+    # flags or not, is checked exactly as before.
     urgent_exit: bool = False
     protective_exit: bool = False
+    # Last bar close an urgent exit was decided at; the touch it is priced from
+    # must stay within the collar of it (a normal full close).
+    exit_reference_price: float | None = None
 
     def to_contract(self):
         """Return the canonical order intent contract for downstream journals."""
@@ -1372,16 +1375,19 @@ def _intent_reduces_position(intent: OrderIntent, ledger: Any) -> bool:
     return _intent_reduces_qty(intent, _ledger_position_qty(ledger, intent.symbol))
 
 
-def _urgent_exit_waives_execution_quality(intent: OrderIntent) -> bool:
-    """True for a protective exit, or an urgent exit that only reduces the held position.
+def exit_waivers(intent: OrderIntent) -> tuple[bool, bool]:
+    """``(urgent, protective)`` exit waivers that apply to this intent.
 
-    The OMS ledger carries no positions, so the ledger check above never fires;
-    an urgent exit is judged against the position the intent was built with.
+    A flag counts only while the order reduces the position the intent was
+    built with (``position_qty``; unknown means no waiver). The OMS ledger
+    carries no positions, so the ledger check above never fires for exits.
     """
 
-    if bool(intent.protective_exit):
-        return True
-    return bool(intent.urgent_exit) and _intent_reduces_qty(intent, intent.position_qty)
+    if not (intent.urgent_exit or intent.protective_exit):
+        return False, False
+    if not _intent_reduces_qty(intent, intent.position_qty):
+        return False, False
+    return bool(intent.urgent_exit or intent.protective_exit), bool(intent.protective_exit)
 
 
 def _intent_reduces_qty(intent: OrderIntent, current_qty: float | None) -> bool:
@@ -1435,7 +1441,7 @@ def _execution_quality_gate(
     if (
         not bool(enabled)
         or _intent_reduces_position(intent, ledger)
-        or _urgent_exit_waives_execution_quality(intent)
+        or exit_waivers(intent)[0]
     ):
         return None
 
@@ -1896,7 +1902,7 @@ def validate_pretrade(
             )
 
     effective_quote_age_ms = _effective_quote_age_ms(intent)
-    protective_exit = bool(intent.protective_exit)
+    urgent_exit, protective_exit = exit_waivers(intent)
     quote_stale = False
     if quote_max_age_ms > 0 and effective_quote_age_ms is not None:
         quote_stale = effective_quote_age_ms > float(quote_max_age_ms)
@@ -2227,8 +2233,11 @@ def validate_pretrade(
         else bucket_ceiling
     )
     effective_expected_slippage_bps, slippage_source = _effective_expected_slippage_bps(intent)
+    # A protective exit pays the spread to get out; the slippage ceiling is for
+    # orders that can wait.
     if (
-        effective_expected_slippage_bps is not None
+        not protective_exit
+        and effective_expected_slippage_bps is not None
         and slippage_ceiling_bps is not None
         and float(effective_expected_slippage_bps) > float(slippage_ceiling_bps)
     ):
@@ -2327,14 +2336,38 @@ def validate_pretrade(
             )
 
     # An urgent exit's limit is built from this same quote (bid/ask plus a small
-    # buffer), so it passes the collar unless the spread itself is absurd. The
-    # one exception: a protective exit whose quote is stale is priced from the
-    # bar close, and a stale quote is no reference for that price.
-    collar_applies = not (protective_exit and quote_stale)
-    if collar_applies and intent.limit_price is not None and reference and reference > 0:
+    # buffer), so it passes the collar unless the spread itself is absurd. A
+    # protective exit whose quote is stale, missing or far from the bar close
+    # is priced from the bar close instead, so its limit may sit within the
+    # collar of either the quote mid or that bar close.
+    exit_close = _finite_float(intent.exit_reference_price)
+    if intent.limit_price is not None and reference and reference > 0:
         deviation = abs(float(intent.limit_price) - float(reference)) / float(reference)
+        if protective_exit and exit_close is not None and exit_close > 0.0:
+            deviation = min(deviation, abs(float(intent.limit_price) - exit_close) / exit_close)
         if deviation > max(0.0, collar_pct):
             return False, "PRICE_COLLAR_BLOCK", {"reference": reference, "limit_price": intent.limit_price, "deviation": deviation}
+    # A normal full close is priced from the touch, so the touch itself must
+    # stay within the collar of the bar close it was decided at (on main the
+    # bar-close limit against the quote held it the same way). A protective
+    # exit bounds the touch in pricing instead (netting_exit_pricing).
+    if urgent_exit and not protective_exit and exit_close is not None and exit_close > 0.0:
+        side_token = str(intent.side or "").strip().lower()
+        touch = _finite_float(intent.ask if side_token in {"buy", "cover", "buy_to_cover"} else intent.bid)
+        if touch is not None and touch > 0.0:
+            touch_deviation = abs(touch - exit_close) / exit_close
+            if touch_deviation > max(0.0, collar_pct):
+                return (
+                    False,
+                    "PRICE_COLLAR_BLOCK",
+                    {
+                        "reference": exit_close,
+                        "touch": touch,
+                        "limit_price": intent.limit_price,
+                        "deviation": touch_deviation,
+                        "basis": "touch_vs_bar_close",
+                    },
+                )
 
     if ledger is not None and intent.client_order_id:
         seen_fn = getattr(ledger, "seen_client_order_id", None)

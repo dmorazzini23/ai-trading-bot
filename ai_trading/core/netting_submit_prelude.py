@@ -10,10 +10,13 @@ from ai_trading.config.management import get_env
 from ai_trading.core.evidence_lineage import normalize_evidence_timestamp
 from ai_trading.core.execution_guards import build_portfolio_optimizer_positions, build_pretrade_validation_cfg
 from ai_trading.core.execution_intent import ExecutionIntentContext, build_execution_intent_context
-from ai_trading.core.netting_exit_pricing import urgent_exit_limit_price
+from ai_trading.core.netting_exit_pricing import (
+    PROTECTIVE_EXIT_MAX_TOUCH_DEVIATION_PCT,
+    urgent_exit_limit_price,
+)
 from ai_trading.core.netting_position_backstop import exit_override_gate, is_full_close
 from ai_trading.logging import get_logger
-from ai_trading.oms.pretrade import resolve_quote_max_age_ms
+from ai_trading.oms.pretrade import exit_waivers, resolve_quote_max_age_ms
 
 logger = get_logger(__name__)
 
@@ -348,17 +351,33 @@ def prepare_netting_submit_prelude(
         position_qty=float(current_shares),
         urgent_exit=bool(urgent_exit),
         protective_exit=bool(urgent_exit and protective_exit),
+        exit_reference_price=float(price) if urgent_exit else None,
     )
+    # The flags only count while the order really reduces the held position;
+    # an add, an entry or a flip carrying them is priced and checked as before.
+    urgent_effective, protective_effective = exit_waivers(intent)
+    max_quote_age_ms: int | None = None
+    if urgent_effective:
+        try:
+            max_quote_age_ms = resolve_quote_max_age_ms(pretrade_cfg)
+        except (TypeError, ValueError, RuntimeError):
+            # An unparseable setting (get_env raises RuntimeError on a bad cast):
+            # left unpriced; pretrade reads the same value and fails closed with
+            # PRETRADE_VALIDATION_ERROR.
+            max_quote_age_ms = None
     exit_limit_price: float | None = None
-    if urgent_exit:
+    if urgent_effective and max_quote_age_ms is not None:
         exit_price = urgent_exit_limit_price(
             symbol=symbol,
             side=side,
             bid=submit_bid_at_arrival,
             ask=submit_ask_at_arrival,
             quote_age_ms=intent.quote_age_ms,
-            max_quote_age_ms=resolve_quote_max_age_ms(pretrade_cfg),
+            max_quote_age_ms=max_quote_age_ms,
             fallback_price=float(price),
+            max_touch_deviation_pct=(
+                PROTECTIVE_EXIT_MAX_TOUCH_DEVIATION_PCT if protective_effective else None
+            ),
         )
         if exit_price is not None:
             exit_limit_price = float(exit_price.limit_price)
@@ -372,7 +391,7 @@ def prepare_netting_submit_prelude(
                 "tick": exit_price.tick,
                 "quote_unusable_reason": exit_price.quote_unusable_reason,
                 "bar_close": float(price),
-                "protective_exit": bool(protective_exit),
+                "protective_exit": bool(protective_effective),
             }
             snapshot_updates["urgent_exit_pricing"] = pricing_evidence
             logger.info(
