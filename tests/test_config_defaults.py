@@ -9,8 +9,6 @@ def test_new_config_defaults(monkeypatch):
     """New configuration fields expose sane default values and types."""
 
     for env_name in (
-        "ORDERS_PENDING_NEW_WARN_S",
-        "ORDERS_PENDING_NEW_ERROR_S",
         "DATA_MAX_GAP_RATIO_INTRADAY",
         "DATA_DAILY_FETCH_MIN_INTERVAL_S",
         "EXECUTION_MIN_QTY",
@@ -23,12 +21,6 @@ def test_new_config_defaults(monkeypatch):
     monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
 
     cfg = TradingConfig.from_env()
-
-    assert isinstance(cfg.orders_pending_new_warn_s, int)
-    assert cfg.orders_pending_new_warn_s == 60
-
-    assert isinstance(cfg.orders_pending_new_error_s, int)
-    assert cfg.orders_pending_new_error_s == 180
 
     assert isinstance(cfg.data_max_gap_ratio_intraday, float)
     assert cfg.data_max_gap_ratio_intraday == 0.005

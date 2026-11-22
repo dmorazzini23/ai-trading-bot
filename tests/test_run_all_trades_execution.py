@@ -506,13 +506,13 @@ def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(
 
 
 def test_execute_cycle_runs_netting_when_config_disables_it(monkeypatch) -> None:
-    """The cycle has one route; ``netting_enabled=False`` no longer selects another."""
+    """The cycle has one route; the retired ``AI_TRADING_NETTING_ENABLED=0`` is ignored."""
     _clear_parity_cache()
     monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "0")
     monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     disabled_cfg = get_trading_config()
-    assert disabled_cfg.netting_enabled is False
+    assert not hasattr(disabled_cfg, "netting_enabled")
     monkeypatch.setattr(bot_engine, "_decision_log_runtime_path", lambda: "runtime/test-decisions.jsonl")
     monkeypatch.setattr(bot_engine, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda _orders, _runtime: False)

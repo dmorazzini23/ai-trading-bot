@@ -534,7 +534,6 @@ def _run_cycle(
     """Run one real netting cycle: AAPL is an entry from flat, MSFT a full exit."""
 
     cfg = TradingConfig.from_env(allow_missing_drawdown=True).update(
-        netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
         ledger_enabled=False,

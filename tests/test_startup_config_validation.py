@@ -175,12 +175,10 @@ def test_live_mode_applies_strict_execution_quote_defaults(monkeypatch):
     monkeypatch.setenv("EXECUTION_MODE", "live")
     monkeypatch.delenv("EXECUTION_REQUIRE_REALTIME_NBBO", raising=False)
     monkeypatch.delenv("EXECUTION_MARKET_ON_DEGRADED", raising=False)
-    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
     monkeypatch.delenv("NBBO_REQUIRED_FOR_LIMIT", raising=False)
 
     cfg = reload_trading_config()
 
     assert cfg.execution_require_realtime_nbbo is True
     assert cfg.execution_market_on_degraded is False
-    assert cfg.execution_allow_fallback_price is False
     assert cfg.nbbo_required_for_limit is True

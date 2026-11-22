@@ -1435,7 +1435,6 @@ def test_netting_cycle_exits_a_stopped_position_and_blocks_nothing_else(
 
     written, submitted = _patch_cycle(monkeypatch, tmp_path)
     cfg = TradingConfig.from_env(allow_missing_drawdown=True).update(
-        netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
         ledger_enabled=False,

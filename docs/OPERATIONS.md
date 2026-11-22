@@ -97,10 +97,8 @@ Live mode now requires one authoritative durability path:
 - Live JSONL OMS ledgers are disabled in the hot path.
 - Legacy/non-netting live execution is blocked in non-test runtimes.
 - The legacy non-netting decision cycle has been removed: every trading
-  cycle runs the netting pipeline and does not read `netting_enabled`.
-  `AI_TRADING_NETTING_ENABLED=0` is rejected at startup with
-  `NETTING_DISABLED_UNSUPPORTED`, both by the service and by
-  `ai_trading.__main__.run_trade` (used by `scripts/runtime_artifacts_reset.sh`).
+  cycle runs the netting pipeline. `AI_TRADING_NETTING_ENABLED` is no longer a
+  setting (any value is ignored); remove it from `.env`.
 - `STRATEGIES` is no longer read and no strategy classes are loaded at runtime;
   `STRATEGIES_NOT_CONSUMED_UNDER_NETTING` and `STRATEGIES_NONE_RESOLVED` are no
   longer logged. Remove `STRATEGIES` from `.env` if it is still set.

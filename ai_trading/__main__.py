@@ -443,10 +443,6 @@ def run_trade() -> None:
     ensure_dotenv_loaded()
     _validate_startup_config()
     from ai_trading import main as _main
-    from ai_trading.config.management import get_trading_config
-
-    # This entrypoint skips ``_main.main()``, so apply its netting-only check here.
-    _main._require_netting_pipeline(get_trading_config())
 
     preflight_ok = _main.preflight_import_health()
     if not preflight_ok:
