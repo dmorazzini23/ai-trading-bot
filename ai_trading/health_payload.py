@@ -17,6 +17,7 @@ from ai_trading.config.launch_profiles import (
 )
 from ai_trading.config.management import get_env
 from ai_trading.logging import logger
+from ai_trading.logging.emit_once import emit_once
 from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
@@ -1160,14 +1161,25 @@ def _drawdown_breaker_snapshot() -> dict[str, Any]:
     try:
         from ai_trading.risk.circuit_breakers import drawdown_breaker_health_section
     except ImportError:
-        logger.warning("DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE", extra={"reason": "import_failed"})
+        emit_once(
+            logger,
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE:import_failed",
+            "warning",
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE",
+            reason="import_failed",
+        )
         return unavailable
     try:
         return drawdown_breaker_health_section()
     except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
-        logger.warning(
+        # Once per day per process: this runs on every health poll.
+        emit_once(
+            logger,
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE:snapshot_failed",
+            "warning",
             "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE",
-            extra={"reason": "snapshot_failed", "error": f"{exc.__class__.__name__}: {exc}"},
+            reason="snapshot_failed",
+            error=f"{exc.__class__.__name__}: {exc}",
         )
         return unavailable
 
