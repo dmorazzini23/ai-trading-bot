@@ -27,7 +27,6 @@ tail -n 500 runtime/tca_records.jsonl
 
 3. Reduce execution aggressiveness temporarily:
 
-- Raise `AI_TRADING_ENTRY_COST_BUFFER_BPS`
 - Lower `EXECUTION_MAX_NEW_ORDERS_PER_CYCLE`
 - Increase passive execution preference knobs if enabled
 

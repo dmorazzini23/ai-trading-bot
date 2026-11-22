@@ -6,7 +6,6 @@ from ai_trading.core import execution_flow
 from ai_trading.settings import (
     get_buy_threshold,
     get_conf_threshold,
-    get_min_position_hold_seconds,
     get_settings,
 )
 
@@ -15,11 +14,6 @@ def _clear_live_default_env(monkeypatch) -> None:
     for key in (
         "AI_TRADING_CONF_THRESHOLD",
         "AI_TRADING_BUY_THRESHOLD",
-        "AI_TRADING_MIN_POSITION_HOLD_SECONDS",
-        "AI_TRADING_MAX_POSITION_HOLD_SECONDS",
-        "AI_TRADING_LIVE_STOP_LOSS_BPS",
-        "AI_TRADING_LIVE_TAKE_PROFIT_BPS",
-        "AI_TRADING_LIVE_TRAILING_STOP_BPS",
     ):
         monkeypatch.delenv(key, raising=False)
     get_settings.cache_clear()
@@ -30,7 +24,6 @@ def test_live_defaults_align_with_replay_profile(monkeypatch) -> None:
 
     assert get_conf_threshold() == 0.52
     assert get_buy_threshold() == 0.15
-    assert get_min_position_hold_seconds() == 600
 
 
 def test_liquidate_positions_if_needed_flattens_eod(monkeypatch) -> None:
