@@ -449,6 +449,14 @@ When investigating a degraded runtime, check:
 2. `/operator/control-plane` top-level fields:
    `rollout`, `service_state`, `attention_flags`, `broker_health`, and `data_provider`
 
+The `drawdown_breaker` section shows the drawdown circuit breaker's in-memory
+state (`state` closed/open, `peak_equity`, `peak_set_at`, `current_drawdown`,
+`trip_threshold`, `tripped_at`) and whether its persisted state was loaded
+(`persistence`, `persisted_state_loaded`, `load_failure_reason`). It is
+informational: it never changes `ok`, `status` or the HTTP code, and
+`{"available": false}` means the breaker is not initialised or could not be
+read. See `API_DOCUMENTATION.md` for field semantics.
+
 The shared health payload also exposes `operating_mode`. When its mode is
 `paper_diagnostics_only`, the configured paper diagnostic path is enabled but
 the required governed model remains unavailable. Diagnostic trades are not

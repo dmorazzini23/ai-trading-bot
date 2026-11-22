@@ -7250,6 +7250,7 @@ SEED = 42
 from ai_trading.risk.circuit_breakers import (
     DRAWDOWN_BREAKER_STATE_PATH,
     DrawdownCircuitBreaker,
+    register_drawdown_breaker_for_health,
 )
 from ai_trading.utils.timefmt import (
     utc_now_iso,  # AI-AGENT-REF: Import UTC timestamp utilities
@@ -16871,6 +16872,7 @@ class LazyBotContext:
                 else None
             ),
         )
+        register_drawdown_breaker_for_health(self._context.drawdown_circuit_breaker)
         try:
             ensure_alpaca_attached(self._context)
         except COMMON_EXC:

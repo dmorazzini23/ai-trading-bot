@@ -85,12 +85,34 @@ Representative response fields:
   },
   "quotes_status": {
     "allowed": true
+  },
+  "drawdown_breaker": {
+    "available": true,
+    "state": "closed",
+    "peak_equity": 101250.5,
+    "peak_set_at": "2026-11-20T15:31:04.000000+00:00",
+    "current_drawdown": 0.012,
+    "trip_threshold": 0.08,
+    "reset_threshold": 0.064,
+    "tripped_at": null,
+    "persistence": "restored",
+    "persisted_state_loaded": true,
+    "load_failure_reason": null
   }
 }
 ```
 
 Notes:
 
+- `drawdown_breaker` is informational only and never changes `ok`, `status` or
+  the HTTP code. `state` is `closed` or `open`; `tripped_at` is set only while
+  open. `persistence` is `not_configured`, `pending` (no equity reading yet, or
+  the file was unreadable and is being retried), `restored`, or `failed` (fresh
+  start; `load_failure_reason` says why, e.g. `missing`, `corrupt`,
+  `account_mismatch`). `peak_equity` and `current_drawdown` are `null` until
+  known. If the breaker is not initialised or cannot be read the section is
+  `{"available": false, "reason": "not_initialized" | "snapshot_failed"}`. The
+  account id is never included.
 - The handler is designed to degrade gracefully rather than raising uncaught
   exceptions.
 - Health payloads may report `"status": "degraded"` while still returning HTTP
