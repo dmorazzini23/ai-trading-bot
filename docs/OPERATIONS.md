@@ -515,8 +515,9 @@ to the drawdown breaker.
   `DRAWDOWN_BREAKER_TRIPPED` (critical).
 - **While open:** orders that increase exposure are rejected with gate
   `DRAWDOWN_BREAKER_BLOCK` in the decision record; orders that reduce a
-  position still go out; a reversal is cut to an exit and tagged
-  `DRAWDOWN_BREAKER_REDUCE_ONLY`. It does not set the global halt.
+  position still go out; a reversal has already been cut to its exit leg
+  (`FLAT_BEFORE_REVERSAL`) before this check, so it goes out as a reduction.
+  It does not set the global halt.
 - **Reset:** automatic once drawdown is back under the threshold; there is no
   extra recovery margin. Logs `DRAWDOWN_BREAKER_RESET` (warning).
 - **Unusable equity** (no snapshot, missing, non-numeric, zero or negative)

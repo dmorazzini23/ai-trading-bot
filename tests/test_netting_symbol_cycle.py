@@ -139,7 +139,6 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
         state=SimpleNamespace(
             halt_trading=False,
             halt_reason=None,
-            stop_lock={},
             last_order_bar_ts={},
             degraded_providers=set(),
         ),
@@ -434,30 +433,48 @@ def test_process_netting_symbol_missing_price_still_records_bad_data() -> None:
     assert target.reasons == ["BAD_DATA_CONTRACT"]
 
 
-def test_process_netting_symbol_stop_lock_blocks_same_bar_reentry() -> None:
-    processor, records = _make_processor()
-    processor.state.stop_lock["AAPL"] = {
-        "bar_ts": processor.now,
-        "direction": "long",
-    }
-    net_target = _make_net_target(bar_ts=processor.now)
+@pytest.mark.parametrize("breaker_open", [False, True])
+@pytest.mark.parametrize(("current_shares", "target_dollars"), [(10, -200.0), (-10, 200.0), (3, -1000.0)])
+def test_flip_is_cut_to_its_exit_leg_before_later_stages(
+    breaker_open: bool, current_shares: int, target_dollars: float
+) -> None:
+    """A flip is clamped to flat before the prelude, so no later stage sees one.
 
-    result = process_netting_symbol(
+    ``apply_symbol_adjustments`` and the drawdown-breaker check used to carry
+    their own flat-before-reversal clamps; those were removed as unreachable.
+    This pins the earlier clamp that makes them so.
+    """
+
+    processor, records = _make_processor(
+        positions={"AAPL": current_shares},
+        cfg=SimpleNamespace(seed="seed", shorts_allowed=True),
+        drawdown_breaker={"open": True} if breaker_open else {},
+    )
+    seen: dict[str, list[int]] = {"prelude": [], "adjustments": [], "submit": []}
+    stages = (
+        ("prelude", "prepare_symbol_prelude_func"),
+        ("adjustments", "apply_symbol_adjustments_func"),
+        ("submit", "execute_submission_func"),
+    )
+    for stage, attr in stages:
+        original = getattr(processor, attr)
+
+        def _wrapped(_original=original, _stage=stage, **kwargs: Any) -> Any:
+            seen[_stage].append(int(kwargs["delta_shares"]))
+            return _original(**kwargs)
+
+        setattr(processor, attr, _wrapped)
+
+    process_netting_symbol(
         processor=processor,
         symbol="AAPL",
-        net_target=net_target,
+        net_target=_make_net_target(bar_ts=processor.now, target_dollars=target_dollars),
         orders_submitted=0,
     )
 
-    assert result.attempted_increment == 0
-    assert result.submitted_increment == 0
-    assert net_target.target_shares == 0
-    assert net_target.target_dollars == 0.0
-    assert len(records) == 1
-    assert records[0]["gates"] == ["STOP_LOCK"]
-    assert records[0]["metrics"]["terminal_stage"] == "decision_filter"
-    assert records[0]["metrics"]["terminal_reason"] == "STOP_LOCK"
-    assert "AAPL" in processor.state.stop_lock
+    assert seen == {"prelude": [-current_shares], "adjustments": [-current_shares], "submit": [-current_shares]}
+    assert records[0]["gates"] == ["FLAT_BEFORE_REVERSAL", "OK_TRADE"]
+    assert records[0]["net_target"].target_shares == 0
 
 
 def test_process_netting_symbol_suppresses_short_opening_in_long_only(monkeypatch) -> None:

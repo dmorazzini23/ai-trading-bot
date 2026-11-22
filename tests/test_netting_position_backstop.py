@@ -1130,7 +1130,7 @@ def test_portfolio_optimizer_passes_exits_and_holds_an_entry(overrides: dict[str
     ("overrides", "gates"),
     [
         ({"enforce_participation_cap_func": lambda **k: (False, 0.0, "LIQ_PARTICIPATION_BLOCK")}, ["LIQ_PARTICIPATION_BLOCK"]),
-        ({"state": SimpleNamespace(halt_trading=False, halt_reason=None, stop_lock={}, last_order_bar_ts={"AAPL": NOW}, degraded_providers=set())}, ["BAR_DEDUP"]),
+        ({"state": SimpleNamespace(halt_trading=False, halt_reason=None, last_order_bar_ts={"AAPL": NOW}, degraded_providers=set())}, ["BAR_DEDUP"]),
     ],
 )
 def test_exits_still_respect_participation_cap_and_bar_dedup(

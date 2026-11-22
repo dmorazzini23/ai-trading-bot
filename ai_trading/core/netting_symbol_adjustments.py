@@ -308,28 +308,6 @@ def apply_symbol_adjustments(
                     "auto_tune": dict(uncertainty_auto_controls),
                 }
 
-    requested_delta_shares = int(delta_shares)
-    reversal_clamp_reason: str | None = None
-    if current_shares > 0 and delta_shares < 0 and abs(delta_shares) > current_shares:
-        delta_shares = -current_shares
-        reversal_clamp_reason = "FLAT_BEFORE_REVERSAL"
-    elif current_shares < 0 and delta_shares > 0 and abs(delta_shares) > abs(current_shares):
-        delta_shares = abs(current_shares)
-        reversal_clamp_reason = "FLAT_BEFORE_REVERSAL"
-    if reversal_clamp_reason:
-        gates_added.append(reversal_clamp_reason)
-        logger.info(
-            "POSITION_REVERSAL_CLAMP",
-            extra={
-                "symbol": symbol,
-                "current_shares": int(current_shares),
-                "requested_delta_shares": requested_delta_shares,
-                "adjusted_delta_shares": int(delta_shares),
-                "target_shares": 0,
-                "reason": reversal_clamp_reason,
-            },
-        )
-
     try:
         max_symbol_notional = float(
             getattr(
@@ -378,9 +356,6 @@ def apply_symbol_adjustments(
 
     target_shares = int(current_shares + delta_shares)
     target_dollars = float(target_shares * price)
-    if reversal_clamp_reason:
-        target_shares = 0
-        target_dollars = 0.0
 
     return SymbolAdjustmentResult(
         delta_shares=int(delta_shares),

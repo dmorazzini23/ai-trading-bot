@@ -11210,7 +11210,6 @@ class BotState:
     last_order_client_id: dict[str, str] = field(default_factory=dict)
     netting_symbol_budget_cursor: int = 0
     turnover_dollars: dict[tuple[date, str, str], float] = field(default_factory=dict)
-    stop_lock: dict[str, dict[str, Any]] = field(default_factory=dict)
     recon_halt: bool = False
     last_recon_ts: datetime | None = None
     halt_trading: bool = False
