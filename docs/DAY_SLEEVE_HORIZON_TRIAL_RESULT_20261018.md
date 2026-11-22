@@ -87,3 +87,17 @@ ledger in the runtime checkout:
   --repository-root /home/aiuser/ai-trading-bot \
   --contract /home/aiuser/ai-trading-bot/config/day_sleeve_horizon_trial_campaign.json --fit
 ```
+
+## Correction (November 22, 2026)
+
+The registered contract (`config/day_sleeve_horizon_trial_campaign.json`,
+unchanged because registered contracts are immutable) says in
+`economic_motivation` that the runtime holds positions 600 to 7200 seconds via
+`AI_TRADING_MIN_POSITION_HOLD_SECONDS` and `AI_TRADING_MAX_POSITION_HOLD_SECONDS`.
+That was not true of the running service. When the contract was registered
+(`723649711`) those keys were read only by `_position_min_hold_active` and
+`should_exit` in the non-netting trade cycle, which the netting service did not
+run; that code was removed on November 18, 2026 (`877253b78`) and the keys
+have had no reader since. The 5-minute flatten lead
+(`AI_TRADING_EOD_FLATTEN_LEAD_SECONDS`) is still read. The trial's own 60-minute
+horizon and 15:55 cutoff were set by the contract, so its result is unaffected.

@@ -109,6 +109,60 @@ Live mode now requires one authoritative durability path:
   the old `trades` / `portfolio` / `risk_metrics` / `performance_metrics`
   schema for runtime durability.
 
+### Retired Settings Keys (Phase 4 Cleanup)
+
+The keys below no longer have a reader. The service ignores them: startup
+does not reject them, and setting, changing or deleting them has no effect on
+trading or on `resolved_config_hash`. They are safe to delete from `.env` after
+the phase 4 deploy (then restart so the runtime env file is refreshed).
+
+- Former `TradingConfig` settings: `AI_TRADING_NETTING_ENABLED`,
+  `EXECUTION_ALLOW_LAST_CLOSE`, `AI_TRADING_EXEC_ALLOW_LAST_CLOSE`,
+  `EXECUTION_ALLOW_FALLBACK_PRICE`, `AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE`,
+  `ALLOW_EXECUTION_ON_FALLBACK_QUOTES`, `LOG__EXEC_SUMMARY_ENABLED`,
+  `EXECUTION_STALE_RATIO_SHADOW`, `SYMBOL_PROCESS_BUDGET`,
+  `AI_TRADING_SIGNAL_HOLD_EPS`, `DEFAULT_MODEL_URL`, `MAX_SYMBOLS_PER_CYCLE`,
+  `ORDERS_PENDING_NEW_WARN_S`, `ORDERS_PENDING_NEW_ERROR_S`.
+- Former `Settings` fields (unprefixed aliases such as
+  `TAKE_PROFIT_EXIT_FRACTION` or `MIN_POSITION_HOLD_SECONDS` are retired too): `AI_TRADING_TAKE_PROFIT_EXIT_FRACTION`,
+  `AI_TRADING_TAKE_PROFIT_MIN_HOLD_BYPASS_PCT`, `AI_TRADING_MIN_HOLD_LOSER_CUT_PCT`,
+  `AI_TRADING_FALLBACK_ENTRY_CONFIDENCE_BONUS`,
+  `AI_TRADING_REVERSAL_EXIT_CONFIRM_SIGNALS`, `AI_TRADING_ENTRY_FLIP_CONFIRM_SIGNALS`,
+  `AI_TRADING_FALLBACK_EXPECTED_EDGE_PENALTY_BPS`, `AI_TRADING_ENTRY_COST_BUFFER_BPS`,
+  `AI_TRADING_ENTRY_AGE_PENALTY_PER_SEC_BPS`, `AI_TRADING_ENTRY_AGE_PENALTY_CAP_BPS`,
+  `AI_TRADING_EXPECTANCY_FILTER_ENABLED`, `AI_TRADING_EXPECTANCY_MIN_SAMPLES`,
+  `AI_TRADING_EXPECTANCY_WINDOW_TRADES`, `AI_TRADING_EXPECTANCY_MIN_MEAN_PCT`,
+  `AI_TRADING_WINNER_BREAK_EVEN_R`, `AI_TRADING_WINNER_TRAILING_TIGHTEN_R`,
+  `AI_TRADING_WINNER_TRAILING_ATR_FACTOR`, `DEFAULT_LIQUIDITY_FACTOR`,
+  `AI_TRADING_LIVE_STOP_LOSS_BPS` (alias `AI_TRADING_STOP_LOSS_BPS`),
+  `AI_TRADING_LIVE_TAKE_PROFIT_BPS` (alias `AI_TRADING_TAKE_PROFIT_BPS`),
+  `AI_TRADING_LIVE_TRAILING_STOP_BPS` (alias `AI_TRADING_TRAILING_STOP_BPS`),
+  `DATA_SANITIZE_ENABLED`, `CORP_ACTIONS_ENABLED`, `SIZING_ENABLED`,
+  `AI_TRADING_MIN_POSITION_HOLD_SECONDS` (alias `REBALANCE_HOLD_SECONDS`),
+  `AI_TRADING_MAX_POSITION_HOLD_SECONDS`, `AI_TRADING_MAX_TRADES_PER_DAY`,
+  `AI_TRADING_MAX_TRADES_PER_HOUR`.
+- Keys that nothing ever read: all `AI_TRADING_PROFITABILITY_GOVERNOR_*`;
+  `AI_TRADING_FEED_RELIABILITY_ENABLED`, `_LIVE_MIN_SAMPLES`, `_MIN_SCORE`,
+  `_SIZE_FLOOR`, `_THRESHOLD_BONUS_MAX` (`_LOOKBACK`, `_MIN_SAMPLES` and `_PATH`
+  are still read); `AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_HOUR`,
+  `AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SYMBOL_PER_HOUR`,
+  `AI_TRADING_PAPER_SAMPLING_TRADE_COOLDOWN_MIN`.
+
+**These keys do not protect positions.** `AI_TRADING_LIVE_STOP_LOSS_BPS`,
+`AI_TRADING_LIVE_TAKE_PROFIT_BPS`, `AI_TRADING_LIVE_TRAILING_STOP_BPS`,
+`AI_TRADING_MIN_POSITION_HOLD_SECONDS`, `AI_TRADING_MAX_POSITION_HOLD_SECONDS`,
+the `AI_TRADING_WINNER_*` keys and the `AI_TRADING_EXPECTANCY_*` keys were read
+only by the removed non-netting cycle, which the netting service does not run.
+Stop losses and maximum holds are enforced by the position backstop, whose
+limits are module constants in `ai_trading/core/netting_position_backstop.py`
+(`POSITION_STOP_LOSS_PCT`, `POSITION_MAX_HOLD_SESSIONS`; see "Position
+Backstop" below), not by any env key. `AI_TRADING_MAX_TRADES_PER_DAY` and
+`AI_TRADING_MAX_TRADES_PER_HOUR` enforce no trade-count limit. Order-count
+limits that are still enforced come from other settings, for example
+`EXECUTION_MAX_NEW_ORDERS_PER_CYCLE` and, when paper sampling is enabled, the
+`AI_TRADING_PAPER_SAMPLING_*` limits that are still read (such as
+`AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_DAY`).
+
 ### Canonical Topology
 
 - Production ownership belongs to `ai-trading.service` only.
