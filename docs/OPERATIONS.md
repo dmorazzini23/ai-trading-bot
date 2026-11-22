@@ -511,21 +511,36 @@ from the execution engine's per-cycle account snapshot (no extra broker call)
 to the drawdown breaker.
 
 - **Trip:** equity at or below `(1 - MAX_DRAWDOWN_THRESHOLD)` of the highest
-  equity this process has seen (8% with `MAX_DRAWDOWN_THRESHOLD=0.08`). Logs
-  `DRAWDOWN_BREAKER_TRIPPED` (critical).
+  equity recorded (8% with `MAX_DRAWDOWN_THRESHOLD=0.08`), including peaks
+  from before a restart. Logs `DRAWDOWN_BREAKER_TRIPPED` (critical, with
+  `peak_set_at`).
 - **While open:** orders that increase exposure are rejected with gate
   `DRAWDOWN_BREAKER_BLOCK` in the decision record; orders that reduce a
   position still go out; a reversal is cut to an exit and tagged
   `DRAWDOWN_BREAKER_REDUCE_ONLY`. It does not set the global halt.
-- **Reset:** automatic once drawdown is back under the threshold; there is no
-  extra recovery margin. Logs `DRAWDOWN_BREAKER_RESET` (warning).
+- **Reset:** automatic once drawdown is back at or below 0.8 x the trip level
+  (6.4%). Logs `DRAWDOWN_BREAKER_RESET` (warning). The peak only rises.
 - **Unusable equity** (no snapshot, missing, non-numeric, zero or negative)
   is never scored: `DRAWDOWN_BREAKER_FEED_SKIPPED` (warning) and the state is
   left as it was.
-- **State is in memory only.** A restart closes the breaker and takes the
-  first equity reading after start as the new peak, so it cannot trip on
-  start, and it measures drawdown since the last restart, not all-time. A
-  cash withdrawal reads as drawdown. `peak_equity.txt` is not used.
+- **State survives restarts.** Peak equity, when it was set, open/closed, the
+  trip time and the broker account id are kept in
+  `runtime/drawdown_breaker_state.json` under the data dir, written atomically
+  only when one of them changes. The first equity reading after a start
+  restores it (`DRAWDOWN_BREAKER_STATE_RESTORED`, with `peak_age_days`), so a
+  drawdown spread over several restarts trips and a restart does not close an
+  open breaker. A missing, unreadable or implausible file (wrong
+  `schema_version`, non-finite or non-positive peak, future or zone-less
+  timestamp, a different account id) logs `DRAWDOWN_BREAKER_STATE_LOAD_FAILED`
+  with `reason` and starts fresh from the first reading; it never blocks
+  trading. Write errors log `DRAWDOWN_BREAKER_STATE_WRITE_FAILED` and retry at
+  the next reading. A stored peak never expires.
+- **Deposits and withdrawals are not detected.** A withdrawal reads as
+  drawdown, and a deposit raises the peak. To re-base the peak deliberately
+  (after a withdrawal, or to clear an open breaker), stop the service, delete
+  `runtime/drawdown_breaker_state.json` from the data dir, and start it: the
+  first reading becomes the new peak. Do not edit the file while the service
+  runs; it is rewritten from memory. `peak_equity.txt` is not used.
 
 ### Position Backstop (Stop Loss, Maximum Hold, Position Cap)
 
