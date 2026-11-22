@@ -1,15 +1,19 @@
 from __future__ import annotations
 'Circuit breakers and safety mechanisms for production trading.'
+import json
 import math
 import threading
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 from ai_trading.logging import logger
 from ai_trading.logging.emit_once import emit_once
 from json import JSONDecodeError
 from ai_trading.exc import RequestException
+from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.utils.time import safe_utcnow
 
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
@@ -19,6 +23,48 @@ from ..core.constants import PERFORMANCE_THRESHOLDS
 # fraction of the trip level (0.8 x 8% = 6.4%), so equity noise around either
 # level cannot trip and reset it on consecutive readings.
 DRAWDOWN_RESET_FRACTION = 0.8
+
+# Drawdown breaker state that survives restarts (peak equity, open/closed),
+# resolved under the runtime data dir like the position backstop state. A
+# breaker built without ``state_path`` keeps everything in memory.
+DRAWDOWN_BREAKER_STATE_PATH = 'runtime/drawdown_breaker_state.json'
+DRAWDOWN_BREAKER_STATE_SCHEMA_VERSION = 1
+# A stored timestamp later than now by more than this is implausible.
+DRAWDOWN_BREAKER_STATE_MAX_CLOCK_SKEW = timedelta(minutes=5)
+# No maximum age: the limit is peak-to-trough across restarts, so an old peak
+# still counts. Delete the file with the service stopped to re-base the peak.
+
+
+class _StateRejected(ValueError):
+    """A stored breaker state that must not be restored; ``reason`` is logged."""
+
+    def __init__(self, reason: str, detail: str = '') -> None:
+        super().__init__(detail or reason)
+        self.reason = reason
+
+
+def _parse_state_ts(value: Any, field: str, now: datetime) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError) as exc:
+        raise _StateRejected('timestamp_invalid', f'{field}: {exc}') from exc
+    if parsed.tzinfo is None:
+        raise _StateRejected('timestamp_invalid', f'{field}: no timezone')
+    parsed = parsed.astimezone(UTC)
+    if parsed > now + DRAWDOWN_BREAKER_STATE_MAX_CLOCK_SKEW:
+        raise _StateRejected('future_timestamp', f'{field}: {parsed.isoformat()}')
+    return parsed
+
+
+def _snapshot_account_id(account_snapshot: Any) -> str | None:
+    """The broker account id already on the cycle's snapshot, if any."""
+    if isinstance(account_snapshot, Mapping):
+        raw = account_snapshot.get('id', account_snapshot.get('account_id'))
+    else:
+        raw = getattr(account_snapshot, 'id', None)
+    if isinstance(raw, UUID | str):
+        return str(raw).strip() or None
+    return None
 
 class CircuitBreakerState(Enum):
     """Circuit breaker state enumeration."""
@@ -41,13 +87,22 @@ class DrawdownCircuitBreaker:
     when predefined thresholds are exceeded.
     """
 
-    def __init__(self, max_drawdown: float=None, recovery_threshold: float=DRAWDOWN_RESET_FRACTION):
+    def __init__(
+        self,
+        max_drawdown: float=None,
+        recovery_threshold: float=DRAWDOWN_RESET_FRACTION,
+        state_path: Path | None = None,
+    ):
         """Initialize drawdown circuit breaker.
 
         ``recovery_threshold`` is the reset level as a fraction of the trip
         level: trip at drawdown >= ``max_drawdown``, reset only at drawdown <=
         ``max_drawdown * recovery_threshold``. The peak only ever rises; neither
         a trip nor a reset moves it.
+
+        With ``state_path`` the peak and open/closed state are restored from
+        that file on the first equity reading and rewritten when they change.
+        Without it nothing touches the filesystem.
         """
         self.max_drawdown = max_drawdown or PERFORMANCE_THRESHOLDS['MAX_DRAWDOWN']
         self.recovery_threshold = recovery_threshold
@@ -56,6 +111,11 @@ class DrawdownCircuitBreaker:
         self.peak_equity = 0.0
         self.last_equity: float | None = None
         self.halt_timestamp: datetime | None = None
+        self.peak_set_at: datetime | None = None
+        self.state_path = Path(state_path) if state_path is not None else None
+        self._account_id: str | None = None
+        self._state_loaded = self.state_path is None
+        self._saved_key: tuple[Any, ...] | None = None
         self.reset_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
         emit_once(logger, 'DRAWDOWN_CB_INIT', 'info', 'DrawdownCircuitBreaker initialized', max_drawdown=self._safe_format_percentage(self.max_drawdown))
 
@@ -83,8 +143,141 @@ class DrawdownCircuitBreaker:
             'trip_level': self.max_drawdown,
             'reset_level': self._recovery_drawdown_threshold(),
             'peak_equity': self.peak_equity,
+            'peak_set_at': self.peak_set_at.isoformat() if self.peak_set_at else None,
             'equity': self.last_equity,
         }
+
+    # -- persistence (only with ``state_path``) --
+    def _state_key(self) -> tuple[Any, ...]:
+        return (
+            self.peak_equity,
+            self.peak_set_at,
+            self.state.value,
+            self.halt_timestamp,
+            self._account_id,
+        )
+
+    def _state_payload(self) -> dict[str, Any]:
+        return {
+            'schema_version': DRAWDOWN_BREAKER_STATE_SCHEMA_VERSION,
+            'account_id': self._account_id,
+            'peak_equity': self.peak_equity,
+            'peak_set_at': self.peak_set_at.isoformat() if self.peak_set_at else None,
+            'state': self.state.value,
+            'tripped_at': self.halt_timestamp.isoformat() if self.halt_timestamp else None,
+            'saved_at': safe_utcnow().isoformat(),
+        }
+
+    def _validated_state(self, payload: Any, account_id: str | None) -> dict[str, Any]:
+        """Return the fields to restore; raise ``_StateRejected`` otherwise."""
+        if not isinstance(payload, Mapping):
+            raise _StateRejected('corrupt', 'payload is not an object')
+        version = payload.get('schema_version')
+        if isinstance(version, bool) or version != DRAWDOWN_BREAKER_STATE_SCHEMA_VERSION:
+            raise _StateRejected('schema_mismatch', f'schema_version={version!r}')
+        stored_account = payload.get('account_id')
+        if stored_account is not None and not isinstance(stored_account, str):
+            raise _StateRejected('corrupt', 'account_id is not a string')
+        if stored_account and account_id and stored_account != account_id:
+            raise _StateRejected('account_mismatch')
+        raw_peak = payload.get('peak_equity')
+        if isinstance(raw_peak, bool) or not isinstance(raw_peak, int | float):
+            raise _StateRejected('peak_invalid', f'peak_equity={raw_peak!r}')
+        peak = float(raw_peak)
+        if not math.isfinite(peak) or peak <= 0.0:
+            raise _StateRejected('peak_invalid', f'peak_equity={raw_peak!r}')
+        now = safe_utcnow()
+        peak_set_at = _parse_state_ts(payload.get('peak_set_at'), 'peak_set_at', now)
+        try:
+            state = CircuitBreakerState(payload.get('state'))
+        except ValueError as exc:
+            raise _StateRejected('state_invalid', str(exc)) from exc
+        if state is CircuitBreakerState.HALF_OPEN:
+            raise _StateRejected('state_invalid', 'half_open')
+        tripped_at = None
+        if state is CircuitBreakerState.OPEN:
+            tripped_at = _parse_state_ts(payload.get('tripped_at'), 'tripped_at', now)
+        return {
+            'account_id': stored_account or None,
+            'peak_equity': peak,
+            'peak_set_at': peak_set_at,
+            'state': state,
+            'tripped_at': tripped_at,
+        }
+
+    def _ensure_state_loaded(self, account_id: str | None = None) -> None:
+        """Restore the stored state once, before the first equity reading.
+
+        A missing, unreadable or implausible file starts fresh with one
+        ``DRAWDOWN_BREAKER_STATE_LOAD_FAILED`` warning; it never raises.
+        """
+        if account_id:
+            self._account_id = account_id
+        if self._state_loaded or self.state_path is None:
+            return
+        self._state_loaded = True
+        path = self.state_path
+        try:
+            payload = json.loads(path.read_text(encoding='utf-8'))
+            restored = self._validated_state(payload, account_id)
+        except FileNotFoundError:
+            logger.warning('DRAWDOWN_BREAKER_STATE_LOAD_FAILED', extra={'path': str(path), 'reason': 'missing'})
+            return
+        except _StateRejected as exc:
+            logger.warning(
+                'DRAWDOWN_BREAKER_STATE_LOAD_FAILED',
+                extra={'path': str(path), 'reason': exc.reason, 'error': str(exc)},
+            )
+            return
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning(
+                'DRAWDOWN_BREAKER_STATE_LOAD_FAILED',
+                extra={'path': str(path), 'reason': 'corrupt', 'error': str(exc)},
+            )
+            return
+        self.peak_equity = restored['peak_equity']
+        self.peak_set_at = restored['peak_set_at']
+        self.state = restored['state']
+        self.halt_timestamp = restored['tripped_at']
+        current_account = self._account_id
+        self._account_id = restored['account_id']
+        self._saved_key = self._state_key()  # what the file holds
+        if current_account:
+            self._account_id = current_account
+        age = safe_utcnow() - restored['peak_set_at']
+        log = logger.warning if self.state is CircuitBreakerState.OPEN else logger.info
+        log(
+            'DRAWDOWN_BREAKER_STATE_RESTORED',
+            extra={
+                'path': str(path),
+                'peak_equity': self.peak_equity,
+                'peak_set_at': self.peak_set_at.isoformat(),
+                'peak_age_days': round(age.total_seconds() / 86400.0, 2),
+                'breaker_state': self.state.value,
+                'tripped_at': self.halt_timestamp.isoformat() if self.halt_timestamp else None,
+            },
+        )
+
+    def _persist_if_changed(self) -> None:
+        """Atomically rewrite the state file when peak, state or account changed."""
+        if self.state_path is None or not self._state_loaded:
+            return
+        key = self._state_key()
+        if key == self._saved_key:
+            return
+        try:
+            atomic_write_text(
+                self.state_path,
+                json.dumps(self._state_payload(), sort_keys=True, indent=1) + '\n',
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            # The in-memory breaker still decides; the write retries next change.
+            logger.warning(
+                'DRAWDOWN_BREAKER_STATE_WRITE_FAILED',
+                extra={'path': str(self.state_path), 'error': str(exc)},
+            )
+            return
+        self._saved_key = key
 
     def _safe_format_percentage(self, value) -> str:
         """
@@ -116,9 +309,11 @@ class DrawdownCircuitBreaker:
             if current_equity < 0:
                 logger.warning(f'Negative equity detected: {current_equity}')
                 return False
+            self._ensure_state_loaded()
             self.last_equity = float(current_equity)
             if current_equity > self.peak_equity:
                 self.peak_equity = current_equity
+                self.peak_set_at = safe_utcnow()
             if self.peak_equity > 0:
                 self.current_drawdown = (self.peak_equity - current_equity) / self.peak_equity
             else:
@@ -135,6 +330,7 @@ class DrawdownCircuitBreaker:
                     self._reset_breaker('Drawdown recovery achieved')
                     return True
                 return False
+            self._persist_if_changed()
             return self.state == CircuitBreakerState.CLOSED
         except COMMON_EXC as e:
             logger.error(f'Error updating drawdown circuit breaker: {e}', exc_info=True)
@@ -146,6 +342,7 @@ class DrawdownCircuitBreaker:
             self.state = CircuitBreakerState.OPEN
             self.halt_timestamp = safe_utcnow()
             logger.critical('DRAWDOWN_BREAKER_TRIPPED', extra=self._transition_extra(reason))
+            self._persist_if_changed()
             for callback in self.reset_callbacks:
                 try:
                     callback('halt', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': self.halt_timestamp})
@@ -160,6 +357,7 @@ class DrawdownCircuitBreaker:
             self.state = CircuitBreakerState.CLOSED
             self.halt_timestamp = None
             logger.warning('DRAWDOWN_BREAKER_RESET', extra=self._transition_extra(reason))
+            self._persist_if_changed()
             for callback in self.reset_callbacks:
                 try:
                     callback('reset', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': safe_utcnow()})
@@ -195,6 +393,7 @@ class DrawdownCircuitBreaker:
                 if isinstance(raw_equity, bool) or not math.isfinite(equity) or equity <= 0.0:
                     skip_reason = 'account_equity_invalid'
         if skip_reason is None:
+            self._ensure_state_loaded(_snapshot_account_id(account_snapshot))
             self.update_equity(equity)
         else:
             logger.warning(
