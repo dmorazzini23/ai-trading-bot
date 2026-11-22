@@ -1,6 +1,52 @@
 # Current handoff
 
-## November 21: full-close exit fix merged, not deployed (`db356eb49`) (start here)
+## November 22: exit pricing merged, not deployed (`da2570eb4`) (start here)
+
+- **Running service:** still `d22babac4` (position backstop). Nothing was
+  restarted. The owner approved deploying this together with the full-close
+  fix (`db356eb49`) as one restart after the close on Mon Nov 23, provided
+  the backstop's first market session looks clean.
+- **Change (`claude/exit-pricing`, 5 commits):** a protective exit or a full
+  close ("urgent exit", decided once in `netting_symbol_cycle.py`) goes out
+  as a DAY limit priced to fill: sell at bid - 10 bps, cover at ask + 10 bps;
+  with no usable quote a protective exit uses the bar close moved 50 bps
+  (`ai_trading/core/netting_exit_pricing.py`, marker
+  `URGENT_EXIT_LIMIT_PRICE`). A full close is blocked (`PRICE_COLLAR_BLOCK`)
+  when the touch is beyond the collar from the bar close; a protective exit
+  follows the quote up to 10%, then falls back. Protective exits only: stale
+  quote, missing quote and `SLIPPAGE_CEILING_BLOCK` waived. Urgent exits:
+  execution-quality gate waived. Every waiver requires a reducing order
+  (`exit_waivers` in `oms/pretrade.py`). `compute_current_positions` parses
+  fractional quantities (`POSITION_FRACTIONAL_QTY_TRUNCATED`). No settings
+  or ConfigSpec changes.
+- **Evidence:** two read-only traces (limit price; order/position read
+  timing) found no defect in the full-close fix. November TCA records: 28
+  sells submitted, 28 filled (paper).
+- **Validation:** full suite on merged main 6777 passed, 2 skipped;
+  `agent_validate_changed.sh` on the branch; independent review (no
+  must-fix; three should-fix, all done); reviewer's 144-case prelude and
+  submission comparison re-run on the final code: trims, adds and entries
+  identical to the pre-change main. Decision baseline reference is now
+  `COMBINED_DECISIONS 02fa7cd460ac3c191209e944b762b63b480773dd1b48112f46378a5a72dee83a`
+  (`exit_pricing2`); `dccac997...` no longer applies.
+- **Not covered:** the last two commits had no second independent review;
+  no run against the broker, so better fills are unproven until paper runs.
+- **Left as is:** a crossed quote blocks every exit (`QUOTE_SANITY_BLOCK`);
+  a remainder under one share is never exited; `audit_positions` and
+  `portfolio/core.py` still use `int(qty)`; sub-dollar names use a 0.01
+  tick; quote age is measured from cycle start; real money: an unfilled
+  closing order is never cancelled or repriced, and a failed post-submit
+  sync leaves a stale open-order index for closing sells.
+- **Crash alert:** installed Nov 22 (`OnFailure=` set, units match
+  packaging); delivery not test-fired.
+- **In progress (branches, not merged):** `claude/breaker-peak` (persist the
+  drawdown breaker's peak and tripped state) and `claude/phase4-cleanup`
+  (dead settings and code; one config-hash commit needing explicit owner
+  approval at deploy).
+- **Rollback after deploy:** `git checkout --detach d22babac4`, restore the
+  spec backup, `sudo systemctl restart ai-trading.service`.
+
+## November 21: full-close exit fix merged, not deployed (`db356eb49`)
 
 - **Running service:** still `d22babac4` (position backstop). Nothing was
   restarted. Deploy of `db356eb49` is planned for after the close on Mon
