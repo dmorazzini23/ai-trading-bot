@@ -5,7 +5,8 @@ Four alert kinds, all read from ``journalctl`` (the aiuser account is in the
 
 * service lifecycle: unit start, failure, or restart;
 * trading stopped / resumed: halt and kill-switch markers and the drawdown
-  breaker markers ``DRAWDOWN_BREAKER_TRIPPED`` / ``DRAWDOWN_BREAKER_RESET``;
+  breaker markers ``DRAWDOWN_BREAKER_TRIPPED`` / ``DRAWDOWN_BREAKER_RESTORED_OPEN``
+  / ``DRAWDOWN_BREAKER_RESET``;
 * position backstop: a stop-loss or maximum-hold exit of one symbol, or such an
   exit that has stalled (de-duplicated per marker and symbol);
 * new ERROR / CRITICAL log line types, de-duplicated by message type.
@@ -40,6 +41,8 @@ STANDING_ERROR_COOLDOWNS = {"MODEL_REGISTRY_STALE": timedelta(days=1)}
 # Markers that mean new openings are blocked, and the markers that lift them.
 TRADING_STOP_MARKERS = (
     "DRAWDOWN_BREAKER_TRIPPED",
+    # A restart restored an open drawdown breaker (still reduce-only).
+    "DRAWDOWN_BREAKER_RESTORED_OPEN",
     "DISASTER_HALT_TRIGGERED",
     "ALERT_HALT_TRADING",
     "HALT_FLAG_WRITTEN",
