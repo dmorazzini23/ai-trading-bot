@@ -26,7 +26,6 @@ def _patch_quote_gate_guards(monkeypatch) -> None:
         monkeypatch.setattr(live_mod, "_safe_mode_guard", lambda *a, **k: False, raising=False)
         monkeypatch.setattr(live_mod, "_require_bid_ask_quotes", lambda: False, raising=False)
         monkeypatch.setattr(live_mod, "quote_fresh_enough", lambda *a, **k: True, raising=False)
-        monkeypatch.setattr(live_mod, "guard_shadow_active", lambda: False, raising=False)
         monkeypatch.setattr(live_mod, "is_safe_mode_active", lambda: False, raising=False)
         provider_monitor = getattr(live_mod, "provider_monitor", None)
         if provider_monitor is not None:

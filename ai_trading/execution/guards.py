@@ -17,13 +17,6 @@ def _utcnow() -> _dt.datetime:
     return _dt.datetime.now(tz=_dt.timezone.utc)
 
 
-class SafetyState:
-    """Process-wide safety state (reset on process restart)."""
-
-    shadow_cycle: bool = False
-
-
-STATE = SafetyState()
 logger = get_logger(__name__)
 MAX_FUTURE_QUOTE_SKEW_SECONDS = 5.0
 
@@ -180,9 +173,3 @@ def quote_fresh_enough(
         quote_ts_utc = quote_ts_utc.replace(tzinfo=_dt.timezone.utc)
     age = (_utcnow() - quote_ts_utc).total_seconds()
     return -MAX_FUTURE_QUOTE_SKEW_SECONDS <= age <= max_age_sec
-
-
-def shadow_active() -> bool:
-    """Return ``True`` when the current cycle is shadow-only."""
-
-    return STATE.shadow_cycle

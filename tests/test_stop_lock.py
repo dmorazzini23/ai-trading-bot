@@ -18,7 +18,6 @@ def test_netting_cycle_applies_execution_symbol_budget(monkeypatch):
     # Other tests reload the runtime module; use the class held by this consumer.
     cfg = bot_engine.TradingConfig.from_env(allow_missing_drawdown=True)
     cfg = cfg.update(
-        netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
         ledger_enabled=False,

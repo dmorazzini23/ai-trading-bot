@@ -10,7 +10,6 @@ import pytest
 
 
 import ai_trading.execution.live_trading as lt
-from ai_trading.execution import guards
 from ai_trading.execution.engine import OrderManager
 from ai_trading.oms.intent_store import IntentStore
 
@@ -214,7 +213,6 @@ def engine_factory(monkeypatch):
     )
 
     monkeypatch.setattr(lt, "_safe_mode_guard", lambda *_, **__: False)
-    guards.STATE.shadow_cycle = False
 
     def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
         return lt.CapacityCheck(True, int(quantity))
@@ -259,7 +257,6 @@ def engine_factory(monkeypatch):
         )
         monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda *_a, **_k: False)
         monkeypatch.setattr(lt, "_require_bid_ask_quotes", lambda: False)
-        monkeypatch.setattr(lt, "guard_shadow_active", lambda: False)
         monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
         return engine
 
@@ -697,7 +694,6 @@ def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch, cap
     _runtime_cfg.reload_trading_config()
     monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda *_a, **_k: False)
     monkeypatch.setattr(lt, "_require_bid_ask_quotes", lambda: False)
-    monkeypatch.setattr(lt, "guard_shadow_active", lambda: False)
     monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
 
     captured: dict[str, Any] = {}

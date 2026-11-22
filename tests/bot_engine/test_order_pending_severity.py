@@ -204,8 +204,6 @@ def test_pending_orders_long_lived_backlog_uses_warning(monkeypatch, caplog):
         "get_trading_config",
         lambda: types.SimpleNamespace(
             order_stale_cleanup_interval=600,
-            orders_pending_new_warn_s=60,
-            orders_pending_new_error_s=180,
         ),
     )
     monkeypatch.setattr(
@@ -247,8 +245,6 @@ def test_pending_orders_symbol_scope_caps_error_to_warning(monkeypatch, caplog):
         "get_trading_config",
         lambda: types.SimpleNamespace(
             order_stale_cleanup_interval=600,
-            orders_pending_new_warn_s=60,
-            orders_pending_new_error_s=120,
         ),
     )
     monkeypatch.setattr(
@@ -289,8 +285,6 @@ def test_pending_orders_first_detection_stays_info_for_fresh_orders(monkeypatch,
         "get_trading_config",
         lambda: types.SimpleNamespace(
             order_stale_cleanup_interval=60,
-            orders_pending_new_warn_s=5,
-            orders_pending_new_error_s=10,
         ),
     )
     monkeypatch.setattr(

@@ -594,27 +594,6 @@ def process_netting_symbol(
                 )
                 return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
-    lock = processor.state.stop_lock.get(symbol)
-    if lock:
-        lock_ts = lock.get("bar_ts")
-        lock_dir = str(lock.get("direction", "")).lower()
-        net_score = sum(p.score for p in net_target.proposals)
-        net_conf = max((p.confidence for p in net_target.proposals), default=0.0)
-        reentry_threshold = max((s.reentry_threshold for s in processor.sleeve_configs_map.values()), default=0.6)
-        if lock_ts and isinstance(lock_ts, datetime) and net_target.bar_ts <= lock_ts:
-            net_target.target_dollars = 0.0
-            net_target.target_shares = 0
-            delta_shares = -current_shares
-            gates.append("STOP_LOCK")
-        else:
-            if abs(net_score) < reentry_threshold or net_conf < reentry_threshold:
-                net_target.target_dollars = 0.0
-                net_target.target_shares = 0
-                delta_shares = -current_shares
-                gates.append("STOP_LOCK")
-            elif lock_dir:
-                processor.state.stop_lock.pop(symbol, None)
-
     if delta_shares == 0:
         _record_decision(
             symbol=symbol,
@@ -639,17 +618,11 @@ def process_netting_symbol(
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
     if bool(processor.drawdown_breaker.get("open", False)):
-        # Evaluated after the stop lock and quarantine have had the chance to
-        # turn the trade into an exit, so the breaker never holds an exit back.
+        # Evaluated after quarantine has had the chance to turn the trade into
+        # an exit, so the breaker never holds an exit back. A flip never gets
+        # here: it was cut to its exit leg above (FLAT_BEFORE_REVERSAL).
         post_trade_shares = current_shares + delta_shares
-        if post_trade_shares * current_shares < 0:
-            # Trading through flat would open the opposite side: exit only.
-            net_target.target_dollars = 0.0
-            net_target.target_shares = 0
-            delta_shares = -current_shares
-            gates.append("DRAWDOWN_BREAKER_REDUCE_ONLY")
-            symbol_snapshot["drawdown_breaker"] = dict(processor.drawdown_breaker)
-        elif abs(post_trade_shares) > abs(current_shares):
+        if abs(post_trade_shares) > abs(current_shares):
             gates.append("DRAWDOWN_BREAKER_BLOCK")
             symbol_snapshot["drawdown_breaker"] = dict(processor.drawdown_breaker)
             _record_decision(

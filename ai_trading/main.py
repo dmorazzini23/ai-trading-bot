@@ -2806,34 +2806,6 @@ def _install_signal_handlers() -> None:
             )
 
 
-def _require_netting_pipeline(trading_cfg: Any) -> None:
-    """Reject a resolved config that disables the netting pipeline.
-
-    Netting is the only decision path, so ``AI_TRADING_NETTING_ENABLED=0`` asks
-    for something that no longer exists. Test mode is exempt because tests set
-    the flag to prove the cycle ignores it.
-    """
-
-    if bool(getattr(trading_cfg, "netting_enabled", True)):
-        return
-    if _is_test_mode():
-        return
-    message = (
-        "AI_TRADING_NETTING_ENABLED=0 is no longer supported: the legacy "
-        "non-netting decision path cannot be run by the service. Set "
-        "AI_TRADING_NETTING_ENABLED=1 or leave it unset."
-    )
-    logger.critical(
-        "NETTING_DISABLED_UNSUPPORTED",
-        extra={
-            "governing_flag": "AI_TRADING_NETTING_ENABLED",
-            "netting_enabled": False,
-            "hint": "set AI_TRADING_NETTING_ENABLED=1 or leave it unset",
-        },
-    )
-    raise SystemExit(message)
-
-
 def _fail_fast_env() -> None:
     """Reload and validate mandatory environment variables early."""
 
@@ -2927,7 +2899,6 @@ def _fail_fast_env() -> None:
     except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
-    _require_netting_pipeline(trading_cfg)
     _log_config_effective_summary(trading_cfg)
 
     credential_warning_logged = False

@@ -45,7 +45,6 @@ from ai_trading.runtime.regime_entry_throttle import evaluate_regime_entry_throt
 from ai_trading.execution.guards import (
     can_execute,
     quote_fresh_enough,
-    shadow_active as guard_shadow_active,
 )
 from ai_trading.execution.passive_reprice import (
     deterministic_passive_reprice_id,
@@ -19819,10 +19818,6 @@ class ExecutionEngine:
         using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
         kwargs.pop("using_fallback_price", None)
         capacity_prechecked = _safe_bool(kwargs.pop("capacity_prechecked", False))
-        pytest_mode = (
-            "pytest" in sys.modules
-            or str(_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes", "on"}
-        )
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(
             symbol,
@@ -20246,14 +20241,6 @@ class ExecutionEngine:
                 extra={"symbol": symbol, "side": side_lower, "quantity": quantity, "order_type": "market"},
             )
 
-        if guard_shadow_active() and not closing_position:
-            logger.info(
-                "SHADOW_MODE_ACTIVE",
-                extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
-            )
-            if not pytest_mode:
-                return None
-
         quote_payload: Mapping[str, Any] | None = None
         quote_dict: dict[str, Any] | None = None
         quote_ts = None
@@ -20633,10 +20620,6 @@ class ExecutionEngine:
         kwargs.pop("reduce_only", None)
         using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
         capacity_prechecked = _safe_bool(kwargs.pop("capacity_prechecked", False))
-        pytest_mode = (
-            "pytest" in sys.modules
-            or str(_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes", "on"}
-        )
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(
             symbol,
@@ -21063,14 +21046,6 @@ class ExecutionEngine:
         quote_age_ms: float | None = None
         synthetic_quote = False
         fresh = True
-        if guard_shadow_active() and not closing_position:
-            logger.info(
-                "SHADOW_MODE_ACTIVE",
-                extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
-            )
-            if not pytest_mode:
-                return None
-
         if prefetch_quotes:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             if isinstance(kwargs, dict):
@@ -26515,7 +26490,11 @@ class ExecutionEngine:
         return any(token in normalized for token in tokens)
 
     def check_stops(self) -> None:
-        """Hook for risk-stop enforcement from core loop (currently no-op)."""
+        """Post-cycle hook called by the core loop; a no-op for this engine.
+
+        Stop-loss and max-hold exits run in the netting position backstop
+        (``ai_trading.core.netting_position_backstop``).
+        """
 
         logger.debug(
             "EXEC_ENGINE_CHECK_STOPS_NOOP",

@@ -638,27 +638,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=0,
     ),
     ConfigSpec(
-        field="execution_allow_last_close",
-        env=("EXECUTION_ALLOW_LAST_CLOSE", "AI_TRADING_EXEC_ALLOW_LAST_CLOSE"),
-        cast="bool",
-        default=False,
-        description="Permit opening trades using last close prices when live quotes unavailable.",
-    ),
-    ConfigSpec(
-        field="execution_allow_fallback_price",
-        env=("EXECUTION_ALLOW_FALLBACK_PRICE", "AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE"),
-        cast="bool",
-        default=True,
-        description="Allow fallback pricing sources when primary NBBO quotes are unavailable.",
-    ),
-    ConfigSpec(
-        field="allow_execution_on_fallback_quotes",
-        env=("ALLOW_EXECUTION_ON_FALLBACK_QUOTES",),
-        cast="bool",
-        default=False,
-        description="Permit order execution when only fallback quotes are available (intended for test/demo use).",
-    ),
-    ConfigSpec(
         field="safe_mode_failsoft",
         env=("TRADING__SAFE_MODE_FAILSOFT",),
         cast="bool",
@@ -728,13 +707,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=0,
     ),
     ConfigSpec(
-        field="log_exec_summary_enabled",
-        env=("LOG__EXEC_SUMMARY_ENABLED",),
-        cast="bool",
-        default=True,
-        description="Emit consolidated execution summary logs at the end of each cycle.",
-    ),
-    ConfigSpec(
         field="order_flip_mode",
         env=("ORDER_FLIP_MODE",),
         cast=_parse_order_flip_mode,
@@ -778,15 +750,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="bool",
         default=False,
         description="Require NBBO quotes for limit pricing; fallback to last trade when false.",
-    ),
-    ConfigSpec(
-        field="execution_stale_ratio_shadow",
-        env=("EXECUTION_STALE_RATIO_SHADOW",),
-        cast="float",
-        default=0.30,
-        description="Stale symbol ratio that triggers automatic shadow cycle.",
-        min_value=0.0,
-        max_value=1.0,
     ),
     ConfigSpec(
         field="sector_exposure_cap",
@@ -1347,14 +1310,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=1,
     ),
     ConfigSpec(
-        field="symbol_process_budget_seconds",
-        env=("SYMBOL_PROCESS_BUDGET",),
-        cast="float",
-        default=300.0,
-        description="Soft budget (seconds) allotted for processing the full symbol universe.",
-        min_value=0.0,
-    ),
-    ConfigSpec(
         field="cycle_budget_fraction",
         env=("CYCLE_BUDGET_FRACTION",),
         cast="float",
@@ -1369,14 +1324,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="float",
         default=None,
         description="Optional override for compute budget fraction. When unset the fraction is derived from `cycle_budget_fraction`.",
-    ),
-    ConfigSpec(
-        field="signal_hold_epsilon",
-        env=("AI_TRADING_SIGNAL_HOLD_EPS",),
-        cast="float",
-        default=0.01,
-        description="Tolerance used when deciding whether to hold positions around target weights.",
-        min_value=0.0,
     ),
     ConfigSpec(
         field="strict_data_gating",
@@ -1415,21 +1362,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="bool",
         default=False,
         description="Controls whether missing ML models emit warnings during startup checks.",
-    ),
-    ConfigSpec(
-        field="default_model_url",
-        env=("DEFAULT_MODEL_URL",),
-        cast="str",
-        default=None,
-        description="URL used to download the default ML model when not present locally.",
-    ),
-    ConfigSpec(
-        field="max_symbols_per_cycle",
-        env=("MAX_SYMBOLS_PER_CYCLE",),
-        cast="int",
-        default=500,
-        description="Hard cap on number of symbols processed during a trading cycle.",
-        min_value=1,
     ),
     ConfigSpec(
         field="health_tick_seconds",
@@ -1527,22 +1459,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Seconds to wait before auto-canceling pending/new orders to unstick the trade loop.",
         min_value=10,
         max_value=3600,
-    ),
-    ConfigSpec(
-        field="orders_pending_new_warn_s",
-        env=("ORDERS_PENDING_NEW_WARN_S",),
-        cast="int",
-        default=60,
-        description="Seconds a pending/new order may linger before emitting a warning log.",
-        min_value=0,
-    ),
-    ConfigSpec(
-        field="orders_pending_new_error_s",
-        env=("ORDERS_PENDING_NEW_ERROR_S",),
-        cast="int",
-        default=180,
-        description="Seconds a pending/new order may linger before escalating to an error.",
-        min_value=0,
     ),
     ConfigSpec(
         field="order_fill_rate_target",
@@ -2264,13 +2180,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         max_value=1.0,
     ),
     ConfigSpec(
-        field="netting_enabled",
-        env=("AI_TRADING_NETTING_ENABLED",),
-        cast="bool",
-        default=True,
-        description="Enable net-to-one target execution pipeline.",
-    ),
-    ConfigSpec(
         field="data_contract_enabled",
         env=("AI_TRADING_DATA_CONTRACT_ENABLED",),
         cast="bool",
@@ -2951,10 +2860,6 @@ class TradingConfig:
         }
         return data
 
-    @property
-    def symbol_process_budget_ms(self) -> int:
-        return int(max(0.0, self._values["symbol_process_budget_seconds"]) * 1000)
-
     @classmethod
     def from_optimization(cls, params: Mapping[str, Any]) -> "TradingConfig":
         base = cls.from_env()
@@ -3349,7 +3254,6 @@ def _apply_live_execution_quote_defaults(
     live_defaults = {
         "execution_require_realtime_nbbo": True,
         "execution_market_on_degraded": False,
-        "execution_allow_fallback_price": False,
         "nbbo_required_for_limit": True,
     }
     for field, default_value in live_defaults.items():

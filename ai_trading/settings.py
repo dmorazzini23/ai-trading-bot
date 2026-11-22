@@ -279,147 +279,11 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         validation_alias=AliasChoices("MAX_POSITION_MODE", "AI_TRADING_MAX_POSITION_MODE"),
     )
     finnhub_rpm: int = Field(default=55, validation_alias="AI_TRADING_FINNHUB_RPM")
-    max_trades_per_day: int = Field(default=200, validation_alias="AI_TRADING_MAX_TRADES_PER_DAY")
-    max_trades_per_hour: int = Field(default=30, validation_alias="AI_TRADING_MAX_TRADES_PER_HOUR")
-    min_position_hold_seconds: int = Field(
-        default=600,
-        validation_alias=AliasChoices(
-            "AI_TRADING_MIN_POSITION_HOLD_SECONDS",
-            "MIN_POSITION_HOLD_SECONDS",
-            "REBALANCE_HOLD_SECONDS",
-        ),
-    )
-    max_position_hold_seconds: int = Field(
-        default=7200,
-        validation_alias=AliasChoices(
-            "AI_TRADING_MAX_POSITION_HOLD_SECONDS",
-            "MAX_POSITION_HOLD_SECONDS",
-        ),
-    )
-    take_profit_exit_fraction: float = Field(
-        default=1.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_TAKE_PROFIT_EXIT_FRACTION",
-            "TAKE_PROFIT_EXIT_FRACTION",
-        ),
-    )
-    take_profit_min_hold_bypass_pct: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_TAKE_PROFIT_MIN_HOLD_BYPASS_PCT",
-            "TAKE_PROFIT_MIN_HOLD_BYPASS_PCT",
-        ),
-    )
-    min_hold_loser_cut_pct: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_MIN_HOLD_LOSER_CUT_PCT",
-            "MIN_HOLD_LOSER_CUT_PCT",
-        ),
-    )
-    fallback_entry_confidence_bonus: float = Field(
-        default=0.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_FALLBACK_ENTRY_CONFIDENCE_BONUS",
-            "FALLBACK_ENTRY_CONFIDENCE_BONUS",
-        ),
-    )
-    reversal_exit_confirm_signals: int = Field(
-        default=2,
-        validation_alias=AliasChoices(
-            "AI_TRADING_REVERSAL_EXIT_CONFIRM_SIGNALS",
-            "REVERSAL_EXIT_CONFIRM_SIGNALS",
-        ),
-    )
-    entry_flip_confirm_signals: int = Field(
-        default=1,
-        validation_alias=AliasChoices(
-            "AI_TRADING_ENTRY_FLIP_CONFIRM_SIGNALS",
-            "ENTRY_FLIP_CONFIRM_SIGNALS",
-        ),
-    )
     min_expected_edge_bps: float = Field(
         default=6.0,
         validation_alias=AliasChoices(
             "AI_TRADING_MIN_EXPECTED_EDGE_BPS",
             "MIN_EXPECTED_EDGE_BPS",
-        ),
-    )
-    fallback_expected_edge_penalty_bps: float = Field(
-        default=8.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_FALLBACK_EXPECTED_EDGE_PENALTY_BPS",
-            "FALLBACK_EXPECTED_EDGE_PENALTY_BPS",
-        ),
-    )
-    entry_cost_buffer_bps: float = Field(
-        default=2.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_ENTRY_COST_BUFFER_BPS",
-            "ENTRY_COST_BUFFER_BPS",
-        ),
-    )
-    entry_age_penalty_per_sec_bps: float = Field(
-        default=0.02,
-        validation_alias=AliasChoices(
-            "AI_TRADING_ENTRY_AGE_PENALTY_PER_SEC_BPS",
-            "ENTRY_AGE_PENALTY_PER_SEC_BPS",
-        ),
-    )
-    entry_age_penalty_cap_bps: float = Field(
-        default=5.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_ENTRY_AGE_PENALTY_CAP_BPS",
-            "ENTRY_AGE_PENALTY_CAP_BPS",
-        ),
-    )
-    expectancy_filter_enabled: bool = Field(
-        default=False,
-        validation_alias=AliasChoices(
-            "AI_TRADING_EXPECTANCY_FILTER_ENABLED",
-            "EXPECTANCY_FILTER_ENABLED",
-        ),
-    )
-    expectancy_min_samples: int = Field(
-        default=8,
-        validation_alias=AliasChoices(
-            "AI_TRADING_EXPECTANCY_MIN_SAMPLES",
-            "EXPECTANCY_MIN_SAMPLES",
-        ),
-    )
-    expectancy_window_trades: int = Field(
-        default=30,
-        validation_alias=AliasChoices(
-            "AI_TRADING_EXPECTANCY_WINDOW_TRADES",
-            "EXPECTANCY_WINDOW_TRADES",
-        ),
-    )
-    expectancy_min_mean_pct: float = Field(
-        default=-0.001,
-        validation_alias=AliasChoices(
-            "AI_TRADING_EXPECTANCY_MIN_MEAN_PCT",
-            "EXPECTANCY_MIN_MEAN_PCT",
-        ),
-    )
-    winner_break_even_r: float = Field(
-        default=1.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_WINNER_BREAK_EVEN_R",
-            "WINNER_BREAK_EVEN_R",
-        ),
-    )
-    winner_trailing_tighten_r: float = Field(
-        default=1.75,
-        validation_alias=AliasChoices(
-            "AI_TRADING_WINNER_TRAILING_TIGHTEN_R",
-            "WINNER_TRAILING_TIGHTEN_R",
-        ),
-    )
-    winner_trailing_atr_factor: float = Field(
-        default=0.7,
-        validation_alias=AliasChoices(
-            "AI_TRADING_WINNER_TRAILING_ATR_FACTOR",
-            "WINNER_TRAILING_ATR_FACTOR",
         ),
     )
     regime_signal_routing_enabled: bool = Field(
@@ -485,34 +349,7 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     score_size_gamma: float = Field(
         1.0, alias="SCORE_SIZE_GAMMA", description="Shape parameter: 1.0 linear, <1 concave, >1 convex"
     )
-    default_liquidity_factor: float = Field(
-        1.0,
-        alias="DEFAULT_LIQUIDITY_FACTOR",
-        ge=0.0,
-        description="Fallback liquidity multiplier when live quotes are unavailable.",
-    )
     buy_threshold: float = Field(default=0.15, validation_alias="AI_TRADING_BUY_THRESHOLD")
-    live_stop_loss_bps: float = Field(
-        default=60.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_LIVE_STOP_LOSS_BPS",
-            "AI_TRADING_STOP_LOSS_BPS",
-        ),
-    )
-    live_take_profit_bps: float = Field(
-        default=160.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_LIVE_TAKE_PROFIT_BPS",
-            "AI_TRADING_TAKE_PROFIT_BPS",
-        ),
-    )
-    live_trailing_stop_bps: float = Field(
-        default=90.0,
-        validation_alias=AliasChoices(
-            "AI_TRADING_LIVE_TRAILING_STOP_BPS",
-            "AI_TRADING_TRAILING_STOP_BPS",
-        ),
-    )
     sector_exposure_cap: float = Field(default=0.33, validation_alias="AI_TRADING_SECTOR_EXPOSURE_CAP")
     max_portfolio_positions: int = Field(default=20, validation_alias="AI_TRADING_MAX_PORTFOLIO_POSITIONS")
     disaster_dd_limit: float = Field(default=0.25, validation_alias="AI_TRADING_DISASTER_DD_LIMIT")
@@ -646,9 +483,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     data_warmup_lookback_days: int = Field(120, validation_alias="DATA_WARMUP_LOOKBACK_DAYS")
     enable_sklearn: bool = Field(False, validation_alias="ENABLE_SKLEARN")
     metrics_enabled: bool = Field(False, validation_alias="METRICS_ENABLED")
-    data_sanitize_enabled: bool = Field(False, validation_alias="DATA_SANITIZE_ENABLED")
-    corp_actions_enabled: bool = Field(False, validation_alias="CORP_ACTIONS_ENABLED")
-    sizing_enabled: bool = Field(False, validation_alias="SIZING_ENABLED")
     regime_min_rows: int = Field(100, validation_alias="REGIME_MIN_ROWS")
     sgd_params: dict[str, float] = Field(default_factory=dict, validation_alias="SGD_PARAMS")
     ai_trading_seed: int = Field(42, alias="AI_TRADING_SEED")
@@ -1168,10 +1002,6 @@ def get_trade_cooldown_min() -> int:
     return _to_int(getattr(get_settings(), "trade_cooldown_min", 15), 15)
 
 
-def get_min_position_hold_seconds() -> int:
-    return max(0, _to_int(getattr(get_settings(), "min_position_hold_seconds", 0), 0))
-
-
 def get_regime_signal_routing_enabled() -> bool:
     return _to_bool(getattr(get_settings(), "regime_signal_routing_enabled", False), False)
 
@@ -1204,14 +1034,6 @@ def get_alpha_decay_max_bump() -> float:
 
 def get_alpha_decay_max_trades_window() -> int:
     return max(0, _to_int(getattr(get_settings(), "alpha_decay_max_trades_window", 0), 0))
-
-
-def get_max_trades_per_hour() -> int:
-    return _to_int(getattr(get_settings(), "max_trades_per_hour", 30), 30)
-
-
-def get_max_trades_per_day() -> int:
-    return _to_int(getattr(get_settings(), "max_trades_per_day", 200), 200)
 
 
 def get_backup_data_provider() -> str:

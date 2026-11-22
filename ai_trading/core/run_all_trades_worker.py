@@ -62,15 +62,6 @@ def _observe_cycle_execute_latency(be: Any, execution_stage_start: float | None)
         be.logger.debug("CYCLE_EXECUTE_LATENCY_OBSERVE_FAILED", exc_info=True)
 
 
-def _log_cycle_gates(be: Any) -> None:
-    be.logger.info(
-        "CYCLE_GATES",
-        extra={
-            "shadow": be.guard_shadow_active(),
-        },
-    )
-
-
 def _finalize_run_all_trades_cycle(
     *,
     be: Any,
@@ -91,7 +82,6 @@ def _finalize_run_all_trades_cycle(
     state.running = False
     state.last_loop_duration = last_loop_duration
 
-    _run_finalizer_hook(be, "cycle_gates_log", _log_cycle_gates, be)
     _run_finalizer_hook(
         be,
         "loop_heartbeat",

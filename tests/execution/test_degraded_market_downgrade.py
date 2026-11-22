@@ -35,7 +35,6 @@ def _patch_execution_guards(monkeypatch) -> None:
         monkeypatch.setattr(live_mod, "_safe_mode_guard", lambda *a, **k: False, raising=False)
         monkeypatch.setattr(live_mod, "_require_bid_ask_quotes", lambda: False, raising=False)
         monkeypatch.setattr(live_mod, "quote_fresh_enough", lambda *a, **k: True, raising=False)
-        monkeypatch.setattr(live_mod, "guard_shadow_active", lambda: False, raising=False)
         monkeypatch.setattr(live_mod, "is_safe_mode_active", lambda: False, raising=False)
         monkeypatch.setattr(
             live_mod,
@@ -56,18 +55,13 @@ def _patch_execution_guards(monkeypatch) -> None:
         monkeypatch.setitem(globals_ns, "_safe_mode_guard", lambda *a, **k: False)
         monkeypatch.setitem(globals_ns, "_require_bid_ask_quotes", lambda: False)
         monkeypatch.setitem(globals_ns, "quote_fresh_enough", lambda *a, **k: True)
-        monkeypatch.setitem(globals_ns, "guard_shadow_active", lambda: False)
         monkeypatch.setitem(globals_ns, "is_safe_mode_active", lambda: False)
         monkeypatch.setitem(
             globals_ns,
             "_call_preflight_capacity",
             lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
         )
-    from ai_trading.execution import guards
 
-    setattr(guards.STATE, "shadow_cycle", False)
-    if hasattr(guards.STATE, "shadow_cycle_forced"):
-        setattr(guards.STATE, "shadow_cycle_forced", False)
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 

@@ -458,28 +458,6 @@ def test_open_breaker_turns_a_reversal_into_an_exit() -> None:
     assert records[0]["net_target"].target_dollars == 0.0
 
 
-def test_stop_lock_exit_is_not_held_back_by_an_open_breaker() -> None:
-    submitted: list[int] = []
-    processor, records = _make_processor(
-        drawdown_breaker=dict(OPEN_BREAKER), positions={"AAPL": 5}
-    )
-    processor.state.stop_lock["AAPL"] = {"bar_ts": processor.now, "direction": "long"}
-    real_submit = processor.execute_submission_func
-
-    def _submit(**kwargs: Any) -> Any:
-        submitted.append(int(kwargs["delta_shares"]))
-        return real_submit(**kwargs)
-
-    processor.execute_submission_func = _submit
-
-    # The sleeves want to add to the long; the stop lock flattens it instead.
-    result = _process(processor, target_dollars=100.0)
-
-    assert result.submitted_increment == 1
-    assert submitted == [-5]
-    assert records[0]["gates"] == ["STOP_LOCK", "OK_TRADE"]
-
-
 @pytest.mark.parametrize("payload", [{}, {"open": False}, {**OPEN_BREAKER, "open": False}])
 def test_closed_breaker_leaves_symbol_decisions_unchanged(payload: dict[str, Any]) -> None:
     for positions, target_dollars in (({}, 100.0), ({"AAPL": 10}, 0.0), ({"AAPL": 5}, 100.0)):
@@ -556,7 +534,6 @@ def _run_cycle(
     """Run one real netting cycle: AAPL is an entry from flat, MSFT a full exit."""
 
     cfg = TradingConfig.from_env(allow_missing_drawdown=True).update(
-        netting_enabled=True,
         data_contract_enabled=False,
         recon_enabled=False,
         ledger_enabled=False,

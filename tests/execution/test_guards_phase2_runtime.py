@@ -110,4 +110,3 @@ def test_quote_fresh_enough_and_shadow_state(monkeypatch: pytest.MonkeyPatch) ->
     assert guards.quote_fresh_enough(now + timedelta(seconds=6), 10) is False
     assert guards.quote_fresh_enough(now.replace(tzinfo=None) - timedelta(seconds=5), 10) is True
     assert guards.quote_fresh_enough(now - timedelta(seconds=11), 10) is False
-    assert guards.shadow_active() is False

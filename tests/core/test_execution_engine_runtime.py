@@ -127,3 +127,35 @@ def test_execution_engine_stub_recovery_is_test_only(monkeypatch) -> None:
         match="stub recovery is disabled outside tests",
     ):
         bot_engine._ensure_execution_engine(runtime)
+
+
+def test_engine_without_check_stops_aborts_startup_naming_the_backstop(monkeypatch) -> None:
+    from ai_trading.core import bot_engine
+
+    class _Status:
+        engine_class = "tests.fake.ExecutionEngine"
+        missing_dependencies = ()
+        missing_credentials = ()
+        reason = None
+        settings_fallback = False
+        mode = "sim"
+        shadow_mode = False
+
+    class _EngineWithoutHook:
+        def __init__(self, _runtime) -> None:
+            return None
+
+    fake_module = SimpleNamespace(
+        get_execution_runtime_status=lambda: _Status(),
+        ExecutionEngine=_EngineWithoutHook,
+    )
+    monkeypatch.setattr(bot_engine.importlib, "import_module", lambda _name: fake_module)
+    runtime = SimpleNamespace(execution_engine=None, exec_engine=None)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        bot_engine._ensure_execution_engine(runtime)
+
+    message = str(excinfo.value)
+    assert "check_stops() post-cycle hook; startup aborted" in message
+    assert "netting position backstop" in message
+    assert "risk-stop" not in message

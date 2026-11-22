@@ -13,7 +13,6 @@ def test_degraded_feed_defaults(monkeypatch):
         "TRADING__MIN_QUOTE_FRESHNESS_MS",
         "TRADING__DEGRADED_FEED_MODE",
         "TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS",
-        "LOG__EXEC_SUMMARY_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -24,7 +23,6 @@ def test_degraded_feed_defaults(monkeypatch):
     assert cfg.min_quote_freshness_ms == 2500
     assert cfg.degraded_feed_mode == "block"
     assert cfg.degraded_feed_limit_widen_bps == 50
-    assert cfg.log_exec_summary_enabled is True
 
 
 def test_degraded_feed_mode_accepts_hard_block(monkeypatch):

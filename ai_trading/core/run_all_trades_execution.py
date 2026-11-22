@@ -167,8 +167,8 @@ def execute_run_all_trades_cycle(
 ) -> None:
     """Execute the netting worker cycle after bootstrap has completed.
 
-    The netting pipeline is the only decision path; the cycle does not read
-    ``netting_enabled``. Startup rejects a config that disables it.
+    The netting pipeline is the only decision path; there is no setting that
+    selects another.
     """
     be = importlib.import_module("ai_trading.core.bot_engine")
     default_required = not bool(

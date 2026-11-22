@@ -16,7 +16,6 @@ def _patch_common_guards(monkeypatch) -> None:
     """Keep execution heuristics deterministic for gating assertions."""
 
     monkeypatch.setattr(live_trading, "_safe_mode_guard", lambda *a, **k: False)
-    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
     monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
     monkeypatch.setattr(
         live_trading.provider_monitor,
