@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import threading
+import weakref
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -131,6 +132,11 @@ class DrawdownCircuitBreaker:
         self._account_id: str | None = None
         self._state_loaded = self.state_path is None
         self._saved_key: tuple[Any, ...] | None = None
+        # How the stored state was loaded, for ``health_snapshot``.
+        self._load_status = 'not_configured' if self.state_path is None else 'pending'
+        self._load_reason: str | None = None
+        self._last_write_failed = False
+        self.last_reading_at: datetime | None = None
         self.reset_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
         emit_once(logger, 'DRAWDOWN_CB_INIT', 'info', 'DrawdownCircuitBreaker initialized', max_drawdown=self._safe_format_percentage(self.max_drawdown))
 
@@ -236,10 +242,12 @@ class DrawdownCircuitBreaker:
             raw = path.read_bytes()
         except FileNotFoundError:
             self._state_loaded = True
+            self._load_status, self._load_reason = 'fresh', None
             logger.warning('DRAWDOWN_BREAKER_STATE_LOAD_FAILED', extra={'path': str(path), 'reason': 'missing'})
             return
         except OSError as exc:
             # Possibly transient; overwriting now could erase a stored open breaker.
+            self._load_reason = 'unreadable'
             emit_once(
                 logger,
                 f'DRAWDOWN_BREAKER_STATE_LOAD_FAILED:unreadable:{path}',
@@ -255,6 +263,7 @@ class DrawdownCircuitBreaker:
         try:
             restored = self._validated_state(json.loads(raw.decode('utf-8')), self._account_id)
         except _StateRejected as exc:
+            self._load_status, self._load_reason = 'failed', exc.reason
             logger.warning(
                 'DRAWDOWN_BREAKER_STATE_LOAD_FAILED',
                 extra={'path': str(path), 'reason': exc.reason, 'error': str(exc)},
@@ -263,6 +272,7 @@ class DrawdownCircuitBreaker:
         except _STATE_DECODE_ERRORS as exc:
             # This runs inside the trading cycle: a bad file must start fresh,
             # not abort the cycle.
+            self._load_status, self._load_reason = 'failed', 'corrupt'
             logger.warning(
                 'DRAWDOWN_BREAKER_STATE_LOAD_FAILED',
                 extra={'path': str(path), 'reason': 'corrupt', 'error': f'{exc.__class__.__name__}: {exc}'},
@@ -294,6 +304,7 @@ class DrawdownCircuitBreaker:
         )
         if self._account_id is None:
             self._account_id = stored_account
+        self._load_status, self._load_reason = 'restored', None
         extra: dict[str, Any] = {
             'path': str(self.state_path),
             'peak_equity': self.peak_equity,
@@ -328,12 +339,14 @@ class DrawdownCircuitBreaker:
             )
         except (OSError, TypeError, ValueError) as exc:
             # The in-memory breaker still decides; the write retries next change.
+            self._last_write_failed = True
             logger.warning(
                 'DRAWDOWN_BREAKER_STATE_WRITE_FAILED',
                 extra={'path': str(self.state_path), 'error': str(exc)},
             )
             return
         self._saved_key = key
+        self._last_write_failed = False
 
     def _safe_format_percentage(self, value) -> str:
         """
@@ -367,6 +380,7 @@ class DrawdownCircuitBreaker:
                 return False
             self._ensure_state_loaded(equity=float(current_equity))
             self.last_equity = float(current_equity)
+            self.last_reading_at = safe_utcnow()
             if current_equity > self.peak_equity:
                 self.peak_equity = current_equity
                 self.peak_set_at = safe_utcnow()
@@ -499,9 +513,64 @@ class DrawdownCircuitBreaker:
         self._reset_breaker('Manual reset after drawdown recovery')
         return True
 
+    def health_snapshot(self) -> dict[str, Any]:
+        """Read-only, JSON-safe view of the in-memory state for ``/healthz``.
+
+        Never reads the state file and never includes the account id.
+        ``current_drawdown`` is ``None`` until the first equity reading and
+        ``state`` is ``'unknown'`` until the stored state has been loaded.
+        """
+        state = self.state
+        peak_equity = self.peak_equity
+        peak_set_at = self.peak_set_at
+        tripped_at = self.halt_timestamp
+        last_equity = self.last_equity
+        has_peak = peak_equity > 0.0
+        return {
+            'available': True,
+            # Until the stored state is read (first equity reading of a market
+            # cycle) the in-memory default says nothing about a saved open breaker.
+            'state': 'unknown' if self._load_status == 'pending' else state.value,
+            'peak_equity': peak_equity if has_peak else None,
+            'peak_set_at': peak_set_at.isoformat() if peak_set_at else None,
+            'current_drawdown': self.current_drawdown if last_equity is not None else None,
+            'trip_threshold': self.max_drawdown,
+            'reset_threshold': self._recovery_drawdown_threshold(),
+            'tripped_at': tripped_at.isoformat() if tripped_at else None,
+            'last_reading_at': self.last_reading_at.isoformat() if self.last_reading_at else None,
+            'state_load': self._load_status,
+            'persisted_state_loaded': self._load_status == 'restored',
+            'load_failure_reason': self._load_reason,
+            'last_write_failed': self._last_write_failed,
+        }
+
     def get_status(self) -> dict[str, Any]:
         """Get current circuit breaker status."""
         return {'state': self.state.value, 'current_drawdown': self.current_drawdown, 'max_drawdown': self.max_drawdown, 'recovery_drawdown': self._recovery_drawdown_threshold(), 'peak_equity': self.peak_equity, 'halt_timestamp': self.halt_timestamp, 'trading_allowed': self.state == CircuitBreakerState.CLOSED}
+
+
+# The running drawdown breaker, for the health payload. Held weakly so the
+# registry never keeps a replaced breaker alive.
+_HEALTH_BREAKER_LOCK = threading.Lock()
+_HEALTH_BREAKER: weakref.ReferenceType[DrawdownCircuitBreaker] | None = None
+
+
+def register_drawdown_breaker_for_health(breaker: DrawdownCircuitBreaker | None) -> None:
+    """Make ``breaker`` the one reported by ``drawdown_breaker_health_section``."""
+    global _HEALTH_BREAKER
+    with _HEALTH_BREAKER_LOCK:
+        _HEALTH_BREAKER = weakref.ref(breaker) if breaker is not None else None
+
+
+def drawdown_breaker_health_section() -> dict[str, Any]:
+    """Return the ``drawdown_breaker`` health section; ``available`` is False if none is registered."""
+    with _HEALTH_BREAKER_LOCK:
+        ref = _HEALTH_BREAKER
+    breaker = ref() if ref is not None else None
+    if breaker is None:
+        return {'available': False, 'reason': 'not_initialized'}
+    return breaker.health_snapshot()
+
 
 class VolatilityCircuitBreaker:
     """

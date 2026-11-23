@@ -16,6 +16,8 @@ from ai_trading.config.launch_profiles import (
     resolve_launch_profile,
 )
 from ai_trading.config.management import get_env
+from ai_trading.logging import logger
+from ai_trading.logging.emit_once import emit_once
 from ai_trading.governance.paths import resolve_governance_base_path
 from ai_trading.settings import get_backup_data_provider
 from ai_trading.telemetry import runtime_state
@@ -1152,6 +1154,36 @@ def _manual_override_snapshot() -> dict[str, Any]:
     }
 
 
+def _drawdown_breaker_snapshot() -> dict[str, Any]:
+    """Return the informational drawdown-breaker section; never raises."""
+
+    unavailable: dict[str, Any] = {"available": False, "reason": "snapshot_failed"}
+    try:
+        from ai_trading.risk.circuit_breakers import drawdown_breaker_health_section
+    except ImportError:
+        emit_once(
+            logger,
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE:import_failed",
+            "warning",
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE",
+            reason="import_failed",
+        )
+        return unavailable
+    try:
+        return drawdown_breaker_health_section()
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        # Once per day per process: this runs on every health poll.
+        emit_once(
+            logger,
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE:snapshot_failed",
+            "warning",
+            "DRAWDOWN_BREAKER_HEALTH_UNAVAILABLE",
+            reason="snapshot_failed",
+            error=f"{exc.__class__.__name__}: {exc}",
+        )
+        return unavailable
+
+
 def _broker_account_configuration_snapshot() -> dict[str, Any]:
     """Return the cached read-only broker account-configuration check."""
 
@@ -1838,6 +1870,7 @@ def build_runtime_health_payload(
         "launch_profile": launch_profile_status,
         "provider_authority": provider_authority | {"ok": provider_authority_ok},
         "broker_account_configuration": broker_account_configuration,
+        "drawdown_breaker": _drawdown_breaker_snapshot(),
     }
     if readiness_failures:
         payload["reason"] = readiness_failures[0]

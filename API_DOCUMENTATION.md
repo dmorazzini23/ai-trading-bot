@@ -85,12 +85,48 @@ Representative response fields:
   },
   "quotes_status": {
     "allowed": true
+  },
+  "drawdown_breaker": {
+    "available": true,
+    "state": "closed",
+    "peak_equity": 101250.5,
+    "peak_set_at": "2026-11-20T15:31:04.512345+00:00",
+    "current_drawdown": 0.012,
+    "trip_threshold": 0.08,
+    "reset_threshold": 0.064,
+    "tripped_at": null,
+    "last_reading_at": "2026-11-21T20:59:01.123456+00:00",
+    "state_load": "restored",
+    "persisted_state_loaded": true,
+    "load_failure_reason": null,
+    "last_write_failed": false
   }
 }
 ```
 
 Notes:
 
+- `drawdown_breaker` is informational only and never changes `ok`, `status` or
+  the HTTP code. The account id is never included.
+- `state` is `closed`, `open`, or `unknown`. The saved state is read on the
+  first equity reading of a market cycle, so after a restart `state` is
+  `unknown` (not `closed`) until then, even if the saved file says open.
+- `state_load` is `not_configured` (no state file), `pending` (not read yet, or
+  the file was unreadable and is being retried; `load_failure_reason` is
+  `unreadable` in the latter case), `restored`, `fresh` (no file; a normal first
+  start), or `failed` (file rejected, fresh start; `load_failure_reason` is e.g.
+  `corrupt`, `account_mismatch`, `schema_mismatch`, `peak_invalid`).
+  `persisted_state_loaded` is true only for `restored`.
+- `last_write_failed` is true after a failed state-file write and false again
+  after the next successful write. `last_reading_at` is when the last accepted
+  equity reading arrived, so a stale `current_drawdown` is visible; it and
+  `peak_equity`/`current_drawdown` are `null` until the first reading.
+- The section is `{"available": false, "reason": "not_initialized" |
+  "snapshot_failed"}` when the breaker is absent or cannot be read.
+  `not_initialized` is what the main service shows until the bot context is
+  first built. The standalone health app (`RUN_HEALTHCHECK=1 python -m
+  ai_trading.app`) is a separate process and always shows `not_initialized`.
+  The snapshot reports in-memory state and never reads the state file.
 - The handler is designed to degrade gracefully rather than raising uncaught
   exceptions.
 - Health payloads may report `"status": "degraded"` while still returning HTTP

@@ -449,6 +449,20 @@ When investigating a degraded runtime, check:
 2. `/operator/control-plane` top-level fields:
    `rollout`, `service_state`, `attention_flags`, `broker_health`, and `data_provider`
 
+The `drawdown_breaker` section shows the drawdown circuit breaker's in-memory
+state (`state` closed/open/unknown, `peak_equity`, `peak_set_at`,
+`current_drawdown`, `last_reading_at`, `trip_threshold`, `tripped_at`) and how
+its saved state was handled (`state_load` of `restored`, `fresh`, `pending`,
+`failed` or `not_configured`, `persisted_state_loaded`, `load_failure_reason`,
+`last_write_failed`). `state` is `unknown` until the first equity reading of a
+market cycle, because the saved file is only read then: after a weekend restart
+it does not say `closed` for a breaker that was tripped. The section is
+informational: it never changes `ok`, `status` or the HTTP code.
+`{"available": false, "reason": "not_initialized"}` is normal in the main
+service until the bot context is first built, and always so in the standalone
+health app (`RUN_HEALTHCHECK=1`), which is a separate process. See
+`API_DOCUMENTATION.md` for field semantics.
+
 The shared health payload also exposes `operating_mode`. When its mode is
 `paper_diagnostics_only`, the configured paper diagnostic path is enabled but
 the required governed model remains unavailable. Diagnostic trades are not
