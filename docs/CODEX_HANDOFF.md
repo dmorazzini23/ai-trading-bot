@@ -1,6 +1,46 @@
 # Current handoff
 
-## November 22: breaker persistence and Phase 4 merged; four-change deploy approved (`7dffb1379`) (start here)
+## November 23: breaker health section merged; five-change deploy approved (`90df63509`) (start here)
+
+- **Running service:** still `d22babac4`. Nothing was restarted.
+- **Approved deploy (owner, Nov 23):** the restart after the close on Mon
+  Nov 23 now carries five changes: the four in the next section plus the
+  breaker health section. Same condition (clean session first), same
+  approved config hash (`49f5e469...`; this change adds no settings).
+- **Change (`claude/breaker-health`, 2 commits):** `/healthz` and `/health`
+  gain an informational `drawdown_breaker` section (state, peak, drawdown,
+  thresholds, `last_reading_at`, `state_load`, `last_write_failed`). It
+  never changes `ok`, `status` or the HTTP code and omits the account id.
+  `state` is `unknown` until the first equity reading of a market cycle
+  loads the saved file; the section is `not_initialized` until the bot
+  context is built, and always in the standalone health app. See
+  `API_DOCUMENTATION.md`.
+- **Validation:** full suite 6836 passed, 2 skipped; decision baseline
+  unchanged (`02fa7cd4...`); independent review (no must-fix; follow-ups
+  done); trip-and-restart probe on the final code. The follow-up commit had
+  no second independent review.
+- **Correction:** the exit-pricing section below says an unfilled closing
+  order is never cancelled or repriced. That is wrong. A trace on Nov 22
+  (no code written; branch `claude/exit-reprice` is empty) found: the
+  pending-new timeout policy replaces a stale order 6 bps wider at 20 s and
+  cancels by 90 s on paper (`live_trading.py`, `replace_widen` in `.env`);
+  the stale sweep cancels any open order after 75 s in both modes
+  (`pending_order_runtime.py`), and the next cycle resubmits at the current
+  quote; a symbol with a resting order is dropped from the netting cycle.
+  Neither mechanism fired between Nov 2 and Nov 22 (journal).
+- **Real-money checklist (owner deferred these on Nov 23; resolve or accept
+  before any real-money switch):** (1) the 75 s sweep does not confirm the
+  cancel before the symbol is released, so after a failed sync a
+  resubmitted sell is clipped only by a stale open-order index, and a short
+  cover is not clipped against open buys at all; (2) the timeout policy
+  refuses to cancel verified closing orders in real-money mode
+  (`LIVE_CLOSING_ORDER_CANCEL_SUPPRESSED`) but the sweep cancels them;
+  (3) a partly filled exit rests up to 15 minutes before the sweep takes
+  it; (4) the paper replace helper prices off the old limit, skips pretrade
+  and never reads the position. See also `docs/SUPPORTED_TRADING_PATH.md`
+  on held replacements.
+
+## November 22: breaker persistence and Phase 4 merged; four-change deploy approved (`7dffb1379`)
 
 - **Running service:** still `d22babac4` (position backstop). Nothing was
   restarted.
