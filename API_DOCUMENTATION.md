@@ -43,8 +43,9 @@ Settings keys (names only; see `docs/OPERATIONS.md`):
 - `AI_TRADING_OPERATOR_TOKEN_MAP`: per-operator tokens. When it is set, the
   token must match the entry for the operator id.
 - `AI_TRADING_OPERATOR_API_TOKEN` with `AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN`:
-  a shared token. It is accepted only for read routes while
-  `AI_TRADING_OPERATOR_READERS` is empty, and never for the mutating routes.
+  a shared token. It is accepted only when `AI_TRADING_OPERATOR_TOKEN_MAP` is
+  empty, and only for read routes while `AI_TRADING_OPERATOR_READERS` is
+  empty. It is never accepted for the mutating routes.
 - Allowlists: `AI_TRADING_OPERATOR_READERS` (optional, read routes),
   `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS` (manual-override `POST` and
   `DELETE`), `AI_TRADING_OPERATOR_APPROVERS` (governance approval) and

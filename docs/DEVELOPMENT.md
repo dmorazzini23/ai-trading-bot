@@ -39,7 +39,7 @@ approval.
 # requirements-dev.txt and requirements-test.txt, then installs the package)
 make install-dev
 
-# Production and dev requirements into the current interpreter (no venv)
+# Production and dev requirements into $(PYTHON): the repo venv if present, otherwise python3
 make ensure-runtime
 
 # Manual installation
@@ -80,7 +80,8 @@ Tests are configured via `pytest.ini`:
 
 ### Test Markers
 
-Defined in `pyproject.toml`:
+Listed in `pyproject.toml`. pytest reads `pytest.ini`, which declares no
+markers, so these are not registered:
 
 - `@pytest.mark.slow` - Long-running tests
 - `@pytest.mark.integration` - Tests that need network or vendor APIs

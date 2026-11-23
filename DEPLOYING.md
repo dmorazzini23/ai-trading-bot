@@ -95,8 +95,7 @@ Rejected deprecated aliases (startup fails when any is set; the list is
 | `NEWS_API_KEY` | `SENTIMENT_API_KEY` |
 
 `DATA_FEED` is deprecated but not rejected: it is still read as an alias for
-`ALPACA_DATA_FEED`, and the config loader logs `CONFIG_ENV_DEPRECATED` when it
-falls back to it. Use `ALPACA_DATA_FEED`.
+`ALPACA_DATA_FEED`. Use `ALPACA_DATA_FEED`.
 
 ## Feed Configuration
 

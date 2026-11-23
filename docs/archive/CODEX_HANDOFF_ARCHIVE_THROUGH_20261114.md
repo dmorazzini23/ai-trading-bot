@@ -1534,7 +1534,7 @@ failover remain untested.
 
 The owner installed the packaged two-minute heartbeat service and timer; unit
 files match the reviewed copies. Manual and scheduled runs through 04:00 UTC
-published `responding: true`. In Ohio account `399705375437`, the owner created
+published `responding: true`. In Ohio account `<aws-account-id>`, the owner created
 `ai-trading-primary-host-failure`; CloudShell read-back confirmed its
 `AITrading/Host` metric, `Host=ai-trading-primary`, Minimum over 180 seconds,
 two of two below one, missing data breaching and both transitions routed to

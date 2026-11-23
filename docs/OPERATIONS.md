@@ -75,8 +75,8 @@ the service does not start. The spec must hold exactly these fields:
 - `schema_revision`: the checkout's single Alembic head equals the spec; the
   pre-migration phase also accepts an older applied revision on that history,
   the normal phase requires the applied revision to equal the spec.
-- `model_artifact`: the SHA-256 of `model_artifact.path` under
-  `--models-root` equals `model_artifact.sha256`.
+- `model_artifact`: the SHA-256 of `model_artifact.path` (a relative path
+  inside `--models-root`) equals `model_artifact.sha256`.
 - `model_path_matches_runtime`: that file is the one `AI_TRADING_MODEL_PATH`
   names.
 
@@ -119,16 +119,30 @@ Safe deploy order (as `aiuser`, outside market hours):
    and set `AI_TRADING_DATA_DIR` to a scratch directory so the run writes
    nothing under `/var/lib/ai-trading-bot`.
 
+   The tool finds the database from `DATABASE_URL` or
+   `AI_TRADING_OMS_INTENT_STORE_PATH` (default `runtime/oms_intents.db`,
+   relative to the current directory). If neither is absolute in the runtime
+   env, export
+   `AI_TRADING_OMS_INTENT_STORE_PATH=/home/aiuser/ai-trading-bot/runtime/oms_intents.db`
+   (the path the unit uses) for the dry run, and check that
+   `observed.schema_revision` is not null.
+
    If the candidate adds a migration, the normal run can pass
    `schema_revision` only after the migration, which the unit runs between
    the two checks.
 2. Back up the live spec, for example
    `cp -p /var/lib/ai-trading-bot/runtime/release_spec.json /var/lib/ai-trading-bot/runtime/release_spec.json.bak`.
-3. Check out the candidate commit in `/home/aiuser/ai-trading-bot` and confirm
+3. `sudo systemctl stop ai-trading.service`, so the running process cannot
+   load new code or restart against a spec that does not match yet.
+4. Check out the candidate commit in `/home/aiuser/ai-trading-bot` and confirm
    `git status --porcelain` is empty.
-4. Update the live spec with the reviewed values.
-5. `sudo systemctl restart ai-trading.service`, then check both report files
+5. Update the live spec with the reviewed values.
+6. `sudo systemctl start ai-trading.service`, then check both report files
    and `curl -sS http://127.0.0.1:9001/healthz`.
+
+Rollback: stop the service, check out the previous commit, restore the spec
+backup, start the service. After five failed starts within 300 seconds, run
+`sudo systemctl reset-failed ai-trading.service` before starting again.
 
 See [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md) for the reviewed-evidence
 requirements.

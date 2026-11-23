@@ -25,7 +25,7 @@ sudo systemctl status ai-trading.service
 
 # 2. Verify configuration
 ./venv/bin/python -m ai_trading.tools.env_validate
-curl -s http://127.0.0.1:9001/diag | jq .
+curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" http://127.0.0.1:9001/diag | jq .
 
 # 3. Check health (packaged service serves /healthz on :9001)
 curl -sS http://127.0.0.1:9001/healthz | jq .
@@ -105,7 +105,7 @@ Packaged services copy `/home/aiuser/ai-trading-bot/.env` to `/run/ai-trading-bo
 
 1. Define the full endpoint explicitly, e.g. `ALPACA_TRADING_BASE_URL=https://api.alpaca.markets` (production) or `https://paper-api.alpaca.markets` (paper trading).
 2. For the packaged service, edit `.env` and restart: `sudo systemctl restart ai-trading.service`. Do not add a second env source under `/etc/ai-trading-bot`.
-3. Run `./venv/bin/python -m ai_trading.tools.env_validate` to confirm the environment passes validation.
+3. Run `./venv/bin/python -m ai_trading.tools.env_validate` to confirm the required keys are set and the two retired URL aliases are absent (it does not check the full alias table).
 
 **Verification:**
 
