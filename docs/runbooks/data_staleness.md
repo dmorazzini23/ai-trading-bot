@@ -18,11 +18,16 @@ sudo journalctl -u ai-trading.service --since "30 min ago" --no-pager | \
 grep -E 'EMPTY_DATA|BACKUP_PROVIDER_USED|PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE|DATA_SOURCE_FALLBACK'
 ```
 
-2. Verify health endpoint state:
+2. Verify health endpoint state on the packaged service, which serves
+   `/healthz` on the API port `:9001`:
 
 ```bash
-curl -sS http://127.0.0.1:${HEALTHCHECK_PORT:-8081}/healthz | jq .
+curl -sS http://127.0.0.1:9001/healthz | jq .
 ```
+
+   If you run the standalone health app (`RUN_HEALTHCHECK=1 python -m
+   ai_trading.app`) instead, query its own port:
+   `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT:-8081}/healthz | jq .`
 
 3. Tighten degraded execution temporarily:
 

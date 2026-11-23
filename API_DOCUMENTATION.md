@@ -23,6 +23,38 @@ The standalone health app is launched with:
 RUN_HEALTHCHECK=1 python3 -m ai_trading.app
 ```
 
+The standalone health app registers only `/healthz` and `/metrics`.
+
+## Authentication
+
+`/health` and `/healthz` are unauthenticated. `/metrics` has its own access
+control (see below). `/diag` and every `/operator/*` route require operator
+authentication and fail closed when it is not configured.
+
+Each request must send:
+
+- `Authorization: Bearer <token>`
+- `X-AI-Trading-Operator-Id: <operator-id>` (`X-Operator-Id` is also accepted)
+
+The examples below use `$OPERATOR_TOKEN` and `$OPERATOR_ID` as placeholders.
+
+Settings keys (names only; see `docs/OPERATIONS.md`):
+
+- `AI_TRADING_OPERATOR_TOKEN_MAP`: per-operator tokens. When it is set, the
+  token must match the entry for the operator id.
+- `AI_TRADING_OPERATOR_API_TOKEN` with `AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN`:
+  a shared token. It is accepted only for read routes while
+  `AI_TRADING_OPERATOR_READERS` is empty, and never for the mutating routes.
+- Allowlists: `AI_TRADING_OPERATOR_READERS` (optional, read routes),
+  `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS` (manual-override `POST` and
+  `DELETE`), `AI_TRADING_OPERATOR_APPROVERS` (governance approval) and
+  `AI_TRADING_OPERATOR_ROLLBACK_OPERATORS` (governance rollback). The last
+  three are required for their routes.
+
+Error responses: `401` for a missing bearer token, `400` for a missing operator
+id header, `403` for a rejected token or an operator outside the allowlist, and
+`503` when authentication or a required allowlist is not configured.
+
 ## Health Routes
 
 ### `GET /health`
@@ -66,7 +98,9 @@ Example:
 curl -s http://127.0.0.1:9001/healthz | jq .
 ```
 
-Representative response fields:
+Representative response fields (the payload has more top-level fields, for
+example `service_state`, `attention_flags`, `operating_mode`,
+`launch_profile`, `provider_authority` and `day_sleeve_model`):
 
 ```json
 {
@@ -147,17 +181,39 @@ Behavior:
 - Returns `200` with Prometheus text when metrics are available.
 - Returns `501` with `metrics unavailable` when the metrics backend is not
   available.
+- Returns `503` with `metrics temporarily unavailable` when generating the
+  metrics text fails.
+
+Access control:
+
+- Callers whose remote address is in `AI_TRADING_METRICS_ALLOWED_REMOTE_ADDRS`
+  (comma-separated addresses or CIDR networks; default `127.0.0.1,::1`) are
+  allowed.
+- Other callers must send `Authorization: Bearer <token>` matching
+  `AI_TRADING_METRICS_BEARER_TOKEN`. Without a match the route returns `403`
+  with `metrics access denied` and logs `PROM_METRICS_ACCESS_REJECTED`.
+- `AI_TRADING_METRICS_ALLOW_UNAUTHENTICATED=1` turns the check off.
+
+Remote example:
+
+```bash
+curl -s -H "Authorization: Bearer $METRICS_TOKEN" http://<host>:9001/metrics
+```
 
 ## Diagnostics Route
 
 ### `GET /diag`
 
 Environment and Alpaca diagnostics from `ai_trading.diagnostics.env_diag`.
+Requires operator authentication.
 
 Example:
 
 ```bash
-curl -s http://127.0.0.1:9001/diag | jq .
+curl -s \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  http://127.0.0.1:9001/diag | jq .
 ```
 
 Representative response:
@@ -179,6 +235,9 @@ Representative response:
 
 ## Operator Routes
 
+Every route in this section requires operator authentication (see
+[Authentication](#authentication)).
+
 ### `GET /operator/presets`
 
 Returns the available guarded operator presets.
@@ -186,7 +245,10 @@ Returns the available guarded operator presets.
 Example:
 
 ```bash
-curl -s http://127.0.0.1:9001/operator/presets | jq .
+curl -s \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  http://127.0.0.1:9001/operator/presets | jq .
 ```
 
 Representative response:
@@ -211,10 +273,14 @@ Representative response:
 
 ### `GET /operator/plan`
 
-Returns the default guarded plan for the `balanced` preset.
+Returns the default guarded plan for the `balanced` preset. This route is
+`GET` only; there is no `POST /operator/plan`.
 
 ```bash
-curl -s http://127.0.0.1:9001/operator/plan | jq .
+curl -s \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  http://127.0.0.1:9001/operator/plan | jq .
 ```
 
 Representative response:
@@ -231,48 +297,15 @@ Representative response:
 }
 ```
 
-### `POST /operator/plan`
-
-Validates a requested preset and optional overrides.
-
-Example request:
-
-```bash
-curl -s \
-  -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{"preset":"balanced","overrides":{"max_positions":8,"capital_cap":0.05}}' \
-  http://127.0.0.1:9001/operator/plan | jq .
-```
-
-Success response:
-
-```json
-{
-  "ok": true,
-  "plan": {
-    "name": "balanced",
-    "max_positions": 8,
-    "capital_cap": 0.05
-  }
-}
-```
-
-Validation failure response:
-
-```json
-{
-  "ok": false,
-  "error": "capital_cap must be between ..."
-}
-```
-
 ### `GET /operator/control-plane`
 
 Returns a consolidated runtime control-plane snapshot.
 
 ```bash
-curl -s http://127.0.0.1:9001/operator/control-plane | jq .
+curl -s \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  http://127.0.0.1:9001/operator/control-plane | jq .
 ```
 
 Representative top-level snapshot fields:
@@ -290,6 +323,68 @@ Representative top-level snapshot fields:
   }
 }
 ```
+
+### `GET /operator/control-plane/<section>`
+
+Returns one control-plane section as `{"ok": true, "section": ..., "data":
+...}`. Read auth. Sections: `rollout`, `broker-health`, `positions`,
+`open-orders`, `execution-quality`, `circuit-breakers`, `liveness`,
+`manual-overrides`, `services`.
+
+```bash
+curl -s \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  http://127.0.0.1:9001/operator/control-plane/broker-health | jq .
+```
+
+### `POST /operator/control-plane/manual-overrides`
+
+Persists manual runtime overrides. Requires a per-operator token and an
+operator listed in `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS`. The JSON body
+must contain `disabled_slices` (a list); `diagnostics` (an object) and
+`source_updated_at` are optional. A missing or invalid body returns `400`.
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  -H 'Content-Type: application/json' \
+  -d '{"disabled_slices": []}' \
+  http://127.0.0.1:9001/operator/control-plane/manual-overrides | jq .
+```
+
+### `DELETE /operator/control-plane/manual-overrides`
+
+Clears the manual overrides. Same auth and allowlist as the `POST` route.
+
+### `GET /operator/governance`
+
+Returns the governance snapshot (approvals, scorecards and rollback audit).
+Read auth.
+
+```bash
+curl -s \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" \
+  http://127.0.0.1:9001/operator/governance | jq .
+```
+
+### `POST /operator/governance/approval`
+
+Records a governance approval or rejection checkpoint. Requires a per-operator
+token and an operator listed in `AI_TRADING_OPERATOR_APPROVERS`. The JSON body
+must contain `strategy` and `model_id` (otherwise `400`); `decision` (default
+`approved`), `note` and `ticket` are optional. The approver is the
+authenticated operator id.
+
+### `POST /operator/governance/rollback`
+
+Rolls a strategy back to its previous production model. Requires a
+per-operator token and an operator listed in
+`AI_TRADING_OPERATOR_ROLLBACK_OPERATORS`. The JSON body must contain
+`strategy` (otherwise `400`); `reason` and `force` (default true) are
+optional. Returns `200` when the rollback happened and `409` when it did not.
 
 ## Not Currently Documented As Public API
 

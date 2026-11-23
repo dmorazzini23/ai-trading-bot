@@ -34,7 +34,15 @@ logging, validation, and AI-assisted edits.
 
 ## Validation
 
-For runtime or library changes, run and report:
+For runtime or library changes, run and report the default post-change
+validation (see AGENTS.md section 4 for the `--market-hours`, `--full` and
+`--docs-only` variants):
+
+```bash
+bash scripts/agent_validate_changed.sh
+```
+
+Explicit full validation runs:
 
 ```bash
 ./venv/bin/pytest -q

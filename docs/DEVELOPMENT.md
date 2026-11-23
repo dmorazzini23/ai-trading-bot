@@ -15,13 +15,14 @@ make install-dev
 # Validate environment
 make validate-env
 
-# Run tests (installs requirements if needed)
-make test-all
-
-# Lint and tests directly
-ruff check .
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+# Default validation after a change (changed-file lint/type/compile checks,
+# mapped regression tests, forbidden-pattern scan, runtime smoke checks)
+bash scripts/agent_validate_changed.sh
 ```
+
+See AGENTS.md section 4 for the variants (`--market-hours`, `--full`,
+`--docs-only`). Do not run the broad test suite during market hours without
+approval.
 
 ## Dependency Management
 
@@ -34,11 +35,12 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ### Installing Dependencies
 
 ```bash
-# Production dependencies only
-make install
-
-# Development dependencies (includes production)
+# Development dependencies (creates venv/ if missing, installs
+# requirements-dev.txt and requirements-test.txt, then installs the package)
 make install-dev
+
+# Production and dev requirements into the current interpreter (no venv)
+make ensure-runtime
 
 # Manual installation
 python -m pip install -U pip
@@ -51,20 +53,18 @@ pip install -r requirements-dev.txt
 ### Available Test Commands
 
 ```bash
-# Run all tests with validation (installs requirements)
+# Default validation after a change
+bash scripts/agent_validate_changed.sh
+
+# Full suite without slow, integration or credentials-marked tests
+# (installs requirements first; skip with SKIP_INSTALL=1)
 make test-all
 
-# Run tests quickly (fail fast)
-make test-fast
+# Everything, including slow/integration/credentials-marked tests
+make test-all-heavy
 
-# Run tests in CI mode (fewer failures, shorter output)
-make test-ci
-
-# Run tests with coverage
-make coverage
-
-# Run benchmarks only
-make benchmark
+# Targeted smoke subset
+make smoke
 
 # Validate environment dependencies
 make validate-env
@@ -73,17 +73,18 @@ make validate-env
 ### Test Configuration
 
 Tests are configured via `pytest.ini`:
-- 30-second timeout for individual tests
-- Excludes slow tests by default (use `-m slow` to include)
-- Parallel execution with pytest-xdist
-- Warning filters to reduce noise
+- No per-test timeout (`timeout = 0`); `faulthandler_timeout = 120` dumps stacks for hung tests
+- `addopts = -ra`; tests run serially (the xdist preload was dropped)
+- `filterwarnings = error`, with a few ignores
+- `make test-all` additionally deselects slow, integration and credentials-marked tests with `-m`
 
 ### Test Markers
 
+Defined in `pyproject.toml`:
+
 - `@pytest.mark.slow` - Long-running tests
-- `@pytest.mark.smoke` - Quick smoke tests  
-- `@pytest.mark.benchmark` - Performance benchmarks
-- `@pytest.mark.integration` - Integration tests
+- `@pytest.mark.integration` - Tests that need network or vendor APIs
+- `@pytest.mark.no_test_credentials` - Run without globally injected Alpaca test credentials
 
 ## Code Quality
 
@@ -93,11 +94,9 @@ Tests are configured via `pytest.ini`:
 # Run linting
 make lint
 
-# Run type checking
-make mypy-check
-
-# Run both
-make check
+# Type checking
+./venv/bin/mypy
+bash scripts/typecheck_strict.sh
 ```
 
 ### Configuration Files
@@ -148,8 +147,9 @@ make install-dev
 ```
 
 **Tests timing out**
-- Increase timeout in `pytest.ini`
-- Use `make test-fast` for quicker feedback
+- Tests have no default timeout (`timeout = 0` in `pytest.ini`); run the
+  affected test file directly, or use `bash scripts/agent_validate_changed.sh`
+  for the mapped regression tests
 
 **Import errors in tests**
 - Ensure `PYTHONPATH=.` is set (handled by Makefile)
@@ -179,20 +179,20 @@ pip install --timeout 60 -r requirements-dev.txt
 1. Install development dependencies: `make install-dev`
 2. Validate environment: `make validate-env`
 3. Run linting: `make lint`
-4. Run tests: `make test-all`
-5. Check coverage: `make coverage`
+4. Run the default validation: `bash scripts/agent_validate_changed.sh`
+   (use `--full` for explicit full validation outside market hours)
 
 ### Adding New Dependencies
 
 1. **Production dependencies**: Add to `requirements.txt`
 2. **Development dependencies**: Add to `requirements-dev.txt`
 3. **Update pyproject.toml** if needed
-4. **Test the change**: `make validate-env && make test-all`
+4. **Test the change**: `make validate-env && bash scripts/agent_validate_changed.sh`
 
 ## Python Version
 
-This project requires **Python 3.12.3** exactly. This is enforced in:
-- `pyproject.toml` (`requires-python = "==3.12.3"`)
+This project requires Python 3.12. This is enforced in:
+- `pyproject.toml` (`requires-python = ">=3.12,<3.13"`)
 - All GitHub Actions workflows
 - Production deployment scripts
 

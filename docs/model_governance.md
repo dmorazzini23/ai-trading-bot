@@ -27,55 +27,48 @@ Development → Registry → Shadow Testing → Production
 Ensure model-data compatibility by tracking dataset fingerprints and preventing deployment with incompatible data.
 
 ### Implementation
-- Computes hash from dataset paths, sizes, and modification times
-- Includes content samples for small files (< 10MB)
-- Stored in model metadata during registration
-- Verified during model loading
+- The caller supplies a `dataset_fingerprint` string when registering a model
+  (`ModelRegistry.register_model` in `ai_trading/model_registry.py`); the
+  registry stores it with the model entry and does not compute it.
+- `load_model` checks it only when `verify_dataset_hash=True` is passed
+  (default `False`), comparing the stored value to `expected_dataset_fingerprint`.
 
 ### Usage Examples
 
 ```python
 from ai_trading.model_registry import ModelRegistry
-from ai_trading.governance.promotion import ModelPromotion
 
-# Register model with dataset governance
+# Register model with a dataset fingerprint
 registry = ModelRegistry()
 model_id = registry.register_model(
-    model=trained_model,
-    strategy='momentum',
-    model_type='lightgbm',
+    trained_model,
+    'momentum',
+    'lightgbm',
     metadata={'version': '1.2.3'},
-    dataset_paths=[
-        '/data/features/train.parquet',
-        '/data/labels/targets.parquet'
-    ]
+    dataset_fingerprint=train_fingerprint,
 )
 
-# Load with dataset verification (default)
+# Load with dataset verification
 model, metadata = registry.load_model(
-    model_id=model_id,
+    model_id,
     verify_dataset_hash=True,
-    current_dataset_paths=[
-        '/data/features/live.parquet',
-        '/data/labels/live_targets.parquet'  
-    ]
+    expected_dataset_fingerprint=live_fingerprint,
 )
 ```
 
 ### Hash Mismatch Handling
 ```python
-# Allow dataset mismatch with environment variable
-import os
-os.environ['ALLOW_DATASET_MISMATCH'] = '1'
-
-# Or catch and handle mismatch
+# A missing or different fingerprint raises ValueError
 try:
-    model, metadata = registry.load_model(model_id, verify_dataset_hash=True)
+    model, metadata = registry.load_model(
+        model_id,
+        verify_dataset_hash=True,
+        expected_dataset_fingerprint=live_fingerprint,
+    )
 except ValueError as e:
-    if "Dataset hash mismatch" in str(e):
-        # Handle mismatch appropriately
-        print(f"Dataset changed: {e}")
-        # Retrain model or accept risk
+    # "Dataset fingerprint mismatch" or "Dataset fingerprint missing for model"
+    print(f"Dataset changed: {e}")
+    # Retrain model or accept risk
 ```
 
 ## Shadow Testing
@@ -235,9 +228,8 @@ models/
   "model_hash": "abc123def456",
   "strategy": "momentum",
   "model_type": "lightgbm",
-  "registration_time": "2024-12-07T10:30:00Z",
-  "dataset_hash": "a1b2c3d4",
-  "dataset_paths": ["/data/train.parquet"],
+  "registered_at": "2024-12-07T10:30:00+00:00",
+  "dataset_fingerprint": "a1b2c3d4",
   "governance": {
     "status": "shadow",
     "shadow_start_time": "2024-12-07T11:00:00Z",

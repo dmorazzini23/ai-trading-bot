@@ -28,6 +28,12 @@ Installed hook packages:
 - `aitmpl-codex--automation--change-logger`: logs file mutations and
   non-read-only Bash commands to `.codex/critical_log_changes.csv`. The project
   copy redacts common secret patterns before persisting command snippets.
+- `aitmpl-codex--quality-gates--plan-gate`: `PreToolUse` hook on `Edit`,
+  `MultiEdit` and `Write`. Warns when source code is edited and no
+  `*.spec.md` file modified in the last 14 days exists. Non-blocking.
+- `aitmpl-codex--quality-gates--scope-guard`: `Stop` hook. Warns when
+  git-modified files fall outside the files declared in a recent `*.spec.md`.
+  Non-blocking, and silent when no spec exists.
 
 ## Installed Skills
 
@@ -52,7 +58,7 @@ Existing project skills remain:
 - `trading-ops-runbook`
 - `trading-ops-shift`
 
-## Installed Plugin
+## Installed Plugins
 
 The project plugin marketplace file is:
 
@@ -64,6 +70,8 @@ Installed plugin:
 
 - `sentry`: official OpenAI plugin for Sentry issue/event triage. It requires
   Sentry authentication before it can inspect project issues.
+- `hugging-face`: inspect models, datasets, Spaces, and research. It is
+  registered in the marketplace file but disabled in `.codex/config.toml`.
 
 ## Rules For Future Agents
 
@@ -87,13 +95,16 @@ Run:
 bash scripts/verify_codex_marketplace_guardrails.sh
 ```
 
-This checks that the expected hook, skill, and plugin files exist and that
-forbidden hook types were not installed.
+This checks that the original five hooks, the five installed skills, and the
+`sentry` plugin files exist and that forbidden hook types were not installed.
+It does not check for `plan-gate`, `scope-guard` or the `hugging-face` plugin.
 
 ## Rollback
 
 To remove a project-scoped hook or skill, delete its directory under
 `.codex/hooks` or `.codex/skills` and remove the matching entry from
-`.codex/hooks.json` when applicable. To remove the Sentry plugin, remove the
-`sentry` entry from `.agents/plugins/marketplace.json` and delete
-`plugins/sentry`.
+`.codex/hooks.json` when applicable (`plan-gate` has three entries under
+`PreToolUse`, `change-logger` has four under `PostToolUse`, `scope-guard` has
+one under `Stop`). To remove a plugin (`sentry` or `hugging-face`), remove its
+entry from `.agents/plugins/marketplace.json` and delete `plugins/<name>`; for
+`hugging-face` also remove its override in `.codex/config.toml`.

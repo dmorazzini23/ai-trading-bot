@@ -5,6 +5,16 @@ repeatable after-hours operating loop. It creates artifacts for Slack
 and operators to read; it does not promote production models or enable live
 capital automatically.
 
+> **Research reset in effect.** While `config/research_reset.json` has
+> `"enabled": true`, every scheduled or automatic cadence (anything other than
+> `manual`) runs only the three reset steps, `broker_accounting_evidence`,
+> `paper_evidence_review` and `research_reset_scorecard`, instead of the
+> cadences described below (`build_research_steps` in
+> `ai_trading/tools/research_automation.py`). The `strategy-change` workflow is
+> reduced the same way. Scheduled or automatic training is forbidden under the
+> research reset (AGENTS.md section 8, `docs/RESEARCH_RESET.md`). Read the
+> cadence sections below as the behavior outside the reset.
+
 ## Cadence
 
 Daily after market close:

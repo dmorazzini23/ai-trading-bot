@@ -1,6 +1,6 @@
 # Trading System Checklist
 
-Last reviewed: `2026-04-20`
+Last reviewed: `2026-04-20` (links to removed core modules cleaned up `2026-11-23`)
 
 This is the repo-specific version of "what good looks like" for this trading
 system. It is organized into:
@@ -203,11 +203,9 @@ execution, persistence, and operator recovery.
   - [ai_trading/core/pending_order_runtime.py](../ai_trading/core/pending_order_runtime.py)
   instead of keeping the runtime-state mutation and backlog-control flow
   expanded inline in `bot_engine.py`.
-- The pre-run candidate-universe/degraded-provider runtime now also lives
-  outside the main engine file in:
-  - [ai_trading/core/prepare_run_runtime.py](../ai_trading/core/prepare_run_runtime.py)
-  instead of keeping `_prepare_run(...)` and degraded candidate truncation
-  expanded inline in `bot_engine.py`.
+- The pre-run candidate-universe/degraded-provider runtime was moved out of
+  `bot_engine.py`; its separate module (`prepare_run_runtime.py`) has since
+  been removed.
 - The execution runtime metadata helpers now also live outside the main engine
   file in:
   - [ai_trading/core/execution_runtime_metadata.py](../ai_trading/core/execution_runtime_metadata.py)
@@ -219,11 +217,9 @@ execution, persistence, and operator recovery.
   application now also lives outside the main engine file in:
   - [ai_trading/core/netting_target_runtime.py](../ai_trading/core/netting_target_runtime.py)
   instead of keeping that target-construction glue inline in `bot_engine.py`.
-- The remaining multi-strategy allocation/execution loop and symbol
-  screening cycle now also live outside the engine file in:
-  - [ai_trading/core/strategy_cycle.py](../ai_trading/core/strategy_cycle.py)
-  instead of keeping `run_multi_strategy(...)` and `_process_symbols(...)`
-  expanded inline in `bot_engine.py`.
+- The multi-strategy allocation/execution loop and symbol screening cycle
+  were moved out of `bot_engine.py`; their separate module
+  (`strategy_cycle.py`) has since been removed.
 
 Verdict:
 - `Completed`
@@ -389,8 +385,8 @@ Recent engine-thinning completions now include:
   - [ai_trading/core/netting_rank_runtime.py](../ai_trading/core/netting_rank_runtime.py)
 - OMS durability and execution-context assembly through:
   - [ai_trading/core/netting_execution_runtime.py](../ai_trading/core/netting_execution_runtime.py)
-- legacy halted-position control-plane handling through:
-  - [ai_trading/core/position_risk_runtime.py](../ai_trading/core/position_risk_runtime.py)
+- legacy halted-position control-plane handling (its module,
+  `position_risk_runtime.py`, has since been removed)
 - remaining startup/scheduler/control-plane glue through:
   - [ai_trading/core/startup_runtime.py](../ai_trading/core/startup_runtime.py)
 - bounded runtime incident-drill hardening across:

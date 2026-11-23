@@ -12,7 +12,13 @@
 
 ## Validation
 
-Required for runtime or library changes:
+Required for runtime or library changes (default; see AGENTS.md section 4 for variants):
+
+```bash
+bash scripts/agent_validate_changed.sh
+```
+
+Explicit full validation:
 
 ```bash
 ./venv/bin/pytest -q

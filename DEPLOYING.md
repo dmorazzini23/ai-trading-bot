@@ -12,9 +12,18 @@ sudo systemctl enable --now ai-trading.timer
 sudo systemctl status ai-trading.service
 ```
 
-The timer schedules the bot around the market session. If the service starts
-outside market hours, the runtime waits for the next NYSE session unless
+`ai-trading.timer` starts the service Mon..Fri at 09:30 America/New_York; once
+running, the service uses `Restart=always`. If the service starts outside
+market hours, the runtime waits for the next NYSE session unless
 `ALLOW_AFTER_HOURS=1` is set.
+
+The unit refuses to start unless
+`/var/lib/ai-trading-bot/runtime/release_spec.json` matches the checkout
+(clean, at `tested_commit_sha`), config, launch profile, schema and model. Any
+ConfigSpec change alters `resolved_config_hash` and blocks startup until the
+spec is updated. Follow "Release Identity Check" in
+[docs/OPERATIONS.md](docs/OPERATIONS.md) for the checks and the safe deploy
+order before every restart onto a new commit.
 
 ## Environment Sync
 
@@ -62,10 +71,32 @@ path, setting it requires `HEALTHCHECK_PORT` to differ from `API_PORT`.
 | `AI_TRADING_CAPITAL_CAP` | Capital allocation guardrail |
 | `DOLLAR_RISK_LIMIT` | Per-position risk guardrail |
 
-Rejected deprecated aliases:
+Rejected deprecated aliases (startup fails when any is set; the list is
+`_CANONICAL_ENV_MAP` in `ai_trading/config/management.py`):
 
-- `ALPACA_API_URL`
-- `ALPACA_BASE_URL`
+| Rejected alias | Use instead |
+| --- | --- |
+| `ALPACA_API_URL`, `ALPACA_BASE_URL` | `ALPACA_TRADING_BASE_URL` |
+| `ALPACA_DATA_URL` | `ALPACA_DATA_BASE_URL` |
+| `TRADING_MODE` | `AI_TRADING_TRADING_MODE` |
+| `CAPITAL_CAP` | `AI_TRADING_CAPITAL_CAP` |
+| `DAILY_LOSS_LIMIT` | `AI_TRADING_DAILY_LOSS_LIMIT` |
+| `MAX_POSITION_SIZE`, `AI_TRADING_MAX_POSITION_SIZE` | `AI_TRADING_SIGNAL_MAX_POSITION_SIZE` |
+| `TAKE_PROFIT_FACTOR` | `AI_TRADING_TAKE_PROFIT_FACTOR` |
+| `BUY_THRESHOLD` | `AI_TRADING_BUY_THRESHOLD` |
+| `CONF_THRESHOLD` | `AI_TRADING_CONF_THRESHOLD` |
+| `MIN_CONFIDENCE` | `AI_TRADING_MIN_CONFIDENCE` |
+| `KELLY_FRACTION` | `AI_TRADING_KELLY_FRACTION` |
+| `KELLY_FRACTION_MAX` | `AI_TRADING_KELLY_FRACTION_MAX` |
+| `SIGNAL_CONFIRMATION_BARS` | `AI_TRADING_SIGNAL_CONFIRMATION_BARS` |
+| `AI_TRADING_MAX_DRAWDOWN_THRESHOLD` | `MAX_DRAWDOWN_THRESHOLD` |
+| `AI_TRADING_ALLOW_SHORT` | `TRADING__ALLOW_SHORTS` |
+| `AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO` | `EXECUTION_ALLOW_FALLBACK_WITHOUT_NBBO` |
+| `NEWS_API_KEY` | `SENTIMENT_API_KEY` |
+
+`DATA_FEED` is deprecated but not rejected: it is still read as an alias for
+`ALPACA_DATA_FEED`, and the config loader logs `CONFIG_ENV_DEPRECATED` when it
+falls back to it. Use `ALPACA_DATA_FEED`.
 
 ## Feed Configuration
 
@@ -133,3 +164,7 @@ only; model promotion and live-money cutover remain manual gated workflows.
   OMS-backed stores only.
 - Operator access should use `AI_TRADING_OPERATOR_TOKEN_MAP` with per-operator
   credentials rather than a shared bearer token.
+- The drawdown circuit breaker (saved state, staying tripped across restarts,
+  and the operator clear procedure) and
+  the position backstop are described in
+  [docs/OPERATIONS.md](docs/OPERATIONS.md).

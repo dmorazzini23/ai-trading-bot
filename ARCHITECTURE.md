@@ -30,8 +30,20 @@ Current canonical routes from `create_app()`:
 - `GET /diag`
 - `GET /operator/presets`
 - `GET /operator/plan`
-- `POST /operator/plan`
 - `GET /operator/control-plane`
+- `GET /operator/control-plane/<section>` for the sections `rollout`,
+  `broker-health`, `positions`, `open-orders`, `execution-quality`,
+  `circuit-breakers`, `liveness`, `manual-overrides` and `services`
+- `POST /operator/control-plane/manual-overrides`
+- `DELETE /operator/control-plane/manual-overrides`
+- `GET /operator/governance`
+- `POST /operator/governance/approval`
+- `POST /operator/governance/rollback`
+
+`/health` and `/healthz` are registered through the shared
+`ai_trading.health_payload.register_health_routes` helper. `/diag` and every
+`/operator/*` route require operator authentication; `/metrics` has its own
+access control. See `API_DOCUMENTATION.md`.
 
 ## Control Flow
 
@@ -47,8 +59,10 @@ Current canonical routes from `create_app()`:
 - `ai_trading.strategies.backtester` is the fast research backtest path.
 - `ai_trading.tools.offline_replay` is the production-faithful historical
   replay path.
-- `ai_trading.strategies.regime_detector` is the dynamic-threshold and
-  canonical `MarketRegime` module used by live-ish portfolio and signal flows.
+- `ai_trading.strategies.regime_detector` is the dynamic-threshold regime
+  detector used by `ai_trading.rebalancer` and `ai_trading.signals`. The `MarketRegime` enum itself
+  is defined in `ai_trading.risk.adaptive_sizing`, which `regime_detector`
+  imports.
 - `ai_trading.tools.seed_trade_history` uses the packaged JSON seed file
   `ai_trading/defaults/trade_history.seed.json`, while runtime trade-history
   persistence is controlled separately through `AI_TRADING_TRADE_HISTORY_PATH`.
@@ -60,3 +74,10 @@ Current canonical routes from `create_app()`:
 - No compatibility shims in current runtime policy.
 - The main runtime refuses to start when another healthy API is already bound
   to the configured API port.
+- The packaged unit runs `ai_trading.tools.release_identity` before and after
+  the Alembic migration and refuses to start when the release specification
+  does not match the checkout, config, schema and model. See "Release identity
+  check" in `docs/OPERATIONS.md`.
+- The drawdown circuit breaker (`ai_trading.risk.circuit_breakers`) and the
+  position backstop (`ai_trading.core.netting_position_backstop`) are
+  described in `docs/OPERATIONS.md`.

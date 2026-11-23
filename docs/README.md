@@ -22,7 +22,7 @@ section 3.
 - [CODEX_EFFICIENCY.md](CODEX_EFFICIENCY.md), [CODEX_MARKETPLACE_GUARDRAILS.md](CODEX_MARKETPLACE_GUARDRAILS.md), [CODEX_MCP_AND_SKILLS_SETUP.md](CODEX_MCP_AND_SKILLS_SETUP.md): agent working rules and tooling.
 - [SUPPORTED_TRADING_PATH.md](SUPPORTED_TRADING_PATH.md): the supported trading path.
 - [LEGACY_INVENTORY.md](LEGACY_INVENTORY.md): retained legacy surfaces.
-- [CENTRALIZED_IMPORTS.md](CENTRALIZED_IMPORTS.md), [coding/](coding/), [persistence/](persistence/): code conventions and design notes.
+- [coding/](coding/), [persistence/](persistence/): code conventions and design notes.
 - [ARTIFACT_AUTHORITY.md](ARTIFACT_AUTHORITY.md): which artifacts count as evidence.
 
 ## Configuration and data
@@ -30,7 +30,7 @@ section 3.
 - [SEED_TRADE_HISTORY.md](SEED_TRADE_HISTORY.md), [TRADE_UPDATES_STREAM.md](TRADE_UPDATES_STREAM.md): trade history seeding and the trade-updates stream.
 
 ## Strategy, risk and models
-- [ENTRY_EXIT_SIGNALS.md](ENTRY_EXIT_SIGNALS.md), [MAX_FACTOR.md](MAX_FACTOR.md), [risk_engine.md](risk_engine.md), [precision_and_costs.md](precision_and_costs.md), [peak_performance.md](peak_performance.md): signals, stops, risk and costs.
+- [MAX_FACTOR.md](MAX_FACTOR.md), [risk_engine.md](risk_engine.md), [precision_and_costs.md](precision_and_costs.md), [peak_performance.md](peak_performance.md): signals, stops, risk and costs.
 - [model_governance.md](model_governance.md): model promotion framework.
 - [SMALL_ACCOUNT_RISK_CONTRACT.md](SMALL_ACCOUNT_RISK_CONTRACT.md), [SMALL_ACCOUNT_EVALUATION.md](SMALL_ACCOUNT_EVALUATION.md): small-account limits.
 - [ROBUSTNESS_AUDIT.md](ROBUSTNESS_AUDIT.md), [TRADING_SYSTEM_CHECKLIST.md](TRADING_SYSTEM_CHECKLIST.md): robustness standard and checklist.

@@ -20,11 +20,19 @@ Current startup validation requires:
 - `AI_TRADING_CAPITAL_CAP`
 - `DOLLAR_RISK_LIMIT`
 
-Deprecated and rejected:
+Deprecated and rejected (startup fails when any is set). The full list, with
+the canonical key for each, is the table in [../DEPLOYING.md](../DEPLOYING.md)
+and `_CANONICAL_ENV_MAP` in `ai_trading/config/management.py`. It includes:
 
-- `ALPACA_API_URL`
-- `ALPACA_BASE_URL`
-- `DATA_FEED`
+- `ALPACA_API_URL`, `ALPACA_BASE_URL` (use `ALPACA_TRADING_BASE_URL`)
+- `ALPACA_DATA_URL` (use `ALPACA_DATA_BASE_URL`)
+- `TRADING_MODE`, `CAPITAL_CAP`, `DAILY_LOSS_LIMIT`, `MAX_POSITION_SIZE`,
+  `TAKE_PROFIT_FACTOR`, `BUY_THRESHOLD`, `CONF_THRESHOLD`, `MIN_CONFIDENCE`,
+  `KELLY_FRACTION`, `KELLY_FRACTION_MAX`, `SIGNAL_CONFIRMATION_BARS`,
+  `NEWS_API_KEY`
+
+`DATA_FEED` is deprecated but not rejected: it is still read as an alias for
+`ALPACA_DATA_FEED`. Use `ALPACA_DATA_FEED`.
 
 ## Feed Selection
 
@@ -44,7 +52,9 @@ Optional feed controls:
 - `ALPACA_HAS_SIP=1`
 - `ALPACA_FEED_FAILOVER=sip,iex`
 - `ALPACA_EMPTY_TO_BACKUP=1`
-- `BACKUP_DATA_PROVIDER=finnhub|finnhub_low_latency|none`
+- `BACKUP_DATA_PROVIDER=yahoo|finnhub|finnhub_low_latency|none` (default
+  `yahoo`, or `none` when `EXECUTION_MODE=live`; live mode does not permit
+  Yahoo)
 
 Production execution note:
 
@@ -65,11 +75,21 @@ described in [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md). It compares the tested
 commit, effective config/profile, applied migration and configured model bytes
 against a reviewed release specification. The installed packaged unit enforces
 checks before and after Alembic migration and refuses startup without a valid
-release specification. Its last verified paper start was October 8,
-2026 19:33 Pacific after the host maintenance reboot, using CI-tested commit `1853464dc`, with
-both installed release checks passing. The broker was closed, ACTIVE and flat
-before restart; post-start broker freshness and OMS consistency passed at
-19:40 Pacific, with zero positions/active orders and automatic restarts.
+release specification at `/var/lib/ai-trading-bot/runtime/release_spec.json`.
+The spec's `tested_commit_sha` must equal the checkout's `HEAD`, the checkout
+must be clean, and its `resolved_config_hash` must equal the hash the new code
+computes. Any ConfigSpec change alters `resolved_config_hash` and blocks
+startup until the spec is updated. The checks and the safe deploy order are in
+"Release Identity Check" in [OPERATIONS.md](OPERATIONS.md).
+
+Historical record, not the current state: on October 8, 2026 19:33 Pacific,
+after the host maintenance reboot, a paper start with CI-tested commit
+`1853464dc` was verified with both installed release checks passing. The
+broker was closed,
+ACTIVE and flat before restart; post-start broker freshness and OMS
+consistency passed at 19:40 Pacific, with zero positions/active orders and
+automatic restarts. The service has been redeployed since; the currently
+deployed commit is recorded in [CODEX_HANDOFF.md](CODEX_HANDOFF.md).
 For each subsequent candidate, review a
 passing report with CI, broker exposure and rollback evidence before updating
 the release specification or restarting. Do not restart during market hours.
@@ -108,6 +128,18 @@ curl -s http://127.0.0.1:${HEALTHCHECK_PORT:-8081}/healthz
 When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
 `API_PORT`.
 
+`/metrics` answers loopback callers by default; remote callers need
+`AI_TRADING_METRICS_BEARER_TOKEN` or an address in
+`AI_TRADING_METRICS_ALLOWED_REMOTE_ADDRS` (see
+[../API_DOCUMENTATION.md](../API_DOCUMENTATION.md)).
+
+## API Port Startup
+
+The API binds to `API_PORT` (default `9001`). Startup waits up to
+`API_PORT_WAIT_SECONDS` (default 30 seconds) for the port to become free. If
+it stays busy, the process exits with status `98`, and the packaged unit's
+`RestartPreventExitStatus=98` stops systemd from restarting it.
+
 ## Verification Checklist
 
 1. `python3 -c "import importlib.metadata as m; assert m.version('alpaca-py') == '0.42.1'"`
@@ -120,8 +152,11 @@ When launching the standalone health app, `HEALTHCHECK_PORT` must differ from
 
 - Configure operator credentials with `AI_TRADING_OPERATOR_TOKEN_MAP`, not a
   shared bearer token.
-- All `/operator/*` endpoints now require an authenticated operator token plus
-  `X-AI-Trading-Operator-Id`.
+- `/diag` and all `/operator/*` endpoints require an authenticated operator
+  token plus `X-AI-Trading-Operator-Id`.
+- The drawdown circuit breaker (saved state, staying tripped across restarts,
+  and the operator clear procedure) and the position backstop are described in
+  [OPERATIONS.md](OPERATIONS.md).
 
 ## Additional Runtime Hardening
 

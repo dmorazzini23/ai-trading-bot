@@ -69,10 +69,6 @@ print(f"MA tick: {spec.tick}, lot: {spec.lot}, currency: {spec.currency}")
 # Get individual components
 tick = get_tick_size('SPY')    # Decimal('0.01')
 lot = get_lot_size('QQQ')      # 1
-
-# Add custom specification
-from ai_trading.market.symbol_specs import add_symbol_spec
-add_symbol_spec('CUSTOM', Decimal('0.001'), 100)
 ```
 
 ## Enhanced Cost Model
@@ -186,23 +182,6 @@ model.update_costs(
     volume_ratio=1.1,
     learning_rate=0.1
 )
-```
-
-### Symbol Specifications Updates
-```python
-from ai_trading.market.symbol_specs import update_specs_from_config
-
-# Bulk update from configuration
-specs_config = {
-    'AAPL': {'tick': '0.01', 'lot': 1},
-    'MA': {'tick': '0.01', 'lot': 1, 'currency': 'USD'},
-    'TMO': {'tick': '0.01', 'lot': 1},
-    'CAT': {'tick': '0.01', 'lot': 1},
-    'BTC-USD': {'tick': '0.01', 'lot': 1},
-    'ES': {'tick': '0.25', 'lot': 1, 'multiplier': 50}
-}
-
-update_specs_from_config(specs_config)
 ```
 
 ## Best Practices
