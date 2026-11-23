@@ -158,21 +158,8 @@ def set_data_feed_intraday(feed: str | None) -> str:
 
 SENTIMENT_API_KEY = _CFG.sentiment_api_key
 SENTIMENT_API_URL = _CFG.sentiment_api_url
-SENTIMENT_ENHANCED_CACHING = bool(_CFG.sentiment_enhanced_caching)
-SENTIMENT_FALLBACK_SOURCES = tuple(_CFG.sentiment_fallback_sources)
-SENTIMENT_SUCCESS_RATE_TARGET = float(_CFG.sentiment_success_rate_target)
-SENTIMENT_RECOVERY_TIMEOUT_SECS = int(_CFG.sentiment_recovery_timeout_secs)
-
-META_LEARNING_BOOTSTRAP_ENABLED = bool(_CFG.meta_learning_bootstrap_enabled)
-META_LEARNING_BOOTSTRAP_WIN_RATE = float(_CFG.meta_learning_bootstrap_win_rate)
-META_LEARNING_MIN_TRADES_REDUCED = int(_CFG.meta_learning_min_trades_reduced)
 
 ORDER_TIMEOUT_SECONDS = int(_CFG.order_timeout_seconds)
-ORDER_FILL_RATE_TARGET = float(_CFG.order_fill_rate_target)
-LIQUIDITY_SPREAD_THRESHOLD = float(_CFG.liquidity_spread_threshold)
-LIQUIDITY_VOL_THRESHOLD = float(_CFG.liquidity_vol_threshold)
-LIQUIDITY_REDUCTION_AGGRESSIVE = float(_CFG.liquidity_reduction_aggressive)
-LIQUIDITY_REDUCTION_MODERATE = float(_CFG.liquidity_reduction_moderate)
 ORDER_STALE_CLEANUP_INTERVAL = int(_CFG.order_stale_cleanup_interval)
 EXECUTION_MODE = str(getattr(_CFG, "execution_mode", "sim") or "sim").lower()
 SHADOW_MODE = bool(getattr(_CFG, "shadow_mode", False))
@@ -358,17 +345,9 @@ __all__ = [
     "_require_env_vars",
     "AlpacaConfig",
     "get_max_drawdown_threshold",
-    "META_LEARNING_BOOTSTRAP_ENABLED",
-    "META_LEARNING_BOOTSTRAP_WIN_RATE",
-    "META_LEARNING_MIN_TRADES_REDUCED",
     "MODE_PARAMETERS",
-    "ORDER_FILL_RATE_TARGET",
     "SENTIMENT_API_KEY",
     "SENTIMENT_API_URL",
-    "SENTIMENT_ENHANCED_CACHING",
-    "SENTIMENT_FALLBACK_SOURCES",
-    "SENTIMENT_RECOVERY_TIMEOUT_SECS",
-    "SENTIMENT_SUCCESS_RATE_TARGET",
     "Settings",
     "TradingConfig",
     "broker_keys",

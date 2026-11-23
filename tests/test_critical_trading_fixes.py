@@ -282,17 +282,6 @@ class TestLiquidityManagementFixes(unittest.TestCase):
         self.assertEqual(qty, 75)  # 25% reduction
         self.assertFalse(skip)
 
-    def test_liquidity_configuration_parameters(self):
-        """Test that liquidity configuration parameters are properly set."""
-        self.assertTrue(hasattr(config, 'LIQUIDITY_SPREAD_THRESHOLD'))
-        self.assertTrue(hasattr(config, 'LIQUIDITY_VOL_THRESHOLD'))
-        self.assertTrue(hasattr(config, 'LIQUIDITY_REDUCTION_AGGRESSIVE'))
-        self.assertTrue(hasattr(config, 'LIQUIDITY_REDUCTION_MODERATE'))
-
-        # Check default values are reasonable
-        self.assertEqual(config.LIQUIDITY_REDUCTION_AGGRESSIVE, 0.75)
-        self.assertEqual(config.LIQUIDITY_REDUCTION_MODERATE, 0.90)
-
 
 class TestOrderManagementFixes(unittest.TestCase):
     """Test enhanced order management and timeout fixes."""
@@ -305,7 +294,6 @@ class TestOrderManagementFixes(unittest.TestCase):
         """Test that order timeout is properly configured."""
         self.assertEqual(config.ORDER_TIMEOUT_SECONDS, 300)  # 5 minutes
         self.assertEqual(config.ORDER_STALE_CLEANUP_INTERVAL, 120)  # 2 minutes
-        self.assertEqual(config.ORDER_FILL_RATE_TARGET, 0.80)  # 80%
 
     @patch('time.time')
     def test_stale_order_cleanup(self, mock_time):
@@ -357,29 +345,10 @@ class TestOrderManagementFixes(unittest.TestCase):
 class TestSystemMonitoringAndAlerting(unittest.TestCase):
     """Test enhanced system monitoring and alerting."""
 
-    def test_sentiment_success_rate_monitoring(self):
-        """Test sentiment success rate monitoring configuration."""
-        self.assertTrue(hasattr(config, 'SENTIMENT_SUCCESS_RATE_TARGET'))
-        self.assertEqual(config.SENTIMENT_SUCCESS_RATE_TARGET, 0.90)
-
-    def test_meta_learning_configuration(self):
-        """Test meta-learning configuration parameters."""
-        self.assertTrue(hasattr(config, 'META_LEARNING_BOOTSTRAP_ENABLED'))
-        self.assertTrue(hasattr(config, 'META_LEARNING_MIN_TRADES_REDUCED'))
-        self.assertTrue(hasattr(config, 'META_LEARNING_BOOTSTRAP_WIN_RATE'))
-
-        self.assertEqual(config.META_LEARNING_MIN_TRADES_REDUCED, 10)
-        self.assertEqual(config.META_LEARNING_BOOTSTRAP_WIN_RATE, 0.55)
-
     def test_comprehensive_configuration_coverage(self):
         """Test that all critical configuration parameters are defined."""
         required_configs = [
-            'SENTIMENT_ENHANCED_CACHING',
-            'SENTIMENT_FALLBACK_SOURCES',
-            'META_LEARNING_BOOTSTRAP_ENABLED',
             'ORDER_TIMEOUT_SECONDS',
-            'LIQUIDITY_SPREAD_THRESHOLD',
-            'LIQUIDITY_VOL_THRESHOLD'
         ]
 
         for config_param in required_configs:
