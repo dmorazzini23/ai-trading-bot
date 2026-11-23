@@ -1,7 +1,3 @@
-import os
-
-os.environ.setdefault("ENV_IMPORT_GUARD", "0")
-
 import pytest
 
 from ai_trading.execution.live_trading import APIError, CapacityCheck, ExecutionEngine

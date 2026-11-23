@@ -4,7 +4,6 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 import json
 from datetime import timedelta
 from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, cast
 from types import SimpleNamespace
 import sys
@@ -224,8 +223,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
             "AI_TRADING_ALPACA_SECRET_KEY",
         ),
     )
-    redis_url: str | None = Field(default=None, alias="REDIS_URL")
-    enable_finnhub: bool = Field(True, alias="ENABLE_FINNHUB")
     alpaca_rate_limit_per_min: int = Field(200, alias="ALPACA_RATE_LIMIT_PER_MIN")
     finnhub_api_key: str | None = Field(default=None, alias="FINNHUB_API_KEY")
     execution_mode: str = Field(
@@ -246,17 +243,12 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         default="balanced",
         validation_alias=AliasChoices("AI_TRADING_TRADING_MODE", "trading_mode"),
     )
-    WEBHOOK_SECRET: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("WEBHOOK_SECRET", "AI_TRADING_WEBHOOK_SECRET"),
-    )
     ENABLE_PORTFOLIO_FEATURES: bool = Field(
         True,
         validation_alias=AliasChoices("ENABLE_PORTFOLIO_FEATURES", "AI_TRADING_ENABLE_PORTFOLIO_FEATURES"),
     )
     testing: bool = Field(False, alias="TESTING")
     shadow_mode: bool = Field(False, alias="SHADOW_MODE")
-    force_trades: bool = Field(False, alias="FORCE_TRADES")
     disable_daily_retrain: bool = Field(False, alias="DISABLE_DAILY_RETRAIN")
     log_market_fetch: bool = Field(True, alias="LOG_MARKET_FETCH")
     healthcheck_port: int = Field(
@@ -264,7 +256,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         validation_alias=AliasChoices("HEALTHCHECK_PORT", "AI_TRADING_HEALTHCHECK_PORT"),
     )
     min_health_rows: int = Field(120, alias="MIN_HEALTH_ROWS")
-    api_host: str = Field("0.0.0.0", alias="API_HOST")
     api_port: int = Field(
         9001,
         validation_alias=AliasChoices("API_PORT", "AI_TRADING_API_PORT"),
@@ -278,7 +269,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         "STATIC",
         validation_alias=AliasChoices("MAX_POSITION_MODE", "AI_TRADING_MAX_POSITION_MODE"),
     )
-    finnhub_rpm: int = Field(default=55, validation_alias="AI_TRADING_FINNHUB_RPM")
     min_expected_edge_bps: float = Field(
         default=6.0,
         validation_alias=AliasChoices(
@@ -353,13 +343,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     sector_exposure_cap: float = Field(default=0.33, validation_alias="AI_TRADING_SECTOR_EXPOSURE_CAP")
     max_portfolio_positions: int = Field(default=20, validation_alias="AI_TRADING_MAX_PORTFOLIO_POSITIONS")
     disaster_dd_limit: float = Field(default=0.25, validation_alias="AI_TRADING_DISASTER_DD_LIMIT")
-    data_cache_enable: bool = Field(default=True, validation_alias="AI_TRADING_DATA_CACHE_ENABLE")
-    data_cache_ttl_seconds: int = Field(default=300, validation_alias="AI_TRADING_DATA_CACHE_TTL_SECONDS")
-    data_cache_dir: str = Field(
-        default=str(Path.home() / ".cache" / "ai_trading"),
-        validation_alias="AI_TRADING_DATA_CACHE_DIR",
-    )
-    data_cache_disk_enable: bool = Field(True, validation_alias="AI_TRADING_DATA_CACHE_DISK_ENABLE")
     minute_cache_ttl: int = Field(300, alias="MINUTE_CACHE_TTL")
     market_cache_enabled: bool = Field(False, alias="MARKET_CACHE_ENABLED")
     market_cache_ttl: int = Field(86400, alias="MARKET_CACHE_TTL")
@@ -402,13 +385,8 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         default=True,
         validation_alias="META_SYNC_FROM_BROKER",
     )
-    env_import_guard: bool = Field(
-        default=True,
-        validation_alias="ENV_IMPORT_GUARD",
-    )
     pretrade_lookback_days: int = Field(120, alias="PRETRADE_LOOKBACK_DAYS")
     verbose_logging: bool = Field(default=False, validation_alias="AI_TRADING_VERBOSE_LOGGING")
-    enable_plotting: bool = Field(default=False, validation_alias="AI_TRADING_ENABLE_PLOTTING")
     position_size_min_usd: float = Field(
         default=POSITION_SIZE_MIN_USD_DEFAULT,
         validation_alias="AI_TRADING_POSITION_SIZE_MIN_USD",
@@ -479,11 +457,8 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     iterations: int = Field(0, alias="AI_TRADING_ITERATIONS")
     scheduler_iterations: int = Field(0, validation_alias="SCHEDULER_ITERATIONS")
     scheduler_sleep_seconds: int = Field(60, validation_alias="SCHEDULER_SLEEP_SECONDS")
-    rebalance_sleep_seconds: int = Field(60, validation_alias="REBALANCE_SLEEP_SECONDS")
-    data_warmup_lookback_days: int = Field(120, validation_alias="DATA_WARMUP_LOOKBACK_DAYS")
     enable_sklearn: bool = Field(False, validation_alias="ENABLE_SKLEARN")
     metrics_enabled: bool = Field(False, validation_alias="METRICS_ENABLED")
-    regime_min_rows: int = Field(100, validation_alias="REGIME_MIN_ROWS")
     sgd_params: dict[str, float] = Field(default_factory=dict, validation_alias="SGD_PARAMS")
     ai_trading_seed: int = Field(42, alias="AI_TRADING_SEED")
     model_path: str = Field("trained_model.pkl", alias="AI_TRADING_MODEL_PATH")
@@ -503,7 +478,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
             " of 30s is enforced for reliability."
         ),
     )
-    cpu_only: bool = Field(default=False, validation_alias="CPU_ONLY")
     news_api_key: str | None = None
     sentiment_api_key: str | None = Field(
         default=None,
@@ -528,14 +502,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
     http_read_timeout_closed: float | None = Field(None, alias="HTTP_READ_TIMEOUT_CLOSED")
     # Dynamic sizing refresh TTL (seconds) to limit equity polling in AUTO mode
     dynamic_size_refresh_secs: float = Field(3600.0, alias="DYNAMIC_SIZE_REFRESH_SECS")
-    # Execution policy (safe rollout toggles)
-    exec_prefer_limit: bool = Field(False, alias="EXECUTION_PREFER_LIMIT")
-    exec_max_participation_rate: float = Field(
-        0.05,
-        alias="EXECUTION_MAX_PARTICIPATION_RATE",
-        description="Cap per-order market participation rate [0,1] when available",
-    )
-    exec_log_slippage: bool = Field(False, alias="EXECUTION_LOG_SLIPPAGE")
     # Slow the main loop when market is closed
     interval_when_closed: int = Field(300, alias="INTERVAL_WHEN_CLOSED")
 
@@ -766,27 +732,12 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
             raise ValueError(f"dollar_risk_limit must be in (0, 1], got {v}")
         return float(v)
 
-    @field_validator("exec_max_participation_rate")
-    @classmethod
-    def _part_rate_range(cls, v):
-        v = float(v)
-        if v < 0.0:
-            return 0.0
-        if v > 1.0:
-            return 1.0
-        return v
-
     @field_validator("max_position_size")
     @classmethod
     def _max_pos_positive(cls, v, info):
         if v is not None and float(v) <= 0.0:
             raise ValueError(f"{info.field_name} must be positive")
         return v
-
-    @field_validator("force_trades", mode="before")
-    @classmethod
-    def _force_trades_cast(cls, v):
-        return _to_bool(v, False)
 
     @field_validator("alpaca_base_url", mode="after")
     @classmethod
@@ -816,10 +767,6 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
         ratio_bps = _to_float(getattr(self, "data_max_gap_ratio_bps", 50.0), 50.0)
         ratio = max(float(ratio_bps) / 10000.0, 0.0)
         return SimpleNamespace(max_gap_ratio_intraday=ratio)
-
-    @property
-    def REGIME_MIN_ROWS(self) -> int:
-        return int(self.regime_min_rows)
 
     @property
     def data_feed(self) -> Literal["iex", "sip"]:
