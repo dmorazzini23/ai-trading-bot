@@ -15,7 +15,6 @@ def portfolio_settings(monkeypatch) -> SimpleNamespace:
     settings = SimpleNamespace(
         ENABLE_PORTFOLIO_FEATURES=False,
         portfolio_drift_threshold=0.05,
-        rebalance_sleep_seconds=1,
     )
     monkeypatch.setattr(rebalancer, "get_settings", lambda: settings)
     return settings

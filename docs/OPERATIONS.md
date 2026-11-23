@@ -147,6 +147,31 @@ the phase 4 deploy (then restart so the runtime env file is refreshed).
   are still read); `AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_HOUR`,
   `AI_TRADING_PAPER_SAMPLING_MAX_TRADES_PER_SYMBOL_PER_HOUR`,
   `AI_TRADING_PAPER_SAMPLING_TRADE_COOLDOWN_MIN`.
+- Retired in the follow-up cleanup (same rules: ignored at startup, safe to
+  delete from `.env` once that deploy is live):
+  - Former `TradingConfig` settings, whose removal changed
+    `resolved_config_hash`: `API_HOST` (the API and health servers always
+    bind `0.0.0.0`), `ORDER_FILL_RATE_TARGET`, `LIQUIDITY_SPREAD_THRESHOLD`,
+    `LIQUIDITY_VOL_THRESHOLD`, `LIQUIDITY_REDUCTION_AGGRESSIVE`,
+    `LIQUIDITY_REDUCTION_MODERATE` (the execution engine's liquidity
+    reduction is hardcoded), `SENTIMENT_ENHANCED_CACHING`,
+    `SENTIMENT_FALLBACK_SOURCES`, `SENTIMENT_SUCCESS_RATE_TARGET`,
+    `SENTIMENT_RECOVERY_TIMEOUT_SECS`, `META_LEARNING_BOOTSTRAP_ENABLED`,
+    `META_LEARNING_BOOTSTRAP_WIN_RATE`, `META_LEARNING_MIN_TRADES_REDUCED`.
+    An out-of-range value for one of these used to fail startup; it is now
+    ignored.
+  - Former `Settings` fields: `AI_TRADING_FINNHUB_RPM`,
+    `AI_TRADING_DATA_CACHE_ENABLE`, `AI_TRADING_DATA_CACHE_TTL_SECONDS`,
+    `AI_TRADING_DATA_CACHE_DIR`, `AI_TRADING_DATA_CACHE_DISK_ENABLE`,
+    `ENV_IMPORT_GUARD`, `AI_TRADING_ENABLE_PLOTTING`,
+    `REBALANCE_SLEEP_SECONDS`, `DATA_WARMUP_LOOKBACK_DAYS`, `REGIME_MIN_ROWS`,
+    `EXECUTION_PREFER_LIMIT`, `EXECUTION_LOG_SLIPPAGE`,
+    `EXECUTION_MAX_PARTICIPATION_RATE` (the per-order participation cap comes
+    from `PARTICIPATION_RATE`; order slicing separately reads
+    `AI_TRADING_EXEC_MAX_PARTICIPATION_RATE`, which is unaffected),
+    `REDIS_URL` (still redacted in logs).
+  - Still read, although their duplicate `Settings` field was removed:
+    `FORCE_TRADES`, `WEBHOOK_SECRET`, `CPU_ONLY`, `ENABLE_FINNHUB`.
 
 **These keys do not protect positions.** `AI_TRADING_LIVE_STOP_LOSS_BPS`,
 `AI_TRADING_LIVE_TAKE_PROFIT_BPS`, `AI_TRADING_LIVE_TRAILING_STOP_BPS`,

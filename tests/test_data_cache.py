@@ -84,23 +84,6 @@ def test_memory_cache_thread_safety():
     # All operations should succeed
     assert all(results), "Some cache operations failed under concurrent access"
 
-def test_settings_integration():
-    """Test that cache settings can be loaded and work as expected"""
-    from ai_trading.config.settings import get_settings
-
-    settings = get_settings()
-
-    # Test default values
-    assert isinstance(settings.data_cache_enable, bool)
-    assert isinstance(settings.data_cache_ttl_seconds, int)
-    assert isinstance(settings.data_cache_dir, str)
-    assert isinstance(settings.data_cache_disk_enable, bool)
-
-    # Test that defaults are reasonable
-    assert settings.data_cache_ttl_seconds > 0
-    assert len(settings.data_cache_dir) > 0
-
-
 def test_get_or_load_caches_memory_and_disk(tmp_path):
     with mcache._lock:
         mcache._mem.clear()
