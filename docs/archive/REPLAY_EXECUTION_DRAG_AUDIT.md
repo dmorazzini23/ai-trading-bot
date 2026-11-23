@@ -6,7 +6,7 @@ This is a bounded code and saved-artifact audit, not a strategy experiment.
 
 Artifact: /var/lib/ai-trading-bot/runtime/replay_outputs/replay_hash_20260911.json.
 Its hash and gross-minus-drag reconciliation are recorded in
-docs/ROLLBACK_REPLAY_MODEL_DECISION.md. No source dataset was replayed or modified.
+docs/archive/ROLLBACK_REPLAY_MODEL_DECISION.md. No source dataset was replayed or modified.
 
 ## Findings
 

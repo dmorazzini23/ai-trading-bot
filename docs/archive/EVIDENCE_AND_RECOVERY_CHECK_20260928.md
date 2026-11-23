@@ -34,7 +34,7 @@ still match their saved source bytes. Alpaca says `data_quality=complete` filter
 some incomplete, unprocessed events and does not guarantee creation time; a
 complete response is therefore not independent proof of every distribution or
 point-in-time availability. See [Alpaca corporate actions API](https://docs.alpaca.markets/us/reference/corporateactions-1)
-and [the earlier adjustment review](ENDPOINT_PREPARATION_RESULT.md).
+and [the earlier adjustment review](../ENDPOINT_PREPARATION_RESULT.md).
 
 **Decision:** observation support passes for this draft Friday schedule.
 Distribution completeness, any future revision policy, point-in-time action

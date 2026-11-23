@@ -36,7 +36,7 @@ unavailable on this host; this file is the shared-workspace handoff.
    against current artifacts. Separate implementation defects from insufficient
    evidence; preserve qualification gates and provenance requirements.
 4. Reconcile remaining historical ledger discrepancies against broker evidence.
-   Consult `docs/LEDGER_AND_COVERAGE_20260919.md` and existing ledger-rebuild
+   Consult `docs/archive/LEDGER_AND_COVERAGE_20260919.md` and existing ledger-rebuild
    artifacts. Preserve original history; unsupported periods stay explicitly
    unverified. Do not manufacture opening balances or executions.
 

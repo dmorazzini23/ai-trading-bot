@@ -5,7 +5,7 @@ Older sections moved verbatim from docs/CODEX_HANDOFF.md (newest first, as in th
 
 Governance record only, on branch `claude/reset-early-review` (not merged, not
 deployed). No runtime code changed.
-- **Decision:** [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). The
+- **Decision:** [November 14 review](../RESEARCH_RESET_REVIEW_20261114.md). The
   owner held the December 9 review early. Allowed now: portfolio manager mode
   build per `docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md` (offline, then
   paper), and new strategy research under one pre-registered contract per
@@ -1070,7 +1070,7 @@ model requires `submitted_at`). Validation after rebasing onto c402a78: `agent_v
 ## October 14 research reset review
 
 The user decided to keep the pause through the holdout
-([review](RESEARCH_RESET_REVIEW_20261014.md)). `config/research_reset.json` now
+([review](../RESEARCH_RESET_REVIEW_20261014.md)). `config/research_reset.json` now
 sets the review date to 2026-12-09 and still requires an explicit review. Work is
 limited to named gaps, in priority order: stale decision quotes (1,896/2,399 over
 1 s), incomplete causal fill chains (0/22), per-fill fees. Runtime is still at

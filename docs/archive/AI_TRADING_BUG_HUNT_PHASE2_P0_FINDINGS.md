@@ -2,7 +2,7 @@
 
 Date: 2026-04-28
 
-Scope: P0 files from `docs/AI_TRADING_BUG_HUNT_PHASE1_MANIFEST.md`.
+Scope: P0 files from `docs/archive/AI_TRADING_BUG_HUNT_PHASE1_MANIFEST.md`.
 
 Phase 2 status: P0 inspection complete, and P0 critical/high/medium findings repaired. Six subagents inspected disjoint P0 slices, then six workers repaired disjoint ownership slices. No broad validation or full pytest was run because the repair occurred during regular U.S. market hours.
 

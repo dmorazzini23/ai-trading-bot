@@ -54,7 +54,7 @@ pending verification, never a passing result. Private broker snapshot:
 
 ## Training
 
-The concrete review checklist is docs/TRAINING_RESUMPTION_REQUIREMENTS.md.
+The concrete review checklist is docs/archive/TRAINING_RESUMPTION_REQUIREMENTS.md.
 No training, model promotion, budget change or holdout evaluation was authorized
 by this evidence work. Explicit review remains required to resume paused training.
 
