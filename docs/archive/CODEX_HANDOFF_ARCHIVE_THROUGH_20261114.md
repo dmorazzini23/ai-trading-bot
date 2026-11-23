@@ -1,0 +1,3625 @@
+# Codex handoff archive, through November 14, 2026
+Older sections moved verbatim from docs/CODEX_HANDOFF.md (newest first, as in the original); current handoff is docs/CODEX_HANDOFF.md.
+
+## November 14: research reset reviewed early; pause on new work ended
+
+Governance record only, on branch `claude/reset-early-review` (not merged, not
+deployed). No runtime code changed.
+- **Decision:** [November 14 review](RESEARCH_RESET_REVIEW_20261114.md). The
+  owner held the December 9 review early. Allowed now: portfolio manager mode
+  build per `docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md` (offline, then
+  paper), and new strategy research under one pre-registered contract per
+  hypothesis. It supersedes branch rules B and C of the December 9 plan.
+- **Unchanged:** holdout September 9–December 8 unscored and reserved;
+  consumed budgets; real-money gate; scheduled training blocked; the
+  day-sleeve model is to be retired from runtime in a separate change, not
+  retrained.
+- **Do not set `enabled: false`** in `config/research_reset.json`. That flag
+  is the only thing `training_block_reason()` checks; turning it off would
+  restart after-hours training on the live service and return research
+  automation to its full daily/weekly/monthly step lists.
+- **Changed:** `config/research_reset.json` (`last_review_*`, `review_record`,
+  `allowed_work`, `paused_work`; no code reads those fields), `AGENTS.md`
+  section 8, `docs/RESEARCH_RESET.md`, the December 9 plan (amendment), this
+  file, and one test pinning the checked-in policy.
+- **Release identity:** `resolved_config_hash` is not affected; it hashes the
+  sanitized `TradingConfig` snapshot only. A deploy still needs the new commit
+  SHA in the release spec, as for any commit.
+- **Next:** merge when the owner agrees. No restart is needed for the policy
+  file: readers load it on each call.
+
+## November 14: unreferenced functions and classes removed; deployed (`fb2df3aee`)
+
+Third cleanup on branch `claude/unreachable-module-cleanup`. 296 files,
+about 29,700 lines removed (14,700 in `ai_trading/`); no `CONFIG_SPECS` or
+trading-decision change.
+- **Method:** name-based call graph over `ai_trading`, `scripts`, `tools`,
+  `plugins`. A top-level definition was removed only if no non-test code
+  mentions its name anywhere (identifier, attribute or string). Largest cuts:
+  `core/bot_engine.py` (~3,450 lines, including standalone
+  `safe_submit_order`), `signals/__init__.py`, `data/fallback/concurrency.py`,
+  `portfolio/sizing.py`, `core/interfaces.py`.
+- **Modules removed (left empty or orphaned):** `audit`, `trade_logic`,
+  `health_monitor`, `execution/algorithms`, `utils/capital_scaling`,
+  `utils/ohlcv`, `data/fetch/empty_handling`, `core/order_ids`.
+- **Kept on purpose:** module `__getattr__`/`__dir__` hooks, 29 test-reset
+  helpers (`reset_*`, `clear_*`, `*_for_tests`), everything under
+  `ai_trading/tools/`, `strategies/`, `research/`, `health.py`,
+  `runtime/equity_risk.py`. About 135 imports left unused by the deletion
+  remain because other modules or tests may reach them as attributes.
+- **Tests:** 65 test files deleted, 134 trimmed (6,623 tests remain).
+- **Validation:** full `pytest` 6,619 passed, 2 skipped, 4 failed; three of
+  the failures tested deleted entry points and were removed afterwards (their
+  files re-run green). The fourth,
+  `tests/test_idempotency_cache_fallback.py::test_order_idempotency_cache_fallback`,
+  is order-dependent (frozen clock) and fails identically on `6a81aedb5` when
+  run alone. `ruff check`, `mypy`, `scripts/typecheck_strict.sh`, import of
+  every module, lazy-export resolution and startup imports pass with the
+  editable finder stripped. `release_identity` (both modes) passes for
+  `fb2df3aee` with the unchanged config hash.
+  `scripts/agent_validate_changed.sh` stops at its broad-exception scan on a
+  pre-existing `except BaseException` in `ai_trading/http/pooling.py:710`.
+- **Deploy:** live checkout detached at `fb2df3aee`, restarted 03:43:46 UTC
+  Sat Nov 14 (market closed). `IMPORT_PREFLIGHT_OK`, `ExecutionEngine
+  initialized`, 3 `BROKER_SYNC`, 0 errors or warnings, `NRestarts=0`;
+  `/healthz` 503 with only `required_model_stale` and
+  `replay_live_parity_gate_failed` (unchanged). No market-hours session has
+  run on this or the two November 12 commits yet.
+- **Next:** watch Monday's session, then the legacy (non-netting) path removal, phase 1 first. The
+  phase 0 lists are in `artifacts/phase0_legacy_path/` (gitignored).
+- **Rollback:** checkout `6a81aedb5`, restore
+  `/var/lib/ai-trading-bot/runtime/release_spec.6a81aedb5.bak.json`, restart.
+
+## November 12: second unreachable-module batch removed; deployed (`6a81aedb5`)
+
+Follow-on to `192123ebc`, same branch `claude/unreachable-module-cleanup`.
+124 files, about 12,100 lines removed; no trading decision or `CONFIG_SPECS`
+change.
+- **Package modules (53 files):** `training/{train_ml,stacking}`,
+  `evaluation/`, `strategies/{backtest,signals,imports}`,
+  `execution/{microstructure,slippage}`, `features/pipeline`, `data/labels`,
+  `data/yfinance`, `data/fetch/{backoff,http,heartbeat}`,
+  `rl_trading/inference`, `rl/`, `core/{context,run_all_trades,
+  config_autofix}`, `runner`, `talib/`, `price_snapshot/`, `regime/`, `ml/`,
+  `prediction/`, `meta/`, `startup/`, `plotting/`, `shadow_mode/`,
+  `institutional/`, `sentiment/`, `metrics/registry`, `models/registry`,
+  `utils/{benchmark,safe_pickle}`, `portfolio/correlation`,
+  `analytics/peak_equity`, `runtime/{params,max_position_size}`,
+  `risk/parameters`. `ai_trading.runtime` no longer lazily exports
+  `build_runtime`/`get_max_position_size` (the used one is
+  `ai_trading.core.runtime.build_runtime`).
+- **Docs:** `docs/ALPHA_UPGRADE.md`, `docs/TECHNICAL_ANALYSIS.md` and
+  `docs/slippage.md` described only deleted code and are gone.
+- **Tests:** 41 test files deleted, 18 trimmed.
+- **Kept on purpose:** `ai_trading.simple_models` (the live env sets
+  `AI_TRADING_ML_SHADOW_MODEL_MODULE=ai_trading.simple_models`; module names
+  in env vars are invisible to import tracing, so check the live process
+  environment before deleting), `replay/replay_engine` (in
+  `ci/scripts/institutional_gates.sh` and acceptance matrix AC-13),
+  `ai_trading/health.py` (its tests cover the canonical health app),
+  `research/focused_cycle`, `runtime/equity_risk`, `scripts/self_check`.
+- **Validation:** full `pytest` 7209 passed, 2 skipped; `ruff check`, `mypy`,
+  `typecheck_strict.sh` clean; every module imports and every `__all__`/lazy
+  export resolves, with the editable-install fallback disabled.
+- **Open for owner:** netting is on live (`AI_TRADING_NETTING_ENABLED=1`) and
+  non-netting live execution is blocked, so `ai_trading/strategies/*`
+  (about 4,000 lines), the two allocators and the legacy branch in
+  `bot_engine.py` cannot run live. Removing them touches the trading path and
+  the registered-trial tooling; not started.
+- **Deployed** Thu 05:30 UTC (closed, flat), owner-approved. Identity
+  pre-check from the new commit passed both phases. Spec backup
+  `runtime/release_spec.192123ebc.bak.json` (SHA only). First start
+  succeeded: `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` x3 (0
+  positions, 0 open orders), 0 errors, 0 warnings, NRestarts=0 after four
+  minutes. `/healthz` 503 with only the two preserved flags. Rollback:
+  checkout `192123ebc`, restore that spec, restart.
+- Not yet observed: a market-hours session on either cleanup commit.
+
+## November 12: unreachable modules, archival scripts and dead root files removed; deployed (`192123ebc`)
+
+Owner-requested audit ("delete over simplify"). Branch
+`claude/unreachable-module-cleanup` (worktree
+`.claude/worktrees/unreachable-module-cleanup`), on top of `9242f77e9`. 191
+files, about 25,500 lines removed; no trading decision changes and no
+`CONFIG_SPECS` change (config hash unaffected).
+- **Method:** import reachability from real entry points (`ai_trading.main`,
+  `__main__`, `app`, every `ai_trading.tools.*` CLI, systemd units, referenced
+  scripts, string/dynamic imports). Only modules reachable from tests alone
+  were deleted.
+- **Package modules (46 files):** the unwired "production system" cluster
+  (`production_system`, `production/`, `execution/production_engine`,
+  `monitoring/alerting`, `monitoring/performance_dashboard`,
+  `monitoring/dashboard`, `strategies/multi_timeframe`,
+  `strategies/regime_detection`, `risk/pre_trade_validation`,
+  `shutdown_handler`, `safety/`, `security`, `algorithm_optimizer`,
+  `core/parameter_validator`, `execution/simulator`), the retired
+  `database/` SQLAlchemy manager, `integrations/rate_limit`,
+  `data/{daily_cache,fallback_cache,retry_handler,rate_limiter}`,
+  `data/fetch/core`, `diagnostics/http_diag`, `monitoring/drift`,
+  `portfolio/{risk_controls,short_close}`, `utils/{determinism,performance,
+  pickle_safe,ids}`, `core/hyperparams_schema`, `config/scaling`,
+  `scheduler/`, `backtesting/`, `pipeline/basic`,
+  `meta_learning/conversion`, `execution/order_slicer`, `main_extended`,
+  `main_trade_log_path`.
+- **Scripts/tools/root:** 39 archival demo/validate scripts and
+  `scripts/legacy_guard.py` (with the tests that only quarantined them), 24
+  unreferenced one-shot `tools/` codemods, and root `deploy.sh` (ssh as root,
+  `git reset --hard`, wrong unit name, bypassed the release spec), `run.py`,
+  `run_checks`, `run_checks.sh`, `cleanup_pycache.sh`,
+  `cache_config_example.env`, `DEPLOYMENT.md`.
+- **Tests:** 44 test files deleted, 18 trimmed. `tests/public_api/
+  test_exports.py` asserts the production-system files stay gone.
+- **Validation:** full `pytest` 7400 passed, 4 skipped (26 min); `ruff check`,
+  `mypy`, `typecheck_strict.sh`, `py_compile` clean; every remaining
+  `ai_trading` module imports.
+- **Worktree trap:** the venv is an editable install of the live checkout, so
+  in a worktree a deleted module silently resolves from
+  `/home/aiuser/ai-trading-bot`. Validation here removed `_EditableFinder`
+  from `sys.meta_path` first.
+- **Left for owner decision (still unreachable, about 10,900 lines):**
+  `strategies/backtest` + `execution/microstructure`, `evaluation/walkforward`
+  + `training/{train_ml,stacking}`, `replay/replay_engine`, `rl/module` +
+  `rl_trading/inference`, `features/pipeline`, `strategies/signals`,
+  `data/labels`, `data/fetch/backoff`, `research/focused_cycle`,
+  `runtime/equity_risk`, `runner`, `simple_models`.
+- **Deployed** Thu 04:48 UTC (closed, flat), owner-approved. Pre-check: the
+  service's `release_identity` run from the new commit with the live env
+  against a scratch spec passed both phases (config hash unchanged). Spec
+  backup `runtime/release_spec.9242f77e9.bak.json` (SHA only). First start
+  succeeded: identity `pass`, `IMPORT_PREFLIGHT_OK`, engine init,
+  `BROKER_SYNC` x3 (0 positions, 0 open orders), 0 errors, NRestarts=0 after
+  four minutes. `/healthz` still 503 with only the preserved
+  `required_model_stale` and `replay_live_parity_gate_failed` flags.
+  Rollback: checkout `9242f77e9`, restore that spec, restart.
+- Not yet observed: a market-hours session on this commit.
+
+## November 11: unused risk-engine hard stop and `alpaca_api.submit_order` removed, deployed (`9242f77e9`)
+
+Owner-approved cleanup of the two audit items left in place on `829b5f5e2`,
+following a read-only Fable 5.2 plan. Commits `21d41deb6` and `9242f77e9`,
+fast-forwarded onto `main`; no trading decision changes.
+- **Risk engine:** `RiskEngine.hard_stop`, its cooldown/recovery logic,
+  `check_max_drawdown(api)`, the `drawdowns`/`drawdown` arguments of
+  `can_trade`/`update_portfolio_metrics`, and the `hard_stop_cooldown_min`
+  config entry are gone. The service only called `position_size(sig, cash,
+  price)` without an API, so the stop could never trigger. Drawdown
+  protection remains DrawdownCircuitBreaker, `check_daily_loss` and the
+  pretrade intraday-drawdown gate. `MAX_DRAWDOWN_THRESHOLD` stays (other
+  modules read it). Unreferenced `scripts/risk_engine_cli.py` (stale engine
+  copy) and `scripts/backtest_framework.py` were deleted.
+- **alpaca_api:** `submit_order`, `_sdk_submit`, `_http_submit` (already
+  uncalled), their helpers and `AlpacaOrderNetworkError` are removed;
+  `SUPPORTED_TRADING_PATH.md` updated. A test asserts they stay gone. The
+  validator maps `alpaca_api.py` to a missing `tests/alpaca_api.py`, so its
+  tests must be run by name.
+- `tests/test_daily_cache.py::test_daily_fetcher_uses_cache` fails only when
+  run after the alpaca/submit test set, identically on unchanged `main`
+  (pre-existing ordering issue, not fixed here).
+- Full validation not run yet (owner deferred).
+- **Deployed** Wed 16:13 UTC (market open, flat). The first restart at 16:06
+  failed: removing the `hard_stop_cooldown_min` ConfigSpec changes
+  `resolved_config_hash` (it digests every declared spec, set or not), so
+  pre-migration identity blocked on `config_hash` alone. `.env` never set it;
+  old code gives `cc88fa08…`, new code `b46e8e82…` with the same env. With
+  owner approval, `resolved_config_hash` was updated alongside
+  `tested_commit_sha`. Five failed starts hit the systemd start limit (5 per
+  300 s); `reset-failed` needs a password, so the service was started after
+  the window passed. About 7 minutes down. Spec backup
+  `runtime/release_spec.621a72c3b.bak.json` (old SHA and old config hash).
+  Identity (pre-migration and preflight) `pass`, `IMPORT_PREFLIGHT_OK`,
+  engine init, `BROKER_SYNC` (0 positions, 0 open orders, fresh), NRestarts=0;
+  only error is the known `MODEL_REGISTRY_STALE`. `/healthz` 503 `degraded`
+  with only the two preserved flags below. Rollback: checkout `621a72c3b`,
+  restore that spec, restart.
+- **For future deploys:** any ConfigSpec addition or removal needs a new
+  `resolved_config_hash` in `release_spec.json` before restarting. Compute
+  it with the live env and `PYTHONPATH=<checkout>` (the venv's editable
+  install otherwise imports the live checkout).
+
+## November 11: fee allocation and test isolation deployed (`621a72c3b`)
+
+Two commits on top of `829b5f5e2`; neither changes trading decisions.
+- `1420b7687`: the scorecard reports Alpaca REG/CAT/TAF fees allocated to
+  that trade date's fills as `described_fee_allocation` (reported only; never
+  completes a chain or validates net fees). The Dec 9 agenda adds the stale
+  decision-quote and per-fill-fee questions. Validation: lint, mypy, 47 tests.
+- `621a72c3b`: test isolation only. `test_submit_order_fix.py` restores the
+  exact `ai_trading.execution` modules instead of reloading them (that reload
+  broke four `test_pretrade_short_checks.py` tests).
+  `test_meta_learn_persistence.py` uses a fresh slippage EWMA map, and the
+  midpoint-offset clamp test turns off the adaptive blend. The previously
+  failing 87-file selection now passes (995 tests); validator 310 passed.
+- **Deployed** Wed 04:55 UTC (closed, flat). Spec backup
+  `runtime/release_spec.829b5f5e2.bak.json` (SHA only). Identity `pass`,
+  `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` (0 positions, 0 open
+  orders), 0 errors, NRestarts=0. Rollback: checkout `829b5f5e2`, restore that
+  spec, restart.
+- `/healthz` is still `degraded`, with only the preserved
+  `required_model_stale` (model trained Jul 17, 14-day limit; retraining
+  waits for the reset) and `replay_live_parity_gate_failed` (counterfactual
+  −6.05 bps, 166/250 samples) blocks.
+
+## November 11: code-audit fixes deployed (`829b5f5e2`)
+
+A read-only audit found 12 issues; 10 were fixed in `829b5f5e2`, each with a
+regression test. July 3 half-day close now comes from the exchange calendar.
+The day after a ≥5% loss gets a 3% daily-loss limit. Pretrade daily-loss
+pct/abs and intraday-drawdown gates now receive account metrics (opening
+orders only; unavailable metrics are logged). Live profiles can only tighten
+promotion/approval gates. Missing equity skips the drawdown check instead of
+halting. Holiday checks use the New York date. A data-layer calendar
+fallback is logged. The fabricated test ack and the bulk-cancel fallback are
+removed. An empty successful positions read clears the tracker. Not changed:
+the uncalled `RiskEngine` drawdown stop (a large cleanup with no runtime
+effect) and `alpaca_api.submit_order`, kept for paper/test per
+`docs/SUPPORTED_TRADING_PATH.md`.
+`agent_validate_changed.sh` passed (577 mapped tests). Replay deferred: risk
+gates and calendar only, no signal change.
+- **Deployed** Wed 04:03 UTC (closed, flat). Spec backup
+  `runtime/release_spec.8023d7642.bak.json` (SHA only). Identity `pass`,
+  `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC` fresh, 0 errors,
+  NRestarts=0. Rollback: checkout `8023d7642`, restore that spec, restart.
+- `/healthz` is `degraded` because of `replay_live_parity_gate_failed` (the
+  gate has logged `REPLAY_LIVE_PARITY_GATE_BLOCKED` since Oct 25) and
+  `required_model_stale`. Both showed on `8023d7642` right after a restart, and
+  this change touches neither.
+- Opening orders are now blocked at a $150 / 5% daily loss or a 6% drop from
+  the intraday peak (`.env`).
+- The reported-only fee allocation then landed as `1420b7687` (above).
+
+## October 25: portfolio manager mode proposal drafted (for Dec 9; nothing built)
+
+`docs/PORTFOLIO_MANAGER_MODE_PROPOSAL_20261025.md`, linked from the Dec 9 plan's
+amendment record. Fixed owner-chosen ETF mix, band/calendar rebalancing,
+cash-flow first, EOD flatten off, daily loss cap replaced by drawdown alerts,
+kill switch halts orders without liquidating, manual approval per live
+rebalance, plan-benchmark + SPY reporting, phased rollout behind an
+operational gate (8 paper scorecards, then small live ≥ 3 months). Owner
+decisions listed in section 6. No code or config changed.
+
+## October 25: volatility-target trial claimed once — retired
+
+On the owner's instruction `--fit` ran at 15:52 UTC (closed) on `8023d7642`:
+`retired`. Only the Sharpe lower bound failed: +0.068 (0.936 vs 0.868), CI
+−0.138..+0.256. Passed: drawdown ratio 0.705 vs same-exposure static mix
+(19.0% vs 26.9%), +0.058 at 20 bps, turnover 1.15, support 498/10 years.
+Reported only: CAGR 13.3% vs 15.7%, vol 12.0% vs 15.9%, avg SPY weight 0.89.
+Recorded in the amendment (Result) and the Dec 9 plan amendment record. No
+tuning authorized. Holdout not evaluated, 0 orders.
+
+## October 25: volatility-target trial registered, data acquired, preflight passed (claimed later, above)
+
+Owner approved the contract as drafted. `8023d7642` (amendment
+`docs/RESEARCH_RESET_AMENDMENT_20261025_VOLATILITY_TARGET.md`, reset config
+entry, contract `registered` with three clarification keys, runner
+`ai_trading/tools/volatility_target_trial.py` + 17 tests). Full validation
+7,669 passed; CI, CodeQL, SBOM, Workflow Lint green.
+- **Deployed** Sun 05:16 UTC, closed and flat. Spec backup
+  `runtime/release_spec.3911dfa6e.bak.json` (SHA only). Both identity reports
+  pass, `IMPORT_PREFLIGHT_OK`, engine init, `BROKER_SYNC`, stream connected,
+  account config OK, 0 errors, NRestarts=0. Rollback: checkout `3911dfa6e`,
+  restore that spec, restart.
+- **Ledger** `artifacts/volatility_target_core_trial_20261025/campaign_state.json`
+  registered 05:18:16Z, contract hash `b0b8b925…f5b9`, trials `[]`.
+- **Acquisition** `data/acquisition.json`: SPY and BIL SIP daily
+  `adjustment=all`, 2,514 rows each 2016-01-04..2025-12-31; SPY sha
+  `626ff4e2…`, BIL sha `cf72c0cb…`.
+- **Support audit** (timestamp-only): 498 periods (400 needed), 10 supported
+  years (8 needed), 46–51 per year. **Preflight**: `preflight_passed`, 0 price
+  rejections, signature `430b6305…`, `trial_claimed: false`.
+- Next, only on the owner's explicit word:
+  `./venv/bin/python -m ai_trading.tools.volatility_target_trial --repository-root . --contract config/volatility_target_core_trial_campaign.json --fit`
+  (claims once, no retry).
+
+## October 25: volatility-target core trial drafted (registered later, above)
+
+Owner asked for the next hypothesis after the momentum trial retired. Checked
+the September trend contract: a price-direction ETF filter (60 sessions), so a
+long-horizon trend filter is a consumed-hypothesis variant and was excluded.
+Drafted `config/volatility_target_core_trial_campaign.json`
+(`draft_not_registered`) and `docs/VOLATILITY_TARGET_CORE_TRIAL_PROPOSAL_20261025.md`:
+SPY weight min(1, 15% / 21-session vol), rest BIL, 5-session rebalance, 0.10
+band, 2016–2025 SIP daily `adjustment=all`. Sharpe vs buy-and-hold (bootstrap
+lower bound > 0) and drawdown ≤ 0.85× a same-average-exposure static mix.
+Timestamp-only check: SPY/BIL 2,514 bars each 2016-01-04..2025-12-31. Next, on
+the owner's word: amendment + registration, then an offline weight-trial
+runner and daily acquisition (registered_strategy_trial scores buy signals
+only), support audit, preflight, single `--fit`.
+
+## October 25: momentum trial claimed once — retired
+
+On the owner's instruction `--fit` ran at 04:03 UTC (closed): status
+`retired`, ledger `trials` has one finished entry. Net −21.4 bps/period at
+10 bps (CI −76.7..+31.1), paired vs always-long −37.0 bps (CI −70.1..−5.2),
+−31.4 bps at 20 bps, 3/7 profitable quarters; always-long +15.6 bps. Every
+acceptance criterion failed. Holdout not evaluated, 0 models, 0 orders.
+Recorded in `docs/RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md` (Result) and
+the Dec 9 plan's amendment record: branch A ends, review proceeds under B/C.
+No tuning of this hypothesis is authorized.
+
+## October 25: momentum trial audit and preflight passed (claimed later, above)
+
+On the owner's word, from the live checkout (`3911dfa6e`, closed, nothing
+deployed or restarted):
+- Timestamp-only support audit
+  (`artifacts/cross_sectional_momentum_trial_20261018/support_audit.json`):
+  `support_possible_not_strategy_eligible`, 87 possible periods/selections
+  (60 required), 7 supported quarters (6 required), 502 development sessions,
+  protocol hash `5f694a82…a3e`, no prices read.
+- `--preflight` (`preflight.json`): `preflight_passed`, 87 periods,
+  `trial_claimed: false`, `holdout_evaluated: false`, signature `c9611baa…`.
+  Ledger `trials` still `[]`.
+- Next, only on the owner's explicit word: `--fit` (claims the single trial,
+  no retry). Decision rules: `docs/RESEARCH_RESET_REVIEW_20261209_PLAN.md`.
+- Rollback venv `venv.sys-bak` and wheelhouse `~/venv-rebuild` are gone; disk 38%.
+
+## October 25: Dec 9 review plan and weekly SPY benchmark — deployed `3911dfa6e`
+
+- **Dec 9 plan:** `docs/RESEARCH_RESET_REVIEW_20261209_PLAN.md` (linked from
+  `docs/RESEARCH_RESET.md`) fixes the review's decision rules before any
+  outcome: momentum trial branch (one untouched consistency check on the
+  holdout only after a pass), retire the stale day-sleeve model if no qualified
+  candidate exists, and the real-money gate (8 weekly scorecards, 30 closed
+  positions, positive after measured costs, at least even with
+  exposure-matched SPY, `live_canary_allowed`, owner approval).
+  `config/research_reset.json` unchanged. Momentum trial still unclaimed;
+  support audit, `--preflight` and `--fit` each need the owner's word.
+- **SPY benchmark:** new `ai_trading/analytics/spy_benchmark.py`; the research
+  reset scorecard gains reported-only `spy_benchmark` (account vs SPY
+  close-to-close; trades vs SPY held over the same entry/exit minutes with the
+  same notional; IEX bars; `--skip-spy-benchmark`). The weekly Slack
+  completion message adds a "Versus SPY" section. Never a blocker.
+- Real-data dry run (Oct 18–25 window, nothing sent): 14 round trips, bot
+  −$6.49 vs SPY +$2.06 on the same trades (−$8.55, −15.1 bps of $5,664
+  notional); account −0.8 bps vs SPY −45.9 bps (cash).
+- Validation: `agent_validate_changed.sh` passed (ruff, mypy, 40 targeted
+  tests, health smoke, incident snapshot) and `--full` passed
+  (7,652 passed, 3 skipped; ruff, mypy, strict typecheck, py_compile).
+- **Deployed** Sun Oct 25 03:46 UTC (Sat 23:46 ET), closed and flat, after
+  CI, CodeQL, SBOM and Workflow Lint passed on `3911dfa6e`. Prior spec saved as
+  `runtime/release_spec.4b013aa16.bak.json`; the new spec changes only the SHA.
+  Both identity reports pass, `IMPORT_PREFLIGHT_OK`, `ExecutionEngine
+  initialized`, `BROKER_SYNC`, trade-updates stream connected,
+  `BROKER_ACCOUNT_CONFIGURATION_OK`, 0 errors/warnings, NRestarts=0, RSS 614 MB,
+  `/healthz` 0.26 s (still 503 `required_model_stale`). No bot behavior
+  changed. First live SPY section: weekly run Sat Oct 31. Rollback:
+  `git -C /home/aiuser/ai-trading-bot checkout --detach 4b013aa16`, restore
+  that spec, restart.
+
+## October 19 deploy of `4b013aa16` — complete
+
+Deployed Mon 04:36 UTC (00:36 ET), closed and flat, after CI, CodeQL, SBOM and
+Workflow Lint passed on `4b013aa16`. That commit is the three merged Alpaca
+threads plus two follow-ups: `83b483e28` (stream degraded flag now timed from
+the later of start and last disconnect; missing-credentials path marks the
+stream stopped) and `4b013aa16` (docstring-only: the env-contract test
+`tests/test_env_contract_py.py::test_all_python_has_explicit_alpaca_creds`
+rejects `TradingClient(` without `api_key=` even inside docstrings; it was the
+single CI failure on `83b483e28` out of 7,639 tests). Prior spec saved as
+`runtime/release_spec.db1725a11.bak.json`; the new spec changes only the SHA.
+Pre- and post-migration identity pass, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC` (0/0, fresh), 0 errors, 0
+restarts, RSS 608 MB at ~150 s, `/healthz` 0.38–0.45 s, still 503
+`required_model_stale`.
+
+New subsystems on first start:
+- `BROKER_ACCOUNT_CONFIGURATION_DRIFT` on the first start (paper account had
+  `no_shorting=false`, `max_margin_multiplier=4`). The owner changed the paper
+  account in the Alpaca dashboard at ~04:45 UTC; `--check` then returned
+  `match` (exit 0) and a restart at 04:47 UTC (closed, flat; identity pass, 0
+  warnings, stream reconnected on attempt 1) logged
+  `BROKER_ACCOUNT_CONFIGURATION_OK` and cleared the health flag. The startup
+  check runs once per start, so a future drift shows only after a restart or
+  via `./venv/bin/python -m ai_trading.tools.broker_account_configuration --check`.
+  `dtbp_check`/`pdt_check` are `unreported_fields` (Alpaca stopped returning
+  them; raw-GET fallback in use).
+- `TRADE_UPDATES_STREAM_CONNECTED` on attempt 1, paper, shadow only; health
+  section shows connected, not degraded, 0 events (market closed). The shadow
+  artifact `runtime/trade_updates_stream.jsonl` and
+  `trade_updates_parity_latest.json` do not exist yet; they appear on the first
+  event and the first 300 s parity refresh.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach db1725a11`,
+restore that spec, restart. Stream kill switch without rollback:
+`AI_TRADING_TRADE_UPDATES_STREAM_ENABLED=0` in `.env`, restart.
+
+Monday watch list: everything from the `db1725a11` entry, plus: stream stays
+connected through the open and records fills (`events_today` > 0, rows in
+`trade_updates_stream.jsonl`); parity summary after the first fills
+(`python -m ai_trading.tools.trade_updates_parity --session 2026-10-19
+--output <file>`); EOD recap renders the broker cross-check block; the
+dispatcher's broker-portfolio cache file appears under the runtime root;
+`/healthz` latency with the second websocket open.
+
+## October 19: three Alpaca-surface threads merged to main, not deployed
+
+Merged `4cb6a129f`, `aa763ad76`, `45f2611e8` (branches
+`claude/broker-account-config-check-07605f`, `claude/portfolio-history-crosscheck-0f880b`,
+`claude/trade-updates-stream-shadow-bbd273`; Opus 5.5 sessions, each validator-clean).
+No conflicts. Combined-tree checks: ruff, mypy and compile on the 22 changed
+Python files; 429 tests across tests/broker, tests/analytics, the stream, parity,
+Slack, research_reset, prune, health, app, startup_runtime and main suites; the
+merged entrypoint imports and builds the canonical health payload in 0.35 s warm
+with both new sections rendering their unavailable state. Live service still on
+`db1725a11`. SIP purchase declined by the owner for now.
+
+- **Broker account configuration, read-only** (`ai_trading/broker/account_configuration.py`,
+  `ai_trading/tools/broker_account_configuration.py --check`, health section
+  `broker_account_configuration`, flag `broker_account_configuration_drift`,
+  `docs/BROKER_ACCOUNT_CONFIGURATION.md`). Startup runs it once after BROKER_SYNC
+  and logs `BROKER_ACCOUNT_CONFIGURATION_OK|DRIFT`; never blocks trading. The live
+  paper account currently drifts: `no_shorting=false` and `max_margin_multiplier=4`
+  against the long-only 1x launch profile, so the flag will show after deploy
+  until the owner changes the paper account in the Alpaca dashboard (the exact
+  `set_account_configurations` call is in the module docstring). Alpaca no longer
+  returns `dtbp_check`/`pdt_check`, which breaks alpaca-py 0.42.1's typed call;
+  the check falls back to a raw GET on the same client and lists them under
+  `unreported_fields`.
+- **Portfolio-history cross-check, reported only** (`ai_trading/analytics/portfolio_history.py`;
+  EOD recap `broker_portfolio` section and `broker_crosscheck_block` in
+  `slack_format.py`; weekly scorecard columns in `tools/research_reset.py`
+  `build_scorecard`, `--skip-broker-portfolio-history` to skip). 5-minute cache in
+  memory and at `<runtime_root>/broker_portfolio_history_cache.json` because the
+  dispatcher is a fresh process each minute; failures not cached; kept out of the
+  recap dedupe fingerprint. Same-day round-trip P&L now computed in one shared
+  place. Live non-sending check for Oct 16: broker +$0.72 vs internal +$0.76; the
+  week shows broker $0.03–0.05 below internal every day (likely per-sell
+  regulatory fees; inference, not verified).
+- **Trade-updates stream, shadow only** (`ai_trading/alpaca_api.py`
+  `start_trade_updates_stream` real implementation; `ai_trading/telemetry/trade_updates_stream.py`;
+  `ai_trading/tools/trade_updates_parity.py --session YYYY-MM-DD [--output]`;
+  health section `trade_updates_stream`; `docs/TRADE_UPDATES_STREAM.md`). Records
+  every broker trade update to `runtime/trade_updates_stream.jsonl` (dedupe set of
+  20k keys; retention 32 MiB / 100k lines registered in both prune tools) and
+  refreshes `runtime/trade_updates_parity_latest.json` every 300 s from a
+  background thread; it never writes the OMS store or `fill_events.jsonl`. Finding:
+  the old stream thread was never started because `python -m ai_trading` never
+  called `configure_main_runtime_jobs`; `ai_trading/main.py` now starts it
+  (daemon, honours `AI_TRADING_TRADE_UPDATES_STREAM_ENABLED`, default 1, skipped
+  in test mode). Paper/live from `ALPACA_TRADING_BASE_URL` then `EXECUTION_MODE`.
+  Drives the websocket through alpaca-py private methods (`_start_ws`, `_consume`,
+  `stop_ws`) because the SDK loop retries without backoff; safe only while 0.42.1
+  stays pinned. Opens a second websocket on the paper account once deployed.
+  Authority bar: three consecutive clean sessions (zero stream_only/polled_only/
+  qty mismatches, price-delta p95 < 1 bps, no write failures).
+
+Next on the owner's word: deploy in a closed, flat window; then fix the paper
+account's shorting and margin settings and re-run `--check`; watch the first
+trading session for `TRADE_UPDATES_STREAM_CONNECTED`, rows in
+`trade_updates_stream.jsonl`, and the parity summary.
+
+## October 19 deploy of `db1725a11` — complete
+
+Deployed Mon 00:56 UTC (Sun 20:56 ET), closed and flat, after CI, CodeQL, SBOM
+and Workflow Lint passed on `db1725a11` (the run on `3d058ec66` was cancelled
+by the newer push; this run covers both commits: momentum trial registration,
+fee-schedule draft, slippage CSV schema fix). Prior spec saved as
+`runtime/release_spec.68792e2ca.bak.json`; the new spec changes only the SHA.
+Pre- and post-migration identity reports pass, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC` (0 positions, 0 open orders,
+fresh), 0 warnings, 0 errors, 0 restarts, RSS 572 MB at ~100 s, `/healthz`
+0.28–0.39 s, still 503 `required_model_stale` by design. The header-only live
+`slippage.csv` was rewritten to the new seven-column header during the window,
+so Monday's first fill rows land under the right header. Nothing in this
+deploy changes trading decisions; the fee schedule stays disabled and the
+momentum trial is registered only.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 68792e2ca`,
+restore that spec, restart.
+
+Monday watch list (unchanged): burn-in cycles accumulating with no reset;
+closing sells as `order_role: exit`; first real EOD recap in Slack after the
+close; the prune timer's first archive rotation of `decision_records.jsonl`;
+cycle times; dispatcher minute-runs staying `health_ok`; first
+`slippage.csv` rows having seven columns.
+
+## October 18 late night: momentum trial registered, logs reset, fee draft, prune
+
+On the owner's instruction, four items, none deployed and no restart:
+
+- **Momentum trial registered, not claimed.** `cross_sectional_momentum_trial_20261018`
+  is now `registered` in `config/cross_sectional_momentum_trial_campaign.json`,
+  cited in `config/research_reset.json` `registered_trials` and `amendments`,
+  with record `docs/RESEARCH_RESET_AMENDMENT_20261018_MOMENTUM.md`. The owner
+  adopted the `open_and_close_minutes` DIA completeness rule as written. Ledger
+  `artifacts/cross_sectional_momentum_trial_20261018/campaign_state.json`
+  (runtime checkout, gitignored) registered 2026-10-18T23:56:26Z, contract hash
+  `5f694a82e5b07900ad2767d6947c29b33795b49c1c98c2e0298c6033e66e0a3e`, zero
+  trials. Neither the support audit nor `--preflight` has run. Next, only on the
+  owner's word: `./venv/bin/python -m ai_trading.tools.registered_strategy_trial
+  --repository-root /home/aiuser/ai-trading-bot --contract
+  config/cross_sectional_momentum_trial_campaign.json --preflight` (never
+  claims), then `--fit` once from a closed window.
+- **Slippage log reset.** `/var/log/ai-trading-bot/slippage.csv` held 693
+  AAPL/MSFT fixture rows from March; archived as
+  `runtime/recovery_backups/legacy_bak_preserved_20261018/slippage.csv.fixture_polluted.20261018T235540Z.gz`
+  and recreated with the header the code wrote at the time. `reward_log.csv`
+  was already header-only and is untouched. **Header mismatch fixed on main,
+  not deployed:** the header writers in `bot_engine.py` and
+  `production_engine.py` wrote five columns
+  (`timestamp,symbol,expected,actual,slippage_cents`) while
+  `execution/slippage_log.record_fill` appended seven, and the VWAP slice path
+  in `core/execution_flow.py` appended a different five. All writers now use
+  `ai_trading.slippage.recorder.SLIPPAGE_LOG_COLUMNS`
+  (`timestamp,symbol,side,quantity,expected_price,actual_price,slippage_bps`)
+  via `ensure_slippage_log_header`; `record_fill` writes the header before its
+  first row; the VWAP row carries side, filled qty and side-normalised bps.
+  `tca.rollups.load_slippage_records` already accepted both shapes and still
+  loads legacy five-column rows. Test: `tests/test_slippage_log_schema.py`.
+  The live file still carries the old five-column header until the next
+  deploy; rewrite that one header line when deploying, or leave it (readers
+  skip the header by name).
+- **Fee schedule draft for the owner's declaration.**
+  `config/fee_schedule.paper_alpaca.draft.json`, filled from the Alpaca
+  Brokerage Fee Schedule PDF (sha256 `814767d3…`, title metadata "Template Oct
+  12, 2026", retrieved 2026-10-18T23:56:03Z): commission 0 (retail
+  commission-free per the Commissions Disclosure), SEC Section 31 sells
+  0.0000206 × trade value, FINRA TAF sells $0 per share, CAT buys and sells
+  $0.000003 per executed equivalent share; rounding ceil to $0.01 per fill from
+  the Regulatory Fees page. `effective_from` set to 2026-10-19 because the PDF
+  prints no effective date; the owner should confirm it. Validation fails only
+  on the two unfilled fields `declared_by` and `declared_at`; with placeholders
+  it passes (hash `18cdf297…`, which will change once declared). Still
+  disabled (`AI_TRADING_FEE_SCHEDULE_SOURCE` unset). Enabling needs a reset
+  amendment, the two declaration fields, a rename to
+  `config/fee_schedule.paper_alpaca.json`, the two `.env` lines and a restart
+  (`docs/FEE_SCHEDULE_DECISION_20261018.md`).
+- **Pruned.** Ten merged branches (`claude/affectionate-lehmann-4c08b7`,
+  `modest-shtern-ae9515`, `practical-cray-ffebdc`, `slack-readability`, six
+  `worktree-agent-*`) deleted with their worktrees. Left in place because their
+  idle sessions still own them: `claude/eloquent-elbakyan-2b19ec` and
+  `claude/upbeat-carson-2abade` (both merged).
+
+## October 18 night deploy of `68792e2ca` — complete
+
+Deployed Sun 23:26 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint passed on `68792e2ca` (merge of `claude/modest-shtern-ae9515`, the
+`/healthz` latency fix below). Prior spec saved as
+`runtime/release_spec.7ce1acdc9.bak.json`; the new spec changes only the SHA.
+Note for the manual pre-migration identity check: run it with the unit's
+`Environment=` lines and `/run/ai-trading-bot/ai-trading-runtime.env` sourced,
+otherwise it reports `mode: sim` and blocks on config/profile hash. Both
+identity reports pass on `68792e2ca`, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC` (0 positions, 0 open orders,
+fresh), 0 errors, 0 restarts, RSS 599 MB at ~100 s. Only the designed
+`STRATEGIES_NOT_CONSUMED_UNDER_NETTING` warning. `/healthz` now answers in
+0.29–0.32 s (was 3.6–6.5 s); still 503 `required_model_stale` with only
+`replay_counterfactual` failing, basis `exchange_calendar`, as before. The
+connectors dispatcher's `health_payload_unavailable` runs should stop; confirm
+Monday. Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach
+7ce1acdc9`, restore that spec, restart.
+
+Monday watch list (unchanged plus one): burn-in cycles accumulating with no
+reset; closing sells as `order_role: exit`; first real EOD recap in Slack after
+the close; the prune timer's first archive rotation of `decision_records.jsonl`;
+cycle times; dispatcher minute-runs no longer timing out on health.
+
+Cleanup done Sun 23:48 UTC on the owner's instruction: duplicate branch
+`claude/charming-cohen-e6dade` and its worktree deleted; the five finished
+Slack-chain and latency sessions archived (their worktrees removed);
+`venv.sys-bak` (1.9 GB, April) deleted; `STRATEGIES` removed from the live
+`.env` (removed value: cross_sectional_momentum, multi_factor_quality_value,
+pairs_stat_arb, pead_event, low_beta_defensive, time_series_momentum_overlay).
+The identity check confirmed the removal leaves both spec hashes unchanged.
+Service restarted closed and flat on `68792e2ca`: identity pass, all three
+anchors, 0 warnings, 0 errors, 0 restarts, `/healthz` 0.27 s. Merged branches
+`claude/{affectionate-lehmann-4c08b7,modest-shtern-ae9515,practical-cray-ffebdc,
+slack-readability,eloquent-elbakyan-2b19ec,upbeat-carson-2abade}` and the six
+`worktree-agent-*` worktrees remain for the owner to prune.
+
+## October 18 night: /healthz latency root cause (merged in `68792e2ca`)
+
+Branch `claude/modest-shtern-ae9515`, merged to main after `3744697b9`. `/healthz` on :9001 took ~3 s per request
+because `.env` sets `AI_TRADING_HEALTH_REQUIRE_{OMS_INVARIANTS,OMS_LIFECYCLE_PARITY,
+REPLAY_LIVE_PARITY_GATE,DB_READY}=1`, so those gates skip the async health cache
+and run inline on every request. Out-of-process timings against live data: OMS
+reconciliation invariants ~0.7-0.8 s and lifecycle parity ~0.7-1.0 s (one SQL query
+and connection per intent, 2,255 intents each); replay gate ~1.6-2.5 s (parses all
+139 `replay_hash_*.json`, 163 MB, to find the newest). Concurrent probes serialize
+on the GIL: three concurrent curls each took ~11 s. Fix: a bulk
+`EventStore.list_oms_event_types_by_intent` query and a per-file signature cache of
+replay artifact `ts`. Full canonical payload ~3.4 s -> ~0.3 s warm (first call
+~1.9 s); gate outputs identical on live data.
+
+Second commit, same branch: the two in-process whole-file readers below.
+`/healthz` does not call `build_report` (it reads
+`runtime_performance_report_latest.json`, ~5 ms); these readers slowed health
+only by holding the GIL in the trading process. `bot_engine._read_jsonl_records`
+now reads backwards from EOF until `max_records` rows are found (all 12
+callers), so `_load_recent_rejection_concentration_by_symbol` went from ~3.1 s to
+~0.8 s. The rest is parsing the 4,000-record window, which is 45 MB of the
+252 MB file. `_summarize_gate_effectiveness_daily` keeps a per-path fold of the
+complete lines already read and parses only appended bytes. It rebuilds on a
+new inode, on shrink, or when the 256 bytes before the offset change. Cost went
+from ~1.4-1.9 s per call to ~1.3 s on the first call and ~1 ms after that.
+Out-of-process outputs on live data hash-identical before and after.
+
+## October 18 night deploy of `7ce1acdc9` — complete
+
+Deployed Sun 19:52 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint passed on `7ce1acdc9`. Prior spec saved as
+`runtime/release_spec.7e0a00365.bak.json`; the new spec changes only the SHA
+(config and launch-profile hashes unchanged; the fee-schedule fields default to
+`missing`). Identity checks pass pre- and post-migration, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, 0 restarts, broker
+connected and flat, RSS 729 MB at 89 s. Exactly one WARNING as designed:
+`STRATEGIES_NOT_CONSUMED_UNDER_NETTING` (remove STRATEGIES from `.env` to
+silence it). The replay gate now reports only `replay_counterfactual` with
+`sessions_since_replay=0`, basis `exchange_calendar`.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 7e0a00365`,
+restore that spec, restart.
+
+**Known at the time, fixed by `68792e2ca`:** `/healthz` took 3.6–6.5 s per request
+(503 while degraded is expected). The connectors dispatcher's health timeout is
+5 s, so roughly half of its minute-runs record `health_payload_unavailable`
+(48 in the three hours before this deploy, on `7e0a00365`). Root cause is the
+whole-file loads inside the health/go-no-go path (see the retention follow-up
+below); either bound those readers or raise the dispatcher timeout.
+
+Monday watch list: burn-in cycles accumulating with no reset; closing sells as
+`order_role: exit`; first real EOD recap in Slack after the close; the prune
+timer's first archive rotation of `decision_records.jsonl`; cycle times.
+
+## October 18 late: six fixes and upgrades merged to main
+
+`main` is `7ce1acdc9` on origin and deployed (above). Full suite on the merged tree:
+7,543 passed, 3 skipped, under the new production read guard; ruff, mypy and
+compile clean on all 14 changed runtime files. Each piece was built in its own
+worktree by an Opus 5.5 agent and verified independently before merging.
+
+- **Loader** (`c57078890`): `get_strategies()` logs `STRATEGIES_NONE_RESOLVED`
+  and returns `[]` when nothing resolves (the dead `momentum` fallback is gone),
+  and warns once a day `STRATEGIES_NOT_CONSUMED_UNDER_NETTING` while
+  `AI_TRADING_NETTING_ENABLED=1`. The live `.env` still sets six names, so the
+  warning will appear after deploy until STRATEGIES is removed from `.env`.
+- **Replay freshness** (`93a222a1c`): age measured on the XNYS calendar with
+  closed-market hours excluded and at most one missed session; weekday behavior
+  unchanged. Removes the weekend `replay_fresh` failure; the counterfactual
+  failure is untouched.
+- **Retention** (`bad476786`): `scripts/prune_runtime_jsonl.sh` now archives
+  rotated segments under `recovery_backups/archive/` (never deletes), adds
+  `--dry-run`, caps execution_quality_events / broker_position_boundaries /
+  policy_ablation_events, lowers decision_records to 192 MiB, and archives
+  research runs older than 30 days with a model-registry reference guard. The
+  first apply after deploy rotates `decision_records.jsonl`. The two legacy
+  `.bak.gz` files the OLD script would have deleted this week are copied to
+  `recovery_backups/legacy_bak_preserved_20261018/`. Known follow-up, not
+  fixed: two whole-file readers in the trading process (`bot_engine.py`
+  `_load_recent_rejection_concentration_by_symbol`, ~9 s per cycle;
+  `runtime_performance_report._load_json_lines` on gate_effectiveness every
+  60 s, ~4 s and +295 MB).
+- **Multi-day trial tooling** (`743eb25fb`): `ai_trading.tools.registered_strategy_trial`,
+  a daily support audit in `research_feasibility`, and the draft
+  `config/cross_sectional_momentum_trial_campaign.json` (ETF universe; status
+  `draft_not_registered`). Owner decision pending: the ETF set clears support
+  only under the open/close-minute completeness rule; see
+  `docs/MULTI_DAY_STRATEGY_TRIAL_PROPOSAL_20261018.md`.
+- **Fee schedule** (`5c6dd615d`): `ai_trading/analytics/fee_schedule.py`,
+  `AI_TRADING_FEE_SCHEDULE_SOURCE=missing|declared` (default missing), consumers
+  label `declared_schedule` distinctly and never as broker evidence. Memo:
+  `docs/FEE_SCHEDULE_DECISION_20261018.md`. Not enabled.
+- **Test read isolation** (`5316effc8`): audit-hook read guard in
+  `tests/conftest.py` on top of the write guard; root cause of the stray
+  `logs/trades.jsonl` in the checkout was the conftest reset calling the
+  trade-log fallback (fixed). `tools/mcp_slack_alerts_server.py` runtime report
+  path now honors `AI_TRADING_RUNTIME_ROOT`.
+
+Deploy, when chosen: closed and flat, spec SHA update, identity checks,
+restart (procedure below). Rollback: checkout `7e0a00365`.
+
+## October 18 evening deploy of `7e0a00365` — complete
+
+Deployed Sun 16:56 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint passed on `7e0a00365`. The prior spec is saved as
+`runtime/release_spec.1e7c849f4.bak.json`; the new spec changes only the SHA.
+Identity checks pass pre- and post-migration, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, 0 warnings, 0 restarts,
+broker connected and flat, RSS 733 MB at 93 s. Only `required_model_stale` and
+`replay_live_parity_gate_failed` remain (the latter also shows `replay_fresh`
+over weekends; a card proposes a calendar-aware fix).
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 1e7c849f4`,
+restore that spec, restart.
+
+What this deploy carries beyond `1e7c849f4`:
+
+- **Readable Slack messages** (`0103d585a`): one shared formatter
+  (`ai_trading/monitoring/slack_format.py`) for incidents, EOD recap, preflight,
+  close recap and research notices. Four test messages were posted from the
+  merged code before deploy; the connectors timer now runs the new code and
+  dedupes exactly as before (incident fingerprint unchanged, nothing re-sent).
+- **EOD recap now sends after the close** (`e3488b0ec`): eligibility uses the
+  shared market-closed check (health reason or data-provider reason), so
+  `required_model_stale` no longer blocks it. First real send: Monday after
+  the close. Its P&L, closed trades, win rate, profit factor and losers all
+  derive from report-date fills (Eastern boundary); cumulative trade-history
+  loss drivers are kept under `trade_history` and never shown as the day's
+  losers.
+- **Incident flap debounce**: a changed trigger set must persist two
+  consecutive evaluations before re-alerting
+  (`AI_TRADING_SLACK_TRIGGER_CHANGE_CONFIRMATIONS`, default 2); hard outage
+  triggers alert at once. The Oct 13–18 journal showed 98 sends alternating
+  on broker connected/unknown.
+- **Test isolation** (`042adb507`): tests can no longer write to the
+  production log, data, model, cache or output directories; a guard fails any
+  test that does. The live `slippage.csv` still holds 693 fixture rows and
+  `reward_log.csv` is header-only; archive and reset them (owner decision).
+- Study reports: `docs/PAPER_ROUND_TRIP_COST_EVIDENCE_20261018.md` and
+  `docs/STRATEGY_WIRING_AUDIT_20261018.md`.
+
+Open on the host (owner, needs password): remove the dangling
+`/usr/local/bin/openclaw-admin` symlink and reinstall
+`packaging/systemd/ai-trading-connectors.service` (installed copy still says
+"Slack + OpenClaw"). Six proposed task cards cover the remaining fixes and
+upgrades (loader fallback, test read isolation, calendar-aware replay
+freshness, multi-day trial harness, declared fee schedule, JSONL retention).
+
+## October 18 deploy of `1e7c849f4` — complete
+
+Deployed Sun 04:54 UTC, closed and flat, after CI, CodeQL, SBOM and Workflow
+Lint all passed on `1e7c849f4`. The prior spec is saved as
+`runtime/release_spec.ad499f4fe.bak.json`; the new spec changes only the SHA
+(resolved config hash and launch-profile hash are unchanged by the burn-in fix).
+Pre- and post-migration identity checks pass, `IMPORT_PREFLIGHT_OK`,
+`ExecutionEngine initialized`, `BROKER_SYNC`, 0 errors, 0 restarts, broker
+connected and flat, provider alpaca, RSS 692 MB at 80 s. Only the two existing
+flags remain (`required_model_stale`, `replay_live_parity_gate_failed`).
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach ad499f4fe`,
+restore that spec, restart.
+
+Four commits beyond the October 17 deploy, plus the test isolation fix
+(`7d85dbea3`, merged as `1e7c849f4`) that removed the order-dependent failure
+noted below. Watch Monday for `PAPER_BURN_IN_STATUS` accumulating cycles with
+no reset, and for closing sells arriving as `order_role: exit`.
+
+**Trial outcome (04:57 UTC):** `day_sleeve_horizon_trial_20261018` ran and is
+`inconclusive_budget_consumed`; hypothesis retired. Net -0.854 bps per
+opportunity at 10 bps, bootstrap lower bound -1.49, 1 of 5 folds profitable,
+4 of 5 folds under 250 selections; +8.7 bps over always-long (-9.57). Better
+than the five-minute trial (-3.20) but not positive. No artifact saved, no gate
+changed; the stale-model deadlock stands. Record:
+`docs/DAY_SLEEVE_HORIZON_TRIAL_RESULT_20261018.md`. Next decision is the
+owner's: a different hypothesis needs a new pre-registered contract.
+
+- **Burn-in config-hash churn** (PR 3165, merged as `af7b0497c`): `build_runtime`
+  wrote the AUTO-resolved max position size into `cfg` after the open, changing
+  `config_snapshot_hash` and resetting paper burn-in almost every session
+  (255 resets; cycles=1 at most opens). Declared settings are now frozen at
+  construction; rollout governance fails closed outside paper. Watch Monday for
+  `PAPER_BURN_IN_STATUS` cycles accumulating across the day and no new reset.
+- **Fill order_role** (`f03bc15a9`): closing sells were recorded as `entry` with
+  `closing_position: false` (50 of 64 sells since Sep 1). The submit-time
+  closing decision now travels into reconciled fill records. Historical records
+  are unchanged; TCA, markout and the symbol live-expectancy gate read the new
+  records only going forward.
+- **Trial tooling** (`3fd9617ff`): `model_replacement_trial` and
+  `research_feasibility` read horizon, cutoff, classifier and bootstrap from a
+  `--contract`; the Sept 21 contract is unchanged in behavior and hash.
+- **Reset amendment** (`723649711`): the owner authorized one registered
+  development trial, `day_sleeve_horizon_trial_20261018` (60-minute label
+  horizon, existing feature contract, 2024–2025 SIP for AAPL/AMZN/MSFT). See
+  `docs/RESEARCH_RESET_AMENDMENT_20261018.md` and the proposal. Ledger
+  `artifacts/day_sleeve_horizon_trial_20261018/campaign_state.json`, hash
+  `46604293…`, zero trials claimed; preflight partitions and the support audit
+  (8,934 opportunities) are present. Claiming with `--fit` is a separate owner
+  decision from a closed, flat window.
+- Known pre-existing test pollution: with `tests/config tests/core tests/execution
+  tests/runtime tests/app` in one run, `test_module_entrypoint_loads_dotenv_before_standalone_settings`
+  fails (passes alone); a side session is fixing it.
+
+Deploy, when chosen: closed and flat, release spec update, identity checks, then
+`sudo systemctl restart ai-trading.service`. Rollback: checkout `ad499f4fe`.
+
+## October 17 weekend: clean venv, OpenClaw retired, EOD log fix
+
+Deployed `ad499f4fe` Sat ~01:50 ET, closed and flat, after a host reboot onto
+kernel 6.8.0-147. CI, CodeQL, SBOM and Workflow Lint pass. The prior spec is saved
+as `runtime/release_spec.3fe07613e.bak.json`.
+
+- **Clean venv** (no `--system-site-packages`), built offline from
+  `/home/aiuser/venv-rebuild/wheelhouse` exactly as CI does: `requirements-dev.txt`
+  + constraints, plus the RL and plot extras, plus an editable install. It now
+  matches the lock (torch 2.13.0+cpu, transformers 5.10.4, pyarrow 23.0.1,
+  cryptography 50.0.1); `pip check` is clean. Full validation on it: 7,399 passed,
+  3 skipped. The new skip is `ta`, which is not in the lock and not used at runtime.
+  The bot runs with 0 system-package mappings, torch not loaded, 845 MB RSS at
+  start. Secrets use the standalone `/usr/local/bin/aws` CLI v2, not boto3.
+  Rollback: stop, `rm -rf venv && mv venv.sys-bak venv`, start. Delete
+  `venv.sys-bak` (1.9 GB) and the wheelhouse (491 MB) after a clean session.
+- **EOD** `659f6dfee` (from the EOD session): `EOD_EXIT` is logged only for
+  accepted exits (otherwise `EOD_EXIT_SKIPPED`); insufficient-qty 40310000 is
+  non-retryable. Merged by hand with the cancel-then-flatten policy.
+- **OpenClaw retired** (`ad499f4fe`): repo code removed (connector 1,390 → ~470
+  lines; hooks, audit script, agent templates, policy doc). `openclaw_summary`
+  → `operator_summary`. On the server: 4 user units stopped and removed, both npm
+  installs (`~/.local`, `~/.npm-global`) uninstalled, `~/.openclaw`,
+  `~/ai-trading-bot/.openclaw` and `memory/` deleted. Backups:
+  `~/openclaw-backup-20261017.tar.gz` (455 MB, includes the cron job JSON) and
+  `~/openclaw-repo-workspace-backup-20261017.tar.gz`. Eleven `*OPENCLAW*` vars were
+  removed from `.env` (backup `~/env-backup-20261017-pre-openclaw-removal`); the
+  identity check still passes with the new `.env`.
+- **Replacement Slack reports**: user timers `ai-trading-slack-report-preflight`
+  (Mon–Fri 09:20 ET) and `-close-recap` (16:45 ET) run
+  `connector_incident_dispatch.py --report …`. They post via the Slack incident
+  webhook (to that webhook's channel, not the old DM). The send path was dry-run
+  verified (secret hydrated, Slack URL, nothing posted). First runs: Mon Oct 19.
+  The Monday runtime audit is dropped.
+
+Watch Monday: 09:20 and 16:45 Slack reports arrive; EOD cancel-then-flatten and
+`EOD_EXIT_SKIPPED` behavior; a flat close; RSS and swap on the new venv.
+
+## October 16 evening deploy of `3fe07613e` — complete
+
+The owner asked for items 1–5 end to end. Full validation passed (7,407 tests;
+`artifacts/maintenance/validation_20261016_batch/`). Pushed; CI, CodeQL, SBOM and
+Workflow Lint pass. Deployed Fri 19:10 ET, closed and flat; the prior spec is saved
+as `runtime/release_spec.4d53076b1.bak.json`. Identity checks pass, 0 errors, 0
+restarts, broker flat, provider alpaca.
+
+- `99114d099`: provider-monitor hard-fail reasons now name the gap condition
+  (`gap_ratio_severe_initial` / `gap_ratio_residual` / `gap_ratio_exceeded`)
+  instead of the catch-all. Criticality is unchanged (all keep the `gap_ratio`
+  token). Telemetry reason_code now reads `gap_ratio`, not `upstream_5xx`.
+- `5dd9c72e2`: `tests/conftest.py` isolates each test module's import-time
+  `os.environ` changes (27 modules leaked TESTING/DRY_RUN/etc. into the whole run).
+- `3fe07613e`: **EOD policy change.** When a held symbol has non-EOD active orders,
+  EOD requests their cancellation and defers that symbol. The next EOD attempt
+  (60 s cadence, 300 s window) exits the remaining quantity from a fresh read. EOD
+  never sells beside a resting order and never cancels its own `eod-` orders. If the
+  open-order snapshot is unavailable, it falls back to the old behavior. Watch Monday
+  for `EOD_PENDING_ORDER_CANCEL_REQUESTED` / `EOD_EXIT_DEFERRED_PENDING_CANCEL` and
+  a flat close.
+- Five linked side sessions (all merged/deployed) still need archiving; the app was
+  unreachable from this session.
+
+Rollback: checkout `4d53076b1`, restore that spec, restart.
+
+## October 16 06:12 UTC deploy of `4d53076b1` — complete
+
+The owner approved. Full validation passed (7,399 tests; log in
+`artifacts/maintenance/validation_20261016_both2/`). Pushed; CI, CodeQL, SBOM and
+Workflow Lint all pass. Deployed closed and flat; the prior spec is saved as
+`runtime/release_spec.15513026b.bak.json`. Identity checks pass, 0 errors, 0
+restarts, broker connected and flat, provider alpaca, torch not loaded.
+Rollback: checkout `15513026b`, restore that spec, restart.
+
+1. **Oct 15 IEX→Yahoo fallback** (`9c4161644`): not a regression from our code (no
+   `ai_trading/data` changes). Root causes: (a) an upstream IEX minute-bar gap
+   ~16:57–18:10 UTC across AAPL/AMZN/TSLA/AMD/META pushed the session gap ratio
+   past 25% → switch at 18:05. (b) A pre-existing recovery bug: every
+   backup-served request was reported to the provider monitor as a primary
+   `hard_fail`, even when routing skipped the primary. That reset the
+   consecutive recovery passes, so the bot stayed on Yahoo until the close even
+   though IEX was current from ~18:13. Fix: no primary health update when the
+   primary wasn't attempted (routing skip). Real attempts, safe mode and forced
+   provider are unchanged.
+2. **Oct 15 EOD MSFT 403** (`f9be12add`, from the EOD investigation session): the
+   open-order quantity index normalized alpaca-py `OrderSide` with `str()` →
+   `"OrderSide.SELL"`, so every broker order was dropped. Sell clipping,
+   duplicate-intent suppression and delta netting never saw open orders. The fix
+   unwraps `.value`. **This changes trading behavior** (netting now subtracts real
+   open orders); no replay was run because it restores the intended contract.
+   Watch fills/rejects. The EOD cancel/replace policy question is still open.
+3. Test hardening (`4d53076b1`): `tests/core/test_enter_short_order_logging.py`
+   leaks `TESTING=1` etc. at import (pre-existing pollution).
+4. Process note: a `git stash pop` misfired onto the pre-existing stash
+   `stash@{0}` ("Preserved pre-deployment notes … 2026-09-21"). It was restored;
+   the stash is intact and untouched.
+
+Next: Oct 16 post-close check (fallback count, switchovers, 403s, cycles, memory).
+
+## October 16 early-morning findings
+
+- **Data regression question — resolved above.** On Oct 15 the minute-bar
+  provider switched alpaca-iex → Yahoo at 18:05:18 UTC and stayed there until the
+  close.
+- **Venv drift root cause:** the venv was created with `--system-site-packages`
+  (`venv/pyvenv.cfg`). Twelve packages are older in the venv itself (aiohttp,
+  click, cryptography 46, idna, mako, msgpack, pyarrow 17, soupsieve,
+  transformers 5.7, torch 2.8 vs lock 2.13+cpu, …). Pygments, pytz and setuptools
+  load from Ubuntu's `/usr/lib/python3/dist-packages`, so apt upgrades can change
+  runtime deps. Plan, **only after** the data question is settled: build a clean
+  venv without system packages from `constraints.txt` (as CI does), in a closed and
+  flat window. Keep `venv` as a rollback (move it aside). Run the identity
+  preflight and full health checks, and watch one session.
+- Housekeeping: `venv.cuda-bak` deleted (7.5 GB). `venv.bak` (pre-security-bump)
+  is kept until one clean session on the upgraded venv.
+
+## October 15 after-close security upgrade — complete
+
+`51b0abd4b` (anyio 4.14.2, fsspec 2026.6.0, urllib3 2.8.0, Werkzeug 3.1.9) is
+pushed. All 6 workflows are green, **including Dependency Audit** (first pass
+since Sept 16). The live venv was upgraded in place at 20:13 UTC, closed and flat:
+`--no-deps` install of exactly those 4 wheels. Backup is at
+`/home/aiuser/ai-trading-bot/venv.bak` (excluded locally). Rollback: stop, `rm -rf
+venv && mv venv.bak venv`, then start. Imports are ok. The one new `pip check`
+line comes from the editable install's stale metadata ("ai-trading-bot 0.0.0 has
+requirement urllib3==2.6.3"). No runtime code reads it; refreshing it means an
+editable reinstall into the runtime checkout. The runtime checkout stays at
+`15513026b` (pins are packaging-only). After restart: identity checks pass, 0
+errors, 0 restarts, broker connected and flat, OMS gates pass, torch not loaded.
+`venv.cuda-bak` (7.5 GB) is now safe to delete after one clean session.
+
+**Oct 15 session (first full day on `15513026b`)**: 240 cycles, median 10.7 s
+(was 21.7), p90 17.6 s, max 43.7 s (was 196), 0 over 110 s, 0
+`BROKER_OPEN_ORDER_SNAPSHOT_SLOW` (was 35), 0 `ALERT_CYCLE_COMPUTE_CRITICAL`, 7
+submitted orders. The process at 15.5 h used 874 MB RSS + 122 MB swap with torch
+not loaded; system swap was 1.6 GB, mostly other tools. Issues to follow up:
+(1) `ALERT_PRIMARY_FEED_FALLBACK_PROLONGED`, ~18:05–18:25 UTC on the Yahoo backup;
+(2) the 19:55:47 UTC EOD MSFT market sell was rejected 403 "insufficient qty
+available (available: 0)", probably a race with an existing exit order holding the
+shares. The account ended flat.
+
+## October 15 (04:39 UTC) deploy of `15513026b` — complete
+
+The owner approved. Full validation on `15513026b` passed (7,396 tests, ruff,
+mypy, strict typing, compile; log in
+`artifacts/maintenance/validation_20261015_main/`). It is pushed to origin/main.
+CI, CodeQL, SBOM, Workflow Lint and Dependency Graph pass. **Dependency Audit
+fails**, as it has on every weekly run since Sept 21 (including on `1853464dc`):
+7 vulnerabilities in anyio 4.13.0, fsspec 2025.7.0, urllib3 2.7.0 (live has
+2.6.3) and Werkzeug 3.1.6. Fixed versions: anyio 4.14.2, fsspec 2026.6.0,
+urllib3 2.8.0, Werkzeug 3.1.9. The live venv already runs these vulnerable
+versions and this deploy did not change them. The owner chose to deploy now and
+fix the audit next.
+The deploy ran closed and flat. The prior spec is saved as
+`runtime/release_spec.a7a704ce4.bak.json`; the new spec changes only the SHA. Both
+identity checks pass, there are 0 errors and 0 restarts, broker is connected and
+flat, and the OMS gates pass. **Torch is no longer loaded** (0 mappings, no
+`ML_DEVICE_DETECTED`). RSS was 758 MB at 1m36s, compared with 862 MB at 1m29s
+after the previous restart. Re-measure after a market session.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach a7a704ce4`, restore
+the backup spec, then restart.
+
+## October 15 (03:25 UTC) CPU-only torch venv and HF retirement
+
+- **Live venv converted in place** (owner approved; closed and flat): removed triton
+  and 14 `nvidia-*-cu12` wheels, installed `torch==2.8.0+cpu` (same version), and
+  `pip check` is clean. The venv went from 7.5 GB to 1.9 GB. Backup is at
+  `/home/aiuser/ai-trading-bot/venv.cuda-bak` (excluded via `.git/info/exclude`);
+  delete it after a clean session. Rollback: stop the service, `rm -rf venv &&
+  mv venv.cuda-bak venv`, then start. After restart: identity checks pass, 0
+  errors, 0 restarts, broker connected and flat, and 0 NVIDIA library mappings
+  (76 before).
+- Memory: the old process (4h15m) had 632 MB RSS + 326 MB swap, with 1.84 GB system
+  swap. Re-measure the new process after a full market session. Most remaining
+  swap belongs to other tools (OpenClaw gateway ~262 MB, PDF MCP helpers ~380 MB,
+  idle Claude sessions), not the bot. Torch is still loaded because
+  `AI_TRADING_RL_REQUIRE_RUNTIME_STACK=1`, although the RL agent
+  (`rl_agent.zip`, March) has produced no signals. Removing RL from runtime is a
+  pending **owner decision**.
+- **Drift:** the live venv does not match `constraints.txt` on 15 packages (torch
+  2.8 vs 2.13, transformers 5.7 vs 5.10.4, pyarrow 17 vs 23, cryptography 46 vs
+  50, …). CI tests the lock versions. Rebuilding from the lock is a separate,
+  deliberately validated change.
+- `main` (unpushed): `9e55e86` pins `torch==2.13.0+cpu` via the PyTorch CPU index
+  (packaging tests pass). `121bd42` retires the dormant HF research tooling (5
+  tools, 11 planned steps, report sections; −3,614 lines;
+  `agent_validate_changed.sh` passed with 87 affected tests). The runtime FinBERT
+  sentiment module is unchanged. Neither commit is deployed; the live checkout
+  is still `a7a704ce4`.
+
+## October 14 deploy of `a7a704ce4` — complete
+
+The owner approved the push and deploy. Commit `a7a704ce4` is on origin/main
+(CI, CodeQL, SBOM and Workflow Lint all pass). Local
+`agent_validate_changed.sh --full` passed: 7,409 tests, ruff, mypy, strict typing
+and compile. Log: `artifacts/maintenance/validation_20261014_merged/`. Deployed at
+23:09 UTC with the account closed and flat (0 positions, 0 open orders). The prior
+spec is saved as `runtime/release_spec.1853464dc.bak.json`, and the new spec
+changes only the SHA. Pre- and post-migration identity checks pass, as do
+`IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`, 0 errors, 0 restarts,
+broker fresh/flat and OMS gates. Only the existing stale-model/replay flags remain.
+`.claude/` (side-session worktrees) and the `venv` symlink are excluded locally via
+`.git/info/exclude`, so the runtime checkout reports clean.
+Rollback: `git -C /home/aiuser/ai-trading-bot checkout --detach 1853464dc`, restore
+the backup spec, then `sudo systemctl restart ai-trading.service` (NOPASSWD).
+Next: watch the Oct 15 market session for cycles under 110 s, no
+`BROKER_OPEN_ORDER_SNAPSHOT_SLOW`, decision quotes at most 1 s old, and fewer
+scorecard chain gaps. Follow-ups: CPU-only torch (4.6 GB of unused CUDA wheels), and
+archiving research reports older than 30 days (7.4 GB, evidence: archive, don't delete).
+
+## October 14 evening — release preparation (superseded by the deploy above)
+
+Work from this `main` checkout (`/home/aiuser/ai-trading-maintenance-main`), never
+the live runtime checkout `/home/aiuser/ai-trading-bot`, which must stay clean.
+
+- `main` (unpushed, 3 ahead of origin): `893f491` (Oct 12 broker read/accounting
+  repair), `c402a78` (Oct 14 review), `94ec6f7` (scorecard uses durable OMS
+  decisions for EOD exits as a fallback; on live data the decision, decision-time
+  and order gaps went 3→0).
+- Branch `claude/silly-sutherland-7975c7` → `60d0f75bb`: bounds the open-order
+  history scan by the active-order lifetime, on top of 893f491's symbol scoping
+  (913 tests + validator passed). One commit ahead of `main`.
+- Branch `claude/lucid-moore-e37bad` → `8197a933c`: records the causal decision
+  time and arrival quote in netting decision records. Stale "quotes" were a
+  recording bug, not the IEX feed. Based before `c402a78`; needs a merge.
+- Full validation of `c402a78`: ruff, mypy, strict typing and compile are clean;
+  pytest 7,387 passed, 2 skipped, 8 failed. All 8 are environmental (this
+  worktree has no `./venv`): they pass with `AI_TRADING_PYTHON` set or in the
+  runtime checkout. Triage and logs: `artifacts/maintenance/validation_20261014/`.
+  Run tests here with `/home/aiuser/ai-trading-bot/venv/bin/...` plus
+  `AI_TRADING_PYTHON=/home/aiuser/ai-trading-bot/venv/bin/python`.
+
+Next, in order: (1) done: test triage; (2) merge both branches into
+`main`, then rerun `bash scripts/agent_validate_changed.sh --full` outside market
+hours; (3) **owner approval** to push `main` (public repo) and wait for exact-tip
+CI; (4) after-close deploy per `docs/RELEASE_IDENTITY.md`: flat/no open orders,
+new release spec, move the runtime checkout to the CI-passed SHA,
+`sudo systemctl restart ai-trading.service`, check health and 0 restarts;
+(5) watch the next market session's cycle times (<110 s), quote ages and
+scorecard chain gaps. Live canary stays blocked: no qualified model, replay
+−8.2 bps net, research pause until the Dec 9 review.
+
+## October 14 broker open-order snapshot bound (not deployed)
+
+`list_open_orders` no longer pages the full `status=all` history. The read
+starts 92 days back, based on Alpaca's aged-order policy: GTC orders are
+canceled 90 days after creation, and other TIFs expire sooner. This is a
+lifetime bound, not the rejected submission-time discovery cursor. Hidden
+`pending_new`/`accepted` orders inside the bound are still found. Any `open`
+row with no timestamp or older than the bound falls back to the full scan.
+This builds on 893f491's symbol scoping: unscoped risk/broker-sync reads
+and symbol-scoped reads both stop at the bound instead of reading all history.
+After close, read-only paper measurement: full scan 79 pages / 39,484 rows /
+4.3 s; bounded scan 1 page / 191 rows. History has 2,848 GTC orders, all
+ended within 10 days, and none is active. That fits the policy but doesn't
+prove paper enforces it. Residual gap: an order older than 92 days that is
+hidden from `open`, or a row with no timestamp (the alpaca-py 0.42.1 `Order`
+model requires `submitted_at`). Validation after rebasing onto c402a78: `agent_validate_changed.sh` passed;
+913 tests passed (`tests/core` plus every `list_open_orders` caller). Next: deploy with operator approval and confirm that
+`BROKER_OPEN_ORDER_SNAPSHOT_SLOW` and the over-budget cycles drop.
+
+## October 14 research reset review
+
+The user decided to keep the pause through the holdout
+([review](RESEARCH_RESET_REVIEW_20261014.md)). `config/research_reset.json` now
+sets the review date to 2026-12-09 and still requires an explicit review. Work is
+limited to named gaps, in priority order: stale decision quotes (1,896/2,399 over
+1 s), incomplete causal fill chains (0/22), per-fill fees. Runtime is still at
+`1853464dc`; the research timers read the live checkout, so they keep reporting
+`review_due` until deployment (training stays blocked either way).
+Oct 14 session: service healthy with 0 restarts; 3 one-share round trips, ≈ −$0.68
+gross; ends flat. Five cycles of about 195 s, matching the 39k-order scans that
+the undeployed `893f491` addresses. Validation: `agent_validate_changed.sh`
+targeted pass (ruff/mypy/compile, 9 tests) plus 26 research policy/reset tests.
+
+## October 12 Pacific cycle/accounting repair
+
+Work in persistent `main` checkout `/home/aiuser/ai-trading-maintenance-main`;
+runtime remains clean at `1853464dc`. Five prior documentation edits are preserved.
+Details: `docs/CYCLE_ACCOUNTING_REPAIR_20261012.md`.
+Established causes: repeated complete 39k-order scans (six in a 194.75-second
+cycle); AMZN's pending request compacted by fuzzy match before its real fill;
+MSFT's genuine durable EXIT decision omitted from the ordinary-file-only audit.
+Patch sends explicit symbol scope to every open/all page, reconciles known intents
+by native IDs, reuses only same-attempt/same-broker complete observations younger
+than one second at consumption, stops fuzzy compaction and appends only native
+causal recovery facts, and reads the original durable decision for reports.
+All trading/research safeguards, budgets and holdout remain unchanged. Full
+account discovery still queries all history; no temporal cursor discovery cache.
+Initial 43 focused / 164 expanded tests passed. Final required changed-file
+validation passed 93 mapped tests, lint/type/compile, health/non-sending smoke.
+Actual-record copy proof: decision/order/TCA matches 1/2/1 -> 2/2/2, fees still
+unknown. AMZN-scoped read: six requests / 0.325 seconds versus account-wide
+80 / 3.849; known MSFT lookup one / 0.014. These are after-close measurements,
+not evidence that all market-hour cycles now meet the unchanged 110-second SLO.
+Next: reviewed commit, exact-tip CI, fresh closed/flat exposure and release checks,
+after-close deployment, supported AMZN receipt append/report regeneration, then
+observe ordinary market/EOD cycles without forced trades. Approval is required
+for publishing the exact new commit to the public repository. Private evidence:
+runtime `artifacts/maintenance/cycle_accounting_repair_20261012/`.
+
+## October 8 Pacific host maintenance — complete
+
+Owner requested latest Codex and routine server updates. Both existing npm
+prefixes have stable Codex CLI `0.162.0`; version/help smoke checks pass.
+Owner authenticated apt refresh and
+`sudo env NEEDRESTART_MODE=l apt-get --with-new-pkgs --no-remove upgrade`.
+Completed at 19:26:48 Pacific: 39 upgrades, seven new packages, no removals.
+Two packages (`libopeniscsiusr`, `open-iscsi`) remain deferred by Ubuntu phasing.
+Owner rebooted; boot time 19:32:51 Pacific. Kernel `6.8.0-146-generic` is active
+and the reboot-required marker is absent. The reconnected app server now
+reports `0.162.0`, matching the CLI; the earlier unmanaged `0.160.0` process
+could not be upgraded through the managed daemon commands before reboot.
+Trading started at 19:33:29 Pacific with zero automatic restarts. Both automatic
+startup identity checks pass on clean tested source `1853464dc`. Canonical health
+and independent broker check confirm fresh/connected, closed/ACTIVE and flat;
+OMS checks pass. Existing stale-model/replay flags remain unchanged. No failed
+systemd services or incomplete package states. Heartbeat and backup timers are
+active/enabled; heartbeat upload succeeded after reboot. The last backup before
+reboot completed successfully at 16:31:41 Pacific; next backup is scheduled.
+Final post-reboot snapshot at 19:43 Pacific passes all seven release/broker/OMS/
+kernel/reboot checks. Bounded startup journal has 77 INFO entries and no structured
+ERROR/CRITICAL entries. Non-sending incident check passes; its `health_degraded`
+trigger reflects the existing qualification flags. No notification was sent.
+Docs-only validation and `git diff --check` pass on the restored changes.
+No application code, SDK, model, trading gate or research changes.
+Reboot cleared the temporary main editing worktree and private `/tmp` artifacts.
+Recovered the five recorded documentation edits into persistent main worktree
+`/home/aiuser/ai-trading-maintenance-main`; leave the deployed checkout clean.
+Historical branch metadata is untouched. Older `/tmp` proof and rollback paths
+below are historical references, not currently available files. New maintenance
+evidence is persisted under the ignored runtime artifact directory
+`artifacts/maintenance/server_updates_20261008/`. Documentation is local and
+unpublished; no public push is authorized for a new documentation commit.
+
+## October 14 decision-quote staleness (branch claude/lucid-moore-e37bad)
+
+Root cause, evidence and patch: `docs/QUOTE_STALENESS_DIAGNOSIS_20261014.md`.
+Two recording bugs: the explicit decision time was the cycle start (it preceded
+the per-symbol arrival quote in 487/515 rows), and decision records used the
+cached prerank quote or a mix of it, not the arrival quote (all 23 invalid
+observation rows). Fixed in the submit prelude, netting cycle and recorder, with
+regression tests. Non-submitting rows are genuinely stale (median 7.9 s from
+prerank prefetch to netting); 893f491 targets broker-read tails, not that interval.
+Undeployed; fees still block complete chains.
+
+## October 2 Pacific closing snapshot
+
+Read-only broker check at 13:02 Pacific: market closed, ACTIVE paper account,
+zero positions/active orders, six paginated broker fills. Three one-share
+round trips: AAPL -$1.88, AMZN +$0.82, MSFT -$0.02; total -$1.08 gross.
+Broker equity change also -$1.08. All fill fee amounts remain unknown; neither
+equality nor absent fee activities establishes verified net P&L. Today's
+scheduled report published at 13:38 Pacific: all local sources stable, six-fill
+position arithmetic matched, five TCA matches/one AMZN gap and six unknown fees.
+Separate today-only raw broker comparison passed all six order quantities and
+execution counts; matching counts do not certify individual fill identity.
+The broader historical report still has 19 execution-count mismatches.
+Service active with zero automatic restarts; broker/OMS health fresh/consistent,
+only existing stale-model/replay qualification flags.
+Closing local funnel: 476 decisions, seven intents/acks, six fills and one
+canceled MSFT buy. Six intent/decision trace links pass. The late AMZN sell
+lacks decision_trace_id and reports account_identity_consistent=false even
+though its intent account matches the observed broker. Two diagnostic gaps:
+decision_intent_linkage_incomplete, account_identity_unverified. Earlier
+ordinary-path verification was a bounded sample, not proof of every exit path.
+Root cause and prospective repair now documented in
+`docs/EOD_EXIT_ACCOUNTING_REPAIR_20261002.md`: EOD bypassed the normal decision
+and TCA writers; the lifecycle writer discarded the genuine trigger time.
+The patch adds a stable operational exit trace/decision before claim, retains
+trigger time/account, and captures fill receipts without invented benchmarks,
+fees or costs. Retries retain original durable decision identity. Historical
+records are unchanged. The follow-up preserves known position-entry correlation
+through the actual fill-capture writer; the strict matching gate is unchanged.
+Required validation passed 113 initial, 57 follow-up and 25 helper tests, with
+lint/type/compile, health and non-sending checks; 80 affected tests also passed
+together. Initial CI's outdated helper expectation was corrected before release.
+Final owner-approved commit `1853464dcd1893f98b0d35477a2f8367c0090fb7` is public.
+Exact-tip CI `37065103532` passed: 7,346 passed, five skipped, 80.22% coverage.
+CodeQL, SBOM, Workflow Lint, strict typing, replay, the fixed research fixture
+backtest and determinism checks passed. Historical log: `/tmp/ai-trading-ci-1853464dc.log`.
+After-close deployment completed October 2 at 14:34:28 Pacific, with a fresh
+closed/ACTIVE/flat broker check and both installed and automatic startup release
+identity phases passing. Runtime checkout was clean at `1853464dc`. At 14:36:40
+Pacific, health confirmed fresh connected broker state, zero positions/active
+orders, passing OMS checks and the existing stale-model/replay flags. Zero
+automatic restarts and structured startup errors. The final non-sending incident
+snapshot passed with no triggers; no notification was sent. Historical proof:
+`/tmp/ai-trading-eod-exit-post-deployment.json` and
+`/tmp/ai-trading-eod-exit-incident-snapshot.json`.
+Rollback source is `7e2b81612`; its former specification path was
+`/tmp/ai-trading-release-spec-before-25b9a7d28.json` (cleared at October 8 reboot).
+Next: verify the next naturally occurring EOD reduction's decision, single claim,
+account/order/trace/correlation and observed fill receipt. This runtime-path proof
+awaits a future ordinary session. Unknown fees and the historical AMZN gap remain
+unavailable evidence; do not force trades or fabricate joins.
+Today's report investigation is complete; its `evidence_pending` status remains
+appropriate. Details and exact acceptance criteria are in the repair report.
+Post-deployment documentation is recovered locally on the persistent `main`
+editing worktree; it is not yet committed/published. Keep the runtime checkout clean.
+Private artifacts: `/tmp/ai-trading-status-20261002{,-activities}.json` and
+`/tmp/ai-trading-closing-funnel-20261002.json`.
+
+## October 1 Pacific after-close follow-through
+
+Three-item evidence and patch summary:
+`docs/AFTER_CLOSE_FOLLOWTHROUGH_20261001.md`.
+The owner approved and published follow-up `7e2b81612d2745bdf1b3bcc7508e912ab36a0cd6`.
+Exact-tip CI `36961650029` passed: **7,330 passed, five skipped, 80.21% coverage**;
+CodeQL, SBOM, Workflow Lint, replay, research backtest and all determinism seeds
+passed. Full log: `/tmp/ai-trading-ci-7e2b81612.log`.
+The earlier `3da931cff` also passed CI. Pre-deployment boundary review found
+the canonical lifecycle writer rebuilt metadata without account identity.
+The follow-up verifies/persists the current cached broker account before the
+durable claim; conflicts stop and unavailable identity stays unknown. The
+integration regression now invokes that actual writer and OrderManager/store.
+Its 345 targeted runtime/account tests passed; standard changed-file validation
+passed 51 mapped tests, Ruff, mypy (three paths), compilation, forbidden patterns,
+live health and the non-sending incident snapshot. Logs:
+`/tmp/three-items-durable-writer-tests.log` and
+`/tmp/three-items-durable-writer-validation.log`.
+Runtime checkout and installed specification now identify `7e2b81612`.
+Restart completed October 1 **21:15 Pacific** (October 2 04:15 UTC), after the
+broker clock confirmed closed, account ACTIVE and zero positions/active orders.
+Both installed-checkout and automatic startup identity phases passed.
+Post-start health passed at 21:16 Pacific: fresh connected broker, flat,
+consistent OMS invariants/lifecycle, zero automatic restarts. HTTP 503 retains
+only `required_model_stale` and `replay_live_parity_gate_failed`.
+Non-sending incident snapshot passed; no notification sent by this task.
+Its edge-realism, go/no-go and degraded-health triggers remain diagnostic
+blockers; a passing snapshot smoke check does not establish qualification.
+Reports: `/tmp/ai-trading-followup-installed-{pre,final}.json` and
+`/tmp/ai-trading-three-items-post-deployment.json`. Rollback spec:
+`/tmp/ai-trading-release-spec-before-3da931cff.json` (previous `d20388f88`).
+Complete order lookup remains 79 history pages / 39,427 response rows including
+overlap (~4.08 seconds after close); no latency improvement is claimed. Rejected
+the cursor prototype because newly visible old/null-timestamp pending orders
+could disappear. Fixed open-query pagination and full-page evidence checks.
+Prospective broker account attribution now reaches rejected/final decisions,
+submission/OMS metadata and TCA; failed account refresh/sync clears stale
+execution identity. Original historical records remain unchanged.
+Fresh October 1 raw activities and both raw orders contain no total-fee
+evidence; two observed fills remain gross-only (-$0.320 inferred FIFO), with
+net P&L unavailable. No ingestion defect was established for those responses.
+Investigation completion does not resolve the underlying fee/latency gaps.
+
+Validation: 142 mapped tests, Ruff, mypy (13 paths), compilation, forbidden
+patterns, live health and non-sending incident snapshot passed. Final streaming
+pagination adjustment passed 29 affected tests, Ruff, mypy (two paths) and
+compilation. Logs: `/tmp/three-items-final-agent-validation.log` and
+`/tmp/three-items-inventory-final-tests.log`. Model/replay safeguards and research
+budgets/holdout remain unchanged. Deployment and prospective account-path
+verification are complete within today's observed sample. October 2 ordinary
+session diagnostic: 230 durable decisions, three intents/acks (one canceled
+MSFT buy and the two filled AAPL orders), three causal local trace links and
+zero linkage gaps. All three intent accounts match the fresh broker capture;
+four pending/resolved TCA rows cover both filled broker order IDs and match
+that account. This does not establish fee completeness or live execution proof.
+Artifacts: `/tmp/ai-trading-goal-session-funnel-20261002.json` and
+`/tmp/ai-trading-goal-tca-tail-20261002.jsonl` (private identifiers stay local).
+The ordinary cycle wrote the new release's run manifest at 06:30 Pacific
+October 2 (13:30 UTC). No cycle/order was forced for verification.
+The saved six-area goal remains blocked: source-backed live equity/cash and
+approved baselines plus risk-path integration, cross-host recovery/fencing,
+verified accounting costs/boundaries and model/replay qualification are still
+unfinished. Controlled noncurrent-version recovery and the real local
+PostgreSQL owner-crash drill already passed; do not list them as untested.
+Local documentation updates in this main worktree record deployment; they have
+not been published. Runtime checkout stays clean at its CI-tested code release.
+
+## Approved improvement release continuation (October 1 UTC)
+
+The owner approved publishing exact commit
+`d20388f88aa1e228946b0ce3dbd74970924cebbf`; it is now on `origin/main`.
+SBOM, Workflow Lint, CodeQL and exact-tip CI run `36817593249` passed.
+CI reported **7,305 passed, five skipped, 80.20% coverage**, including its
+replay, research-backtest, determinism, institutional and static gates.
+Full CI log: `/tmp/ai-trading-ci-d20388f88.log`.
+Both read-only candidate release identity phases passed using the packaged
+environment, existing schema and unchanged model/config/profile identities.
+Reports: `/tmp/ai-trading-release-identity-candidate-d20388f88.json` and
+`/tmp/ai-trading-release-identity-final-candidate-d20388f88.json`.
+The refreshed 05:26:16 UTC broker check was closed, active and flat with zero
+active orders. The deployment checkout and installed release specification
+now identify `d20388f88`; both installed-checkout identity phases passed:
+`/tmp/ai-trading-deployment-pre-migration-d20388f88.json` and
+`/tmp/ai-trading-deployment-final-d20388f88.json`.
+Rollback specification is preserved
+at `/tmp/ai-trading-release-spec-before-d20388f88.json`.
+The owner ran the restart at **07:30:04 Pacific October 1 (14:30:04 UTC)**,
+during the open paper session. Both automatic startup identity checks and the
+run manifest identify `d20388f88`; the checkout is clean. The service remains
+active with zero automatic restarts. No further restart was performed.
+After the initial in-flight intent completed, health showed a fresh connected
+broker and consistent OMS invariants/lifecycle parity. HTTP 503 now reflects
+only `required_model_stale` and `replay_live_parity_gate_failed`. Startup includes
+the existing `MODEL_REGISTRY_STALE` error, preserved replay safeguards, IEX gaps
+and slow authoritative broker scans; do not report an error-free startup.
+At 07:35:36 Pacific the broker showed one long MSFT share and zero active orders.
+The read-only daily funnel captured one local decision/intent/ack/fill chain
+with `linked_local_trace` and a causal pre-submit timestamp; local account
+identity remains absent. No account identity or historical join was invented.
+Two KPI snapshots show synchronized inventory ages 0.547/0.690 seconds and
+`open_orders_snapshot_ms=0`; reporting no longer adds a history scan. Authoritative
+79-page scans still took about 14–35 seconds and need separately bounded work;
+do not claim whole-cycle latency is solved. The non-sending incident snapshot
+passed and reported existing degraded health; no notification was sent.
+Evidence: `/tmp/ai-trading-startup-d20388f88.log`,
+`/tmp/ai-trading-health-after-d20388f88.json`,
+`/tmp/ai-trading-postdeployment-exposure-d20388f88.json`,
+`/tmp/ai-trading-postdeployment-funnel-d20388f88.json` and
+`/tmp/ai-trading-incident-after-d20388f88.json`.
+These handoff/release-guide updates are local and outside the already-approved
+published commit. Reuse the completed local/CI tests for unchanged runtime code.
+
+## Five-item improvement follow-through, September 30 Pacific / October 1 UTC
+
+User authorized all five improvements. Work is on `main` in
+`/tmp/goal-handoff-20260929`, preserving the existing uncommitted release docs.
+Implementation and initial validation were completed before the deployed
+continuation above. Scope and per-item acceptance criteria:
+`docs/TRADING_IMPROVEMENTS_20260930.md`.
+
+- **Cycle efficiency:** KPI reporting reuses fresh, known synchronized order
+  inventory instead of another complete history scan. Unknown inventory is null,
+  never zero. Authoritative order/exposure queries are unchanged. The no-query
+  regressions pass; the first-session reporting behavior is verified above.
+  Complete cycle latency remains a separate limitation.
+- **Order diagnostics:** `ai_trading.tools.order_funnel` reads a coherent SQLite
+  snapshot and separates durable decisions, final acceptance, intents, submit
+  claims, durable broker acknowledgements and recorded fills. The daily paper
+  review includes it. Independent pre-submit qualification is not recorded and
+  is reported as unknown. Counts/reasons can overlap; they are not conversion
+  rates. New outcome records retain pre-submit decision/source times and rejection
+  trace IDs. September 30: 476 decisions, zero final accepted records, 12 locally
+  rejected intents/claims, no durable broker acks or fills. All twelve historical
+  joins lack causal time evidence; account identity is absent. No record is
+  backdated or joined by a guessed symbol/time.
+- **Fault coverage:** the durable broker simulator records actual submit calls,
+  preventing unique-order deduplication from hiding retries. Two competing process
+  claims and a partial-fill/cancel/delayed-ack race pass. Eight process tests pass.
+- **Live risk/recovery:** source observation freshness now matters independently
+  of receipt freshness; all fourteen equity-risk tests pass. Added a real opt-in
+  PostgreSQL owner-crash/takeover test with no schema writes, restricted to a local
+  disposable database. The general suite skips it unless explicitly configured;
+  a separate actual run passed using temporarily unpacked Ubuntu PostgreSQL
+  16.15 on localhost. Contention, killed-owner lock release and takeover passed
+  in 5.24 seconds; cleanup stopped the server. No system installation, runtime
+  database or trading-service change occurred. Log:
+  `/tmp/five-items-real-postgres-drill.log`.
+  Funded-live baselines, complete timed cash flows, source equity timestamps and
+  real cross-host recovery remain unavailable. A controlled S3 fixture uploaded
+  the same previously verified bundle twice under one new approved-prefix key;
+  fetching the first, now-noncurrent version matched its version ID, phase
+  metadata and original SHA-256. Isolated restore recovered 3,045 entries and
+  both SQLite integrity checks passed. The restored boundary and fresh paper
+  broker share the same account and flat positions; restored order authority
+  remains disabled. This proves version selection/restore mechanics, not recovery
+  of absent historical versions, full accounting or cross-host failover.
+  Proof: `/tmp/five-items-version-recovery-20261001T043836Z/proof.json` and
+  `broker-boundary-proof.json` in that directory. At 04:44:58 UTC the backup
+  timer was enabled/active; its September 30 23:30:23 UTC run succeeded.
+- **Research decision:** retire the consumed fixed logistic replacement trial.
+  Existing selected proxy trades average +0.221377 bps gross / −9.778623 bps net
+  at frozen 10 bps costs; all five folds lose. Current existing replay has 195
+  samples and −7.294058 bps net edge. More samples alone do not fix economics.
+  No new trial, holdout evaluation, model or gate change is authorized or run.
+
+Validation so far: final affected-file run passed 354 tests with one unconfigured
+PostgreSQL skip; the actual PostgreSQL drill separately passed. Standard changed-file
+validation passed 355 tests, one explicit PostgreSQL skip, Ruff, mypy (12 paths),
+compilation and forbidden-pattern checks; final diagnostic/KPI refinements passed
+their affected-file recheck, Ruff and mypy (six paths). Full project mypy (466
+sources), strict types (466 plus 14 and 25 strict sources), tracked Python and new
+module/test compilation pass. The initial full run was aborted after socket
+restrictions broke local server tests and stalled an HTTP fixture; known socket
+failures pass on the host and four later failures pass in isolation. The final
+unchanged-source full host validation passed at 04:48 UTC:
+**7,308 passed, two skipped** in 21:58, Ruff, mypy, strict types and tracked
+Python compilation all passed. Log: `/tmp/five-items-full-host-validation.log`.
+The skips were the unconfigured PostgreSQL test (separately run and passed) and
+the existing regime fixture lacking a regime column.
+Required live/non-sending checks passed at 03:50 UTC:
+service active, zero restarts; structured health 503 only preserved model/replay
+qualification blocks; fresh broker with zero positions/orders; incident snapshot
+reports expected degraded health. It sent no notification.
+
+Next: preserve ordinary paper evidence and review the next daily accounting
+report; investigate remaining authoritative-read latency in a separately bounded
+task. Deployment and first-session diagnostic/KPI checks passed as recorded above.
+Underlying live-capital evidence gaps and the existing goal remain blocked;
+do not mark them complete because this investigation or patch is finished.
+
+## September 30 release continuation
+
+The owner explicitly approved publishing
+`5a8ae5ac593e828a3431a1284de63d7e4f8f755f`; it is pushed to `origin/main`.
+Exact-tip CI, CodeQL, SBOM and Workflow Lint passed. CI reported 7,285 tests
+passed, four skipped and 80.19% coverage. Reuse the successful full local
+validation below because runtime code is unchanged. Both installed
+release-identity phases passed against the clean deployment checkout,
+packaged runtime environment, existing schema and configured model bytes.
+At 03:03 UTC October 1 the paper broker was closed, active, flat and had no
+active orders.
+The installed unit matches the packaged unit. The deployment checkout and
+installed release specification now identify `5a8ae5ac5`; the prior
+specification is saved at `/tmp/ai-trading-release-spec-before-5a8ae5ac.json`.
+The owner restarted the paper service at 03:05:21 UTC October 1 (8:05 p.m.
+Pacific September 30). Both installed startup checks passed for the clean
+`5a8ae5ac5` checkout. The service is active with zero automatic restarts;
+after warm-up, health reports a fresh, flat broker and consistent OMS
+invariants/lifecycle parity. Structured 503 reflects only the preserved
+`required_model_stale` and `replay_live_parity_gate_failed` qualification
+blocks. The final non-sending incident snapshot reported
+`blocked_qualification`, no triggers and `should_alert=false`. The bounded
+startup log had import/API/broker-sync anchors and no structured warnings or
+errors. `bash scripts/agent_validate_changed.sh --docs-only` passed for the
+local handoff/release-guide updates on the main worktree.
+Use the next paper session to confirm the false OMS self-block is gone and
+inspect the new broker-read timings before proposing a bounded optimization.
+No new experiment or model/trading gate change is authorized by this release.
+
+## September 30 no-order diagnosis and OMS report ordering
+
+The paper service ran 183 cycles during the regular session; 96 event-driven
+cycles skipped because no new bars were available. Across 85 logged decision
+rejection summaries, 476 candidate records were rejected and none accepted.
+Twelve September 30 OMS intents were all locally rejected by the runtime
+go/no-go precheck, with no broker order ID; the paper broker closed with no
+orders, fills, positions or active orders. Seven AMZN entry checks also hit
+the symbol live-expectancy block. Of 19 logged runtime go/no-go entry blocks,
+18 carried `oms_lifecycle_parity_consistent`; the other carried an OMS
+invariants availability/consistency failure. These counts overlap across
+stages.
+
+The go/no-go report's historical five-day window had 19 closed trades (50
+required), six wins, and zero acceptance. Its fresh replay counterfactual had
+195 candidate samples (250 required) and -7.29 bps net edge; more samples
+alone cannot establish positive economics. The active model remains stale.
+The service is healthy as a process but trading qualification remains blocked.
+Do not force orders, change gate thresholds, or treat paper abstention as
+profitability evidence.
+
+One integrity failure in the 19:47:56 report was transient: the report read
+the current AMZN intent after it had been claimed but before its local
+go/no-go rejection closed it. A later direct OMS read found the intent
+`REJECTED` with `SUBMIT_REJECT`, `ORDER_FAILED` and `INTENT_CLOSED` events,
+no broker ID, and no open intents; current health reports OMS lifecycle parity
+consistent. The report refresh happened after the order's earlier cache had
+expired, making its own in-flight intent appear to lack a submit ack. The
+patch refreshes go/no-go immediately before claiming an opening intent when
+the cache is near expiry and starts its TTL at evaluation completion. Prior
+unresolved intents remain subject to the same fail-closed parity check. A
+focused regression reproduces cache expiry between precheck and claim. The
+two affected execution test files passed (334 tests). Full after-close
+validation passed: 7,288 pytest passed, one fixture skip, Ruff, mypy, strict
+mypy, tracked-Python compilation and the validation artifact. The preceding
+diagnostic commit `1ab4380cc0fcd09d38abcc0aebe97c7654968a22` passed
+GitHub CI, CodeQL, SBOM and Workflow Lint. The follow-up fix has now passed its
+own exact-tip CI, installed release identity/exposure checks and the verified
+paper restart described above. Operational confirmation during a trading
+session remains pending.
+
+## September 30 paper close and slow-cycle follow-through
+
+The September 30 paper session closed flat: broker cash equaled equity, with
+zero positions, zero active orders and no September 30 activity.
+The 20:36–20:38 UTC daily evidence workflow completed. Its opening/closing
+broker position snapshots matched with no quantity differences, but there were
+no orders or fills; `paper_evidence_review` remains `evidence_pending` for
+`no_execution_samples` and cannot establish net trading performance. At 22:29
+UTC the service was active with zero restarts; `/healthz` returned structured
+503 for the unchanged `required_model_stale` and
+`replay_live_parity_gate_failed` blocks, with fresh, flat broker state.
+The non-sending incident snapshot reported only the expected degraded-health
+trigger. The session's 13 structured error-level entries were 12 compute
+alerts and one stale-model registry event.
+No order, model, replay, cost or promotion gate was changed.
+
+The service logged 16 over-budget cycles out of 183 on September 30, including
+12 critical compute alerts; the maximum cycle was 248,579 ms. Several delays
+surrounded broker order reads and the execution KPI snapshot. A read-only
+after-close Alpaca paper measurement found that one complete active-order
+snapshot required 80 API calls and scanned 39,425 historical order rows in
+4.33 seconds with zero active orders. Market-session delays were longer, but
+the exact share attributable to that read remains unproven. The current patch
+adds a warning with duration/page/row counts for complete reads taking at least
+10 seconds and adds the broker-read duration to `EXECUTION_KPI_SNAPSHOT`.
+It preserves full pagination and every exposure and trading gate. Use the next
+paper session's timings to locate the remaining cost before proposing a safe
+optimization; do not shorten the broker query from an arbitrary date.
+
+Logged IEX minute gaps were AMZN 4/389 for September 30 and MSFT 7/589 across
+September 29–30. A read-only requery of the free Alpaca IEX feed after close
+still lacked all sampled timestamps, supporting a provider-feed gap rather
+than a local omission for those samples. Keep the missing-bar safeguards and
+do not synthesize bars or buy SIP access. The diagnostic patch has targeted
+regression coverage. `bash scripts/agent_validate_changed.sh --full` passed:
+7,287 pytest passed, one regime-fixture skip, Ruff, mypy, strict mypy,
+tracked-Python compilation and the validation artifact. Run exact-tip CI,
+review broker exposure, then deploy after close and check health before using
+its timings as evidence.
+
+## September 30 after-close release and host-alert evidence
+
+Exact-tip commit `0d86c1225adb229b5cd292682899f996f5e720f7` passed
+GitHub CI, CodeQL, SBOM and Workflow Lint. The complete host-access validation
+below passed before release. After the paper broker reported a closed market,
+zero positions and zero active orders, the clean deployment checkout was moved
+to that commit. The migration-aware release specification and installed
+release-identity preflight passed for the exact checkout and paper mode. The
+owner restarted `ai-trading.service` at 03:39 UTC; it remained active with
+`NRestarts=0`. After warm-up, `/healthz` reported a fresh, flat broker and
+the unchanged `required_model_stale` and `replay_live_parity_gate_failed`
+qualification blocks. The non-sending incident snapshot had no triggers.
+No live trading, strategy gate change or order submission occurred. The prior
+release specification is saved at
+`/tmp/ai-trading-release-spec-before-0d86c1225.json` for reviewed rollback.
+
+The installed backup timer completed its automatic 23:30 UTC run and read back
+the uploaded `recovery.bak.20260929T233016Z-9c5e7b25.gz` object. S3 confirmed
+version `HAYe6qsbNyY83sSmyGYubxfIBF.b0QOm`, AES256 and the expected bucket
+owner. The earlier isolated restore verified 3,045 entries and SQLite
+integrity. A noncurrent-version restore and shared-PostgreSQL two-owner
+failover remain untested.
+
+The owner installed the packaged two-minute heartbeat service and timer; unit
+files match the reviewed copies. Manual and scheduled runs through 04:00 UTC
+published `responding: true`. In Ohio account `399705375437`, the owner created
+`ai-trading-primary-host-failure`; CloudShell read-back confirmed its
+`AITrading/Host` metric, `Host=ai-trading-primary`, Minimum over 180 seconds,
+two of two below one, missing data breaching and both transitions routed to
+the existing SNS topic. SNS reports one confirmed subscription. The alarm was
+`INSUFFICIENT_DATA` immediately after creation and the owner confirmed `OK`
+after completed metric periods. The owner ran the authorized, labelled
+`set-alarm-state` test and confirmed receipt at `dmorazzini23@gmail.com`.
+CloudShell read-back confirmed return to `OK` with two value-1 datapoints at
+03:54 and 03:57 UTC. CloudWatch state and action history confirms the earlier
+03:54:26 action was `INSUFFICIENT_DATA` to `OK`; the authorized drill changed
+`OK` to `ALARM` at 04:00:02 and `ALARM` to `OK` at 04:00:55. Both drill
+transitions successfully executed the SNS action. The owner confirmed receipt
+of the test email. This verifies the alarm notification path; an actual host
+outage and two-owner recovery drill remain separate evidence gaps.
+The notification drill establishes email delivery, not real host-outage
+recovery.
+
+The six-area goal is still blocked for live-capital baseline and cash-activity
+evidence, model and replay qualification, noncurrent-version recovery and the
+shared-owner failover drill. Paper abstention is not profitability evidence.
+
+## September 29 validation and AWS alert handoff
+
+The three reported pytest failures were test-isolation defects: the source
+contract walked ignored research artifacts, and risk import tests left stale
+module identities. Two more tests removed `PYTEST_RUNNING` from the shared
+process, causing later tests to enter production paths and attempt Alpaca and
+AWS calls. The contract now scans tracked and unignored Python files; the risk
+import helper restores its original modules; the two environment tests restore
+the prior marker. Focused collection-order tests passed. The final
+`bash scripts/agent_validate_changed.sh --full` passed: 7,286 pytest passed,
+one skipped for missing regime-column fixture data, Ruff, mypy, strict mypy,
+tracked-Python compilation and the validation artifact. The earlier sandbox
+run failed on denied sockets and the environment leak; it is superseded by the
+complete host-access run. No trading or model gate changed in this repair.
+
+The host IAM policy for `AITrading/Host` was added and a manual heartbeat
+published successfully at 04:28 UTC. The owner created the Ohio SNS topic
+`ai-trading-host-failure` and reports the `dmorazzini23@gmail.com`
+subscription as **Confirmed**; the host IAM identity cannot independently
+list it. The heartbeat timer is not installed (`LoadState=not-found`), no
+CloudWatch alarm exists in the verified evidence, and email delivery has not
+been tested. After exact-tip CI and broker-exposure review, install the timer,
+observe recurring value 1 in CloudWatch, create the alarm against the existing
+SNS topic without another subscription request, and run one labelled test
+alert with recipient acknowledgement. See `docs/INDEPENDENT_HOST_MONITOR.md`.
+
+At 05:12 UTC the paper service was active with zero restarts. A host-access
+`/healthz` read returned structured HTTP 503 `degraded` for
+`required_model_stale`, with `replay_live_parity_gate_failed` also flagged;
+broker state was connected and fresh with zero positions and open orders. One
+five-second health request timed out under full-suite host load; a subsequent
+request completed in 2.65 seconds. No restart was performed. The deployed
+checkout remains `edfefa72fd4cdc3209fafc0ad94934e8f01ce117`; the main
+worktree changes are not deployed.
+
+## September 29 selected equity-risk and off-host alert work
+
+In the separate `main` worktree, `ai_trading.runtime.equity_risk` now has
+fail-closed arithmetic for the selected 1% daily and 3% peak-to-trough
+cash-flow-adjusted equity limits, full projected-long-notional reserve and an
+atomic high-water updater that refuses missing or corrupt baselines. It is
+deliberately not wired to permit live openings: no live-account source,
+approved starting/session baseline, broker equity source timestamp or complete
+cash-activity interval was available. The canonical live opening gate still
+discards strategy-provided loss values. Live capital remains blocked.
+
+The independent host monitor code has a two-minute systemd heartbeat, a
+CloudWatch metric publisher, an administrator provisioning script and tests.
+The local heartbeat returned 1 while `/healthz` returned structured HTTP 503
+for the existing model/replay blockers. Subsequent AWS and subscription
+evidence is recorded above.
+
+Targeted changed-file validation passed Ruff, mypy, compilation, shell syntax,
+84 mapped tests and systemd unit verification. Its sandbox-local `/healthz`
+curl could not connect; a separate host check returned HTTP 503 with
+`degraded`, broker connected, zero paper positions/orders, and the known
+`required_model_stale`/`replay_live_parity_gate_failed` flags. The non-sending
+incident snapshot passed. The separate deployed checkout remains at
+`edfefa72fd4cdc3209fafc0ad94934e8f01ce117` with zero service restarts;
+these code and unit changes are not deployed.
+
+## September 29 installed backup and off-host restore evidence
+
+The installed snapshot-first backup service and timer match their packaged
+files; systemd has reloaded them. The timer is enabled and waiting for its first
+automatic run at 23:30 UTC September 29. The runtime `.env` has the verified
+12-digit expected S3 bucket owner. The existing current-object 30-day lifecycle
+rule was preserved, and a 30-day noncurrent-version expiration was added only
+for `pruned/recovery_backups/`; AWS read-back matched the reviewed rules.
+
+An administrator-started run of the installed service at 03:08-03:09 UTC
+completed successfully, created
+`recovery.bak.20260929T030848Z-1a7c3ed1.gz` (110,749,747 bytes), uploaded it,
+and read it back byte-for-byte. S3 reports AES256 and SHA-256 matching the
+local bundle. Exact current version
+`pk3O20PqM.c3.pX633EMbDjZxuKrLR.a` was then downloaded to
+`/tmp/goal-offhost-restore-20260929` and restored into a new isolated directory.
+Restore verification passed for all 3,045 content entries; both required SQLite
+databases passed integrity checks. The restored OMS has 2,150 terminal intents,
+764 fills, 81,718 events and zero active intents. A fresh paper broker check at
+03:23 UTC showed zero positions and open orders, so exposure matched at that
+boundary. This is not historical fill reconciliation or a shared-PostgreSQL
+two-owner failover drill. The downloaded version was current, so recovery of a
+noncurrent version remains untested.
+
+The paper service remained active with zero restarts; health was degraded for
+the existing `required_model_stale` and `replay_live_parity_gate_failed` gates.
+No broker order, trading change, service restart, live activation or research
+trial occurred. Next: verify the first automatic timer run and its new S3
+object after 23:30 UTC; continue the verified-equity risk contract, shared
+PostgreSQL drill and independent off-host alert evidence. The six-area goal is
+still blocked, not complete.
+
+## September 28 weekly ETF data, execution and recovery check
+
+See `docs/EVIDENCE_AND_RECOVERY_CHECK_20260928.md`. A new outcome-free preflight
+verified the governed all-adjusted ETF bar hashes and measured 96/96 common
+valid Friday observation weeks with a 20-session lookback and five-session
+exit. All 65 captured development corporate actions had matching boundary
+bars; the earlier 19/19 adjustment diagnostics and 38/38 dataset links still
+matched their sources. Provider action completeness and point-in-time treatment
+remain unverified, so no trial was registered or run. The 2026 holdout,
+consumed budgets and all promotion gates remain unchanged.
+
+The current seven-day local audit found 13 fills, 13 order matches, 11 decision
+matches and 11 nonpending TCA matches. The two unmatched decision/TCA records
+were evidenced operational EOD exits. All 13 lacked verified total per-fill
+fees and a qualifying causal quote; the research scorecard had 0/13 complete
+chains. Broker fee activity still has no fill reference. No unknown fee was
+treated as zero or assigned to a guessed fill.
+
+A new local recovery bundle was created using the service runtime environment
+and restored in isolation; both SQLite integrity checks passed, and backup
+status is `ok`. The backup-sync timer remains disabled and the installed
+service unit is the older upload-only variant. Installing the checked-in
+snapshot-first unit was blocked because `sudo` requires a host password; no
+timer or S3 transfer was started. The older-version S3 restore still needs
+`s3:GetObjectVersion` and an isolated version-pinned test. Host health remained
+HTTP 503 for `required_model_stale`, broker fresh/flat, service active with
+zero restarts. Focused preflight, reconciliation and uploader tests passed
+(7 + 38 + 13), as did Ruff, mypy, unit syntax and an isolated restore.
+
+## September 27 order, fee-reporting and release-documentation repair
+
+The previous paper release was `3e9511b21`. The current repair fixes incomplete
+Alpaca active-order snapshots with a
+paged `all` query, startup cancellation and retry signaling, fail-closed order
+capacity/pressure reads, TCA fee provenance and unknown-fee PnL reporting,
+in-memory paper order ID collisions, and the OMS missing-API failure count.
+The audit utility now compiles read-only plugin files in memory. Regression
+tests cover each defect. Changed-file validation passed Ruff, mypy, Python
+compilation and 500 mapped tests; its sandbox-local curl could not reach port
+9001, while a separate host smoke check succeeded. First CI run `36294360918`
+found five older Alpaca request test doubles that lacked pagination fields.
+Those four test files were corrected and all eight mapped tests passed. Follow-up
+commit `edfefa72f` passed exact-tip CI run `36295553632` (7,253 passed,
+4 skipped, 80.22% coverage), CodeQL, SBOM and workflow lint.
+
+Before release, the corrected read-only order query found zero paper broker
+orders and positions, the broker clock was closed, and a fresh recovery bundle
+was restored in isolation. The paper service restarted at 05:23 UTC on
+September 27 with systemd pre/post-migration release identity checks passing
+for `edfefa72f`. It remained active with zero automatic restarts and zero
+error-level journal entries. Post-start health returned HTTP 503 solely for
+`required_model_stale`, with fresh connected broker state and zero exposure.
+The non-sending incident snapshot classified `blocked_qualification`; its
+`health_degraded` alert remains actionable outside startup grace. The current
+checkout and release specification must match a clean CI-tested commit before
+any future restart.
+
+No model, replay, cost, freshness, provenance, promotion, research-budget or
+holdout gate was relaxed. No strategy trial or training was run. The historical
+fee evidence gap remains unresolved; unknown fees now remain unknown in the
+affected TCA-matched performance report. A live read-only report labels its
+older trade-history PnL `reported_trade_pnl_fee_unassessed`; that figure is not
+verified net profitability.
+
+## September 26 bounded economics and quote-timing evidence
+
+See `docs/ECONOMIC_AND_EVIDENCE_PLAN_20260926.md`. The consumed replacement
+trial implies only +0.2214 bps gross per selected bar-open proxy trade against
+10 bps assumed round-trip cost; all five folds were net negative. The slower
+ETF study remains inconclusive with a consumed budget. Neither supports a
+model, strategy or gate change. The September 25 seven-day quote audit had
+2,412/2,414 rows rejected at the one-second record-time gate; reported
+quote age was measured at an earlier quote-gate observation. Decision records
+now preserve that observation time separately, and the audit exposes the
+timing gap without admitting stale quotes. The proposed weekly relative
+strength candidate is a draft for a separate data preflight and frozen-trial
+approval. No trial or holdout evaluation occurred. Exact-tip CI and after-close
+paper deployment of `6bf408b69` completed before this audit. Broker per-fill fees
+and historical operational-exit TCA remain unavailable;
+`required_model_stale` remains unresolved.
+
+Follow-up provenance correction: quote observation time is set only when a
+timestamped bid and ask are published to telemetry; status-only updates leave
+that timestamp unchanged. The first patch's use of the generic telemetry
+`updated` time was too broad and was corrected before deployment. Focused
+tests passed (33); follow-up changed-file validation passed Ruff, mypy,
+compile and 463 mapped tests. Both validator runs could not connect to
+localhost from the sandbox; a separate host health check returned HTTP 503
+only for `required_model_stale`, with fresh broker state and zero exposure.
+The clean follow-up commit passed exact-tip CI and was deployed to paper after
+close; the audit repair candidate above is a separate local patch.
+
+The September 25 position-gate change at `4051d0a560bfe20935283818efd11e91ba4abf4c`
+passed exact-tip CI (`36178793885`: 7,224 passed, four skipped, 80.18%
+coverage) and was deployed to paper after close at 20:02 UTC. The broker was
+flat; release identity and backup checks passed, service had zero restarts,
+and health stayed HTTP 503 solely for `required_model_stale`. The older
+candidate note below is retained as its predeployment record.
+
+## September 25 paper position gate follow-through (candidate, not deployed)
+
+The paper execution go/no-go path previously called the report without a
+verified position bundle, making `open_position_reconciliation_available`
+fail on every evaluation. The candidate now selects the latest complete,
+same-account broker-sync position boundary from before the current New York
+market open, captures a fresh closing paper position and complete broker
+activities from that boundary, and passes the raw bundle to the report. The
+report still rebuilds and checks the interval and makes a separate current
+broker position read. Missing, malformed, cross-account, stale, incomplete,
+or mismatched evidence remains blocking; retry evaluation retains the bundle.
+An explicit read-only 17:08 UTC paper probe matched flat-to-flat with zero
+executions and zero gated position mismatches. The older AAPL -3 / AMZN +1
+diagnostic remained visible. Overall go/no-go still failed closed on
+closed-trade, win-rate, acceptance-rate, replay and live-sample checks. No
+orders or strategy changes were made. Focused broker/runtime tests: 98 passed.
+Market-hours changed-file validation passed Ruff, mypy, compile, and 311
+mapped tests; its sandboxed curl could not reach localhost. Host health was
+the expected HTTP 503 for `required_model_stale`, with broker fresh and flat,
+active service, NRestarts=0. A non-sending incident snapshot passed
+structurally. Secret scan passed. Exact-tip CI remains pending. Do not restart
+during market hours. Review broker exposure, recovery backup and release
+identity after close before any paper deployment.
+
+## September 25 verified position gate
+
+See `docs/VERIFIED_POSITION_GATE_20260925.md`. The runtime go/no-go position
+check now fails closed without a recent raw broker activity/position bundle;
+unbounded local history remains a separate diagnostic. The bundle is rebuilt
+and checked for same-account identity, complete pagination, execution IDs,
+position-changing activities, matching quantities, a 60-second closing age,
+and agreement with a later current broker position read. A read-only 02:48 UTC
+paper capture matched flat-to-flat with zero executions and showed the old
+AAPL -3 / AMZN +1 discrepancy only in the diagnostic. Changed-file Ruff,
+mypy, compile, and 124 mapped tests passed; 293 runtime-control/after-hours
+integration tests passed. The validator's sandboxed localhost curl was denied;
+host HTTP 503 was expected for `required_model_stale`, with active service,
+fresh zero-exposure broker state and NRestarts=0. Exact-tip CI and installed
+release identity remain the deployment gates. Model/replay gates, research
+budgets, holdout, and AWS MFA recovery hold remain unchanged.
+
+The first exact-tip CI run for `5cc70e826` (`36090302137`) failed on three
+older report tests that expected local-history comparisons in the gated
+`open_position_reconciliation` field. The gate correctly requires a verified
+broker bundle; local-history comparisons now live in
+`diagnostic_open_position_reconciliation`. Those tests were updated, and text
+rendering now states the unavailable gate reason while showing the diagnostic
+mismatch count separately. The 97 focused report tests passed. Changed-file
+validation passed Ruff, mypy, compile and 16 mapped tests; its sandboxed curl
+could not reach localhost. Host smoke found the active paper service with
+NRestarts=0 and expected HTTP 503 solely for `required_model_stale`.
+The follow-up `68fe3aab3` passed exact-tip CI (`36092481768`: 7,217 passed,
+four skipped, 80.18% coverage) and was deployed to the paper service after
+close at 04:19 UTC. Pre/post release identity passed; the broker was flat,
+health remained HTTP 503 solely for `required_model_stale`, and NRestarts=0.
+
+## September 24 after-close gate and performance review
+
+See `docs/GATE_AND_PERFORMANCE_REVIEW_20260924.md` for evidence and acceptance.
+The runtime go/no-go reconciliation compares unbounded local trade history to
+current broker positions; AAPL -3 / AMZN +1 is the documented pre-anchor
+legacy difference. The independent September 24 session audit was flat to
+flat with zero fills, and the broker activity capture had no September 23/24
+activities. No new current-session position discrepancy was established.
+The report now labels its reconstructed inventory diagnostic only and states
+that no verified broker ledger was applied; the numerical mismatch and gate
+block remain unchanged. Focused report/lineage tests: 75 passed. The first
+mapped validation encountered sandbox-denied bytecode writes under `.codex` in
+two audit tests. With a temporary `PYTHONPYCACHEPREFIX`, Ruff, mypy, compile,
+and all 792 mapped tests passed; the validator's sandboxed localhost curl was
+denied. A host health check passed its expected HTTP 503 response with only
+`required_model_stale` as readiness failure; service active, NRestarts=0.
+A read-only run on the actual report inputs retained both AAPL/AMZN
+mismatches and showed the diagnostic-only label.
+
+September 24 produced zero broker orders and fills. Net costs remain
+unverified; the existing cost comparison has one slippage pair and zero net
+cost pairs. Replay was 186/250 samples at -1.492 bps candidate net edge, and
+`required_model_stale` remained. The consumed September 21 hypothesis stays
+retired, holdout untouched, and no new experiment or gate change occurred.
+Complete exact-tip CI and installed release-identity checks before treating
+this report-metadata change as deployed.
+
+## September 24 exact-tip validation and release identity
+
+The first backup-uploader CI run `35953054771` failed only because the runner
+does not create the repository `venv`; four uploader tests could not start the
+bundle verifier. The script now uses the repository interpreter when present
+and the runner's `python3` otherwise. All 13 focused uploader tests and the
+changed-file validation (62 mapped script tests) passed locally. Commit
+`d7bf43cba0b11547bca7672046634ce72605816d` is on clean `main`; exact-tip
+CI `35955032742` passed with 7,204 tests, four skipped and 80.17% coverage.
+CodeQL, Workflow Lint, SBOM, research, replay and determinism gates passed.
+
+The hash-only installed release spec was updated to that tested commit, with
+the old spec retained as a local rollback copy. Installed pre-migration and
+normal identity preflights passed. The paper service remained active with
+NRestarts=0; no further restart was needed. At 04:37 UTC, the paper broker was
+closed and active with zero positions and open orders. Health HTTP 503 still
+reported `required_model_stale`, and the backup timer remained disabled. The
+AWS MFA case, versioned S3 restore permission, recurring-upload approval and
+backup-unit installation remain open. No S3 transfer or trading change was
+made for this CI repair.
+
+## September 24 AWS recovery hold and paper service guard activation
+
+The owner opened an AWS account MFA recovery case; IAM
+`s3:GetObjectVersion` remains unavailable. No IAM change or S3 write occurred.
+The owner installed the reviewed `ai-trading.service` unit. It byte-matched
+the packaged file and systemd reported `NeedDaemonReload=no`. Both release
+identity preflights passed against the clean CI-tested checkout and installed
+release spec. Before the 03:39 UTC after-close restart, the paper broker was
+active and closed with zero positions and open orders; a fresh local recovery
+bundle `recovery.bak.20260924T033758Z-d33e3419.gz` verified successfully.
+The restart succeeded with NRestarts=0, and both automatic identity reports
+passed. Postrestart broker exposure remained zero. Health HTTP 503 still
+reported only `required_model_stale`; a non-sending incident snapshot flagged
+`health_degraded` but sent no alert. No live activation or strategy change.
+
+The local backup uploader now selects one newest regular recovery bundle,
+verifies it before transfer, requires the expected 12-digit bucket owner,
+uploads with SSE-S3/SHA-256, reads back the current object and compares bytes.
+It no longer uploads legacy archives or deletes remote objects. Thirteen
+isolated uploader tests and 75 changed-file mapped tests passed, along with
+Ruff, mypy, compile, Bash syntax and diff checks. This uploader change has
+not made a real S3 call. The backup timer is still disabled; the installed
+backup unit is the older variant. Next: exact-tip CI and release-spec update,
+then owner approval of the exact recurring upload scope, required bucket-owner
+configuration, host installation of the backup unit/timer, and a scheduled
+read-back/isolated restore. Version-pinned restore still needs the AWS case
+resolved and `s3:GetObjectVersion`. Live-risk/equity, model, monitoring and
+accounting evidence gates remain unchanged.
+
+## September 23 approved off-host restore and documentation tip
+
+The owner approved one postdeployment bundle upload and the documentation
+commit `be3aeaebf`. Exact-tip CI `35931333370` passed with 7,202 tests,
+four skipped and 80.17% coverage; research, replay, determinism, CodeQL,
+Workflow Lint and SBOM passed. The clean checkout is on `be3aeaebf`.
+The hash-only runtime release spec was updated after CI and its installed
+identity preflight passed. The running paper service was not restarted:
+active, NRestarts=0, health HTTP 503 solely for `required_model_stale`.
+
+Only the verified postdeployment recovery bundle
+`recovery.bak.20260923T202932Z-548c7e87.gz` was uploaded to the configured
+same-account S3 bucket with expected-owner and AES256. The 111,191,546-byte
+current object downloaded with the same version ID returned by upload; its
+SHA-256 matched the local bundle (`fd5de33bf744099d089f074bce26f99d6c8b7b8a51dd3b45a1638ff7a858f6dc`).
+An isolated restore passed bundle verification and both SQLite integrity
+checks; the restored OMS has 2,135 intents, 764 fills and 80,184 events.
+Version-pinned download was denied by IAM `s3:GetObjectVersion`, so restore
+from an older overwritten version is unproven. No broad sync, timer enable,
+S3 deletion, actual alert, broker order or live activation occurred. Scheduled
+off-host backup needs a reviewed unit installation and separate authorization
+for recurring upload scope; live readiness remains blocked by the risk/equity,
+model, monitoring and accounting evidence gaps below.
+
+## September 23 after-close paper release (`5031ca47e`, deployed)
+
+Exact-tip CI `35913045555` passed: 7,202 tests passed, four skipped, 80.17%
+coverage; research, offline replay, determinism, CodeQL, Workflow Lint and
+SBOM passed. The paper broker clock was closed with zero positions and zero
+open orders. The clean-checkout release identity passed before and after the
+20:27:27 UTC service restart against the reviewed code, sanitized config,
+launch profile, schema `20260506_0001` and model SHA. The current service is
+active with NRestarts=0, fresh broker state and zero exposure; HTTP 503 reports
+only `required_model_stale`. A non-sending incident snapshot returned
+`blocked_qualification`, `should_alert=false`; bounded startup logs contained
+no structured ERROR/CRITICAL or traceback. No live activation or strategy
+change occurred.
+
+Pre- and postdeployment local recovery bundles were created, verified and
+restored in new isolated directories. The postdeployment restore includes the
+release spec and model; source and restore each have 2,135 intents, 764 fills,
+80,184 OMS events and zero nonterminal intents. Both SQLite integrity checks
+passed. At release time, this did not prove off-host recovery or broker
+activity after a future snapshot; the subsequent single-bundle readback is
+recorded above.
+
+The installed service unit still lacks the staged release identity guards, and
+the installed backup unit is the older archive-only variant with its timer
+disabled. Host administrator installation of the reviewed packaged units,
+daemon reload and timer enablement remain required. Do not claim scheduled
+backup or automatic identity enforcement from this manual release. The selected
+3% peak drawdown and 1% daily loss contract remains unenforced pending verified
+same-account equity/cash-flow evidence and live-path wiring; live openings
+remain blocked. Verified fees, legacy history, external monitoring and model
+qualification remain separate evidence gaps. The `be3aeaebf` handoff commit
+was documentation-only after the deployed `5031ca47e` code release; its CI
+and subsequent release-spec identity check are recorded above.
+
+## September 23 owner decisions and CI repair
+
+Owner-authorized push of `c4c5d3d75` succeeded. CI `35903372692` reduced the
+failure to the config-cache test: 7,201 passed, one failed, four skipped,
+80.15% coverage. CodeQL, Workflow Lint, SBOM, research, replay and seed jobs
+passed. Reproduction showed that `import ai_trading.config as config_pkg` can
+resolve a stale parent attribute after package reimport; management then
+invalidated another module instance. The public `config.reload_env` now clears
+its own cache after management reload. The adverse alias test failed before and
+passed after the fix. Changed-file validation passed Ruff, mypy, compile,
+85 mapped tests, live read-only health and a non-sending incident snapshot.
+Health remains degraded solely for `required_model_stale`, with fresh broker
+state and zero positions/open orders. The repair is local pending a new
+reviewed push and exact-tip CI; no runtime restart or deployment occurred.
+
+CI `35888651186` later failed on three tests with 7,199 passed, four skipped,
+and 80.15% coverage. The two retry tests inherited CI's `paper_observe`
+profile, whose zero order budget blocked submission before retry; that failure
+was reproduced locally. The config-cache test held a stale package reference
+after another test reimported `ai_trading.config`. The test fixture now selects
+`paper_trade` explicitly and the config test uses the currently registered
+package. The adverse-profile retry reproduction and the focused config group
+pass; `agent_validate_changed.sh --market-hours` passed Ruff, mypy, compile and
+11 mapped tests. No runtime or trading policy changed. The repaired local tip
+has not been pushed or validated by CI, so deployment remains on hold.
+
+The owner explicitly authorized pushing local main through `18ce1c10e` to the
+public GitHub repository. The fast-forward push succeeded; GitHub CI run
+`35888651186` failed for that exact SHA. CodeQL, Workflow Lint and SBOM passed,
+as did the CI research, replay and determinism jobs. No deployment is authorized
+by the failed check.
+The owner also delegated selection of the rough 3% risk limit:
+the proposed live-capital contract now uses 3% verified peak-to-trough equity
+drawdown and a separate 1% verified daily equity loss limit. At $1,000/$2,000
+initial capital those reference amounts are $30/$60 and $10/$20. This policy
+is not enforced yet: same-account cash-flow-adjusted loss evidence, durable
+baselines and canonical live wiring remain missing, so live openings stay
+blocked. See `docs/SMALL_ACCOUNT_RISK_CONTRACT.md`. All model, replay, cost,
+freshness, provenance, promotion and holdout gates remain unchanged.
+
+## September 23 off-host recovery evidence limit (`18ce1c10e`, pushed, not deployed)
+
+Read-only `GetBucketVersioning` on the configured S3 backup bucket returned
+`AccessDenied` (HTTP 403) at 11:22 UTC. The backup-sync timer is still disabled
+and inactive. The earlier complete prefix listing showed zero recovery objects;
+the enabled 30-day lifecycle rule therefore does not establish an off-host
+restore point. Verify versioning with an authorized identity, then after a
+CI-approved backup deployment, read back a real bundle and restore it in
+isolation. No AWS resource, timer or runtime state was changed.
+
+The `local only` labels below describe the state when each milestone was
+written. The commits through `18ce1c10e` are now pushed, but not deployed.
+
+## September 23 live low-level quantity guard (`c273deecd`, local, not deployed)
+
+The live `_submit_order_to_alpaca` claimed-intent check allowed a zero request
+quantity (and a zero intent quantity) to reach the Alpaca SDK. A broker-stub
+regression reproduced the zero request reaching `submit_order`. The guard now
+requires both quantities to be strictly positive before broker submission;
+valid positive claimed orders remain allowed. No strategy or owner threshold
+changed. Changed-file Ruff, mypy, compile and 20 mapped tests passed. Read-only
+health: service active with NRestarts=3, HTTP 503 solely for
+`required_model_stale`, fresh broker with zero positions/open orders; the
+non-sending incident snapshot stayed `blocked_qualification`. No order, alert,
+restart or deployment occurred. CI, after-close exposure review and deployment
+remain pending.
+
+## September 23 paper uncertain-order follow-up (`155f357be`, local, not deployed)
+
+The paper submit retry fix still let an accepted order with a lost response
+reset its durable intent from `SUBMITTING` to `PENDING_SUBMIT`; the opening gate
+then saw no unknown exposure. `execute_order` now retains `SUBMITTING` for
+ambiguous paper exceptions, failed 5xx/no-result outcomes and an empty broker
+response. Definite 400 rejections remain terminal. Parameterized live/paper,
+direct-timeout and definite-rejection tests passed with the execution and
+process-fault suites (65 tests plus the added direct-timeout test). Changed-file
+Ruff, mypy, compile and 44 mapped tests passed. Live read-only health: active
+service, HTTP 503 solely for `required_model_stale`, fresh broker and zero
+positions/open orders; non-sending snapshot `blocked_qualification`. CI,
+after-close release review and deployed
+session evidence are still pending. Do not restart or deploy during market
+hours, and do not infer any improvement in trade expectancy from this safety
+correction.
+
+A follow-up (`63a203c99`, local only) uses the real SQLite `IntentStore` and `OrderManager` with
+a simulated paper submit timeout. It confirms one submit claim remains
+`SUBMITTING`, blocks new openings and still permits closing. The repository
+changed-file validator passed Ruff, mypy, compile and 43 tests for this test-only
+change; no broker request or runtime mutation occurred.
+
+## Current decision and next gate (September 23)
+
+GitHub `main` contains `c4c5d3d75`; CI failed on that SHA, and the local
+config-cache repair awaits a reviewed public push and exact-tip CI.
+Before the push, `make secret-scan` passed on tracked files and an added-line
+scan across all 44 outgoing commits found zero likely live credential
+assignments. These checks do not replace a completed CI run.
+
+The local paper service remains deployed at the earlier release; nothing in
+these commits and nothing in this goal has been deployed. The paper service is
+active with NRestarts=3, fresh broker state and zero positions/open orders;
+readiness remains blocked by `required_model_stale`. Preserve the September
+9–December 8 holdout and all consumed research budgets. No strategy trial or
+live activation is authorized.
+Deployment remains on hold until CI, after-close exposure
+review, release identity and rollback checks pass.
+
+September 23 no-blind-retry correction (`f4344a294`, local only): a paper
+submit timeout or native 504 was retried up to three times after broker lookup
+failed, and the outer `bot_engine.submit_order` facade added another API-error
+retry layer. New tests reproduced three attempts for one ambiguous result.
+The engine now stops paper as well as live retries on ambiguous broker submit
+outcomes; the outer facade submits once through the engine. Definite 429
+rejections retain the engine's bounded retry with the same client order ID.
+Changed-file validation passed Ruff, mypy, compile and 23 mapped tests;
+48 execution/runtime tests and 23 process-fault/error tests passed separately.
+Read-only host smoke: service active, HTTP 503 for the existing
+`required_model_stale` gate, broker fresh with zero positions/open orders;
+non-sending snapshot `blocked_qualification`/`health_degraded`. No broker
+order, restart, alert or deployment occurred. Roll back the local fix by
+reverting `f4344a294`; CI and postdeployment session evidence remain required.
+
+| Goal area | Current status | Acceptance still missing |
+| --- | --- | --- |
+| Durable risk | Numeric policy selected; implementation blocked by source evidence | Verified same-account cash-flow-adjusted equity, durable baselines, 3% drawdown and 1% daily enforcement; live-path proof after CI/deployment. |
+| Crash recovery | Implemented and verified in isolated simulator; awaiting deployment/session evidence | CI, runtime adoption and naturally occurring uncertain-order reconciliation without duplicate submission. |
+| Disaster recovery | Local bundle and isolated restore verified; awaiting deployment and shared-store evidence | Scheduled backup/restore, off-host durability, real PostgreSQL two-owner drill and broker reconciliation on restored state. |
+| Supported path | Code-path guards/profile identity/extraction implemented; awaiting deployment | CI, reviewed release spec and postdeployment checks; live replacement child-OMS contract remains held. |
+| Unattended operation | Same-host connector and local alert state implemented; external dependency remains | Off-host failure detection, approved real delivery, operator receipt/acknowledgement and recovery drill. |
+| Accounting and evaluation | Synthetic account-size mechanics and cash audit implemented; fee/position evidence blocked | Precisely timed corporate actions, position boundaries and verified per-execution fees; no verified net strategy P&L. Retire the consumed negative replacement-model hypothesis. |
+
+Read-only September 23 10:45 UTC fee follow-up: the configured managed-secrets
+provider hydrated the existing paper credentials in process memory. A
+pagination-complete activity read from September 22 00:00 UTC returned eight
+broker fills, no fee activity rows, and no fill fee amount field.
+This does not prove zero fees or future posting completeness; verified net P&L
+remains unavailable. No order, data purchase, or source-record rewrite occurred.
+See `docs/ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
+
+Small-account evaluation follow-up (`ea30ee66d`, local only): `small_account_capacity`
+previously treated a missing estimated fee as a zero cash reserve while still
+returning feasible shares. A full-cash $1,000 fixture reproduced the optimistic
+result. Missing fee assumptions now return zero feasible shares with
+`estimated_fee_assumption_missing`; an explicitly supplied zero estimate remains
+an estimate, never a verified fee. Case/whitespace variants of the same symbol
+also silently overwrote position or pending-buy exposure; the evaluator now
+rejects those ambiguous inputs. Seven focused tests and changed-file Ruff,
+mypy and compile checks pass after the duplicate-symbol fix. This is offline
+mechanical evaluation, not a
+live risk gate or strategy trial. No runtime service changed. Run CI on this
+exact tip and retain the separate broker
+cash/equity and owner-limit acceptance gates.
+
+September 23 pre-push validation: a full local run was interrupted after
+multiple failures and a two-minute hang; **the full suite did not pass**. The
+focused triage fixed a genuine lazy Alpaca circular import and updated four
+regression fixtures/expectations for current broker error, account sync,
+missing-SDK, and staged unit behavior (`267dcdb0c`, local only). The changed-file
+validator passed Ruff, mypy, compile and 61 mapped tests; six import tests and
+11 focused HTTP/audit/socket tests also passed. The HTTP test hung inside even
+a minimal `asyncio.to_thread` call in the restricted sandbox and passed
+host-side. Ten audit/socket tests passed host-side with a temporary pycache.
+Other cached failures include sandbox-denied sockets/DNS and one ignored
+research scratch file scanned by a broad source test; these do not establish a
+passing CI run. No trading or strategy behavior changed. Next: obtain explicit
+approval for publishing the **final** commit range, run CI on that exact tip,
+resolve any CI failure, then review broker exposure and release identity after
+close before deployment. Keep deployment on hold meanwhile.
+
+CI-path test safety follow-up (`8afe4c61e`, local, not deployed): two full-suite tests used
+the real data-fetch path and could request Alpaca bars with CI's dummy
+credentials. The datetime test now uses a local Alpaca-style client and checks
+the timezone-aware arguments; the pretrade-health test supplies a local bar
+frame and asserts two checked symbols. Six tests in those files passed, plus
+changed-file Ruff, mypy and compile. No broker request or strategy trial ran.
+The full suite still has not been certified on the current tip; run CI after
+the public push is approved.
+
+Focused process-fault and live-submit tests were rechecked September 23:
+`22 passed` (`tests/integration/test_oms_process_faults.py` and
+`tests/execution/test_live_submit_owner.py`). The configured paper Trading API
+still has no observed complete per-fill total-fee evidence. Alpaca's separate
+Broker API Activity SSE can link some one-to-one fees, but period-wide charges
+have no parent execution; see `docs/ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
+No strategy, gate, order, deployment or notification changed in this check.
+
+Read-only infrastructure check at 09:17 UTC September 23: the installed
+`ai-trading-connectors.timer` is enabled and active, with a completed invocation
+at 09:17 and the next scheduled for 09:18. The runtime backup-sync timer is
+disabled and inactive. The deployed runtime environment names an S3 bucket and
+region, and the host AWS identity resolves, but `HeadBucket` returned HTTP 403
+and CloudWatch `DescribeAlarms` returned AccessDenied. The 403 does not prove
+that backup uploads are forbidden or that the bucket is absent; it does prevent
+this identity from validating off-host backup coverage through that read.
+CloudWatch alarm coverage also could not be inspected with the current identity.
+Follow-up at 10:48 UTC: `ListObjectsV2` succeeded for the configured backup
+prefix and returned zero keys with no truncation. The bucket has an enabled
+30-day lifecycle expiration rule covering that prefix; bucket versioning was
+not verified. `HeadBucket` 403 therefore did not prevent this narrower read.
+No off-host recovery bundle is currently visible at the configured prefix.
+After CI and release review, enable/test the backup unit, then read the remote
+bundle back and restore it in isolation before claiming off-host recovery.
+CloudWatch alarm coverage still needs authorized read evidence. No AWS resource
+was created or modified in these checks.
+
+Rollback for uninstalled commits is a scoped revert. For deployed code, use the
+reviewed release identity and isolated migration-aware restore process in
+`docs/RELEASE_IDENTITY.md` and `docs/RUNTIME_RECOVERY.md`; never overwrite an
+active OMS database or flatten exposure to make rollback convenient.
+
+## September 23 S3 backup handoff correction (`d86d5f721` local main, not deployed)
+
+The new recovery bundle already matches the uploader's `*.bak.*.gz` pattern and
+lives under its recursive runtime scan. A separate defect remained: with S3
+sync enabled, no staged archive made the script exit successfully; legacy-only
+archives could also appear to satisfy a sync while no authoritative recovery
+bundle was copied. The uploader now requires a `recovery_backups/recovery.bak.*.gz`
+member before calling AWS and returns nonzero when absent. Isolated fake-AWS
+tests cover empty/legacy-only inputs and positive bundle selection; no real S3
+write was made. Changed-file validation passed Ruff, mypy, compile, Bash syntax
+and 65 targeted tests. A read-only host smoke returned HTTP 503 for the existing
+`required_model_stale` gate; the non-sending incident snapshot reported
+`blocked_qualification` with `health_degraded`. An S3 read-back and restore
+remain required before claiming off-host recovery. Revert `d86d5f721` to roll
+back the local change; do not enable the timer before CI and release review.
+Follow-up `f8c9efaa8` fixes another uploader false success: S3 retention listing
+errors and object deletion errors were discarded after a successful upload. The
+script now returns nonzero with a safe failure class for either error. Two
+fake-AWS tests first reproduced zero exit status and now pass; a successful
+retention fixture also passes. Targeted validation passed Ruff, mypy, compile,
+Bash syntax and 68 tests. An ad hoc snapshot without the deployed environment
+initially probed the wrong port; repeating with packaged `:9001` reported
+`blocked_qualification` and `health_degraded`, matching direct HTTP 503
+`required_model_stale`. No S3 read/write, timer activation or notification was
+performed. CI, reviewed bucket list/delete permissions, remote read-back and
+isolated restore remain required. Roll back by reverting `f8c9efaa8`.
+Follow-up `1e72dd425`: an enabled retention pass also returned success for
+invalid days/delete-cap values and when the delete cap left older objects
+behind. Five isolated cases reproduced that false success; the script now
+returns nonzero for those cases. Eleven uploader tests and 73 targeted mapped
+tests passed with Ruff, mypy, compile and Bash syntax. The deployed environment
+has S3 sync enabled but uploader-side retention disabled; its 30-day setting
+does not prove remote retention, and bucket lifecycle could not be inspected.
+An ad hoc five-second health snapshot timed out while direct `/healthz` returned
+HTTP 503 for `required_model_stale`; a repeat with a ten-second bounded probe
+returned `blocked_qualification`/`health_degraded`. No live service or AWS
+resource changed. Before enabling remote retention, review its policy and
+permissions; before claiming off-host recovery, obtain a remote read-back and
+isolated restore. Roll back this local correction by reverting `1e72dd425`.
+
+## September 23 release identity preflight (`e455a40f8` local main, not deployed)
+
+The read-only `ai_trading.tools.release_identity` preflight compares a reviewed
+CI-tested commit, clean checkout, effective sanitized config/profile hashes,
+applied OMS migration and checkout migration head, and the exact configured
+model file/hash. It blocks missing or conflicting evidence, rejects extra spec
+fields, and writes a report without credentials or database URLs. The staged
+packaged unit checks identity before and after Alembic migration and syncs the
+runtime environment only once. Recovery bundles now include the spec and both
+identity reports. Six focused release tests plus recovery/manifest tests passed
+(16 total); the changed-file validator passed Ruff, mypy, compile, six mapped
+tests and `systemd-analyze verify`. The running unit was not replaced: the
+service remained active with NRestarts=0, HTTP 503 for `required_model_stale`,
+broker fresh with zero positions/open orders, and non-sending snapshot state
+`blocked_qualification`. A CI-approved candidate, valid release spec and model
+approval remain unavailable. An isolated SQLite migration rollback fixture
+(`0a0be6030` local main) passed:
+prior OMS revision and duplicate-sequence events were restored with
+`PRAGMA integrity_check=ok` after an upgrade to head. This does not establish
+rollback for a different deployed database engine or live broker state. Next:
+clean tested candidate and reviewed spec, deployment-engine rollback rehearsal,
+then CI/exposure review before after-close installation/restart. See
+`docs/RELEASE_IDENTITY.md`. Roll back the local unit change by reverting its
+commit; do not install the staged unit without the spec.
+The pre-migration check (`5671c6277` local main) also requires the applied
+revision to belong to the checkout's migration history; an unrelated revision
+blocks startup. Sixteen
+focused release/recovery/manifest tests passed after this change.
+
+Risk-contract investigation: the current live-profile daily-loss function
+accepts caller-provided `daily_loss_state` without account, timestamp or
+cash-flow proof. It is not a verified equity-loss control for the intended
+small live account. This is documented in `docs/SMALL_ACCOUNT_RISK_CONTRACT.md`
+(`020b2ecae` local main);
+no threshold or trading gate was relaxed. Next implementation needs a durable
+same-account equity baseline and activity reconciliation, then a fail-closed
+canonical evaluator and targeted live-path tests. The owner decision on 3%
+meaning and daily limit remains pending.
+
+Follow-up `443c8e429` local main (not deployed): canonical live openings discard
+strategy-provided `daily_loss_state`/`loss_state` after refreshing broker
+exposure, and the pure profile gate no longer reads a loss number from the
+account payload. This deliberately blocks live openings until a verified
+same-account, cash-flow-adjusted daily-loss source exists; paper behavior and
+closing-order paths are unchanged. The active service then restarted three
+times during Alpaca paper-account 504 timeouts: one native SDK `APIError`
+escaped `_fetch_account_state`, and subsequent startup AUTO sizing refused to
+guess capital after account timeouts. The local account-read patch catches the
+native error with the bounded read helper, clears stale cached account data,
+marks broker sync degraded with `failed_components=("account",)`, and blocks
+new openings while preserving the closing phase allowance. Targeted tests
+cover the 504, cached-account removal, opening block, and reduction allowance.
+The running unit has not been replaced; broker health later recovered fresh
+with zero positions/open orders, while readiness still reported
+`required_model_stale`. Changed-file validation passed Ruff, mypy, compile and
+338 mapped tests; 56 broker-sync/replay/degraded-gate checks also passed.
+Final host-side read-only checks: active service, NRestarts=3 (unchanged after
+07:54:51 UTC), HTTP 503 for `required_model_stale`, fresh broker with zero
+positions/open orders, non-sending state `blocked_qualification`. No restart,
+order, alert or deployment was performed by Codex. Next: CI and broker exposure
+review before any after-close deployment; build a durable equity/activity
+baseline before any live-capital proposal. Rollback is the scoped commit revert.
+Provider evidence boundary (`5ded97ef7` local main): Alpaca's prior-close
+`last_equity` and date-only
+nontrade activities cannot by themselves certify an intraday cash-flow-adjusted
+loss. The Trading API activity filter uses creation time and some charges post
+on a later day. This is now explicit in the risk contract; missing activity
+does not prove zero cash movement. The live loss gate remains blocked pending
+better source evidence or an approved conservative operational procedure.
+
+Broker contract review: Alpaca documents that `pending_new` orders cannot use
+its native replace endpoint and that a successful replacement response does
+not guarantee the old order was replaced. A safe cancel-and-resubmit therefore
+needs a new canonical decision, child OMS identity and parent/child reconciliation
+through fill/cancel races; the live helper remains held. See
+`docs/SUPPORTED_TRADING_PATH.md` and the official Alpaca order docs.
+
+Submission-path follow-up (`1653455b1` local main, not deployed): the real Alpaca/Tradier
+adapter submit methods now reject configured live mode before the client call.
+The short-cover and canonical low-level submit handlers now recognize the
+SDK's native `APIError` in addition to timeout/connection failures. For an
+ambiguous native 504, the live retry wrapper makes one attempt, retains the
+claimed OMS intent as `SUBMITTING`, and suppresses broker failover while
+identity-based reconciliation remains pending. Regression fixtures cover both
+adapters and native-504 cover/ordinary submissions. These changes preserve
+paper/test adapter behavior and do not relax live qualification or risk gates.
+Changed-file validation passed Ruff, mypy, compile and 316 mapped tests;
+314 focused adapter/execution/error tests and 30 replay/degraded-gate tests
+passed. The final mapped run included plain-text native-504
+regressions were added. Its sandboxed localhost smoke could not connect;
+the separate host-side read-only check did reach the service. Host checks:
+service active, NRestarts=3 (unchanged), HTTP 503
+for `required_model_stale`, fresh broker with zero positions/open orders;
+non-sending snapshot `blocked_qualification`. No order, alert, restart or
+deployment was performed by Codex. Next: CI and an after-close deployment
+review; the 3% meaning, daily loss limit and verified equity source remain
+outstanding. Roll back by reverting the scoped local commit.
+
+## September 23 local alert recovery and acknowledgement (`40ee9a8b7` local main, not deployed)
+
+The Slack incident helper previously retained its last signature when triggers
+cleared, so an identical future incident could be suppressed as a duplicate or
+by the previous incident's cooldown.
+It now records local resolution and preserves the prior incident while allowing
+the next occurrence to alert. A signature-matched `acknowledge_incident` tool
+records an operator locally without suppressing alerts or claiming notification
+receipt. A fake-webhook regression covers first alert, duplicate suppression,
+acknowledgement, silent recovery and recurrence. Changed-file validation passed
+Ruff, mypy, compile and 49 mapped tests. A non-sending snapshot reported
+`blocked_qualification`/`health_degraded`. No notification, service restart or
+deployment occurred. Off-host detection and actual delivery/acknowledgement
+remain external prerequisites for unattended live operation.
+Follow-up (`7c92d872c` local main, not deployed): a single unconfirmed health outage previously left pending state
+across a recovered probe or a deduplicated different incident. The next
+separate outage could then skip its first confirmation. Pending state now clears
+on either transition. Two isolated regressions and the full 51-test alert file
+passed with Ruff, mypy and compile; the non-sending snapshot remained
+`blocked_qualification`. No message or runtime action was sent.
+State-write follow-up (`5d86f7a90` local main, not deployed): the connector, acknowledgement and
+clear tools previously used unlocked read/modify/write on one incident JSON
+file. A concurrent timer run could overwrite an operator's local
+acknowledgement. They now share a same-host file lock and atomic fsynced
+replacement. A forced-overlap fake-webhook test and the full 52-test alert file
+passed with Ruff, mypy and compile. A non-sending snapshot remained
+`blocked_qualification`; no notification or deployment occurred. This remains
+local state, not verified external delivery or cross-host acknowledgement.
+
+## September 23 pending-order cancellation boundary (`ca7ff61d6` local main, not deployed)
+
+The live replacement helper introduced in `9f49d55ce` returns before its own
+cancel call, but pending-order maintenance can separately cancel the original
+when a replacement fails. That contradicted the earlier broad claim that the
+original always remained. Pending-order maintenance now checks broker closing
+`position_intent` or the matching durable OMS intent before automatic
+cancellation and preserves a verified closing order; stale opening orders
+retain the configured cancel policy. Fifteen targeted tests cover identity
+mismatch, opening and closing regressions. Changed-file validation passed Ruff,
+mypy, compile and 287 mapped tests; 28 replay/live gate tests passed. Host-side
+read-only health returned HTTP 503 solely for `required_model_stale`, broker
+fresh with zero positions/open orders, service active with NRestarts=0.
+The non-sending incident snapshot reported `health_degraded`. No restart,
+deployment or alert delivery occurred. The live replacement itself still needs
+a durable pretrade and identity contract. Rollback is a local commit revert.
+
+## September 23 low-level live submit boundary (`9f49d55ce` local main, not deployed)
+
+`_submit_order_to_alpaca` now requires a claimed canonical OMS intent with the
+same client ID, symbol, side and sufficient authorized quantity in live mode.
+After an ambiguous live broker result, `_execute_with_retry` makes no blind
+second submit; `execute_order` leaves the intent `SUBMITTING` instead of
+resetting it to `PENDING_SUBMIT` or marking an unverified rejection. The live
+cancel-and-resubmit limit replacement returns before canceling the original,
+because its new client ID has no durable replacement claim. Paper behavior is
+unchanged. Focused tests cover direct bypass, claimed-intent success, malformed
+quantities, lost and empty responses, and retained original order. The separate
+execution suite passed 705 tests after correcting a stale quote-policy test
+fixture that lacked a fake OMS store. The final finite-quantity and intent-ID
+guard then passed 45 focused tests; 28 replay/live gate tests passed. The
+changed-file validator passed lint, type, compile and 58 collected tests with
+`--market-hours --skip-runtime-smoke`; its default sandboxed localhost curl
+failed. Host-side read-only health returned HTTP
+503 for existing `required_model_stale`; broker was fresh with zero positions
+and open orders, service active with NRestarts=0. The non-sending incident
+snapshot completed and listed `edge_realism_gap_high`, `go_no_go_failed`,
+`go_no_go_failed_checks` and `health_degraded`; no alert was sent. No service
+restart or deployment occurred. The replacement path still needs a durable
+pretrade design before live activation. Rollback is a local commit revert.
+
+## September 23 direct-submit and short-cover follow-up (`fa6aaa380` local main, not deployed)
+
+The generic `ExecutionEngine.safe_submit_order` now rejects live mode because it
+does not carry canonical pretrade and OMS evidence. A live opposite-side short
+cover now refreshes broker positions, open orders and account identity; rejects
+stale, missing or conflicting position data and same-symbol pending orders or
+intents; claims a durable OMS intent before submitting with its client order
+identity; and records a verified broker acknowledgement. An ambiguous response
+leaves the intent unresolved so a later attempt cannot blindly resubmit.
+Paper behavior and strategy/model gates are unchanged. Focused tests cover
+successful cover, stale/conflicting state, an unresolved intent and a lost
+broker response. Changed-file validation passed Ruff, mypy, compile and 284
+mapped tests; 28 replay/live gate tests also passed. Its sandboxed curl failed;
+a separate host read-only health check returned HTTP 503 solely for existing
+`required_model_stale`, with fresh broker, zero positions/orders and active
+service (NRestarts=0). The non-sending incident snapshot reported
+`health_degraded`. The lower-level `_submit_order_to_alpaca` boundary and
+replacement callers still require pretrade/claim proof before live activation.
+No running service was changed or restarted. The scoped code and docs are
+committed on local main; continue the remaining direct-path proof. Rollback is
+a local commit revert.
+
+## September 23 live opening exposure evidence (`548fefd74` local main; awaiting deployment)
+
+The live-canary/profile exposure evaluator previously skipped positions or
+open orders with missing quantities/prices and used candidate price or cost
+basis as a fallback. It also trusted a caller's closing label without checking
+whether the requested quantity would flip the position. Live openings now fail
+closed on missing account identity, position/open-order snapshots, unknown
+current market value, unpriced pending orders, and account conflicts. A bounded
+reduction must fit the observed position. The canonical live precheck refreshes
+broker state and account for each opening, overwrites caller-supplied exposure
+arrays, and blocks stale/failed reads. A broker snapshot update failure remains
+stale, and the profile gate receives the engine's actual execution mode.
+
+Forty targeted profile/risk tests passed. Final
+`agent_validate_changed.sh --market-hours` passed Ruff, mypy, compile and 326
+mapped tests; its sandboxed localhost curl failed. Another 28 targeted
+replay/live gate tests passed. Separate host-side health reached the unchanged
+paper service: HTTP 503 from existing `required_model_stale`/replay flags,
+broker fresh with zero positions/open orders; active service and NRestarts=0.
+The non-sending incident snapshot reported `blocked_qualification`.
+
+This does not approve a 3% interpretation or daily-loss limit, implement a
+durable high-water mark, or prove every direct broker submit/reduction path.
+Next: close those paths with fresh same-account position/order evidence and
+durable OMS state, then validate an isolated live-profile simulation. No live
+activation, push or deployment occurred. Rollback is a local commit revert.
+
+## September 23 operational-state triage (`48e7308f3` local main; awaiting deployment)
+
+The separate connector timer was enabled and completed successfully at
+06:11 UTC; the older healthcheck timer was disabled. Its existing incident
+snapshot now labels healthy abstention, blocked qualification, degraded data,
+uncertain broker state, execution incident, unavailable monitoring and unknown
+degradation without changing `/healthz` readiness, alert triggers, delivery or
+trading gates. The label is advisory and is included in any future incident
+text. Forty-eight focused tests, Ruff, mypy and compile passed under
+`agent_validate_changed.sh --market-hours`; the sandboxed localhost curl was
+inaccessible. A separate host-side non-sending snapshot identified the current
+paper service as `blocked_qualification`, with existing `health_degraded`
+trigger, broker connected and `required_model_stale`. No notification was sent.
+
+This same-host timer can detect application failure while the host stays up;
+it cannot detect loss of the host or its own timer. Off-host heartbeat,
+notification approval, acknowledgement and recovery verification remain
+required for unattended live use. The commit is not pushed or deployed.
+Rollback is a local commit revert; preserve the original incident snapshot and
+readiness controls.
+
+## September 23 account equity boundary capture (`5a93ef693` local main; awaiting session evidence)
+
+`ai_trading.tools.broker_accounting_evidence.capture` now records the cash,
+equity, currency and observation time returned by the existing read-only broker
+account call. `reconcile_account_equity` and optional CLI account-boundary flags
+audit cash effects from identified broker executions and precisely timed USD
+cash activities between two same-account boundaries. Date-only charges, missing
+amounts, identity conflicts and any cash difference remain unverified. The
+report shows observed equity/position-value changes without granting verified
+net-strategy performance or allocating account fees to fills. September 22
+lacks the new boundaries, so its seven unknown verified fees remain unknown.
+No broker order, experiment, strategy change or protected holdout evaluation ran.
+
+Changed-file validation passed Ruff, mypy, compile and 10 mapped tests; the
+sandboxed health curl was inaccessible. After the CLI regression was added,
+12 focused tests plus file Ruff/mypy/compile passed. Separate read-only
+health at about 06:02 UTC reached the unchanged paper service: HTTP 503 from
+existing `required_model_stale`/replay flags, broker fresh with zero positions
+and open orders. This commit is neither pushed nor deployed. After CI and a
+safe after-close deployment, capture two future, time-aligned account
+boundaries and covering activities; inspect any date-only fees and corporate events as
+unresolved, then compare broker cash/equity with separate position and fee
+evidence. No historical net P&L claim follows from this patch.
+Corporate-action follow-up (`1e9eaa215` local main, not deployed): the cash audit now reports
+observed cash distributions and position-changing corporate actions with their
+timing relation to the boundary. A timestamped zero-cash split can still have
+`cash_reconciled` status, but its position effect remains explicitly unverified;
+a date-only split remains unplaced and makes the cash interval unverified.
+Fourteen focused/mapped tests, Ruff, mypy and compile passed. This does not
+resolve the absence of position boundaries, causal times for broker nontrade
+rows, or per-execution total fees. No source record or trading gate changed.
+
+## September 23 submit-owner fence (`2ea228e91` local main; awaiting PostgreSQL and deployment evidence)
+
+Live `OrderManager` initialization now requires an exclusive PostgreSQL session
+advisory lock on the authoritative OMS database. A second owner cannot start;
+lost or forked owner sessions fail closed at the submit claim and immediately
+before the canonical broker SDK call. Standalone `alpaca_api.submit_order` and
+`bot_engine.safe_submit_order` reject live mode. Paper/diagnostic behavior and
+all model, replay and research gates remain unchanged. No live order was sent.
+
+Changed-file validation (`bash scripts/agent_validate_changed.sh --market-hours`)
+passed Ruff, mypy, compile and 44 mapped tests; its sandboxed localhost curl
+could not connect. Separate read-only health at 05:54 UTC reached the unchanged
+paper service: HTTP 503 for existing `required_model_stale` and replay flags,
+fresh broker with zero positions/open orders, active service and NRestarts=0.
+The non-sending incident snapshot passed structurally and reported
+`health_degraded`. Synthetic two-process owner/loss tests pass, but there is no
+configured live PostgreSQL database to prove two real hosts, lock loss, or
+failover. Before deployment, run CI, check broker exposure, and perform an
+isolated same-database PostgreSQL standby/restore drill. Do not start live
+trading on this evidence alone. Rollback is the local commit revert; preserve
+the prior operational stop/revoke fence during recovery.
+
+## September 23 phased trading-system hardening (in progress)
+
+Goal: implement six areas in dependency order: risk-state integrity and an
+approved small-account risk contract; isolated OMS crash recovery; demonstrated
+backup/restore; supported runtime profile and path map; unattended operation and
+deployment identity; and account-size accounting/evaluation. No live activation,
+new strategy experiment, holdout use, or change to model/promotion gates is
+authorized. The owner's 3% drawdown meaning and a separate daily-loss limit
+were requested asynchronously; thresholds remain unchanged pending that answer.
+
+First risk-state milestone, committed locally as `687e516ca`:
+`ai_trading/runtime/live_canary.py`
+now rejects malformed, unreadable, future-dated, and missing historical canary
+state. A lock serializes enforced-profile evaluations. The event journal is
+fsynced before the snapshot so an ambiguous write consumes budget
+conservatively; same-day journal attempts are reconciled with the snapshot.
+A persistent initialization marker distinguishes a fresh empty directory from
+loss of both state and event files after initialization. New regression cases
+cover corruption, missing history, journal-ahead restart, valid rollover,
+future date, and concurrent attempts. `tests/runtime/test_live_canary.py`: 20
+passed. `agent_validate_changed.sh --market-hours` passed lint, type, compile,
+and 20 mapped tests; its sandboxed localhost curl failed. A separate read-only
+health call reached
+the active paper service: broker fresh with zero positions/open orders; readiness
+503 remains due to `required_model_stale`, and replay parity remains flagged.
+The service has not been restarted for this worktree change.
+
+Second OMS milestone, committed locally as `d29bf1049`: stale `SUBMITTING` intents previously
+became `FAILED` before broker lookup, and `claim_for_submit` could reclaim them
+after a timeout. Both permitted a duplicate after an accepted-but-lost broker
+response. Reconciliation now checks broker identity, links accepted/partial/
+terminal responses, and leaves unknown outcomes open with a warning; claiming
+is limited to `PENDING_SUBMIT`. Isolated process tests persist simulated broker
+acceptance, terminate before local acknowledgement, then verify restart,
+partial fill, fill/cancel race, and no duplicate claim. Focused OMS checks:
+21 passed after updating an older test that expected the unsafe stale close.
+The initial mapped validator had 718 passed/one failed at that old expectation;
+the rerun passed lint, type, compile and 45 mapped tests. Its sandboxed health
+curl failed; the separate read-only health result above remains the runtime
+check. Process tests do not contact the running service or broker.
+
+Follow-up OMS opening gate (`c63cda3cb` local main, not deployed): an unresolved
+durable `SUBMITTING` intent now blocks new openings across symbols after a
+process restart, even when the general execution-phase gate is disabled.
+Read failures block openings; a missing intent store blocks live openings.
+Orders classified as closing positions remain allowed by this gate; their
+separate pretrade controls still apply. A process-crash regression proves the
+opening gate remains closed while broker acceptance is unknown, then opens
+after identity-based reconciliation. Focused tests: 7 passed. Changed-file
+validation passed Ruff, mypy, compile and 280 mapped tests; the sandboxed
+localhost curl was inaccessible. A separate read-only host health check at
+05:08 UTC returned HTTP 503 from the unchanged paper service: broker fresh,
+zero positions/open orders, `required_model_stale`; service active with
+NRestarts=0. A non-sending incident snapshot reported `health_degraded`.
+This change is neither deployed nor a model/trading-gate relaxation.
+Commit `39d4bd879` adds a process test that injects a failed acknowledgement write after
+simulated broker acceptance, reopens the intent store, and verifies no reclaim,
+blocked openings and identity-based recovery without a second broker order.
+Its two focused process checks plus Ruff and mypy passed; it does not simulate
+a physical disk failure or interact with the running service.
+
+Follow-up claim contract (`c8c374140` local main, not deployed):
+`OrderManager.begin_external_order_lifecycle` previously ignored a `False`
+result from the durable submit claim and returned an intent ID anyway. It now
+returns no ID and leaves no new in-memory mapping when the claim is refused.
+When a paper engine has a configured durable store, that failure blocks the
+broker submit even if paper durability was otherwise optional; live remains
+fail-closed. Fake and real-store regressions cover claim refusal, crash-persisted
+`SUBMITTING`, and no second simulated broker attempt. Focused tests: 9 passed.
+Changed-file validation passed Ruff, mypy, compile and 60 mapped tests; its
+sandboxed curl could not connect. Separate host health at 05:33 UTC returned
+HTTP 503 solely for `required_model_stale`, broker fresh with zero positions and
+open orders; service active, NRestarts=0. Non-sending incident snapshot reported
+`health_degraded`. This prevents reuse of one claimed intent, but does not fence
+two owners creating *different* new intents on separate hosts; PostgreSQL or
+another shared ownership mechanism and all direct submit paths still need
+explicit verification before live or restored-host activation.
+
+Backup inventory: the installed `ai-trading-runtime-backup-sync.timer` is
+disabled. Its script only uploads archived `*.bak.*.gz` files; it does not
+snapshot the active OMS SQLite database. The deployed runtime has an active OMS
+database under `/var/lib/ai-trading-bot/runtime`. Consistent snapshot creation,
+integrity/retention/failure checks, isolated restore and ownership fencing are
+still required. No secrets were copied or printed.
+
+These commits are on local main and have not been pushed or deployed. The
+remaining risk contract, runtime-path, operations, and account-size evaluation
+phases are incomplete. This work does not establish live readiness. Preserve
+the pre-existing uncommitted handoff content and
+`docs/REMAINING_TASKS_HANDOFF_20260922.md`.
+
+### Recovery bundle milestone (`ddbacc1ac` local main, not deployed)
+
+`ai_trading/tools/runtime_recovery_backup.py` creates online SQLite snapshots
+of the two runtime databases, captures named runtime evidence and model files,
+and verifies per-file hashes and SQLite integrity. It excludes environment
+files and sensitive model filenames, writes mode-0600 bundles, records safe
+success/failure status, and applies explicit local retention. The packaged
+backup-sync unit now creates a bundle before optional S3 sync; its timer is
+configured for 23:30 UTC daily. It remains disabled on the host.
+
+Synthetic backup/restore tests: 3 passed, including restored OMS intent versus
+simulated broker acceptance, retention and corruption rejection, and failure
+status. Ruff, mypy, compile and mapped tests passed under
+`agent_validate_changed.sh --market-hours`; `systemd-analyze verify` passed.
+The validator's sandboxed curl could not connect. Separate local health at
+04:50 UTC reached the active paper service: fresh broker, zero positions/open
+orders, readiness degraded only by `required_model_stale`, replay parity still
+flagged; NRestarts=0. Non-sending incident snapshot passed.
+
+Latest isolated read-only-source rehearsal against deployed data: bundle
+creation/verification 43.73 seconds, isolated verify/restore 12.09 seconds,
+106 MiB archive, two integrity-checked restored SQLite databases, 2,135 OMS
+intents and 3,028 model files. The archive and restored manifest exist under
+`/tmp/goal-recovery-rehearsal-final` and `/tmp/goal-restored-final`. See
+`docs/RUNTIME_RECOVERY.md` for exact scope, recovery procedure, data-loss
+boundary and limitations. No production backup, service restart, broker order,
+remote sync, or live activation occurred. Local main is six commits ahead of
+origin/main. Next: finish risk-contract/submission-path verification and the
+other four goal areas.
+
+Backup completeness follow-up (`133b285f7` local main, not deployed): the bundle creator could
+previously succeed if any runtime SQLite file existed, even with the
+authoritative OMS or persistent rate-limiter database absent. New schema-2
+bundles resolve the configured stores and require their identities at creation
+and verification; non-SQLite or out-of-scope authoritative stores fail closed.
+Sensitive model-directory components are excluded. The deployed paper
+configuration resolves to the present `oms_intents_paper_monday.db` and
+`pretrade_rate_limiter.db`; no production bundle was created in this follow-up.
+Six isolated backup tests, Ruff, mypy and compile passed; the non-sending
+snapshot remained `blocked_qualification`. Legacy schema-1 bundles still
+verify integrity but cannot certify configured database completeness. The
+backup timer remains disabled; next is CI, after-close exposure review and a
+planned timer deployment plus an actual scheduled backup and restore check.
+Schema-2 isolated rehearsal (`62f421a02` local main) at 09:02 UTC used the deployed paper runtime
+environment and wrote only to `/tmp/goal-recovery-schema2-20260923`. A 105.43
+MiB bundle with 3,042 members was created/verified in 46.58 seconds and
+verified/restored in 12.45 seconds. Its required OMS and pretrade limiter
+databases passed integrity checks; the restored OMS had 2,135 terminal intents,
+none nonterminal, at revision `20260506_0001`. The configured `.pkl` model
+artifact was included. Running broker health remained
+fresh with zero positions/open orders; readiness still failed on
+`required_model_stale`. This read-only-source rehearsal does not replace an
+actual scheduled backup, off-host restore or real PostgreSQL owner drill.
+Owner-fence follow-up (`42c4c17fa` local main, not deployed): no PostgreSQL binary, server unit,
+or container runtime is available on this host. Two isolated shared-lock tests
+exercise two candidate OMS owners, contention, release, lock loss and process-ID
+mismatch; Ruff, mypy, compile and both tests passed. This verifies the local
+fence protocol only. A real PostgreSQL two-owner/failover drill against one
+shared database remains an explicit acceptance requirement before live or
+restored-host submission.
+
+Live-submit extraction (`b51897307` local main, not deployed): the oversized submit handler now
+uses a pure ambiguity classifier for native broker 5xx, timeout/connection and
+plain-text provider errors. Direct cases distinguish uncertain outcomes from
+ordinary 400 rejections without changing identity lookup or failover policy.
+The focused execution files passed 302 tests; the changed-file gate passed
+Ruff, mypy, compile and 18 mapped tests; 39 replay/degraded-gate tests passed.
+Read-only host health remained degraded for existing
+`required_model_stale`/replay flags, with fresh broker state and zero positions
+or open orders. No runtime restart, broker order or deployment occurred.
+
+### Small-account mechanics (`10291462c` local main, not deployed)
+
+`ai_trading/tools/small_account_capacity.py` evaluates explicit $1,000 and
+$2,000 long-only whole-share scenarios with pending buy commitments, cash
+reserve, minimum/maximum order notional, gross/symbol concentration and
+per-side cost assumptions. It keeps estimated market costs, estimated fees and
+unknown verified fees separate. Four synthetic tests pass, including both
+capital sizes, concentration, pending cash, high-price whole-share failure,
+invalid limits and fee provenance. Changed-file validation passed Ruff, mypy,
+compile and four mapped tests; the sandboxed health curl was inaccessible, with
+the separate health smoke above covering the service. No strategy trial or
+holdout evaluation ran. See `docs/SMALL_ACCOUNT_EVALUATION.md` for scope and
+retirement/observation/live-canary eligibility rules. Actual equity/cash
+reconciliation and the owner-approved 3%/daily-loss thresholds remain open.
+
+`docs/SMALL_ACCOUNT_RISK_CONTRACT.md` (`b77c3548f` local main) states the required account/equity,
+daily/starting/peak-loss, outstanding-order, stale-broker and safe-reduction
+semantics without selecting a numeric loss limit. The owner decision on the
+meaning of 3% and, if needed, a separate daily limit is still pending. This
+document is a contract draft; it is not wired into all submit paths and grants
+no live authority. Docs-only validation passed.
+
+### Runtime path and configuration identity (`07d0ca4d0` local main, not deployed)
+
+The startup run manifest and order lineage used different JSON serialization
+for the same sanitized `TradingConfig`, yielding different hashes. The
+canonical hash is now shared. The sanitized snapshot includes a digest of all
+declarative settings, with secret values represented only as configured/absent;
+the manifest separately captures the resolved launch-profile payload and hash
+for policy overrides outside the config schema. Tests verify sensitivity to an
+otherwise omitted position-size setting, stability across secret-value changes,
+manifest/order-hash agreement, and launch-profile override identity. The path,
+precedence, units and known identity gaps are mapped in
+`docs/SUPPORTED_TRADING_PATH.md`. Previous hashes have different scope and must
+not be rewritten. This does not yet bind the applied schema revision, exact
+loaded model artifact or checkout dirty state to a tested release.
+
+Focused tests: 21 passed; four related decision/manifest cases also passed.
+Changed-file validation passed Ruff, mypy, compile
+and 155 mapped tests; its sandboxed health curl could not connect. The first
+host health request timed out at 5 seconds; a bounded repeat returned HTTP 503
+in 2.82 seconds, broker fresh with zero positions/open orders and only
+`required_model_stale` as readiness failure. Service remained active with
+NRestarts=0; a non-sending incident snapshot reported existing degraded
+health and go/no-go flags. No restart, broker submission or deployment occurred.
+Read-only host timer status on September 23: the packaged healthcheck,
+runtime-backup-sync and runtime-report timers are all disabled. The health
+runner can send a webhook if configured, so installing/enabling it requires
+tested state classification and non-sending alert fixtures before notifications
+are approved. The same-host timer cannot detect total host loss; off-host
+heartbeat evidence remains an external dependency. No timer was enabled.
+
+## September 23 accounting and research decision
+
+Detailed evidence and acceptance criteria: `docs/ACCOUNTING_AND_RESEARCH_DECISION_20260923.md`.
+September 22 has seven local fill rows, but eight broker executions: the MSFT
+end-of-day sell-2 row combines two sell-1 broker activities. The AMZN and MSFT
+end-of-day exits match same-account orders but have no strategy decision or
+resolved TCA. Reconciliation now names those gaps without inventing matches;
+broker accounting now flags execution-count mismatches even when order quantities
+match. Future EOD submissions carry causal trigger time and intent reason in
+order events. The original September 22 records remain unchanged.
+
+No September 22 fill has a verified total fee. Captured broker fills have no
+fee field; account-level fee rows have no execution reference and cannot be
+allocated. Net P&L remains unknown. The broker-backed September 7–18 quantity
+ledger and independent September 22 quantity interval may be reported separately;
+pre-anchor legacy history remains excluded. AAPL -3 / AMZN +1 predates the
+verified flat September 18 opening, with no supported exact origin.
+
+Retire the consumed September 21 replacement hypothesis (negative development
+economics). Replay remains blocked at 191/250 samples and negative candidate
+net edge. Keep `required_model_stale` and every reset/holdout/promotion gate.
+No new research trial was run or proposed.
+
+Commit `3c206654c` is on local and remote main. CI run 35813717726 passed:
+7,068 tests passed, four skipped, 80.07% coverage. CodeQL, SBOM, Workflow Lint,
+deterministic replay, offline replay and research backtest gates also passed.
+Locally, 73 focused tests passed; changed-file validator passed Ruff, mypy,
+compile and 75 mapped tests. The validator's sandboxed health curl could not
+connect, and a local full run stopped after 2,070 passes because the sandbox
+forbids a free-port test's socket creation; CI passed in its normal environment.
+
+At 03:45:38 UTC the direct paper broker check confirmed market closed, active
+account, zero positions and zero open orders. The service was restarted after
+close at 03:45:50 UTC. After warmup, health reports fresh broker connectivity,
+zero positions/open orders, `paper_diagnostics_only`, and only
+`required_model_stale` as a readiness failure; `replay_live_parity_gate_failed`
+remains an attention flag. Service active, NRestarts=0. Two yfinance ERROR rows
+reported an SPY daily backup download failure during startup; minute Alpaca IEX
+health then returned 391 rows and completed. No execution or readiness error
+was established. Monitor the next regular session and after-close audit without
+forcing trades or changing gates. The earlier uncommitted handoff content and
+`docs/REMAINING_TASKS_HANDOFF_20260922.md` were preserved outside the commit.
+
+## September 22 CI repair and after-close deployment completed
+
+Published 43abd3d0f after removing the NumPy substitute leaked by
+`tests/execution/test_execution_imports.py` into `bot_engine`. The directly
+ordered execution-imports and correlation tests pass (10 tests), and the
+leaking test now asserts that `bot_engine.np` remains canonical NumPy.
+Full CI run 35771599946 passed: 7066 tests passed, four skipped, zero failures,
+80.04% coverage. CodeQL, Workflow Lint, and SBOM also passed on that SHA.
+
+After 20:00 UTC, broker clock confirmed closed, paper broker reported zero
+positions/open orders, and the release/backups/research hashes passed preflight.
+Production main fast-forwarded from bde5a6a4f to 43abd3d0f; local notes were
+preserved in stash@{0} and /tmp/sep21-production-predeploy/local-work.tgz.
+Service restarted at 20:00:40 UTC and is active with NRestarts=0. After warmup,
+health returns 503 with only `required_model_stale` in readiness failures;
+`replay_live_parity_gate_failed` remains an attention flag. Import preflight and
+paper ExecutionEngine initialization appeared in the journal, with no structured
+error-level entries in the checked postrestart window. Non-sending incident
+snapshot passed structurally and reported degraded health. No model promotion,
+research trial, holdout evaluation, or trading gate change occurred. Next check:
+postdeployment paper session behavior during the next regular market session;
+do not infer model readiness or strategy performance from abstention.
+
+## September 22 exact NumPy contamination source
+
+Full CI run 35767890187 on 4c8c3ea54 again failed only the bot-engine
+correlation test (7065 passed, one failed, four skipped; 80.04% coverage).
+JUnit identified the `np.asarray` replacement as
+the lambda created inside
+`test_execution_engine_real_when_dotenv_unresolved`.
+That test installed a fake NumPy module, reloaded `bot_engine` under it, then
+reloaded `bot_engine` again before pytest removed the fake. Reproduced with the
+ordered execution-imports and correlation tests: one passed, one failed.
+Removed the unrelated fake NumPy setup from that test. The complete
+execution-imports file followed by the correlation tests now passes (10 tests);
+changed-file lint, mypy, compile and five mapped tests pass. Publish and verify
+full CI before deployment. Production and trading/model gates remain unchanged.
+
+## September 22 NumPy isolation repair
+
+CI run 35744924423 on 99995f3b4: 7064 passed, one failed, four skipped,
+80.04% coverage. The sole failure was the bot-engine correlation test because
+`np.asarray` returned a Python list. Two test modules still installed
+list-returning NumPy substitutes during import. Shared test setup also took its
+module snapshot before preloading real pandas/NumPy, leaving the canonical
+NumPy module outside the `patch.dict(sys.modules, clear=True)` restoration set.
+Removed both NumPy substitutes, moved the snapshot after dependency preloads,
+and added an isolation regression beside the correlation test. Fourteen focused
+tests passed; changed-file lint, mypy, compile, and 11 mapped tests passed;
+five selected tests passed with xdist after full collection. No runtime or
+trading code changed. Publish this test repair and require passing full CI
+before deployment. Production service and model/trading gates remain unchanged.
+
+## September 22 final CI isolation follow-through
+
+Published revision 7f18268dd reached 80.06% coverage (unchanged 80% requirement),
+7063 passed, two failed, four skipped in CI35648465789. Remaining failures came
+from global NumPy substitutes and a sleep-based overlap test reaching broker IO.
+Removed dependency substitutes from sentiment/SPY tests; overlap now synchronizes
+with events and exercises the real lock against isolated preparation/execution.
+Changed-file validator: lint, types, compile and five targeted tests passed.
+Nine ordered isolation/correlation regressions also passed before final cleanup.
+Next: publish this test repair to main and verify the full CI result. Production
+remains at bde5a6a4f: no deployment or restart during September 22 market hours.
+After-close deployment remains authorized and pending a passing release. Preserve
+local edits using /tmp/sep21-production-predeploy backups; refresh the release
+hash and broker/market checks before using its deployment script. Model readiness,
+research budgets and holdout boundaries remain unchanged.
+
+## September 21 CI, deployment, and operating-status follow-through
+
+User authorized items 1–3: repair CI/80% coverage, deploy validated main after
+market close, and distinguish paper diagnostics from model readiness. Work is
+in /tmp/ai-trading-workflow-fix; production has not yet been restarted/deployed.
+Baseline CI35644275203 measured78.97%,6885passed/8failed/4skipped. Fixed test
+preflight-state isolation and offline startup equity; removed import-time Flask
+and dependency stubs. Cycle budget uses one deterministic clock and no broker IO.
+New regressions also found/fixed corrupt-pickle recovery and flat-table bulk
+daily grouping. Added meaningful order/fill, persistence, provenance, scheduling,
+source-audit and research-budget tests. Gates and coverage threshold unchanged.
+Shared health now explains paper_diagnostics_only; close recap repeats it while
+required_model_stale remains degraded. No new model trial or holdout evaluation.
+Validation: changed-file lint/types/compile,232tests,live health and non-sending
+incident check passed; additional research/strategy/cache tests and types passed.
+Full CI on the publishing revision remains pending. At20:00 broker clock confirmed
+market closed,account active,zero positions/orders; model remained stale.
+Next: publish to main, verify full CI coverage, preserve local production edits,
+fast-forward deployment after close, restart and verify health/logs. Historical
+ledger discrepancies and absent qualified model remain explicit limitations.
+
+## September 21 replacement-model trial preflight
+
+Superseded by completed trial: docs/MODEL_REPLACEMENT_20260921.md. One trial used,
+status hypothesis_rejected. 113,223 derived rows; 94,200 OOF opportunities; 30,802
+selected proxies; -3.197464 bps/common opportunity, -9.778623 bps/selected trade
+after 10 bps costs, 0/5 profitable folds. Do not rerun or tune the consumed trial.
+Artifacts: production checkout artifacts/model_replacement_20260921/. Ledger,
+report and prediction hashes verified. Cache signatures now exclude audit time;
+original manifests preserved and identical builder code/source hashes verified
+before recertification. Eleven focused tests, lint/types pass; standard validator
+663 tests passed before the cache correction. Direct health and non-sending
+incident checks pass structurally; required_model_stale remains. No model saved,
+registry activation, restart or holdout evaluation. Runner is on origin/main and
+in /tmp/ai-trading-workflow-fix; production checkout was not deployed/reset.
+
+Original preflight history follows:
+
+User explicitly approved one bounded replacement trial; specification is frozen
+in config/model_replacement_campaign.json and registered with zero trials claimed
+in artifacts/model_replacement_20260921/campaign_state.json in the production
+checkout. Scheduled training remains paused. See docs/MODEL_REPLACEMENT_20260921.md.
+Nine governed 2024–2025 stock feature checks pass same-history, prefix causality,
+and default ten-day runtime-window equality. The older 200-bar truncation failures
+are not evidence that the ten-day runtime window fails. Three focused tests pass;
+lint/type/compile pass. No model fitted, holdout evaluated or service restarted.
+Next: implement provenance-preserving derived features/labels and frozen purged
+evaluation before claiming the trial; existing broad trainers are not substitutes.
+
+
+## Efficient ledger and coverage follow-through — September19
+
+Full CI35411547532 on4ae076049 completed:78.99%,6880pass/4fail/4skip. Nine prior
+sklearn failures gone. Four new failures isolated with test-only fixes: throttle
+filter, network-free minute fallback, sizing cache, shared order tracking.
+Follow-up22parallel tests pass; validator lint/types4/compile/nine tests pass.
+Final publishing-triggered CI pending; latest measured coverage remains78.99%,
+below unchanged80%. Conserve user budget; do not start another coverage campaign
+without a new task. Service and original runtime ledger remain unchanged.
+
+See LEDGER_AND_COVERAGE_20260919.md. Removed global import-time stubs from three
+test modules, added fail-closed optional broker-ledger rebuild to the accounting
+CLI, and targeted schema/ledger regressions.66 parallel isolation tests pass;
+validator lint/types6/compile/40tests pass;17 final ledger/CLI tests pass.
+Rebuilt50 broker executions from Sep7 verified opening through Sep18 closing:
+quantity matched. Separate ignored artifacts in production checkout under
+artifacts/ledger_rebuild/20260918. Original history unchanged, earlier history
+unverified/excluded from this rebuild; no live/training source switch or restart.
+One full CI measurement follows publishing; do not claim80% from focused tests.
+User requested efficient use of remaining26%weekly allowance. Keep future runs
+bounded, reuse unchanged validation, and do not delete archived branches.
+
+## September 19 reconciliation and release follow-through
+
+See RECONCILIATION_REPAIR_20260919.md. Current retained ledger reproduces Sep18
+two blocks: AAPL-3/AMZN2/MSFT1 versus session-implied0/1/1. Removed unsafe
+broker-to-itself reconciliation fallback; fixed separate lineage quantity
+overwrite and duplicate/partial audit-to-meta FIFO conversion. Historical data
+unchanged; exact incident input snapshots unavailable. Do not claim ledger
+repaired. Removed sklearn estimator stubs causing eight parallel CI failures.
+104 reporting/conversion tests and56 CI-isolation tests pass. Latest full-deps
+suite6827pass/4skip but78.98%coverage;80%threshold remains enforced.
+Merged committed close/health fixes bde5a6a4f into isolated worktree. Production
+checkout/service untouched; active,NRestarts0,flat,fresh broker,model stale.
+Current validation artifacts:/tmp/sep19-*.log. Deployment requires remaining
+CI/coverage and evidence review; no restart authorized by passing targeted tests.
+Final standard validator --skip-runtime-smoke passed lint,types8,compile and108
+tests. Initial imported dataclass-slots diagnostics did not recur on final run;
+clean production baseline types2 and scoped changed-file types8 also passed.
+Two-worker CI reproduction56pass; integrated replay/health/recap107pass; final
+converter group45pass. Counts overlap. Nonsending incident/live health passed.
+Saved15:26 report replay now reports2 mismatches instead of the old false zero.
+Full-suite CI on the new commit remains required; coverage is not claimed fixed.
+
+## Main integration — September 18
+
+User explicitly requested all current commits on main after disclosure of the
+coverage gate. Integrated origin/main into the repair history, resolving only
+workflow artifact paths and the repair report; actionlint/diff checks passed.
+Normal fast-forward push published 02d5ead2362138afce8a941d80dcda79fa3bac4d to
+origin/main. GitHub marked PR3164 merged. No service restart/deployment or local
+production checkout reset; existing uncommitted close/health changes preserved.
+GitHub accepted the push with required checks pending; CI35301288534 is running
+on the exact main commit. Workflow Lint/SBOM passed; full CI not yet verified.
+
+Branch audit:3148 remote refs,104 historical tips outside main ancestry after
+integration:7 exact tips linked to merged PRs,87 closed-unmerged PR tips,10
+unmatched tips (nine with older PR history plus gh-pages). User explicitly chose
+to leave historical branches archived. No historical merge or deletion performed.
+All commits from the current repair branch are reachable from origin/main.
+Audit artifacts:/tmp/main-branch-audit.json and /tmp/main-closed-prs.jsonl.
+Coverage78.82% is the prior complete run's measured statement execution, not a
+test pass rate; 6785 tests passed but the unchanged80% minimum failed. Earlier
+push-blocker notes below are superseded by this authorized successful push.
+
+## September 18 fixes follow-through
+
+Isolated repair branch/worktree: codex/fix-actions-20260917 at
+/tmp/ai-trading-workflow-fix, draft PR #3164 (unmerged, undeployed).
+cf7a973e8 fixes discarded immutable TradingConfig.update returns in four test
+modules and hidden `.ci/*.xml` artifact uploads. f9fe9ba2d adds fail-closed startup
+reconciliation and rejects invalid sliced-order types before submission, with
+boundary regressions. Changed-file validator passed lint/types/compile and 43
+tests; final startup retry suite nine passed; offline replay/execution 63 passed.
+Counts overlap. CI run35295591496 remains in progress at this checkpoint.
+Push of f9fe9ba2d was rejected by automatic approval review: remote code export
+authorization was not established. This commit remains local; remote PR head is
+cf7a973e8. Ask explicit approval to push f9fe9ba2d to the existing origin branch.
+Last complete full-deps suite: 6785 passed, coverage78.82% (80% gate unchanged).
+Coverage remains unfinished; do not claim all workflows green.
+
+Preflight job33a17762-62de-40ad-a7e7-18f1c8b2112a now has a direct command argv
+payload running the canonical module with repo venv and cwd; schedule/delivery/
+enabled state preserved. Direct non-sending run complete/blocked, exit0. Next
+natural cron delivery remains pending. No service restart; active/NRestarts0.
+
+Fresh two-day broker fetch at01:35:38Z:16 fills, zero execution-linked fee amounts;
+one historical cost-comparison pair, zero net-cost pairs. No evidence fabricated,
+no qualification gates changed, no training or new experiment. Artifacts under
+/tmp/next-fixes-*. Legacy audit-to-meta conversion also produced duplicate
+opposite-reward rows for a round trip during testing; not repaired, investigate
+before training resumes. Existing close-recap/health edits below remain separate.
+
+## Close recap reporting repair — September 18, 00:05 UTC
+
+Fixed scripts/openclaw_market_close_recap.py: current reset automation/paper
+review replaces intentionally paused legacy trading-day/control-plane artifacts;
+missing/stale reset evidence still reports pending. Recognize incident checked_at,
+use New York session dates (including UTC midnight), constrain last fill to that
+session, filter full-session journal before bounded tail, and label edge sums as
+unweighted diagnostics rather than net P&L. Healthy close requires connected
+broker, flat exposure, no readiness failures and active service.
+Canonical health_payload.py now prioritizes degraded readiness and its reason
+over the market-closed healthy shortcut. This runtime patch is NOT loaded into
+the existing process; it takes effect on the next planned restart. User requested
+leave service running; no restart, training, model swap or gate relaxation.
+Recap script is immediately used by enabled OpenClaw command job515d67cc-
+ed31-41cb-acc8-5e02405d907a (16:45 America/New_York); verified live argv/cwd.
+Required changed-file validator passes93tests, lint/types4files/compile. Final
+recap-only changes checked separately:13tests, lint/types. Live read-only preview
+/tmp/close-repair-preview-final.txt finds8fills and current Sep17 evidence_pending
+report. Non-sending incident snapshot passed. Service active/NRestarts0; broker
+connected, positions0/orders0. Model age62days exceeds14, abstains; research
+reset deliberately pauses scheduled training. Fees missing for8fills; net-cost
+and execution-comparison evidence remain unqualified. Do not suppress these.
+Logs /tmp/close-repair-validation.log, /tmp/close-repair-recap-final-tests.log.
+Next natural close verifies delivery; do not manually trigger notifications.
+Rollback the four changed code/test files together; no runtime artifact rewrite.
+
+## Workflow repair PR published — September 17
+
+User explicitly authorized commit/push/draft PR after earlier auto-review block.
+Repair branch codex/fix-actions-20260917 pushed; current head eaa952a8f.
+Draft PR https://github.com/dmorazzini23/ai-trading-bot/pull/3164 is open.
+Worktree /tmp/ai-trading-workflow-fix is clean; temporary venv symlink removed.
+First complete PR CI35237366997: 6773 passed, nine failures, coverage78.76%.
+Manual full-deps CI35237357129: 6777 passed, five failures, coverage78.80%.
+Fixed feature cadence/OHLC fixtures, nested-call regex guard via AST, health
+response adapters and stale class fixtures; defer SDK imports in retry and both
+reconciliation modules. Added lazy import regressions for four modules.
+Follow-up validation: 89 focused tests and seven xdist tests pass; required
+agent_validate_changed --market-hours --skip-runtime-smoke passes 436 tests,
+lint, types11files and compile. Logs /tmp/workflow-repair-validation-final.log,
+/tmp/workflow-repair-focused-final.log and /tmp/workflow-isolation-xdist.log.
+Live health responds degraded required_model_stale; non-sending incident passes.
+No merge/deploy/restart or installed production dependency changes.
+Current head PR CI35242203178 and dispatched full-deps CI35242253502 pending.
+Other checks passed on previous head, audit140packages zero findings; verify
+new runs before claiming green. CI now uploads coverage XML with JUnit.
+Coverage remains unresolved against80%; do not lower threshold/exclude code.
+Next: inspect current CI results, download JUnit/coverage, fix remaining failures
+and add meaningful coverage for the exact gap. Old logs: /tmp/workflow-pr3164-
+{ci,nightly}-failed.log. PR body updated via REST (gh pr edit hits deprecated
+Projects classic GraphQL). /tmp/workflow-pr-body.md has current review details.
+
+## GitHub workflow repairs — September 17
+
+See GITHUB_WORKFLOW_REPAIR_20260917.md. CI failures trace to async limit fixture;
+fixed observed-time/price assertions,64 targeted tests pass. Dependency Audit
+fixed via patched runtime/ML pins and regenerated lock:125packages zero findings,
+no ignores. Full dev/test dependency dry-run passes; actionlint passes. Added
+constraint syntax/version regression. CI now collects all failures/JUnit while
+preserving80%coverage. No production installed dependencies changed or restart.
+Publishing was subsequently explicitly authorized and completed; see current
+state above. Do not ask again for repair-branch publishing authorization.
+
+## Market preflight parsing repair — September 17, 14:19 UTC
+
+ai_trading/tools/market_preflight.py reads canonical health with urllib and emits
+bounded JSON. Valid blocked HTTP200/503 reports exit0; malformed/transport/other
+HTTP failures emit failed/unknown and exit1. No jq or guessed nested field paths.
+Regression10pass; changed-file validator --market-hours --skip-runtime-smoke:
+233passed, lint/types9/compile passed. Live command complete/blocked HTTP503 for
+existing required_model_stale + replay parity flags; non-sending incident passed.
+Updated OpenClaw job33a17762-62de-40ad-a7e7-18f1c8b2112a via matching
+/home/aiuser/.local/bin/openclaw (2026.7.1). Readback matches prompt (gateway trims
+trailing newline); schedule/delivery/enabled/identity preserved. PATH's older
+.npm-global CLI2026.6.11 remains unchanged. No manual cron run/notification sent.
+Next natural scheduled run verifies delivery. No restart/gate/training changes.
+See docs/MARKET_PREFLIGHT.md. Logs /tmp/market-preflight-{tests,validation}.log;
+live.json, incident.log, job-before.json and job-after.json under same prefix.
+Rollback job message from job-before.json via matching CLI, then revert only the
+new preflight module/tests/docs. Prior working-tree changes are unrelated.
+
+## Replay tests and pending evidence — September 17, 03:55 UTC
+
+See REPLAY_TEST_AND_PENDING_EVIDENCE_20260917.md. Four replay failures resolved
+through test fixture/assertion corrections: later actual observations for limits,
+plateaus for markouts/opening policy, candidates rather than fictitious fills
+for rising-price duplicate-timestamp case. Full test_offline_replay.py:30 passed.
+Changed-file validator:223 passed, lint/types7/compile passed; diff check passed.
+No new runtime behavior changes. Healthy active NRestarts0; no new natural skew
+or closeout event in postdeployment journal. Both observations remain pending.
+Original manifest/report still lack full input contract. Canonical comparison
+returns unverified, no qualification authority. No artifact/gate/feed changes.
+Logs /tmp/three-{replay-tests,followup-validation}.log; runtime/provenance evidence
+in report. No restart/training/new trial/background monitor. Prior four-failure
+notes below are historical and superseded by this follow-up.
+
+## Shared five-minute history validation — September 17
+
+Implemented validate_day_sleeve_history in features/day_sleeve.py, extracted
+unchanged live timestamp rules. After-hours datasets and replay-aligned features
+now reject intraday gaps before indicators. Replay caches versioned v3 and cache
+hits validated. Offline replay applies this rule to models declaring 5Min via
+model attribute or artifact metadata; other timeframes remain supported. New
+replay-trained models declare the validated timeframe; old models not relabeled.
+No training, feed/universe/gate changes or restart. Current live rule unchanged.
+Regression covers gap/duplicate/order/grid/timezone, session boundaries, cache
+bypass, declared replay models and new model timeframe metadata.
+Changed-file validator:193 passed, lint/types6/compile passed. Final focused12
+passed; final lint passed. Extended suite190pass/4fail; same4 reproduced using
+HEAD offline replay function: netting reductions, markout metrics, opening-only
+quantile, duplicate-timestamp model scoring. Existing failures remain unresolved.
+Logs /tmp/iex-history-{validation,final-tests,baseline,final-regressions}.log.
+Live health healthy active NRestarts0, existing stale/parity flags. Natural skew
+and closeout-with-exposure still pending. Partial-session boundaries and missing
+whole sessions are not certified by continuity alone; full provenance remains
+unverified. Rollback: revert these code/test hunks, preserving previous docs;
+no data migration. Old cache version is excluded, not deleted.
+
+## IEX-only follow-up — September 17, 03:45 UTC
+
+User declines paid SIP; retain IEX. See IEX_PROVENANCE_AND_GAP_REVIEW_20260917.md.
+Original July17 training report/manifest agree on IEX and dataset fingerprint;
+full adjustment/session/history/finality contract remains absent. No relabeling.
+Unresolved mismatch: serving rejects missing intraday five-minute intervals;
+training permits aligned gaps, excludes crossing labels but computes indicators
+over surviving rows; replay feature helper lacks serving continuity validation.
+Next correction: shared history eligibility with synthetic regression, preserve
+strictness; no training/new trials. Audit only, correction not implemented.
+23 contract/serving +1 missing-bar training tests passed. Active healthy service,
+NRestarts0; stale/parity flags remain. No natural new skew/closeout in postdeploy
+journal. No feed/ticker/gate changes, restart or background monitor.
+
+## SIP entitlement/input contract — September 17, 03:35 UTC
+
+See docs/SIP_ENTITLEMENT_REVIEW_20260917.md. SIP latest quotes and recent minute
+bars both rejected: subscription does not permit recent SIP. Historical SIP
+success is insufficient. /tmp/sip-access-review.json. No subscription/feed edits.
+Selected day model 236ba0fe registry declares IEX/5Min/feature version/lookback60,
+but lacks full input contract (adjustment/session/history semantics/finality).
+Referenced artifact manifest also lacks contract; parity remains unverified.
+Do not infer old training settings from current env or substitute generic model.
+Natural skew capture and closeout with exposure remain pending; no forced trades.
+Read-only checks/docs only; no restart, training or gate changes.
+
+## Skew evidence deployment — September 17, 03:32 UTC
+
+See docs/SKEW_EVIDENCE_AND_FEED_COMPARISON_20260917.md. Skew breaches now record
+feature values/reference stats, frame datetime label versus capture time, model
+class and actual in-memory joblib SHA1 fingerprint (NOT artifact-file checksum).
+Fingerprint failure explicit; predictions/thresholds unchanged. Regression14 pass.
+Initial validator343pass/6 stale lifecycle mocks failed; changed those to real
+normalizer. Final validator20 pass, lint/types3/compile, non-sending snapshot pass.
+Same-window IEX/SIP: AMZN Sep15 389/390 vs390/390; MSFT Sep16 387/390 vs390/390.
+No feed/ticker/model/training changes. Historical SIP != real-time entitlement.
+Restart03:31:15 succeeded. At03:32:40 healthy/ready cycle1 broker fresh connected,
+zero positions/orders; startup logs no warning/error, existing parity/stale flags
+remain. /tmp/skew-fix-{posthealth.json,startup.jsonl,validation-final.log};
+feed result /tmp/skew-fix-feed-comparison.json. Natural skew warning capture pending.
+Docs-only/diff checks passed. Rollback only diagnostic hunks; no data migration.
+
+## Minute gaps/skew — September 17, 03:23 UTC
+
+See docs/GAP_AND_SKEW_REVIEW_20260917.md. 187gap warnings repeat four timestamps:
+AMZN Sep15 16:42 and MSFT Sep16 16:29/17:13/18:17. Direct same-feed IEX/all requests
+reproduce all four absences; no solely local cache defect established. QQQ skew
+16:50:46: RSI/ATR/SMA200/ATRpct/centeredRSI, 5/12=41.7% >35%; meanz1.206<2.5.
+OR threshold explains warning; exact historic feature values/model identity absent,
+so cause beyond distribution excursion unverified. No runtime/gate/feed changes.
+Eight Sep16 intents strategy=day qty1; journals preserve requests2/6/10 versus
+submitted1, pending filled0 correctly precedes durable FILLED. Natural reporting
+verification now observed. Artifacts /tmp/gaps-skew-{provider,amzn-prior}.json.
+Docs-only/diff validation; no restart or new tests needed for read-only review.
+
+## Replay/fee/session trace — September 16, 04:48 UTC
+
+See docs/REPLAY_FEE_SESSION_REVIEW_20260916.md. Exact normalized input and full
+reproduced output hashes match Sep15 saved replay. All24 missing comparisons:
+10Sep15 fills after cutoff, 9cap-zero, 3simulated orders expired unfilled, 2older
+market exits absent decision/TCA input. Candidate90fills/90markouts/no exclusions;
+baseline536fills/527markouts (8horizon,1no-subsequent). No source/pricing repair.
+Fee-specific FEE/PTC/PTR reads empty+pagination complete. Official current Alpaca
+paper docs exclude regulatory fees; do not expect paper data alone to close real
+total-cost gate. Account activities may post next day; empty != zero fees.
+Updated Sep15 session CLI: all10 linked/quantities/positions matched, fees_missing10.
+Artifacts /tmp/replay-missing-observations.json, replay-trace-reproduction.log,
+replay-fee-followup-broker.json, replay-fee-session-review/latest.json.
+Read-only investigation/docs; no runtime changes/restart/training/new trials.
+Natural receipt/closeout-with-exposure verification still pending.
+
+## Four evidence priorities — September 16, 04:36 UTC
+
+See docs/EVIDENCE_FOLLOWUP_20260916.md and TRAINING_RESUMPTION_REQUIREMENTS.md.
+Sep15 ten fills: all decision/order/TCA links and quantities/position boundaries
+match; sole session gap is ten missing fees. Fresh 2-day broker activity capture:
+14fills/14quantitymatches, no fee fields or fee activities. No historical repair.
+Fixed reconciliation accepting fees without USD/per_fill_total; stopped comparison
+publishing fee bps for invalid fee contracts. Added separate evidence gap counts,
+bounded per-order comparison exclusions and explicit all-history scope. Two
+benchmark mismatches are Sep11 AMZN255.20vs255.17 and Sep14 AAPL333.02vs332.94;
+Sep15 has no matching markout observations. Prices remain unchanged/gates intact.
+Validated455 selected +34focused, lint/types39/compile, non-sending snapshot pass.
+CLI refreshed /tmp/evidence-four-review.json: fees_missing10, zero comparable pairs.
+04:34 broker: no orders since reporting deploy, zero positions/openorders, closed.
+Natural production field verification PENDING next eligible order (open13:30UTC).
+No forced trades/training/holdout work. CLI-only changes need no service restart.
+Artifacts/logs /tmp/evidence-four-*. Training checklist preserves explicit review.
+
+## Reporting provenance — September 15, 18:40 UTC
+
+See docs/REPORTING_PROVENANCE_20260915.md. Primary netted sleeve strategy ID now
+passes to durable intents. Receipts separate requested/submitted/filled quantities;
+unknown broker quantity stays null; intent quantity remains requested. Historical
+records unchanged, gates/research untouched. Focused54 and final contract32 pass;
+validator426 pass, lint/types35/compile pass, final types2 pass, non-sending snapshot
+pass. /tmp/provenance-{validation,focused,contract-tests}.log. Broker18:38: ten
+orders, zero positions; 10/10 durable fill quantity matches, old strategy IDs null.
+Restart18:40:05 UTC succeeded; health18:40:39 broker fresh/connected zero positions
+and orders, NRestarts0. Startup warnings: existing parity, stale model, minute gaps,
+sampling block; no new reporting error observed. /tmp/provenance-post-health.json
+and /tmp/provenance-postrestart.log. Docs-only/diff checks passed.
+EOD observation pending19:55–20:00; reconciliation command in report after20:15.
+No background watcher installed. Natural orders required for production field proof.
+
+## Trade/exit review — September 15, 2026
+
+See docs/TRADE_AND_EXIT_REVIEW_20260915.md. Completed ten-trade audit and explicit
+per-trade authority report (/tmp/four-improvements-trade-review.json). Four round
+trips -5.31 gross; all tagged stale_model_paper_diagnostic, not qualified ML.
+Overnight policy enabled (5-minute lead) DID trigger Sep14; Alpaca 504 escaped EOD
+exit and crashed service at20:00 before second symbol. execution_flow now handles
+APIError/transport failure per exit, continues, uses stable date/symbol/side client
+IDs across cycles/restarts; position-fetch APIError handled. Broker latency can
+still defeat close deadline; no guarantee of flatness without broker confirmation.
+Three unmocked-network tests repaired: actual imported getter patched; memo test
+primary call mocked and historical window aligned. Focused73 passed; validator369
+passed, lint/types28/compile passed; non-sending incident smoke passed.
+Additional gaps documented: null intent strategy_id; AMZN receipts show requested
+8/12 vs actual1; review separates these. 113bps carried-MSFT exit quote needs causal
+review. No trading thresholds, research budgets or holdout changed. Restart17:00 UTC;
+at17:01 service active/ready, broker fresh, zero positions/orders; only existing
+parity/stale-model flags. /tmp/four-improvements-health.json. Docs/diff checks pass.
+Logs: /tmp/four-improvements-{focused,validation}.log. Actual EOD window pending.
+
+## Log diagnostics — September 14, 18:40 UTC
+
+See docs/LOG_DIAGNOSTICS_20260914.md. Renamed stale-data rejection warning;
+gap logs now identify missing timestamps/provider/feed; skew logs identify outliers.
+49 focused tests passed; lint/mypy22/compile passed. Selected suite 648 passed,
+three known unmocked daily-fetch DNS failures (get_daily_df unchanged from HEAD).
+Non-sending incident check and docs/diff checks passed. Restarted 18:36:30 UTC;
+watched through 18:40:26, three active cycles, broker fresh, two positions/zero
+orders. No new operational error; only four gap/four replay warnings and existing
+stale-model startup error/unavailable warning. No quote/skew recurrence in window.
+Same-feed requery confirms AMZN bars absent at 16:35,17:56,17:59 UTC; provider gap
+unresolved, not fabricated or hidden. Skew/freshness causes not proven resolved.
+Private logs /tmp/log-fix-{validation,tests,postrestart}.log; health
+/tmp/log-fix-health.json. Thresholds/models/trading authority unchanged.
+
+## Historical integrity / active reconciler — September 14, 14:29 UTC
+
+See docs/HISTORICAL_INTEGRITY_REVIEW_20260914.md. Read-only audit: 2,082 intents,
+715 fill rows; 711 quantities match complete May 3 onward broker capture; four
+unmatched explicitly tagged cutover drills. No observed duplicates/overfills,
+orphans, invalid quantities, post-terminal live-source events or reopened intents.
+SQLite quick_check ok. Repair preview: no database mutations justified.
+LiveTradingEngine durable/pending reconciliation confirmed in logs, zero lookup
+errors. Optional PositionReconciler worker not wired into repository startup;
+no activation observed. Session now open; final broker fresh, zero positions/orders;
+health degraded with existing parity/stale-model flags. Post-close audit pending.
+Private evidence /tmp/history-integrity-audit.json and /tmp/history-audit-*.json.
+No runtime edits, trades or restarts. Docs-only validation/diff check passed.
+
+## Recovery fixes — September 14, 2026
+
+All four audited bugs corrected; see docs/ORDER_RECOVERY_FIXES_20260914.md.
+Conditional terminal transitions; cumulative fills serialized in DB across store
+connections/restarts; invalid snapshots preserve state; APIError recovery and
+interruptible worker stop/restart. New regression suite and manager fake updates.
+Focused: 38 passed. Validator: 247 passed, lint/types (17 sources)/compile passed.
+Synthetic lifecycle parity: four scenarios, zero mismatches. Non-sending incident
+check passed. Service restarted; at 03:23 UTC active/ready, broker fresh/connected,
+zero positions/orders; only existing stale-model/parity flags. Snapshot:
+/tmp/recovery-fix-postdeploy.json. Docs-only validation and git diff --check passed.
+Logs: /tmp/recovery-fix-{tests,validation,parity}.log. No trades/gate changes.
+
+## Recovery audit — September 14, 2026
+
+Historical findings, now fixed above: docs/ORDER_RECOVERY_AUDIT_20260914.md.
+P1 terminal intents reopened by late callbacks; P1 concurrent cumulative fill
+callbacks double-count; P2 None snapshot clears optional reconciler state;
+P2 APIError kills optional reconciliation loop with running flag still true.
+Five local reproductions passed; retained fixture in
+artifacts/audits/test_order_recovery_20260914.py asserts BUG behavior, not fixes.
+Existing focused tests: 17 passed. No runtime changes, trades or deployment.
+Live manager wiring verified for OMS findings; optional reconciler activation
+not established. Next implementation priority: atomic durable transitions and
+fill deduplication, then snapshot failure and worker recovery handling.
+
+## Operational review — September 14, 2026, 02:58 UTC
+
+See docs/OPERATIONAL_REVIEW_20260914.md. Fresh health: broker connected/fresh,
+zero positions/orders; existing stale-model/parity flags. Market closed;
+post-deployment regular-session verification remains pending (13:30–20:00 UTC).
+Verified daily Sep 11, weekly Sep 12 and Sunday Sep 13 workflows/operator reports;
+three reset-approved evidence steps passed. Training guard research_reset_active.
+Policy/scorecard tests: 22 passed. Fresh accounting: 535 activities, 407 quantity
+matches, 407 unknown fees; Documents API access not available in configured client.
+Fresh scorecard: artifacts/research_reset/operational_review_20260914_scorecard.json;
+12 observed fills, zero complete chains, missing causal quotes/fees for all 12.
+No runtime changes or trials. Sep 15–21 review pending future weekly Sep 19 output.
+Existing one-shot user verification timer expired Sep 8; recurring evidence timers
+remain active. No automatic follow-up added. Next: inspect regular-session evidence,
+then next weekly report; obtain authoritative per-fill fee records if available.
+
+## Deep input fixes — September 13, 2026
+
+See docs/DEEP_INPUT_VALIDATION_FIXES.md. Strict input-contract scalar/nested schema
+validation; malformed contracts cannot match. Live feature builder rejects invalid
+historical OHLCV and duplicate/naive/off-grid/irregular timestamps before indicators.
+Replay training retains missing features instead of ffill/zero; RSI errors propagate
+in both replay and after-hours paths. Feature-cache v2 prevents old imputed reuse.
+Shared training/label_timing.py rejects gaps, cross-session/holiday/early-close and
+off-grid labels. Shadow overrides enforce elapsed horizon/session too. Warmup and
+session-boundary exclusions are explicit; numeric quality thresholds unchanged.
+Empty datasets retain quality diagnostics. Existing models and research gates intact.
+Execution evidence refreshed: 535 activities, 407 quantity matches, 407 unknown
+fee totals. /tmp/deep-input-accounting.json; no fee fabrication or trades.
+Real development feature check: 9/9 same-history, 9/9 causal. Ledger hashes unchanged.
+Validator: 199 selected tests, lint/types (10 sources), compile passed;
+/tmp/deep-input-final-validation.log. Additional final focused tests: 46 passed;
+after-hours/helper scope: 114 passed. Final type check: 2 sources passed;
+/tmp/deep-input-last-types.log. Deployed by service restart September 14.
+At 02:31 UTC service active/ready; broker fresh/connected, zero positions/orders.
+Only existing replay_live_parity_gate_failed and required_model_stale flags remain.
+Health snapshot: /tmp/deep-input-postdeploy.json. Non-sending incident check passed.
+Regular-session inference and scheduled-training behavior remain to be observed;
+no forced trades/training or research-budget changes. Per-fill fees remain blocked.
+
+## Calendar and input-contract implementation — September 13, 2026
+
+See docs/INPUT_CONTRACT_IMPLEMENTATION.md. Intraday normalization now uses the
+canonical exchange calendar; holiday/early-close rows excluded. Finalization intact.
+Provider/request attributes, finalized-batch bounds/count/hash and inference
+feature hash/column order are logged; decision debug includes input provenance.
+day_input_v1 compares explicit model metadata with serving inputs, reporting
+unknown/mismatched fields as unverified with no qualification authority. Loader
+preserves absent historical contracts as absent. No feed/adjustment/history change.
+Review: live IEX/all/10-day request vs incomplete historical model contract;
+current reference and development sources differ. Do not infer historical settings.
+Focused tests: 31 initial calendar/serving/contract; final 23 integration tests and
+16 loader tests passed. Final lint, compile and additional types (3 files) passed.
+Changed-file validator: 1,330 passed, 3 daily-fetch tests failed on unmocked Alpaca
+DNS requests in sandbox. Isolated reruns reproduce; get_daily_df AST unchanged
+from HEAD. /tmp/input-contract-validation.log; /tmp/input-contract-daily-failures.log;
+/tmp/input-contract-fetch-regressions.log. Full suite not clean; no broad rerun.
+Non-sending snapshot passed; preflight fresh broker, zero positions/orders.
+Paper-service restart succeeded; active, broker fresh/connected at 15:45:59 UTC,
+zero positions/orders, no broker failures; only existing model/replay flags.
+/tmp/input-contract-health-final.json. Selected-model contract review returns
+unverified with missing declarations: /tmp/input-contract-review.json.
+Docs-only validator and git diff --check passed after final handoff update.
+Natural finalized-batch/eligible-inference provenance verification remains pending
+normal scheduled session. Do not force trades or bypass stale-model gates.
+
+## Live/training bar contract verification — September 13, 2026
+
+See docs/LIVE_TRAINING_BAR_CONTRACT_AUDIT.md. Effective runtime settings: 10-day
+default live history vs selected model 60-day training metadata; live IEX/all,
+current reference-training delayed_sip/raw, development SIP/split. Historical
+selected-model feed/adjustment absent; do not infer it from current training code.
+Finalization verified at five-minute close + two seconds. 19 serving tests passed.
+Synthetic checks confirm normalize_bars retains holiday and post-early-close rows;
+it filters weekdays/time-of-day rather than canonical exchange sessions.
+No matching bar-fetch evidence in post-reboot service logs; actual returned live
+batch remains unverified. Health broker fresh, zero positions/orders, existing
+model/replay flags. No runtime edits, settings changes, new fetches, training or trials.
+Next corrective scope: calendar normalization, actual inference-batch provenance,
+then versioned training/serving input contract. Preserve selected model abstention.
+Docs-only validation and git diff --check passed.
+
+## Bounded feature parity audit — September 13, 2026
+
+See docs/STOCK_FEATURE_PARITY.md. New ai_trading.tools.stock_feature_parity checks
+current training/runtime builders on governed 2024-2025 stock data only. Nine
+fixed prefixes (250/500/1000 bars x three stocks): all identical-history and
+prefix-causality comparisons pass. Last-200-bar histories differ in recursive
+features at rtol=atol=1e-10; economic/prediction effect not measured.
+Report artifacts/stock_development/feature_parity.json. No model loaded, returns,
+training, trial consumption, holdout evaluation, orders or gate changes.
+Warmup regression confirms training imputation can yield finite rows where runtime
+rejects insufficient history. Full live-history equivalence remains unverified.
+Focused tests: 2 passed. Changed-file validator passed: 616 tests, lint, types
+(7 sources), compile; /tmp/feature-parity-validation.log. Used --market-hours
+--skip-runtime-smoke with separate health/incident checks and temporary bytecode cache.
+Docs-only validation and git diff --check passed. No runtime deployment needed.
+Source/ledger checks, live health and non-sending incident snapshot passed.
+
+## Stock-universe development readiness — September 13, 2026
+
+See docs/STOCK_DEVELOPMENT_READINESS.md. Post-maintenance service active, reboot
+00:57 UTC, broker fresh/connected, zero orders/positions; prior model/replay flags.
+Acquired governed AAPL/AMZN/MSFT SIP split-adjusted 1Min bars for 2024-2025 only:
+artifacts/stock_development/acquisition.json, quality passed, 194,700 expected and
+observed regular-session minutes per stock. No holdout acquisition/evaluation.
+New CLI ai_trading.tools.stock_development_readiness verifies source provenance
+and audits raw OHLCV plus 200-bar/current-session feature history. Canonical source
+verification extracted from research_feasibility; existing sampling logic retained.
+Report artifacts/stock_development/readiness.json: each stock 37,936 valid windows,
+195 warmup exclusions, 37,741 necessary feature-input-supported slots. No missing,
+duplicate or invalid regular-session minute exclusions. Full feature parity and
+execution remain unverified; feature imputation/RSI fallback cannot prove validity.
+Fresh broker accounting: 535 activities, 407 quantity matches, 407 unknown fee
+totals, no fee execution linkage. /tmp/stock-audit-accounting.json.
+Campaign ledger hashes match prior audit; no trials, fitting, returns or orders.
+3 readiness tests passed plus lint. Non-sending incident snapshot passed.
+Changed-file validator passed: 613 tests, lint, types (5 sources), compile;
+/tmp/stock-readiness-validation.log. Used --market-hours --skip-runtime-smoke,
+PYTHONPYCACHEPREFIX=/tmp/stock-audit-validation-cache, separate health/incident checks.
+Final added warmup test passed in the 3-test focused run. Docs-only and diff checks
+passed. No deployment needed. Next bounded gap is full feature computation parity
+and execution provenance; input support alone does not authorize model use.
+
+## Five-minute requirements and coverage — September 13, 2026
+
+Completed requested timing definition and development-only coverage assessment.
+See docs/FIVE_MINUTE_TIMING_REQUIREMENTS.md. Proposed convention: completed
+five-minute inputs, entry D+1 minute, exit D+6 (five minutes after entry); exact
+unique minute coverage throughout, same regular session. Not adopted in runtime,
+not retroactive labels, not a new trial. Existing model label durations remain
+irregular (fresh metadata check: maximum 89.67 hours).
+New reproducible CLI: ai_trading.tools.five_minute_coverage; report at
+artifacts/research_reset/five_minute_coverage.json. 2024-2025 governed ETF timestamps
+only, verified hashes and quality, no returns/signals/prices used in analysis.
+502 sessions/symbol: 38,438 candidate slots, 502 boundary exclusions each.
+DIA 36,088 complete, 1,848 missing; other five ETFs 37,936 complete, zero missing.
+No duplicate exclusions. Current AAPL/AMZN/MSFT coverage is not available in this
+dataset. Counts are timestamp upper bounds, not model-ready or independent trades.
+Campaign ledger hashes unchanged; no training, trials, orders or holdout evaluation.
+Tests: 2 new regressions passed. Validator lint, types (2 sources), compile passed;
+609 tests passed, 2 repository-audit tests initially failed writing pycache into
+read-only .codex. Rerun test_audit_repo_tool.py with
+PYTHONPYCACHEPREFIX=/tmp/five-minute-audit-pycache: all 3 passed, no source workaround.
+Logs: /tmp/five-minute-validation-final.log and
+/tmp/five-minute-audit-cache-validation.log. Live broker fresh, existing stale-model/
+replay flags only; non-sending incident snapshot passed. No deployment required.
+Docs-only validation and diff check passed. Next: separately review applicability
+to current stock universe and full feature requirements before any performance study.
+
+## Production timing verification — September 13, 2026
+
+Executed installed replay CLI with runtime environment and production paths;
+exit 2, blocked REPLAY_POLICY_NON_REGRESSION_FAILED as expected. New artifact:
+/var/lib/ai-trading-bot/runtime/replay_outputs/replay_hash_20260913.json
+SHA256 8b133b8ef7d03361a7ecbbd16bfc4621eed24448764bf1803e3b8904fffeb360.
+Both summaries persist timing contracts and per-fill diagnostics. Category counts,
+diagnostic rows and usable-plus-excluded markouts reconcile to all fills.
+Candidate: 82 fills, 76 usable; decision-target missing 34, fill-target missing 44,
+78 fills at/after decision target; net edge -10.735105 bps. Baseline: 534 fills,
+520 usable; decision-target missing 200, fill-target missing 249.
+Rolling source window changed; do not interpret score differences as improvement
+or regression caused by diagnostics. No tuning, training, orders or gate changes.
+Health 00:41:14 UTC: paper broker connected/fresh, zero orders/positions; only
+existing replay/stale-model flags. Non-sending incident snapshot passed.
+Logs: /tmp/timing-production-verification.log; /tmp/timing-production-health.json.
+Timer active; last actual invocation September 11, next September 14 09:22:18 UTC.
+Production CLI integration verified; actual timer-triggered adoption still pending.
+Runtime code unchanged, prior 836-test validation reused. Docs-only validation
+and git diff --check passed for this handoff update.
+
+## Timing contract implementation — September 12, 2026
+
+See docs/REPLAY_TIMING_CONTRACT.md. Replay summary now persists explicit metric
+anchors and exact 300-second observation diagnostics for every fill, including
+excluded fills. Diagnostics have no qualification authority or alternate returns.
+Existing metrics/gates, costs, model selection and research restrictions unchanged.
+Isolated replay /tmp/timing-check/output/replay_hash_20260912.json matched prior
+production source hash and every existing summary field. Correctly blocked exit 2.
+Candidate exact observations missing: 33/83 decision-anchor, 43/83 fill-anchor.
+Baseline missing: 201/539 decision-anchor, 249/539 fill-anchor. Counts reconcile.
+32 focused tests passed; final exact-observation assertions: 2 passed plus lint.
+Changed-file validator: 836 tests passed, lint/types (9 sources), compile;
+/tmp/timing-validation.log. Used --market-hours --skip-runtime-smoke with separate
+isolated replay, live health and non-sending checks. Docs-only and diff checks passed.
+Health broker fresh, zero orders/positions;
+non-sending incident snapshot passed. No service restart needed: scheduled CLI
+loads checkout each invocation. Actual timer check remains pending September 14.
+
+## Four-item evidence audit — September 12, 2026
+
+See docs/REPLAY_BLOCKER_SCORECARD_20260912.md for source hashes and completion criteria.
+Executed installed replay CLI with production paths/settings; artifact refreshed
+17:46 UTC, correctly blocked on qualification. Manual systemd start requires an
+unavailable password; actual timer adoption pending September 14 09:22:18 UTC.
+Timing: 33/77 candidate markouts exceed five minutes; 47/77 fills delayed beyond
+five minutes. Model metadata still has irregular elapsed label horizons.
+Fresh broker reconciliation: 535 activities, 407 quantity matches, 407 unknown
+fee totals; 83 fee records have no execution references. External evidence gap.
+No tuning, training, order submission or gate changes. Documentation only.
+12 focused replay-tool/accounting tests passed; artifact arithmetic assertions and
+non-sending snapshot passed. Health 17:47 UTC broker fresh, zero orders/positions,
+existing stale-model/replay flags. Next task: explicit governed timing contract
+and coverage diagnostics; preserve holdout and consumed research budgets.
+
+## Latest IOC implementation — September 12, 2026
+
+See docs/REPLAY_IOC_FIXES.md. Simulator IOC uses a submission-time observation,
+cancels any remainder and never waits for a later quote. Replay applies immediate
+fills to exposure before the next cap check; summaries persist cancellations.
+Qualification/cost/model/research gates unchanged. Earlier IOC blocker below is
+resolved: isolated replay now writes an artifact and correctly fails qualification.
+
+- Focused regressions: 51 passed; /tmp/replay-ioc-regressions.log.
+- Isolated artifact: /tmp/replay-ioc-check/output/replay_hash_20260912.json.
+  Candidate 77 usable + 6 excluded = 83 fills; baseline 525 + 14 = 539.
+  All bounded markouts fill before expiry; three baseline IOC fills have zero delay.
+  Candidate -9.750137 bps; positive edge, sample minimum and non-regression fail.
+- Non-sending incident snapshot passed. Preflight 17:40 UTC: paper broker fresh,
+  zero orders/positions; existing stale-model/replay attention flags only.
+- Changed-file validator passed: 834 selected tests, lint, types (8 sources),
+  compile; /tmp/replay-ioc-validation.log. Used --market-hours --skip-runtime-smoke
+  with separate live health, incident snapshot and isolated replay checks.
+- Paper service restart succeeded; service active and broker fresh/connected at
+  17:43:03 UTC, zero positions/orders and no broker failures. Only existing
+  stale-model/replay flags remain; /tmp/replay-ioc-health-final.json.
+- Docs-only validator and git diff --check passed. Next: address named evidence
+  gaps under research-reset governance; no qualification or promotion justified.
+
+## Latest expiry implementation — September 12, 2026
+
+See docs/REPLAY_EXPIRY_DIAGNOSTICS.md. Day/GTC and explicit expiry are propagated
+through replay; governance missing TIF uses labeled day assumption. Day expiry
+uses canonical NYSE close, precedes fills and preserves partial filled quantity.
+Expired events and per-fill markout exclusion reasons persist in summaries.
+No qualification, cost, horizon, model or research-setting changes.
+
+- Changed-file validator: 827 selected tests passed, lint/types (8 sources), compile.
+  /tmp/replay-expiry-validation.log.
+- Focused regressions: 44 passed. /tmp/replay-expiry-regressions-final.log.
+- Final simulator lint/compile and git diff --check passed.
+- Initial isolated-run approval hit a usage limit. After its reset and user
+  continuation, the normal approval path succeeded; no workaround used.
+- Isolated replay then failed on unsupported recorded time_in_force=ioc before
+  writing an artifact. /tmp/replay-expiry-check.log and
+  /tmp/replay-expiry-check/summary.json. Do not report real-data expiry reconciliation
+  as verified. IOC requires evidence-backed handling; no approximation introduced.
+- Non-sending incident snapshot passed. Preflight 17:32 UTC: paper, fresh broker,
+  zero positions/orders; existing stale-model/replay flags only.
+- Service restart succeeded; active service and fresh broker at 17:34:15 UTC,
+  zero positions/orders and no broker failures. Existing stale-model/replay flags
+  remain. /tmp/replay-expiry-health-final.json.
+- Documentation validation and final git diff --check passed.
+
+## Latest evidence review — September 12, 2026
+
+Completed four-item post-fix review: docs/POSTFIX_REPLAY_EVIDENCE_REVIEW.md.
+No new scheduled artifact existed; systemd start required a sudo password.
+Ran the same CLI/settings as aiuser with isolated /tmp/postfix-replay-check outputs.
+Production artifact/service untouched. CLI wrote evidence then correctly blocked
+on REPLAY_POLICY_NON_REGRESSION_FAILED.
+68/68 candidate markouts passed field/timestamp/assumption/arithmetic checks.
+7,396 shadow records rejected for missing/unsupported types; final 1,859 source
+rows reduce to 911 by configured symbols. Candidate -10.888324 bps, 68 samples;
+positive edge, sample minimum and edge non-regression fail.
+Median fill delay 1 hour; median markout interval 10 minutes; maximum fill delay
+94.75 hours. Selected model targets one 5Min bar but recorded training label
+elapsed times are also irregular. Diagnostic-only, not qualification evidence.
+Next gap: order expiry/time-in-force and explicit markout exclusion diagnostics.
+No tuning, model fitting, live orders or promotion. Holdout restrictions remain.
+
+## Latest implementation — September 12, 2026
+
+Replay contract fixes implemented; see docs/REPLAY_CONTRACT_FIXES.md.
+Recorder/journal and replay separate submission_status from executable type.
+Unsupported types fail before simulator order creation; unknown opportunity intent
+is rejected diagnostically, never guessed. Explicit historical order_type remains
+accepted. Saved markouts include timestamps, intervals and simulator assumptions.
+Qualification gates, model selection, costs and research restrictions unchanged.
+
+Changed runtime: contracts/decisioning.py, core/decision_log.py,
+core/bot_engine.py, execution/simulated_broker.py, replay/event_loop.py.
+Regressions: tests/test_decision_recorder.py,
+tests/test_replay_governance_async_parity.py,
+tests/unit/test_simulated_broker_reproducible.py.
+
+- Final focused synthetic replay/broker tests: 40 passed.
+  /tmp/replay-contract-final-synthetic.log.
+- Final recorder suite: 11 passed. /tmp/replay-recorder-final.log.
+- Changed-file validation passed: lint/types (8 sources), compile, 823 tests.
+  /tmp/replay-contract-validation-final.log.
+- Final explicit-type fallback lint/compile passed after its last edit.
+- Non-sending incident snapshot passed; git diff --check passed.
+- Preflight 02:05 UTC: paper, fresh broker, zero positions/orders. Existing
+  provider-backup/degraded and stale-model/replay flags remain.
+  /tmp/replay-contract-preflight.json.
+- Restart succeeded; active service and fresh broker at 02:10:05 UTC confirmed
+  zero positions/orders and no broker failures. Only existing stale-model/replay
+  flags remain. /tmp/replay-contract-health-final.json.
+- Documentation validation and git diff --check passed.
+- No new research replay, historical artifact rewrite, model or order initiated.
+
+## Latest bounded audit — September 11, 2026, 14:58 UTC
+
+Completed execution-price-drag audit: docs/REPLAY_EXECUTION_DRAG_AUDIT.md.
+Arithmetic reconciles, but 2512/3174 markouts use not_submitted as an executable
+order type (market-like behavior), simulator defaults supply spread/volatility,
+and persisted rows lack timestamps needed to validate actual holding intervals.
+Synthetic limit-vs-not_submitted reproduction confirmed the semantic difference.
+No runtime code/config/model changes or new replay. Next corrective scope is in
+the audit; do not infer historical order intent or tune from overlapping holdout.
+
+Updated September 11, 2026, 14:54 UTC. User authorized all three: rollback-counter
+repair, existing replay diagnosis, and governed model replacement decision.
+Report: docs/ROLLBACK_REPLAY_MODEL_DECISION.md.
+
+## Current implementation
+
+- ai_trading/governance/promotion.py serializes KPI evaluation/accounting/actions
+  under a shared file lock; atomic state writes fail closed. Observation identities
+  prevent poll/retry inflation across restarts and healthy resets. Unverified
+  legacy counts are diagnostic only. Conflicting payload identity is rejected.
+- ai_trading/main.py uses persisted counts without increasing a local streak;
+  source observation timestamps supply runtime identities.
+- ai_trading/monitoring/slo.py exposes last_observation_at.
+- Regression coverage: tests/governance/test_kpi_observation_accounting.py,
+  tests/main/test_runtime_governance_hooks.py and updated institutional/governance
+  fixtures use distinct evidence where a new observation is intended.
+
+## Validation
+
+- bash scripts/agent_validate_changed.sh --market-hours --skip-runtime-smoke:
+  lint, mypy (49 sources), compile and 720 selected tests passed.
+  /tmp/three-items-validation.log.
+- Final targeted rollback/scheduler tests: 14 passed before one additional
+  distinct-concurrent-writers test was included in the selected validation.
+  /tmp/rollback-targeted-final.log.
+- Final lint/compile for updated terminal-status guard and concurrency test passed.
+- Non-sending incident snapshot passed. No messages or orders sent by this task.
+- Saved replay hash, sample counts, gross-minus-drag identity and attribution
+  residual verified directly; no new backtest, experiment or source replay run.
+
+## Evidence decisions
+
+- Latest existing replay (September 11 09:23 UTC): candidate -18.281386 bps,
+  3174 next-observation markouts. Gross -3.941979 minus execution-price drag
+  14.339406 bps. Baseline also negative (-17.822979); cap contrast -0.458407 bps.
+  This is simulated markout accounting, not live P&L or pure fee attribution.
+- Source report overlaps protected holdout; do not tune/select from its subgroups.
+- Replacement decision: retain abstention. Selected model ~55.8 days old against
+  14-day limit and newest of 187 ml_edge registered entries (July 17).
+- Latest training report: no_qualified_candidate; logreg post-cost OOF -19.025753
+  bps, 0/5 profitable folds, no runtime/promotion/live-money authority.
+- Research reset remains active, no gate weakened and no replacement installed.
+
+## Deployment
+
+- Preflight 14:53:38 UTC: paper, broker connected/fresh, one position,
+  zero open orders. /tmp/three-items-predeploy.json.
+- Service restart succeeded. Active service and fresh broker at 14:54:46 UTC:
+  one position, zero open orders, no broker failures. Only existing stale-model
+  and replay flags remain. /tmp/three-items-health-final.json.
+- Documentation-only validation and git diff --check passed.
+
+## Earlier completed work and constraints
+
+Seven audit fixes: docs/AUDIT_SEVEN_FIXES.md. Shadow-start/provenance follow-up:
+docs/GOVERNANCE_FOLLOWUP_FIXES.md. Environment/reset fixes: docs/ENV_RESET_FIXES.md.
+All were previously validated/deployed. Preserve these and unrelated dirty
+research/efficiency changes. No commit/reset to tidy the tree.
+September 9–December 8 holdout and consumed campaign budgets remain. October 8
+does not auto-release research. Historical holdout isolation is not established.
+Legacy shadow evidence requires review; explicit administrative force promotion
+still bypasses ordinary eligibility. KPI source IDs establish deduplication,
+not statistical independence; no-ID callers conservatively hash monitored values.
