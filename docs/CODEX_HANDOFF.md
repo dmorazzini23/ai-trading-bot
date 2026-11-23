@@ -1,8 +1,40 @@
 # Current handoff
 
-## November 23: breaker health section merged; five-change deploy approved (`90df63509`) (start here)
+## November 23: five-change deploy done (`03344e00b`) (start here)
 
-- **Running service:** still `d22babac4`. Nothing was restarted.
+- **Running service:** `03344e00b` since Mon Nov 23 21:47 UTC (closed,
+  flat), owner-approved. Carries the full-close fix, exit pricing, breaker
+  persistence, Phase 4 cleanup and the breaker health section. Config hash
+  is now `49f5e469...` (owner-approved; derived by the `release_identity`
+  pre-check, both phases, before the spec was edited). Paper burn-in
+  counter reset.
+- **Pre-deploy:** full suite on `03344e00b`, finder stripped: 6,836 passed,
+  2 skipped, 0 failed. Session on `d22babac4` was clean: 0 restarts, no
+  tracebacks, three acknowledged orders (AMZN buy cancelled unfilled; MSFT
+  buy and sell).
+- **Startup:** `IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`,
+  `BROKER_SYNC`, `DrawdownCircuitBreaker initialized`; no errors or
+  warnings in the first four minutes; `NRestarts=0`. `/healthz` shows
+  `drawdown_breaker` with `state: unknown`, `state_load: pending` (the saved
+  file loads on the first equity reading of a market cycle; expect one
+  `DRAWDOWN_BREAKER_STATE_LOAD_FAILED` `missing` warning then).
+- **Rollback:** `git checkout --detach d22babac4`, restore
+  `runtime/release_spec.d22babac4.bak.json` (old SHA and old hash
+  `b46e8e82...`), restart.
+- **Backstop not yet exercised:** on Nov 23 it saw the one position (MSFT)
+  and logged `POSITION_BACKSTOP_UNARMED` (`no_basis`) once, ~90 s after the
+  buy, before the broker snapshot carried an entry price. There is no
+  marker when a basis later arrives, so the journal cannot show the stop
+  was armed. The position closed by a normal exit 27 minutes later.
+  Consider logging the first arming per position.
+- **Tuesday Nov 24:** first session for exit pricing (compare closing-order
+  fills with November's) and for the breaker state in `/healthz`.
+- **Operator `.env`:** 30 retired keys are still set and ignored; they can
+  be deleted without changing the hash (list given to the owner Nov 23).
+
+## November 23: breaker health section merged; five-change deploy approved (`90df63509`)
+
+- **Running service (at the time):** still `d22babac4`. Nothing was restarted.
 - **Approved deploy (owner, Nov 23):** the restart after the close on Mon
   Nov 23 now carries five changes: the four in the next section plus the
   breaker health section. Same condition (clean session first), same
