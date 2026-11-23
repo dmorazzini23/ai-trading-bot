@@ -1,7 +1,7 @@
 # Replay order and observation contract fixes
 
 September 12, 2026. Implements the corrective scope from
-docs/REPLAY_EXECUTION_DRAG_AUDIT.md without changing qualification thresholds.
+docs/archive/REPLAY_EXECUTION_DRAG_AUDIT.md without changing qualification thresholds.
 
 - The recorder and journal keep submission_status separate from order_type.
   No-intent observations are not_submitted; that value is no longer emitted as
