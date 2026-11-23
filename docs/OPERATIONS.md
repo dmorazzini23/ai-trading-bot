@@ -167,7 +167,9 @@ the phase 4 deploy (then restart so the runtime env file is refreshed).
     `REBALANCE_SLEEP_SECONDS`, `DATA_WARMUP_LOOKBACK_DAYS`, `REGIME_MIN_ROWS`,
     `EXECUTION_PREFER_LIMIT`, `EXECUTION_LOG_SLIPPAGE`,
     `EXECUTION_MAX_PARTICIPATION_RATE` (the per-order participation cap comes
-    from `PARTICIPATION_RATE`), `REDIS_URL` (still redacted in logs).
+    from `PARTICIPATION_RATE`; order slicing separately reads
+    `AI_TRADING_EXEC_MAX_PARTICIPATION_RATE`, which is unaffected),
+    `REDIS_URL` (still redacted in logs).
   - Still read, although their duplicate `Settings` field was removed:
     `FORCE_TRADES`, `WEBHOOK_SECRET`, `CPU_ONLY`, `ENABLE_FINNHUB`.
 

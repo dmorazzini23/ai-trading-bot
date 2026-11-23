@@ -282,9 +282,7 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
 
     cfg = get_trading_config()
     provider_order = tuple(getattr(cfg, "price_provider_order", ()) or PRICE_PROVIDER_ORDER)
-    raw_participation_cap: Any = getattr(cfg, "exec_max_participation_rate", None)
-    if raw_participation_cap in (None, ""):
-        raw_participation_cap = getattr(cfg, "participation_rate", None)
+    raw_participation_cap: Any = getattr(cfg, "participation_rate", None)
     participation_cap: float | None
     if isinstance(raw_participation_cap, (int, float, str)):
         try:
