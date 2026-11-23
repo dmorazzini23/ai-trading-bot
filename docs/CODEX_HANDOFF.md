@@ -29,8 +29,21 @@
   Consider logging the first arming per position.
 - **Tuesday Nov 24:** first session for exit pricing (compare closing-order
   fills with November's) and for the breaker state in `/healthz`.
-- **Operator `.env`:** 30 retired keys are still set and ignored; they can
-  be deleted without changing the hash (list given to the owner Nov 23).
+- **Operator `.env`:** the 30 retired keys that were still set were deleted
+  on Nov 23 at the owner's request (backup
+  `.env.bak-20261123-pre-retired-key-removal`); `release_identity` still
+  passes on `03344e00b` with the edited file. Takes effect at the next
+  restart.
+- **Merged, NOT deployed (`745096a46`, `claude/env-cleanup`):** 13 unread
+  ConfigSpecs (incl. `api_host`), 19 Settings fields and 12 unused config
+  exports removed. `main` is therefore ahead of the running service and its
+  config hash is `3084db64...` (owner-approved Nov 23; derived by the
+  pre-check on the merged tree). Deploy it with the next change that needs
+  a restart: set `tested_commit_sha` and that hash together. Full suite on
+  the merged tree: 6,832 passed, 2 skipped; decision baseline unchanged on
+  the branch; independent review, no must-fix. After that deploy `API_HOST`
+  can also be deleted from `.env`. Out-of-range values for the removed
+  specs no longer stop startup.
 
 ## November 23: breaker health section merged; five-change deploy approved (`90df63509`)
 
