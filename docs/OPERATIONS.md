@@ -177,8 +177,9 @@ configured.
   `AI_TRADING_OPERATOR_TOKEN_MAP`
   Example:
   `{"ops@example.com":"<token-1>","approver@example.com":"<token-2>"}`
-  A shared `AI_TRADING_OPERATOR_API_TOKEN` is accepted only when
-  `AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN` is set, and only for read routes
+  A shared `AI_TRADING_OPERATOR_API_TOKEN` is accepted only when the token
+  map is empty and `AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN` is set, and only
+  for read routes
   while `AI_TRADING_OPERATOR_READERS` is empty; it never works for the
   mutating routes.
 - Scoped allowlists:
