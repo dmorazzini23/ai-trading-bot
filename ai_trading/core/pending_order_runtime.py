@@ -245,6 +245,43 @@ def _extract_pending_order_id(order: Any) -> str:
     return "?"
 
 
+def _token(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "").strip().replace("-", "_").replace(" ", "_").lower()
+
+
+def _partially_filled_closing_orders(
+    open_orders: Iterable[Any],
+    *,
+    exclude: Iterable[Any],
+) -> list[Any]:
+    """Return partly filled closing orders missing from ``exclude``.
+
+    Pending confirmation keeps only ``new``/``pending_new`` orders, so while any
+    such order is open a partly filled exit would otherwise never reach the
+    stale sweep's partial-fill age check. A closing order is one the broker
+    lists with ``sell_to_close`` on a sell or ``buy_to_close`` on a buy.
+    """
+
+    be = _bot_engine()
+    excluded_ids = {be._extract_order_identifier(order) for order in exclude} - {None}
+    selected: list[Any] = []
+    for order in open_orders:
+        if _extract_pending_order_status(order) != "partially_filled":
+            continue
+        if be._extract_order_identifier(order) in excluded_ids:
+            continue
+        if isinstance(order, Mapping):
+            intent = _token(order.get("position_intent"))
+            side = _token(order.get("side"))
+        else:
+            intent = _token(getattr(order, "position_intent", None))
+            side = _token(getattr(order, "side", None))
+        if (intent, side) in {("sell_to_close", "sell"), ("buy_to_close", "buy")}:
+            selected.append(order)
+    return selected
+
+
 def _collect_pending_blocked_symbols(orders: Iterable[Any]) -> set[str]:
     blocked: set[str] = set()
     for order in orders:
@@ -1101,7 +1138,8 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
 
     stale_sweep_result = be._maybe_apply_pending_stale_sweep(
         runtime=runtime,
-        pending_orders=confirmed_pending,
+        pending_orders=confirmed_pending
+        + _partially_filled_closing_orders(open_list, exclude=confirmed_pending),
         now_dt=now_dt,
         now_ts=now,
     )

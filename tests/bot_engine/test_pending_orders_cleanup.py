@@ -1006,3 +1006,70 @@ def test_pending_cleanup_holds_symbol_until_broker_stops_listing_cancelled_order
     entry_order = _order("pending_new", "entry-msft", symbol="MSFT", side="buy")
     be._handle_pending_orders([exit_cancelling, entry_order], runtime)
     assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
+
+
+def _partial_exit_sweep_setup(monkeypatch) -> tuple[Any, list[Any], datetime]:
+    runtime = _symbol_scope_runtime_without_decay(monkeypatch, cleanup_interval=3600)
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "3600")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_PARTIALLY_FILLED_SEC", "900")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS", "3")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+    swept: list[Any] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: swept.extend(orders)
+        or be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=len(orders),
+            failed=0,
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[],
+        ),
+    )
+    now_dt = datetime(2026, 3, 2, 15, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(be.time, "time", lambda: now_dt.timestamp())
+    return runtime, swept, now_dt
+
+
+def test_stale_sweep_reaches_partly_filled_exit_while_another_order_is_pending(monkeypatch):
+    runtime, swept, now_dt = _partial_exit_sweep_setup(monkeypatch)
+    partial_exit = _order(
+        "partially_filled", "exit-aapl", symbol="AAPL", side="sell",
+        position_intent="sell_to_close",
+        created_at=now_dt - timedelta(seconds=1000),
+    )
+    young_entry = _order(
+        "pending_new", "entry-msft", symbol="MSFT", side="buy",
+        created_at=now_dt - timedelta(seconds=5),
+    )
+
+    be._handle_pending_orders([partial_exit, young_entry], runtime)
+
+    assert [order.id for order in swept] == ["exit-aapl"]
+    # The cancel is a request: AAPL stays out of the cycle until it is confirmed.
+    assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
+
+
+def test_stale_sweep_leaves_young_or_opening_partial_fills_alone(monkeypatch):
+    runtime, swept, now_dt = _partial_exit_sweep_setup(monkeypatch)
+    young_partial_exit = _order(
+        "partially_filled", "exit-aapl", symbol="AAPL", side="sell",
+        position_intent="sell_to_close",
+        created_at=now_dt - timedelta(seconds=300),
+    )
+    old_partial_entry = _order(
+        "partially_filled", "entry-nvda", symbol="NVDA", side="buy",
+        position_intent="buy_to_open",
+        created_at=now_dt - timedelta(seconds=1000),
+    )
+    young_entry = _order(
+        "pending_new", "entry-msft", symbol="MSFT", side="buy",
+        created_at=now_dt - timedelta(seconds=5),
+    )
+
+    be._handle_pending_orders([young_partial_exit, old_partial_entry, young_entry], runtime)
+
+    assert swept == []

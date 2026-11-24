@@ -930,6 +930,12 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   so a second exit is never sent beside one that can still fill.
   `PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD` logs each cycle a symbol is held
   for this reason. The hold lives in memory and is gone after a restart.
+- A partly filled closing order (the broker lists `sell_to_close` on a sell
+  or `buy_to_close` on a buy) is a stale-sweep candidate once it is
+  `AI_TRADING_PENDING_STALE_SWEEP_PARTIALLY_FILLED_SEC` old (default the
+  larger of 900 s and six times the sweep age), even while other orders are
+  pending. Partly filled opening orders are only considered when no
+  `new`/`pending_new` order is open, as before.
 
 ### Other Packaged Timers And Units
 
