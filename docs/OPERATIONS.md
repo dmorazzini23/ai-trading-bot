@@ -506,19 +506,26 @@ mode, for every sleeve, proposals are blocked with `NO_QUALIFIED_STRATEGY`, and
 the netted target for each symbol is the current position once, however many
 sleeves are configured. A last check before submission refuses any order that
 would grow a position or reverse its sign. Held positions therefore never
-grow; they are reduced or closed by the position backstop (stop-loss, maximum
-hold) and by gates that only reduce exposure, such as long-only short
-suppression, quarantine and the global caps. A new strategy must be
+grow, but steps that only reduce exposure can still reduce or close them,
+such as the position backstop (stop-loss, maximum hold), long-only short
+suppression, quarantine, the global caps, the alpha time-stop and exit-policy
+hazard exit, portfolio limits including volatility targeting (when enabled and
+realized volatility is above target, it trims held positions again on each new
+bar), and the thin-liquidity exit cap. A new strategy must be
 registered, qualified and promoted through the normal offline, replay and
 runtime evidence gates.
 
 The allow condition is looser than the retired stale-model exemption in one
 place, and only in paper mode: with paper sampling active, the rule scorer now
 trades without the separate stale-model diagnostics opt-in flag and whatever
-the model state. The old path blocked it when that flag was off, when the
-model was disabled while required, or on an "unsafe" model error (contract,
-verification, checksum, signature, lineage or feature order). Outside paper
-mode it cannot trade.
+the model state. With `AI_TRADING_REQUIRE_ML_MODEL=1`, the old path blocked it
+when that flag was off, when the model was disabled while required, on an
+"unsafe" model error (incompatible, contract, verification, checksum,
+signature, lineage or feature order), and on any other model error that matched
+neither "unavailable" nor the stale-model pattern. Outside paper mode it cannot
+trade. The new rule is stricter in the other direction: with
+`AI_TRADING_REQUIRE_ML_MODEL=0` the old path did not gate the rule scorer at
+all, in any mode, while it now trades only under active paper sampling.
 
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper

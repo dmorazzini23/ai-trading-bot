@@ -32,9 +32,10 @@ November 14 review required, the running bot no longer loads or serves the
 day-sleeve model. No strategy is qualified: the rule scorer trades only as
 research-only `rule_paper_sampling` evidence while paper sampling is active,
 and every other mode blocks new exposure with `NO_QUALIFIED_STRATEGY`: held
-positions never grow, and only the position backstop and gates that reduce
-exposure (long-only short suppression, quarantine, global caps) can reduce or
-close them. Health
+positions never grow. Steps that only reduce exposure can still reduce or close
+them, such as the position backstop, long-only short suppression, quarantine,
+the global caps, the alpha time-stop and exit-policy hazard exit, portfolio
+limits including volatility targeting, and the thin-liquidity exit cap. Health
 no longer reports `required_model_stale`. The policy file stays
 `enabled: true`; this note does not amend any registered contract or review,
 and the legacy startup model load is removed in a later step.

@@ -32,3 +32,20 @@ def test_configuration_failure_reports_close_only(monkeypatch):
     result = health._operating_mode_snapshot()
     assert result['mode'] == 'close_only'
     assert result['rule_paper_sampling_enabled'] is False
+
+
+@pytest.mark.parametrize('enabled,mode,summary', [
+    (False, 'close_only',
+     'No qualified strategy; no new exposure. Held positions never grow; '
+     'only the position backstop and exposure-reducing gates can reduce them.'),
+    (True, 'paper_rule_sampling',
+     'No qualified strategy; the rule scorer trades only as labelled paper '
+     'sampling. These trades are not strategy performance.'),
+])
+def test_strategy_state_summary_is_pinned(monkeypatch, enabled, mode, summary):
+    monkeypatch.setattr(management, 'get_trading_config', lambda: SimpleNamespace(
+        paper_sampling_enabled=enabled, execution_mode='paper', paper=True,
+        alpaca_base_url='https://paper-api.alpaca.markets', launch_profile='paper_trade'))
+    result = health._operating_mode_snapshot()
+    assert result['mode'] == mode
+    assert result['summary'] == summary

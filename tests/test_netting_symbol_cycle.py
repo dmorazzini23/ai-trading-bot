@@ -795,3 +795,86 @@ def test_process_netting_symbol_without_qualified_strategy_only_reduces(
         assert submitted == []
         assert result.submitted_increment == 0
         assert "NO_QUALIFIED_STRATEGY" in records[-1]["gates"]
+
+
+def _frozen_submissions(**overrides: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    submitted: list[dict[str, Any]] = []
+
+    def execute_submission_func(**kwargs: Any) -> Any:
+        submitted.append(kwargs)
+        return SimpleNamespace(
+            status="submitted",
+            gates_added=("OK_TRADE",),
+            attempted_increment=1,
+            submitted_increment=1,
+            metrics={},
+            tca_record=None,
+            order_payload={"client_order_id": "cid-1"},
+            decision_trace_id="trace-1",
+            order_intent_contract={"intent": "dummy"},
+        )
+
+    target_dollars = overrides.pop("target_dollars")
+    processor, records = _make_processor(
+        execute_submission_func=execute_submission_func,
+        new_exposure_allowed=False,
+        **overrides,
+    )
+    process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now, target_dollars=target_dollars),
+        orders_submitted=0,
+    )
+    return submitted, records
+
+
+@pytest.mark.parametrize(
+    ("position", "refused"),
+    [
+        (10.6, True),  # held as 10, hold target rounds to 11: +1 refused
+        (-10.6, True),  # held as -10, rounds to -11: short growth refused
+        (0.6, True),  # held as 0, rounds to 1: opening refused
+        (11.5, True),  # held as 11, rounds to 12: +1 refused
+        (10.4, False),  # rounds back to 10: nothing to send
+        (12.5, False),  # banker's rounding back to 12: nothing to send
+    ],
+)
+def test_frozen_fractional_position_hold_never_grows(position: float, refused: bool) -> None:
+    # The processor truncates the held position but rounds the target, so the
+    # net-level hold of a fractional position can ask for one more share.
+    submitted, records = _frozen_submissions(
+        positions={"AAPL": position}, target_dollars=position * 10.0
+    )
+
+    assert submitted == []
+    if refused:
+        assert "NO_QUALIFIED_STRATEGY" in records[-1]["gates"]
+        assert records[-1]["metrics"]["terminal_reason"] == "NO_QUALIFIED_STRATEGY"
+
+
+def test_frozen_zero_target_still_closes_a_held_long() -> None:
+    # A zero target (for example from quarantine) under the freeze is a close.
+    submitted, _records = _frozen_submissions(positions={"AAPL": 10}, target_dollars=0.0)
+
+    assert [(s["side"], s["delta_shares"]) for s in submitted] == [("sell", -10)]
+
+
+def test_frozen_long_only_suppression_still_closes_a_held_short() -> None:
+    submitted, records = _frozen_submissions(
+        positions={"AAPL": -5},
+        target_dollars=-50.0,  # the hold target for the short
+        cfg=SimpleNamespace(seed="seed", launch_profile="paper_trade", shorts_allowed=False),
+    )
+
+    assert [(s["side"], s["delta_shares"]) for s in submitted] == [("buy", 5)]
+    assert "LONG_ONLY_SHORT_SUPPRESSED" in records[-1]["gates"]
+
+
+def test_frozen_held_symbol_without_price_sends_nothing() -> None:
+    submitted, records = _frozen_submissions(
+        positions={"AAPL": 10}, latest_price={}, target_dollars=0.0
+    )
+
+    assert submitted == []
+    assert "BAD_DATA_CONTRACT" in records[-1]["gates"]
