@@ -14,7 +14,7 @@ from ai_trading.runtime.paper_sampling import (
     paper_sampling_reservation_symbols,
     release_paper_sampling_order,
     reserve_paper_sampling_order,
-    stale_model_diagnostics_allowed,
+    rule_paper_sampling_allowed,
 )
 
 
@@ -58,40 +58,15 @@ def test_config_rejects_paper_sampling_outside_paper_mode() -> None:
         )
 
 
-def test_stale_model_diagnostics_are_default_off_and_paper_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(
-        "AI_TRADING_PAPER_SAMPLING_STALE_MODEL_DIAGNOSTICS_ENABLED",
-        raising=False,
-    )
-    assert stale_model_diagnostics_allowed(
-        _cfg(), model_error="Governed production day-sleeve model is unavailable"
+def test_rule_paper_sampling_requires_active_paper_sampling() -> None:
+    assert rule_paper_sampling_allowed(_cfg()) is True
+    assert rule_paper_sampling_allowed(_cfg(paper_sampling_enabled=False)) is False
+    assert rule_paper_sampling_allowed(_cfg(execution_mode="live")) is False
+    assert rule_paper_sampling_allowed(
+        _cfg(alpaca_base_url="https://api.alpaca.markets")
     ) is False
-
-    monkeypatch.setenv(
-        "AI_TRADING_PAPER_SAMPLING_STALE_MODEL_DIAGNOSTICS_ENABLED", "1"
-    )
-    assert stale_model_diagnostics_allowed(
-        _cfg(), model_error="Governed production day-sleeve model is unavailable"
-    ) is True
-    assert stale_model_diagnostics_allowed(
-        _cfg(),
-        model_error=(
-            "Active model day-sleeve-primary is stale: "
-            "age_days=17.42 max_age_days=14"
-        ),
-    ) is True
-    assert stale_model_diagnostics_allowed(
-        _cfg(execution_mode="live"),
-        model_error="Governed production day-sleeve model is unavailable",
-    ) is False
-    assert stale_model_diagnostics_allowed(
-        _cfg(), model_error="Day-sleeve model contract is incompatible"
-    ) is False
-    assert stale_model_diagnostics_allowed(
-        _cfg(), model_error="Active model verification failed: checksum mismatch"
-    ) is False
+    assert rule_paper_sampling_allowed(_cfg(paper=False)) is False
+    assert rule_paper_sampling_allowed(_cfg(launch_profile="live_canary")) is False
 
 
 def test_config_rejects_paper_sampling_for_live_canary_profile() -> None:

@@ -42,6 +42,11 @@ _DECISION_METADATA_FIELDS: tuple[str, ...] = (
     "execution_profile",
 )
 
+# Proposals from the unqualified rule scorer: research-only evidence either way.
+_RULE_SAMPLER_EVIDENCE_PARTITIONS: frozenset[str] = frozenset(
+    {"rule_paper_sampling", "no_qualified_strategy_shadow"}
+)
+
 
 def _safe_text(value: Any) -> str | None:
     text = str(value or "").strip()
@@ -144,9 +149,8 @@ class DecisionRecorder:
                 dict(debug)
                 for sleeve in resolved_sleeves
                 if isinstance((debug := getattr(sleeve, "debug", None)), Mapping)
-                and str(debug.get("evidence_partition") or "").startswith(
-                    "stale_model_"
-                )
+                and str(debug.get("evidence_partition") or "")
+                in _RULE_SAMPLER_EVIDENCE_PARTITIONS
             ),
             None,
         )

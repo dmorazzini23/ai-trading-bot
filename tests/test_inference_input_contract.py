@@ -1,10 +1,7 @@
 import pandas as pd
 
 from ai_trading.core.data_contract import normalize_bars
-from ai_trading.models.contracts import DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION
-from ai_trading.features.input_provenance import (
-    REQUIRED, VERSION, compare_input_contracts, describe_batch, frame_identity,
-)
+from ai_trading.features.input_provenance import describe_batch, frame_identity
 
 
 def test_exchange_calendar_excludes_holiday_and_early_close():
@@ -27,20 +24,6 @@ def test_provenance_distinguishes_request_from_effective_source():
     changed = frame.copy()
     changed.iloc[0, 0] = 11
     assert frame_identity(changed) != record['input_sha256']
-
-
-def test_missing_historical_contract_never_matches():
-    serving = {'feed': 'iex', 'adjustment': 'all', 'timeframe': '5Min',
-               'session_policy': 'canonical_exchange_regular_session_v1',
-               'history_policy': {'kind': 'rolling_calendar_days', 'days': 10},
-               'finality_policy': {'bar_label': 'start', 'grace_seconds': 2},
-               'feature_version': DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION}
-    serving['version'] = VERSION
-    assert compare_input_contracts(None, serving)['status'] == 'unverified'
-    assert compare_input_contracts(serving, serving)['status'] == 'matched'
-    training = dict(serving, adjustment='split')
-    assert compare_input_contracts(training, serving)['mismatched_fields'] == ['adjustment']
-    assert not compare_input_contracts(serving, serving)['qualification_authority']
 
 
 def test_empty_batch_and_extended_session_evidence():

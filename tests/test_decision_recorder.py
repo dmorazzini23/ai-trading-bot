@@ -92,7 +92,10 @@ def test_decision_recorder_can_record_global_block() -> None:
     assert recorder.decision_observations[0]["symbol"] == "ALL"
 
 
-def test_decision_recorder_partitions_stale_model_counterfactual() -> None:
+@pytest.mark.parametrize(
+    "partition", ["no_qualified_strategy_shadow", "rule_paper_sampling"]
+)
+def test_decision_recorder_partitions_rule_sampler_counterfactual(partition: str) -> None:
     recorder = DecisionRecorder(
         runtime=type("Runtime", (), {"execution_candidate_rank_expected_edge_bps": {}})(),
         path=None,
@@ -113,9 +116,9 @@ def test_decision_recorder_partitions_stale_model_counterfactual() -> None:
         score=0.7,
         confidence=0.6,
         blocked=True,
-        reason_code="DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE",
+        reason_code="NO_QUALIFIED_STRATEGY",
         debug={
-            "evidence_partition": "stale_model_shadow",
+            "evidence_partition": partition,
             "counterfactual_side": "buy",
             "counterfactual_target_dollars": 500.0,
             "counterfactual_score": 0.7,
@@ -132,13 +135,13 @@ def test_decision_recorder_partitions_stale_model_counterfactual() -> None:
             target_shares=0.0,
             proposals=[proposal],
         ),
-        gates=["DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE"],
+        gates=["NO_QUALIFIED_STRATEGY"],
     )
 
     assert record.metrics["opportunity_eligible"] is True
     assert record.metrics["opportunity_side"] == "buy"
     assert record.metrics["opportunity_quantity"] == pytest.approx(5.0)
-    assert record.metrics["evidence_partition"] == "stale_model_shadow"
+    assert record.metrics["evidence_partition"] == partition
     assert record.metrics["research_only"] is True
     assert record.metrics["promotion_eligible"] is False
     assert record.metrics["model_authority"] is False

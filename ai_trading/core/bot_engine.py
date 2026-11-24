@@ -156,22 +156,17 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.paper_sampling import (
     paper_sampling_deficit_snapshot,
     paper_sampling_reservation_symbols,
-    stale_model_diagnostics_allowed,
+    rule_paper_sampling_allowed,
 )
 from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import load_verified_joblib_artifact
 from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_BAR_TIMEFRAME,
-    DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
     LIVE_ML_BAR_TIMEFRAME,
     LIVE_ML_FEATURE_COLUMNS,
-    infer_day_sleeve_regimes,
     normalize_bar_timeframe,
 )
-from ai_trading.features.day_sleeve import build_day_sleeve_features
-from ai_trading.features.input_provenance import compare_input_contracts, describe_batch, frame_identity
-from ai_trading.model_loader import load_day_sleeve_production_model
-from ai_trading.registry.manifest import evaluate_market_regime_policy
+from ai_trading.features.input_provenance import describe_batch
 from ai_trading.policy.compiler import (
     EffectivePolicy,
     ExecutionCandidate,
@@ -5437,34 +5432,6 @@ def _runtime_execution_mode() -> str:
     return str(raw or "sim").strip().lower() or "sim"
 
 
-def _paper_shadow_model_allowed(cfg: Any) -> bool:
-    """Grant shadow-model serving only to an explicit Alpaca paper profile."""
-
-    if not bool(
-        get_env("AI_TRADING_PAPER_ALLOW_SHADOW_MODEL", False, cast=bool)
-    ):
-        return False
-    execution_mode = str(
-        getattr(cfg, "execution_mode", _runtime_execution_mode()) or "sim"
-    ).strip().lower()
-    launch_profile = str(
-        getattr(
-            cfg,
-            "launch_profile",
-            get_env("AI_TRADING_LAUNCH_PROFILE", "", cast=str),
-        )
-        or ""
-    ).strip().lower()
-    paper_endpoint = "paper" in str(
-        getattr(cfg, "alpaca_base_url", "") or ""
-    ).strip().lower()
-    return bool(
-        execution_mode == "paper"
-        and not launch_profile.startswith("live")
-        and (bool(getattr(cfg, "paper", False)) or paper_endpoint)
-    )
-
-
 def _live_execution_blocks_yahoo_fallback() -> bool:
     return _runtime_execution_mode() == "live"
 
@@ -6496,208 +6463,6 @@ def _day_sleeve_waiting_for_first_finalized_bar(
     except (AttributeError, TypeError, ValueError):
         return False
     return bool(latest_session_date < now_eastern.date())
-
-
-def _day_sleeve_positive_probability(model: Any, features: pd.DataFrame) -> float:
-    probabilities = np.asarray(model.predict_proba(features), dtype=float)
-    if probabilities.ndim != 2 or probabilities.shape[0] != 1 or probabilities.shape[1] < 1:
-        raise ValueError("Day-sleeve model returned an invalid probability shape")
-    positive_index = 1 if probabilities.shape[1] > 1 else 0
-    classes = getattr(model, "classes_", None)
-    if classes is not None:
-        class_values = list(classes)
-        if len(class_values) == probabilities.shape[1]:
-            for index, label in enumerate(class_values):
-                try:
-                    if int(label) == 1:
-                        positive_index = index
-                        break
-                except (TypeError, ValueError):
-                    continue
-    probability = float(probabilities[0, positive_index])
-    if not math.isfinite(probability):
-        raise ValueError("Day-sleeve model returned a non-finite probability")
-    probability = max(0.0, min(probability, 1.0))
-    orientation = str(
-        getattr(model, "edge_score_orientation_", "direct") or "direct"
-    ).strip().lower()
-    if orientation in {"inverse", "inverted", "flip"}:
-        probability = 1.0 - probability
-    return float(max(0.0, min(probability, 1.0)))
-
-
-def _score_day_sleeve_with_ml(
-    *,
-    symbol: str,
-    frame: pd.DataFrame,
-    bundle: Any,
-    heuristic_score: float,
-    heuristic_confidence: float,
-    blend_weight: float,
-    now: datetime,
-) -> tuple[float, float, dict[str, Any] | None, str | None]:
-    """Return a bounded hybrid score, preserving heuristic values on ML failure."""
-
-    bounded_weight = max(0.0, min(float(blend_weight), 1.0))
-    if bounded_weight <= 0.0:
-        return heuristic_score, heuristic_confidence, None, None
-    try:
-        features = build_day_sleeve_features(frame)
-        input_provenance = dict(frame.attrs.get('finalized_input_provenance') or describe_batch(frame))
-        input_provenance['feature_input_sha256'] = frame_identity(features)
-        input_provenance['feature_columns'] = list(features.columns)
-        input_provenance['training_contract_comparison'] = compare_input_contracts(
-            getattr(bundle, 'input_contract', None), input_provenance.get('input_contract', {}))
-        logger.info('DAY_SLEEVE_INFERENCE_INPUT', extra={'symbol': symbol, 'input_provenance': input_provenance})
-        probability = _day_sleeve_positive_probability(bundle.model, features)
-        regimes = infer_day_sleeve_regimes(frame["close"].astype(float).to_numpy())
-        regime = regimes[-1] if regimes else "sideways"
-        selected_threshold = float(bundle.selected_threshold)
-        regime_thresholds = dict(bundle.thresholds_by_regime)
-        serving_threshold = float(regime_thresholds.get(regime, selected_threshold))
-        if not 0.0 <= serving_threshold <= 1.0:
-            raise ValueError("Day-sleeve serving threshold is outside [0, 1]")
-        regime_policy_decision = evaluate_market_regime_policy(
-            getattr(bundle, "market_regime_policy", None),
-            market_regime=regime,
-            now=now,
-        )
-        abstained = (
-            not regime_policy_decision.allowed or probability < serving_threshold
-        )
-        if abstained or serving_threshold >= 1.0:
-            model_score = 0.0
-        else:
-            model_score = float(
-                np.clip(
-                    (probability - serving_threshold) / (1.0 - serving_threshold),
-                    0.0,
-                    1.0,
-                )
-            )
-        serving_score = float(
-            np.clip(
-                ((1.0 - bounded_weight) * float(heuristic_score))
-                + (bounded_weight * model_score),
-                -1.0,
-                1.0,
-            )
-        )
-        serving_confidence = float(
-            np.clip(
-                ((1.0 - bounded_weight) * float(heuristic_confidence))
-                + (bounded_weight * abs(model_score)),
-                0.0,
-                1.0,
-            )
-        )
-        lineage = {
-            str(key): str(value)
-            for key, value in dict(bundle.lineage).items()
-            if str(key).strip() and str(value).strip()
-        }
-        bar_timestamp = pd.Timestamp(features.index[-1]).tz_convert(UTC).isoformat()
-        identity_seed = "|".join(
-            (
-                str(symbol).strip().upper(),
-                "day",
-                bar_timestamp,
-                lineage.get("model_id", ""),
-                lineage.get("model_version", ""),
-                lineage.get("feature_version", ""),
-            )
-        )
-        prediction_id = hashlib.sha256(identity_seed.encode("utf-8")).hexdigest()[:24]
-        decision_id = hashlib.sha256(
-            f"decision|{identity_seed}".encode("utf-8")
-        ).hexdigest()[:24]
-        direction_sign = 1 if model_score > 0.0 else -1 if model_score < 0.0 else 0
-        side = "buy" if direction_sign > 0 else "sell_short" if direction_sign < 0 else "hold"
-        quote_snapshot = _ml_shadow_quote_snapshot(symbol=symbol)
-        market_snapshot = _ml_shadow_market_snapshot(frame, quote=quote_snapshot)
-        horizon_bars = max(
-            1,
-            int(get_env("AI_TRADING_DAY_SLEEVE_HORIZON_BARS", 1, cast=int)),
-        )
-        debug = {
-            "ml_influenced": True,
-            "input_provenance": input_provenance,
-            "model_lineage": lineage,
-            "ml_governance_status": str(
-                getattr(bundle, "governance_status", "production")
-            ),
-            "ml_serving_authority": str(
-                getattr(bundle, "serving_authority", "production")
-            ),
-            "ml_raw_heuristic_score": float(heuristic_score),
-            "ml_raw_score": model_score,
-            "ml_serving_score": serving_score,
-            "ml_positive_probability": probability,
-            "ml_selected_threshold": selected_threshold,
-            "ml_serving_threshold": serving_threshold,
-            "ml_serving_regime": regime,
-            "ml_abstained": abstained,
-            "ml_regime_policy_declared": regime_policy_decision.declared,
-            "ml_regime_policy_allowed": regime_policy_decision.allowed,
-            "ml_regime_policy_reason": regime_policy_decision.reason,
-            "ml_regime_policy_evidence_identity": (
-                regime_policy_decision.evidence_identity
-            ),
-            "ml_regime_policy_evidence_sha256": (
-                regime_policy_decision.evidence_sha256
-            ),
-            "ml_blend_weight": bounded_weight,
-            "ml_serving_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
-            "ml_serving_bar_timestamp": bar_timestamp,
-            "ml_feature_contract_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
-            "prediction_id": prediction_id,
-            "decision_id": decision_id,
-        }
-        shadow_payload = {
-            "ts": now.astimezone(UTC).isoformat(),
-            "mode": "day_sleeve_ml_advisory",
-            "advisory": True,
-            "executed": False,
-            "symbol": str(symbol).strip().upper(),
-            "prediction_id": prediction_id,
-            "decision_id": decision_id,
-            "champion_prediction": direction_sign,
-            "champion_side": side,
-            "champion_probability": probability,
-            "champion_score": model_score,
-            "champion_would_trade": direction_sign != 0,
-            "champion_executed": False,
-            "model_lineage": lineage,
-            **lineage,
-            "required_bar_timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
-            "timeframe": DAY_SLEEVE_ML_BAR_TIMEFRAME,
-            "horizon_bars": horizon_bars,
-            "horizon_unit": "bars",
-            "feature_contract_version": DAY_SLEEVE_ML_FEATURE_CONTRACT_VERSION,
-            "blend_weight": bounded_weight,
-            "heuristic_score": float(heuristic_score),
-            "serving_score": serving_score,
-            "market_regime": regime,
-            "market_regime_policy": {
-                "declared": regime_policy_decision.declared,
-                "allowed": regime_policy_decision.allowed,
-                "reason": regime_policy_decision.reason,
-                "evidence_identity": regime_policy_decision.evidence_identity,
-                "evidence_sha256": regime_policy_decision.evidence_sha256,
-            },
-            "market": market_snapshot,
-            "quote_status": quote_snapshot,
-            "provider": _ml_shadow_provider_snapshot(),
-            "cost": _ml_shadow_cost_snapshot(market_snapshot, quote_snapshot),
-        }
-        _record_shadow_prediction(shadow_payload)
-        return serving_score, serving_confidence, debug, None
-    except BOT_ENGINE_FALLBACK_EXC as exc:
-        logger.warning(
-            "DAY_SLEEVE_ML_INFERENCE_FAILED",
-            extra={"symbol": symbol, "error": str(exc)},
-        )
-        return heuristic_score, heuristic_confidence, None, str(exc)
 
 
 def _ml_shadow_feature_snapshot(
@@ -22859,20 +22624,11 @@ def _score_from_bars(df) -> tuple[float, float]:
         return 0.0, 0.0
 
 
-def _record_netting_model_liveness(
-    *,
-    proposals_total: int,
-    ml_inference_observed: bool,
-) -> None:
+def _record_netting_model_liveness(*, proposals_total: int) -> None:
     """Emit model heartbeat signals from the active netting decision path."""
 
     if int(max(0, proposals_total)) <= 0:
         return
-    if ml_inference_observed:
-        try:
-            note_ml_signal()
-        except BOT_ENGINE_FALLBACK_EXC:
-            logger.debug("NETTING_MODEL_LIVENESS_ML_NOTE_FAILED", exc_info=True)
     try:
         rl_enabled = bool(get_env("USE_RL_AGENT", False, cast=bool))
     except BOT_ENGINE_FALLBACK_EXC:
@@ -29750,18 +29506,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         manual_symbol_side_hour_penalties = _strict_edge_manual_penalty_payload(
             "AI_TRADING_EDGE_COST_MANUAL_PENALTY_BPS_BY_SYMBOL_SIDE_NY_HOUR"
         )
-    day_sleeve_ml_enabled = bool(
-        get_env("AI_TRADING_DAY_SLEEVE_ML_ENABLED", True, cast=bool)
-    )
-    day_sleeve_ml_required = bool(
-        get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool)
-    )
-    day_sleeve_ml_blend_weight = float(
-        get_env("AI_TRADING_DAY_SLEEVE_ML_BLEND_WEIGHT", 0.5, cast=float)
-    )
-    if not math.isfinite(day_sleeve_ml_blend_weight):
-        day_sleeve_ml_blend_weight = 0.5
-    day_sleeve_ml_blend_weight = max(0.0, min(day_sleeve_ml_blend_weight, 1.0))
     day_sleeve_bar_finality_grace_seconds = float(
         get_env(
             "AI_TRADING_DAY_SLEEVE_BAR_FINALITY_GRACE_SECONDS",
@@ -29771,27 +29515,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     if not math.isfinite(day_sleeve_bar_finality_grace_seconds):
         day_sleeve_bar_finality_grace_seconds = 2.0
-    day_sleeve_model_bundle: Any | None = None
-    day_sleeve_model_error: str | None = None
-    day_sleeve_ml_inference_observed = False
-    day_sleeve_configured = any(
-        _is_day_sleeve_ml_timeframe(sleeve.name, sleeve.timeframe)
-        for sleeve in sleeves
-    )
-    if day_sleeve_ml_enabled and day_sleeve_configured:
-        try:
-            day_sleeve_model_bundle = load_day_sleeve_production_model(
-                allow_shadow=_paper_shadow_model_allowed(cfg)
-            )
-        except BOT_ENGINE_FALLBACK_EXC as exc:
-            day_sleeve_model_error = str(exc)
-            logger_once.warning(
-                "DAY_SLEEVE_ML_MODEL_UNAVAILABLE",
-                extra={"error": day_sleeve_model_error},
-                key=f"day_sleeve_model_unavailable:{day_sleeve_model_error}",
-            )
-    elif day_sleeve_configured and day_sleeve_ml_required:
-        day_sleeve_model_error = "day_sleeve_ml_disabled_while_model_required"
+    # No strategy is qualified for new exposure. The rule scorer may trade
+    # only as labelled paper sampling; every other mode freezes positions.
+    rule_sampling_allowed = rule_paper_sampling_allowed(cfg)
     proposals_total = 0
     proposals_blocked = 0
     orders_attempted = 0
@@ -29935,26 +29661,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 continue
             state.last_eval_bar_ts[last_key] = bar_ts
             score, confidence = _score_from_bars(df)
-            day_sleeve_ml_debug: dict[str, Any] | None = None
-            day_sleeve_inference_error = day_sleeve_model_error
-            if (
-                is_day_sleeve_model_path
-                and day_sleeve_ml_enabled
-                and day_sleeve_model_bundle is not None
-            ):
-                score, confidence, day_sleeve_ml_debug, day_sleeve_inference_error = (
-                    _score_day_sleeve_with_ml(
-                        symbol=symbol,
-                        frame=df,
-                        bundle=day_sleeve_model_bundle,
-                        heuristic_score=score,
-                        heuristic_confidence=confidence,
-                        blend_weight=day_sleeve_ml_blend_weight,
-                        now=now,
-                    )
-                )
-                if day_sleeve_ml_debug is not None:
-                    day_sleeve_ml_inference_observed = True
             try:
                 price = float(df["close"].iloc[-1])
             except BOT_ENGINE_FALLBACK_EXC:
@@ -29982,45 +29688,30 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 vol,
                 volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
             )
-            if is_day_sleeve_model_path and day_sleeve_inference_error:
-                proposal.debug.update(
-                    {
-                        "counterfactual_side": (
-                            "buy" if score > 0.0 else "sell" if score < 0.0 else "hold"
-                        ),
-                        "counterfactual_target_dollars": float(proposal.target_dollars),
-                        "counterfactual_score": float(score),
-                        "counterfactual_confidence": float(confidence),
-                        "evidence_partition": "stale_model_shadow",
-                        "research_only": True,
-                        "promotion_eligible": False,
-                        "model_authority": False,
-                        "runtime_authority": False,
-                    }
-                )
-            if day_sleeve_ml_debug is not None:
-                proposal.debug.update(day_sleeve_ml_debug)
-            elif is_day_sleeve_model_path and (
-                day_sleeve_ml_enabled or day_sleeve_ml_required
-            ):
-                if day_sleeve_inference_error:
-                    proposal.debug["ml_fallback_reason"] = day_sleeve_inference_error
-                if day_sleeve_ml_required and day_sleeve_inference_error:
-                    diagnostic_allowed = stale_model_diagnostics_allowed(
-                        cfg,
-                        model_error=day_sleeve_inference_error,
-                    )
-                    proposal.debug["stale_model_paper_diagnostic"] = bool(
-                        diagnostic_allowed
-                    )
-                    if diagnostic_allowed:
-                        proposal.debug["evidence_partition"] = (
-                            "stale_model_paper_diagnostic"
-                        )
-                    else:
-                        proposal.blocked = True
-                        proposal.reason_code = "DAY_SLEEVE_ML_REQUIRED_UNAVAILABLE"
-                        proposal.target_dollars = positions.get(symbol, 0.0) * price
+            proposal.debug.update(
+                {
+                    "counterfactual_side": (
+                        "buy" if score > 0.0 else "sell" if score < 0.0 else "hold"
+                    ),
+                    "counterfactual_target_dollars": float(proposal.target_dollars),
+                    "counterfactual_score": float(score),
+                    "counterfactual_confidence": float(confidence),
+                    "rule_paper_sampling": bool(rule_sampling_allowed),
+                    "evidence_partition": (
+                        "rule_paper_sampling"
+                        if rule_sampling_allowed
+                        else "no_qualified_strategy_shadow"
+                    ),
+                    "research_only": True,
+                    "promotion_eligible": False,
+                    "model_authority": False,
+                    "runtime_authority": False,
+                }
+            )
+            if not rule_sampling_allowed:
+                proposal.blocked = True
+                proposal.reason_code = "NO_QUALIFIED_STRATEGY"
+                proposal.target_dollars = positions.get(symbol, 0.0) * price
             proposals_total += 1
             rolling_volume = _rolling_volume_from_bars(df, liq_lookback_bars)
             latest_liquidity[symbol] = _liquidity_features(
@@ -30210,10 +29901,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if price > 0:
                 latest_price[symbol] = price
 
-    _record_netting_model_liveness(
-        proposals_total=proposals_total,
-        ml_inference_observed=day_sleeve_ml_inference_observed,
-    )
+    _record_netting_model_liveness(proposals_total=proposals_total)
 
     if bool(get_env("AI_TRADING_EVENT_DRIVEN_NEW_BAR_ONLY", True, cast=bool)) and symbols:
         sleeve_count = max(len(sleeves), 1)

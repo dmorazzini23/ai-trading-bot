@@ -303,6 +303,55 @@ def test_submit_order_releases_paper_sampling_slot_when_broker_rejects(
     assert payload["by_symbol"] == {"AMZN": 1}
 
 
+def test_submit_order_refuses_rule_sampler_order_without_paper_sampling(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    engine = _DummyExecEngine()
+    ctx = SimpleNamespace(market_data=None, api=SimpleNamespace(list_positions=lambda: []))
+    cfg = _base_cfg(
+        paper_sampling_enabled=False,
+        execution_mode="paper",
+        paper=True,
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        launch_profile="paper_trade",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    _reset_submit_state(monkeypatch)
+    monkeypatch.setattr(bot_engine, "_exec_engine", engine)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: cfg)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote_basis",
+        lambda *_args, **_kwargs: (
+            "broker_nbbo",
+            99.9,
+            100.1,
+            100.0,
+            100.1,
+            datetime.now(UTC),
+        ),
+    )
+
+    result = bot_engine.submit_order(
+        ctx,
+        "AAPL",
+        1,
+        "buy",
+        price=100.0,
+        metadata={"evidence_partition": "rule_paper_sampling"},
+    )
+
+    assert result is None
+    assert engine.calls == []
+    assert [skip.get("reason") for skip in engine.skips] == [
+        "RULE_SAMPLER_REQUIRES_PAPER_SAMPLING"
+    ]
+
+
 def test_submit_order_releases_exact_sampling_reservation_token(monkeypatch) -> None:
     class _RejectedExecEngine(_DummyExecEngine):
         def execute_order(

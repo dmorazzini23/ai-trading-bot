@@ -223,7 +223,7 @@ def test_research_only_fill_cannot_become_promotion_evidence(
         order_lineage_metadata={
             "account_id": "broker-account-1",
             "account_id_source": "broker_get_account",
-            "evidence_partition": "stale_model_paper_diagnostic",
+            "evidence_partition": "rule_paper_sampling",
             "research_only": True,
             "model_authority": False,
             "runtime_authority": False,
@@ -235,7 +235,7 @@ def test_research_only_fill_cannot_become_promotion_evidence(
     assert tca_record is None
     assert metrics["fill_based_evidence"] is True
     assert metrics["promotion_eligible"] is False
-    assert metrics["evidence_partition"] == "stale_model_paper_diagnostic"
+    assert metrics["evidence_partition"] == "rule_paper_sampling"
     assert metrics["model_authority"] is False
     assert metrics["account_id"] == "broker-account-1"
     assert metrics["account_id_source"] == "broker_get_account"

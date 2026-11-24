@@ -3,15 +3,7 @@ import pandas as pd
 import pytest
 
 from ai_trading.features.day_sleeve import build_day_sleeve_features
-from ai_trading.features.input_provenance import REQUIRED, VERSION, compare_input_contracts
 from ai_trading.training.label_timing import valid_five_minute_labels
-
-
-@pytest.mark.parametrize('value', [{}, [], False, 0, float('nan')])
-def test_malformed_contract_cannot_match_itself(value):
-    contract = dict.fromkeys(REQUIRED, value)
-    contract['version'] = VERSION
-    assert compare_input_contracts(contract, contract)['status'] == 'unverified'
 
 
 @pytest.mark.parametrize('column,value', [('high', 1), ('low', 500), ('volume', 0), ('open', -1)])

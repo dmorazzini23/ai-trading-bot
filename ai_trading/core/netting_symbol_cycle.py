@@ -1030,13 +1030,13 @@ def process_netting_symbol(
             debug
             for proposal in net_target.proposals
             if isinstance((debug := getattr(proposal, "debug", None)), Mapping)
-            and debug.get("stale_model_paper_diagnostic") is True
+            and debug.get("rule_paper_sampling") is True
         ),
         None,
     )
     if diagnostic_debug is not None:
         diagnostic_firewall = {
-            "evidence_partition": "stale_model_paper_diagnostic",
+            "evidence_partition": "rule_paper_sampling",
             "research_only": True,
             "promotion_eligible": False,
             "model_authority": False,

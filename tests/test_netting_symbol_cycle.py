@@ -607,7 +607,7 @@ def test_rejected_submission_retains_pre_submit_causal_time_and_identity() -> No
     assert records[0]["metrics"]["decision_ts_basis"] == "explicit"
 
 
-def test_process_netting_symbol_partitions_stale_model_diagnostic_order() -> None:
+def test_process_netting_symbol_partitions_rule_paper_sampling_order() -> None:
     submitted: list[dict[str, Any]] = []
 
     def execute_submission_func(**kwargs: Any) -> Any:
@@ -628,7 +628,7 @@ def test_process_netting_symbol_partitions_stale_model_diagnostic_order() -> Non
         execute_submission_func=execute_submission_func
     )
     target = _make_net_target(bar_ts=processor.now)
-    target.proposals[0].debug = {"stale_model_paper_diagnostic": True}
+    target.proposals[0].debug = {"rule_paper_sampling": True}
 
     result = process_netting_symbol(
         processor=processor,
@@ -641,7 +641,7 @@ def test_process_netting_symbol_partitions_stale_model_diagnostic_order() -> Non
     assert len(submitted) == 1
     for payload_name in ("order_annotations", "order_lineage_metadata"):
         payload = submitted[0][payload_name]
-        assert payload["evidence_partition"] == "stale_model_paper_diagnostic"
+        assert payload["evidence_partition"] == "rule_paper_sampling"
         assert payload["research_only"] is True
         assert payload["promotion_eligible"] is False
         assert payload["model_authority"] is False
