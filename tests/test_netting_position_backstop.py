@@ -407,6 +407,84 @@ def test_unarmed_and_price_suspect_log_once_per_symbol_per_session(
     assert "NVDA" not in backstop.store.locks
 
 
+def test_armed_marker_logs_once_and_resets_on_close_and_unarmed_transitions(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    def armed() -> list[logging.LogRecord]:
+        return _messages(caplog, "POSITION_BACKSTOP_ARMED")
+
+    def unarmed() -> list[logging.LogRecord]:
+        return _messages(caplog, "POSITION_BACKSTOP_UNARMED")
+
+    with caplog.at_level(logging.INFO):
+        backstop = _backstop(tmp_path, positions={"AAPL": 10, "TSLA": -4}, bases={"AAPL": 100.0, "TSLA": 200.0})
+        assert [r.symbol for r in armed()] == ["AAPL", "TSLA"]
+        first, short = armed()
+        assert first.levelno == logging.INFO
+        assert first.getMessage() == "POSITION_BACKSTOP_ARMED | symbol=AAPL"
+        assert (first.side, first.qty, first.avg_entry) == ("long", 10.0, 100.0)
+        assert first.stop_price == pytest.approx(95.0)
+        assert short.side == "short"
+        assert short.stop_price == pytest.approx(210.0)
+        # Following cycles do not repeat it.
+        for minutes in (1, 2):
+            _backstop(
+                tmp_path,
+                positions={"AAPL": 10, "TSLA": -4},
+                bases={"AAPL": 100.0, "TSLA": 200.0},
+                now=NOW + timedelta(minutes=minutes),
+                backstop=backstop,
+            )
+        assert len(armed()) == 2
+        # Close and reopen: armed again for that symbol only.
+        _backstop(
+            tmp_path,
+            positions={"TSLA": -4},
+            bases={"TSLA": 200.0},
+            now=NOW + timedelta(minutes=3),
+            backstop=backstop,
+        )
+        assert len(armed()) == 2
+        _backstop(
+            tmp_path,
+            positions={"AAPL": 10, "TSLA": -4},
+            bases={"AAPL": 101.0, "TSLA": 200.0},
+            now=NOW + timedelta(minutes=4),
+            backstop=backstop,
+        )
+        assert [r.symbol for r in armed()] == ["AAPL", "TSLA", "AAPL"]
+        assert armed()[-1].avg_entry == 101.0
+        # ARMED -> UNARMED logs, then UNARMED -> ARMED logs again.
+        _backstop(
+            tmp_path,
+            positions={"AAPL": 10, "TSLA": -4},
+            bases={"TSLA": 200.0},
+            unarmed={"AAPL": "stale_snapshot"},
+            now=NOW + timedelta(minutes=5),
+            backstop=backstop,
+        )
+        assert [r.reason for r in unarmed()] == ["stale_snapshot"]
+        assert len(armed()) == 3
+        _backstop(
+            tmp_path,
+            positions={"AAPL": 10, "TSLA": -4},
+            bases={"AAPL": 101.0, "TSLA": 200.0},
+            now=NOW + timedelta(minutes=6),
+            backstop=backstop,
+        )
+        assert [r.symbol for r in armed()] == ["AAPL", "TSLA", "AAPL", "AAPL"]
+        # A later UNARMED for the same reason logs again after re-arming.
+        _backstop(
+            tmp_path,
+            positions={"AAPL": 10, "TSLA": -4},
+            bases={"TSLA": 200.0},
+            unarmed={"AAPL": "stale_snapshot"},
+            now=NOW + timedelta(minutes=7),
+            backstop=backstop,
+        )
+        assert [r.reason for r in unarmed()] == ["stale_snapshot", "stale_snapshot"]
+
+
 def test_breach_markers_carry_the_context(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO):
         backstop = _backstop(tmp_path, positions={"AAPL": -10}, bases={"AAPL": 100.0})

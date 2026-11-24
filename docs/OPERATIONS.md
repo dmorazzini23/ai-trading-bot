@@ -799,7 +799,10 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   execution engine's broker-sync snapshot; with no fresh snapshot (600 s), a
   quantity that differs from the cycle's position, or no usable price the
   symbol is unarmed for the cycle (`POSITION_BACKSTOP_UNARMED`, once per symbol
-  and session). A move above 40% from entry is not trusted
+  and session). `POSITION_BACKSTOP_ARMED` (INFO, with side, qty, `avg_entry` and
+  `stop_price`) is logged once when a held symbol first has a valid basis and
+  again after the position is closed and reopened or after an unarmed spell;
+  it is the journal signal that a position is protected. A move above 40% from entry is not trusted
   (`POSITION_BACKSTOP_PRICE_SUSPECT`).
 - **Maximum hold:** exit after 5 NYSE session closes since the episode opened
   (`POSITION_MAX_HOLD_SESSIONS`; weekends, holidays and early closes counted on
