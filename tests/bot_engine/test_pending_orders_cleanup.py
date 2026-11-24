@@ -921,15 +921,24 @@ def test_stale_sweep_holds_symbol_until_broker_stops_listing_cancelled_order(mon
         created_at=now_dt - timedelta(seconds=5),
     )
 
+    # AAPL is inside a block-decay release cooldown, so decay leaves it out
+    # of the blocked set even though it has an open order. Without the hold
+    # the netting cycle straight after the sweep could resubmit AAPL.
+    runtime.state[be._PENDING_SYMBOL_DECAY_TRACKER_KEY] = {
+        "AAPL": {"released_until_ts": clock.value + 600.0}
+    }
+
     assert be._handle_pending_orders([exit_order, entry_order], runtime) is True
     assert [order.id for order in swept] == ["exit-aapl"]
     assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
 
-    # Next cycle: the broker still lists the exit, now pending_cancel, beside a
-    # fresh entry. The cancel is not confirmed, so AAPL must stay blocked.
+    # Next cycle: the broker still lists the exit (a fill raced the cancel, so
+    # it shows partially_filled) beside a fresh entry. Pending confirmation
+    # drops partially_filled orders, and the cancel is not confirmed, so AAPL
+    # must stay blocked.
     clock.value += 30.0
     exit_cancelling = _order(
-        "pending_cancel", "exit-aapl", symbol="AAPL", side="sell",
+        "partially_filled", "exit-aapl", symbol="AAPL", side="sell",
         created_at=now_dt - timedelta(seconds=120),
     )
     caplog.set_level(logging.INFO)
@@ -1073,3 +1082,225 @@ def test_stale_sweep_leaves_young_or_opening_partial_fills_alone(monkeypatch):
     be._handle_pending_orders([young_partial_exit, old_partial_entry, young_entry], runtime)
 
     assert swept == []
+
+
+class _StrEnum(str):
+    """Stand-in for alpaca-py str enums: ``.value`` holds the wire token."""
+
+    def __new__(cls, token: str, name: str) -> "_StrEnum":
+        obj = super().__new__(cls, f"Enum.{name}")
+        obj.value = token  # type: ignore[attr-defined]
+        return obj
+
+
+def _hold_runtime(monkeypatch, *, scope: str = "symbol") -> Any:
+    runtime = _symbol_scope_runtime_without_decay(monkeypatch, cleanup_interval=3600)
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", scope)
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "3600")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS", "5")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+    return runtime
+
+
+def _accept_all_cancels(monkeypatch) -> list[Any]:
+    swept: list[Any] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: swept.extend(orders)
+        or be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=len(orders),
+            failed=0,
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[],
+        ),
+    )
+    return swept
+
+
+def _clock(monkeypatch) -> Any:
+    clock = types.SimpleNamespace(value=datetime(2026, 3, 2, 15, 0, 0, tzinfo=UTC).timestamp())
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    return clock
+
+
+def _aged(status: Any, oid: str, symbol: str, age_s: float, clock: Any, **extra: Any) -> Any:
+    created = datetime.fromtimestamp(clock.value, tz=UTC) - timedelta(seconds=age_s)
+    return _order(status, oid, symbol=symbol, created_at=created, **extra)
+
+
+def _blocked(runtime: Any) -> tuple[str, ...]:
+    return tuple(getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR))
+
+
+def test_hold_released_on_empty_open_list(monkeypatch):
+    runtime = _hold_runtime(monkeypatch)
+    _accept_all_cancels(monkeypatch)
+    clock = _clock(monkeypatch)
+    be._handle_pending_orders([_aged("pending_new", "x", "AAPL", 120, clock)], runtime)
+    assert runtime.state["_pending_cancel_unconfirmed"]
+
+    clock.value += 30.0
+    assert be._handle_pending_orders([], runtime) is False
+    assert runtime.state["_pending_cancel_unconfirmed"] == {}
+    assert _blocked(runtime) == ()
+
+
+def test_hold_released_when_order_listed_as_filled(monkeypatch):
+    runtime = _hold_runtime(monkeypatch)
+    _accept_all_cancels(monkeypatch)
+    clock = _clock(monkeypatch)
+    be._handle_pending_orders([_aged("pending_new", "x", "AAPL", 120, clock)], runtime)
+
+    # The order filled before the cancel landed; a terminal status confirms it.
+    clock.value += 30.0
+    filled = _aged("filled", "x", "AAPL", 150, clock)
+    entry = _aged("pending_new", "e", "MSFT", 5, clock)
+    be._handle_pending_orders([filled, entry], runtime)
+    assert "AAPL" not in _blocked(runtime)
+    assert "x" not in runtime.state["_pending_cancel_unconfirmed"]
+
+
+def test_partial_cancel_batch_holds_only_accepted_ids(monkeypatch):
+    runtime = _hold_runtime(monkeypatch)
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=1,
+            failed=1,
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[{"order_id": "b", "error": "rejected"}],
+        ),
+    )
+    clock = _clock(monkeypatch)
+    orders = [
+        _aged("pending_new", "a", "AAPL", 200, clock),
+        _aged("pending_new", "b", "NVDA", 150, clock),
+    ]
+    be._handle_pending_orders(orders, runtime)
+    assert set(runtime.state["_pending_cancel_unconfirmed"]) == {"a"}
+
+
+def test_hold_handles_alpaca_enum_status_intent_and_side(monkeypatch):
+    runtime = _hold_runtime(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_PARTIALLY_FILLED_SEC", "900")
+    swept = _accept_all_cancels(monkeypatch)
+    clock = _clock(monkeypatch)
+    partial_exit = _aged(
+        _StrEnum("partially_filled", "PARTIALLY_FILLED"), "x", "AAPL", 1000, clock,
+        side=_StrEnum("sell", "SELL"),
+        position_intent=_StrEnum("sell_to_close", "SELL_TO_CLOSE"),
+    )
+    entry = _aged(_StrEnum("pending_new", "PENDING_NEW"), "e", "MSFT", 5, clock)
+    be._handle_pending_orders([partial_exit, entry], runtime)
+    assert [order.id for order in swept] == ["x"]
+
+    clock.value += 30.0
+    cancelling = _aged(_StrEnum("pending_cancel", "PENDING_CANCEL"), "x", "AAPL", 1030, clock)
+    be._handle_pending_orders([cancelling, entry], runtime)
+    assert runtime.state["_pending_cancel_unconfirmed"]["x"]["last_status"] == "pending_cancel"
+    assert "AAPL" in _blocked(runtime)
+
+
+def test_position_intent_token_matches_name_fallback():
+    from ai_trading.core import pending_order_runtime as por
+    from ai_trading.execution.live_trading import _position_intent_token
+
+    class _NameOnly:
+        name = "SELL_TO_CLOSE"
+
+    for value in (_NameOnly(), "SELL_TO_CLOSE", _StrEnum("sell_to_close", "X"), None):
+        assert por._token(value) == _position_intent_token(value)
+
+
+def test_hold_with_several_orders_on_one_symbol(monkeypatch):
+    runtime = _hold_runtime(monkeypatch)
+    _accept_all_cancels(monkeypatch)
+    clock = _clock(monkeypatch)
+    be._handle_pending_orders(
+        [_aged("pending_new", "a1", "AAPL", 200, clock), _aged("pending_new", "a2", "AAPL", 150, clock)],
+        runtime,
+    )
+    entry = _aged("pending_new", "e", "MSFT", 5, clock)
+
+    clock.value += 30.0
+    be._handle_pending_orders([_aged("partially_filled", "a2", "AAPL", 180, clock), entry], runtime)
+    assert "AAPL" in _blocked(runtime)
+    assert set(runtime.state["_pending_cancel_unconfirmed"]) == {"a2"}
+
+    clock.value += 30.0
+    be._handle_pending_orders([entry], runtime)
+    assert "AAPL" not in _blocked(runtime)
+
+
+def test_listed_pending_cancel_or_replace_blocks_symbol_after_restart(monkeypatch):
+    # Fresh runtime state, as after a restart: nothing was remembered, but the
+    # broker lists orders whose cancel or replace someone else requested.
+    runtime = _hold_runtime(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    clock = _clock(monkeypatch)
+    orders = [
+        _aged("pending_cancel", "c", "AAPL", 10, clock),
+        _aged(_StrEnum("pending_replace", "PENDING_REPLACE"), "r", "NVDA", 10, clock),
+        _aged("pending_new", "e", "MSFT", 5, clock),
+    ]
+    be._handle_pending_orders(orders, runtime)
+    assert set(_blocked(runtime)) == {"AAPL", "NVDA", "MSFT"}
+
+    # The replace was rejected and the order is back to accepted: a status
+    # hold ends as soon as the order leaves pending_cancel/pending_replace.
+    clock.value += 30.0
+    orders[1] = _aged("accepted", "r", "NVDA", 40, clock)
+    be._handle_pending_orders(orders, runtime)
+    assert "NVDA" not in _blocked(runtime)
+    assert "AAPL" in _blocked(runtime)
+
+
+def test_long_hold_warns_after_300s_then_throttles(monkeypatch, caplog):
+    runtime = _hold_runtime(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    clock = _clock(monkeypatch)
+    entry = _aged("pending_new", "e", "MSFT", 5, clock)
+    stuck = _aged("pending_cancel", "c", "AAPL", 10, clock)
+    caplog.set_level(logging.INFO)
+
+    def _warnings() -> list[Any]:
+        return [r for r in caplog.records if r.message == "PENDING_CANCEL_HOLD_LONG"]
+
+    for step, expected in ((0, 0), (299, 0), (1, 1), (100, 1), (200, 2), (60, 2)):
+        clock.value += step
+        be._handle_pending_orders([stuck, entry], runtime)
+        assert len(_warnings()) == expected, step
+    last = _warnings()[-1]
+    assert (last.symbol, last.order_id, last.last_status) == ("AAPL", "c", "pending_cancel")
+    assert last.held_s == 600
+    assert any(r.message == "PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD" for r in caplog.records)
+
+
+def test_cycle_scope_is_unchanged_by_holds(monkeypatch, caplog):
+    runtime = _hold_runtime(monkeypatch, scope="cycle")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_PARTIALLY_FILLED_SEC", "900")
+    swept = _accept_all_cancels(monkeypatch)
+    clock = _clock(monkeypatch)
+    partial_exit = _aged(
+        "partially_filled", "p", "AAPL", 1000, clock, side="sell", position_intent="sell_to_close"
+    )
+    cancelling = _aged("pending_cancel", "c", "NVDA", 10, clock)
+    entry = _aged("pending_new", "e", "MSFT", 5, clock)
+    caplog.set_level(logging.INFO)
+
+    be._handle_pending_orders([partial_exit, cancelling, entry], runtime)
+
+    # As on main: the sweep sees only confirmed pending orders and the blocked
+    # set is just their symbols; no hold is applied or logged.
+    assert [order.id for order in swept] == []
+    assert _blocked(runtime) == ("MSFT",)
+    assert not any(
+        r.message in {"PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD", "PENDING_CANCEL_HOLD_LONG"}
+        for r in caplog.records
+    )
