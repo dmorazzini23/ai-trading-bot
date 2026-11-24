@@ -14,6 +14,7 @@ from urllib.request import urlopen
 
 from ai_trading.config.launch_profiles import launch_profile_payload, resolve_launch_profile
 from ai_trading.config.management import get_env
+from ai_trading.runtime import paper_sampling
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 
@@ -319,6 +320,12 @@ def build_live_capital_readiness(
         ),
     }
 
+    # Code-level fact, independent of every input: health payloads and other
+    # evidence can neither add nor remove it.
+    qualified_strategy = paper_sampling.qualified_strategy_available()
+    if not qualified_strategy:
+        reasons.append(paper_sampling.NO_QUALIFIED_STRATEGY)
+        actions.append("qualify a strategy through registered research before any live-capital step")
     if not bool(validation.get("full_validation_green", False)):
         reasons.append("full_validation_green_artifact_missing")
         actions.append("run full validation and save a green validation artifact")
@@ -478,6 +485,7 @@ def build_live_capital_readiness(
         "launch_profile": profile_payload,
         "freshness": freshness,
         "gates": {
+            "qualified_strategy": qualified_strategy,
             "full_validation_green": bool(validation.get("full_validation_green", False)),
             "health_ok": bool(health.get("ok")),
             "broker_connected": bool(broker.get("connected")),
@@ -559,6 +567,7 @@ def build_live_capital_readiness(
     }
     report["health_report_summary"] = {
         "status": status,
+        "qualified_strategy": qualified_strategy,
         "health_status": _summary_status(health),
         "health_ok": bool(health.get("ok")),
         "broker_connected": bool(broker.get("connected")),

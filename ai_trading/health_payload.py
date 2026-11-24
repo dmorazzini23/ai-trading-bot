@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Callable, Mapping
 
+from ai_trading.runtime import paper_sampling
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.config.launch_profiles import (
     launch_profile_payload,
@@ -1225,9 +1226,10 @@ def build_alpaca_health_payload(
 
 def _operating_mode_snapshot() -> dict[str, Any]:
     """Report strategy authority without changing any readiness decision."""
+    qualified = paper_sampling.qualified_strategy_available()
     result: dict[str, Any] = {
-        "strategy_state": "no_qualified_strategy",
-        "qualified_strategy": False,
+        "strategy_state": "qualified_strategy" if qualified else paper_sampling.NO_QUALIFIED_STRATEGY,
+        "qualified_strategy": qualified,
         "rule_paper_sampling_enabled": False,
         "results_are_strategy_performance": False,
         "promotion_authority": False,

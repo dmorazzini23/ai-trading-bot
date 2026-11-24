@@ -118,6 +118,22 @@ def _is_paper_sampling_active(cfg: Any) -> tuple[bool, str | None]:
     return True, None
 
 
+NO_QUALIFIED_STRATEGY = "no_qualified_strategy"
+
+
+def qualified_strategy_available() -> bool:
+    """Return whether any strategy is qualified to trade on its own authority.
+
+    This is a code-level fact, deliberately not an env var or ConfigSpec: no
+    strategy is currently qualified. The engine assumes it (NO_QUALIFIED_STRATEGY
+    blocks new exposure outside paper sampling), ``/healthz`` reports it as
+    ``operating_mode``, and live-capital readiness blocks on it. Changing it
+    takes a reviewed code change; a missing health payload never changes it.
+    """
+
+    return False
+
+
 def rule_paper_sampling_allowed(cfg: Any) -> bool:
     """Allow the unqualified rule scorer to trade only as explicit paper sampling.
 
@@ -1054,10 +1070,12 @@ def release_paper_sampling_order(
 
 
 __all__ = [
+    "NO_QUALIFIED_STRATEGY",
     "PaperSamplingDecision",
     "evaluate_paper_sampling_order",
     "paper_sampling_deficit_snapshot",
     "paper_sampling_reservation_symbols",
+    "qualified_strategy_available",
     "release_paper_sampling_order",
     "reserve_paper_sampling_order",
     "rule_paper_sampling_allowed",

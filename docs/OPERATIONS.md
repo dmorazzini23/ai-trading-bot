@@ -553,6 +553,14 @@ The active profile and provider-authority decision are exposed in `/healthz` as
 `live_capital_readiness.json`; live money must remain disabled unless that
 artifact and the operator runbook both allow the next step.
 
+While no strategy is qualified, that artifact always reports `blocked` with the
+reason `no_qualified_strategy` (and `gates.qualified_strategy: false`), whatever
+the other evidence says; the other reasons are still listed beside it, and the
+`paper_only` status cannot appear. The fact is code
+(`ai_trading.runtime.paper_sampling.qualified_strategy_available`), not
+configuration: no env var removes it, and it is the same fact `/healthz` reports
+as `operating_mode.qualified_strategy`.
+
 Useful manual checks:
 
 ```bash

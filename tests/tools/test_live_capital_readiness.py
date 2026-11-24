@@ -6,6 +6,8 @@ from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
 
+from ai_trading import health_payload
+from ai_trading.runtime import paper_sampling
 from ai_trading.tools import live_capital_readiness
 
 
@@ -69,7 +71,127 @@ def test_live_capital_readiness_blocks_without_live_cost(monkeypatch):
     assert "live_cost_model_unavailable" in report["reasons"]
 
 
+def _all_green_inputs(now: str) -> dict[str, object]:
+    return {
+        "health": _healthy_payload(),
+        "live_cost_model": {"generated_at": now, "status": {"available": True, "status": "ready", "breach_count": 0}},
+        "promotion_report": {"generated_at": now, "promotion_ready": True},
+        "validation": {"generated_at": now, "full_validation_green": True},
+        "canary_plan": {"generated_at": now, "paper_vs_live_canary_plan": "ready"},
+        "edge_calibration": {"generated_at": now, "status": "calibrated"},
+        "execution_capture": {"generated_at": now, "status": "acceptable"},
+        "portfolio_edge": {"generated_at": now, "status": "ok"},
+        "pretrade_risk_verifier": {"generated_at": now, "status": "passed"},
+        "post_trade_surveillance": {"generated_at": now, "status": "clean"},
+        "walk_forward_capital": {"generated_at": now, "status": "completed", "live_enabled": False},
+        "order_type_optimizer": {"generated_at": now, "status": "ready", "live_enabled": False},
+        "regime_champions": {"generated_at": now, "status": "ready"},
+        "adversarial_failure": {"generated_at": now, "status": "passed", "live_money_authority": False},
+        "drift_monitor": {"generated_at": now, "status": "ok"},
+        "approval_artifact": {
+            "generated_at": now,
+            "approval_id": "approval-1",
+            "status": "approved",
+            "launch_profile": "live_canary",
+        },
+    }
+
+
+def _set_live_canary_env(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+
+
+def test_no_qualified_strategy_blocks_even_when_every_other_gate_is_green(monkeypatch):
+    _set_live_canary_env(monkeypatch)
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(**_all_green_inputs(now))  # type: ignore[arg-type]
+
+    assert paper_sampling.qualified_strategy_available() is False
+    assert report["status"] == "blocked"
+    assert report["reasons"] == ["no_qualified_strategy"]
+    assert report["gates"]["qualified_strategy"] is False
+    assert report["health_report_summary"]["qualified_strategy"] is False
+    assert report["health_report_summary"]["reasons"] == ["no_qualified_strategy"]
+    assert report["operator_summary"]["blocked_reasons"] == ["no_qualified_strategy"]
+    assert report["operator_summary"]["severity"] == "warning"
+
+
+def test_no_qualified_strategy_keeps_existing_reasons_and_paper_profile_blocked(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
+    monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    inputs = _all_green_inputs(now)
+    inputs["health"] = {"ok": False, "status": "degraded"}
+
+    report = live_capital_readiness.build_live_capital_readiness(**inputs)  # type: ignore[arg-type]
+
+    assert report["status"] == "blocked"
+    assert report["reasons"][0] == "no_qualified_strategy"
+    assert "health_not_healthy" in report["reasons"]
+    assert "broker_not_connected" in report["reasons"]
+    assert "live_capital_profile_not_selected" in report["reasons"]
+
+
+def test_no_qualified_strategy_survives_missing_health_payload(monkeypatch):
+    _set_live_canary_env(monkeypatch)
+
+    report = live_capital_readiness.build_live_capital_readiness(
+        health={},
+        live_cost_model={},
+        promotion_report={},
+    )
+
+    assert report["status"] == "blocked"
+    assert "no_qualified_strategy" in report["reasons"]
+    assert "health_not_healthy" in report["reasons"]
+
+
+def test_health_operating_mode_and_readiness_share_the_strategy_fact(monkeypatch):
+    _set_live_canary_env(monkeypatch)
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    mode = health_payload._operating_mode_snapshot()
+    report = live_capital_readiness.build_live_capital_readiness(**_all_green_inputs(now))  # type: ignore[arg-type]
+    assert mode["qualified_strategy"] is report["gates"]["qualified_strategy"] is False
+    assert mode["strategy_state"] == paper_sampling.NO_QUALIFIED_STRATEGY
+    assert paper_sampling.NO_QUALIFIED_STRATEGY in report["reasons"]
+
+    monkeypatch.setattr(paper_sampling, "qualified_strategy_available", lambda: True)
+    mode = health_payload._operating_mode_snapshot()
+    report = live_capital_readiness.build_live_capital_readiness(**_all_green_inputs(now))  # type: ignore[arg-type]
+    assert mode["qualified_strategy"] is report["gates"]["qualified_strategy"] is True
+    assert paper_sampling.NO_QUALIFIED_STRATEGY not in report["reasons"]
+
+
+def test_no_env_var_removes_the_no_qualified_strategy_block(monkeypatch):
+    _set_live_canary_env(monkeypatch)
+    for name in (
+        "AI_TRADING_QUALIFIED_STRATEGY",
+        "AI_TRADING_STRATEGY_QUALIFIED",
+        "QUALIFIED_STRATEGY",
+        "AI_TRADING_STRATEGY_STATE",
+        "AI_TRADING_LIVE_CAPITAL_FORCE",
+        "AI_TRADING_LIVE_READINESS_OVERRIDE",
+    ):
+        monkeypatch.setenv(name, "1")
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    report = live_capital_readiness.build_live_capital_readiness(**_all_green_inputs(now))  # type: ignore[arg-type]
+
+    assert report["status"] == "blocked"
+    assert "no_qualified_strategy" in report["reasons"]
+    # The fact reads no configuration at all, so no env var can reach it.
+    code = paper_sampling.qualified_strategy_available.__code__
+    assert code.co_names == ()
+
+
 def test_live_capital_readiness_allows_explicit_tiny_canary(monkeypatch):
+    # Pretend a strategy has qualified so the remaining gates stay covered.
+    monkeypatch.setattr(paper_sampling, "qualified_strategy_available", lambda: True)
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
     monkeypatch.setenv("AI_TRADING_LIVE_ACCOUNT_CONFIRMED", "1")
     monkeypatch.setenv("AI_TRADING_LIVE_MAX_DAILY_LOSS", "25")
