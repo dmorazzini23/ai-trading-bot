@@ -1,5 +1,6 @@
 
 import importlib
+import os
 
 import pytest
 from ai_trading import config
@@ -83,45 +84,68 @@ def test_reload_env_clears_cached_settings(monkeypatch):
 
 
 def test_reload_env_refreshes_exported_runtime_constants(monkeypatch, tmp_path):
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "\n".join(
-            [
-                "EXECUTION_MODE=paper",
-                "DATA_FEED_INTRADAY=sip",
-                "ALPACA_EXECUTION_FEED=sip",
-                "ALPACA_ALLOW_SIP=1",
-                "ALPACA_HAS_SIP=1",
-                "AI_TRADING_SAFE_MODE_ALLOW_PAPER=1",
-            ]
-        ),
-        encoding="utf-8",
+    # reload_env writes the dotenv values into os.environ. Snapshot and restore
+    # them: a leaked EXECUTION_MODE=sim changes the launch profile, and with it
+    # short permissions, for every later test. (monkeypatch.delenv records
+    # nothing for an absent key, so it cannot undo this.)
+    keys = (
+        "EXECUTION_MODE",
+        "DATA_FEED_INTRADAY",
+        "ALPACA_EXECUTION_FEED",
+        "ALPACA_ALLOW_SIP",
+        "ALPACA_HAS_SIP",
+        "AI_TRADING_SAFE_MODE_ALLOW_PAPER",
     )
+    saved = {key: os.environ.get(key) for key in keys}
+    try:
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "EXECUTION_MODE=paper",
+                    "DATA_FEED_INTRADAY=sip",
+                    "ALPACA_EXECUTION_FEED=sip",
+                    "ALPACA_ALLOW_SIP=1",
+                    "ALPACA_HAS_SIP=1",
+                    "AI_TRADING_SAFE_MODE_ALLOW_PAPER=1",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
-    config.reload_env(path=env_path)
+        config.reload_env(path=env_path)
 
-    assert config.EXECUTION_MODE == "paper"
-    assert config.DATA_FEED_INTRADAY == "sip"
-    assert config.ALPACA_EXECUTION_FEED == "sip"
-    assert config.SAFE_MODE_ALLOW_PAPER is True
+        assert config.EXECUTION_MODE == "paper"
+        assert config.DATA_FEED_INTRADAY == "sip"
+        assert config.ALPACA_EXECUTION_FEED == "sip"
+        assert config.SAFE_MODE_ALLOW_PAPER is True
 
-    env_path.write_text(
-        "\n".join(
-            [
-                "EXECUTION_MODE=sim",
-                "DATA_FEED_INTRADAY=iex",
-                "ALPACA_EXECUTION_FEED=iex",
-                "AI_TRADING_SAFE_MODE_ALLOW_PAPER=0",
-            ]
-        ),
-        encoding="utf-8",
-    )
+        env_path.write_text(
+            "\n".join(
+                [
+                    "EXECUTION_MODE=sim",
+                    "DATA_FEED_INTRADAY=iex",
+                    "ALPACA_EXECUTION_FEED=iex",
+                    "AI_TRADING_SAFE_MODE_ALLOW_PAPER=0",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
-    config.reload_env(path=env_path)
+        config.reload_env(path=env_path)
 
-    assert config.EXECUTION_MODE == "sim"
-    assert config.DATA_FEED_INTRADAY == "iex"
-    assert config.ALPACA_EXECUTION_FEED == "iex"
-    assert config.SAFE_MODE_ALLOW_PAPER is False
+        assert config.EXECUTION_MODE == "sim"
+        assert config.DATA_FEED_INTRADAY == "iex"
+        assert config.ALPACA_EXECUTION_FEED == "iex"
+        assert config.SAFE_MODE_ALLOW_PAPER is False
+    finally:
+        # Then re-derive the exported constants and cached settings from the
+        # restored environment so later tests do not see sim/iex.
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        config.reload_env()
 
 

@@ -742,6 +742,18 @@ def test_submitted_decision_records_arrival_quote_not_runtime_snapshot_quote() -
         assert metrics[key] == value
 
 
+_SHORTS_ALLOWED_CFG = SimpleNamespace(
+    seed="seed", launch_profile="paper_trade", shorts_allowed=True
+)
+
+
+@pytest.fixture
+def _shorts_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("TRADING__ALLOW_SHORTS", "AI_TRADING_LAUNCH_PROFILE_PAPER_TRADE_ALLOW_SHORTS"):
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.mark.usefixtures("_shorts_env")
 @pytest.mark.parametrize(
     ("current_shares", "target_dollars", "submits"),
     [
@@ -776,6 +788,9 @@ def test_process_netting_symbol_without_qualified_strategy_only_reduces(
         execute_submission_func=execute_submission_func,
         positions={"AAPL": current_shares},
         new_exposure_allowed=False,
+        # Shorts allowed, so short growth reaches the guard instead of being
+        # closed by long-only suppression (pinned separately below).
+        cfg=_SHORTS_ALLOWED_CFG,
     )
 
     result = process_netting_symbol(
@@ -815,6 +830,7 @@ def _frozen_submissions(**overrides: Any) -> tuple[list[dict[str, Any]], list[di
         )
 
     target_dollars = overrides.pop("target_dollars")
+    overrides.setdefault("cfg", _SHORTS_ALLOWED_CFG)
     processor, records = _make_processor(
         execute_submission_func=execute_submission_func,
         new_exposure_allowed=False,
@@ -840,6 +856,7 @@ def _frozen_submissions(**overrides: Any) -> tuple[list[dict[str, Any]], list[di
         (12.5, False),  # banker's rounding back to 12: nothing to send
     ],
 )
+@pytest.mark.usefixtures("_shorts_env")
 def test_frozen_fractional_position_hold_never_grows(position: float, refused: bool) -> None:
     # The processor truncates the held position but rounds the target, so the
     # net-level hold of a fractional position can ask for one more share.
