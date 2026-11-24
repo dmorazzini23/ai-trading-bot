@@ -2749,6 +2749,10 @@ class ExecutionEngine:
         self._pending_new_ladder_replacements: dict[str, int] = {}
         self._pending_new_replace_last_mono: dict[str, float] = {}
         self._pending_new_symbol_replace_mono: dict[str, deque[float]] = {}
+        # Orders the pending-new timeout policy cancelled in its latest run;
+        # the pending-order runtime takes them to hold their symbols until the
+        # broker stops listing them.
+        self._pending_new_cancelled_orders: list[Any] = []
         self._pending_new_replacements_this_cycle: int = 0
         self._engine_started_mono: float = float(monotonic_time())
         self._engine_cycle_index: int = 0
@@ -3775,47 +3779,6 @@ class ExecutionEngine:
             "spread_bps": quote_decision.spread_bps,
         }
 
-    def _is_verified_live_closing_order(self, order: Any) -> bool:
-        """Protect a broker-open closing order from automatic timeout cancellation."""
-
-        if normalize_execution_mode(getattr(self, "execution_mode", "paper")) != "live":
-            return False
-        client_id = str(_extract_value(order, "client_order_id") or "").strip()
-        broker_id = str(_extract_value(order, "id", "order_id") or "").strip()
-        symbol = str(_extract_value(order, "symbol") or "").strip().upper()
-        side = self._normalized_order_side(_extract_value(order, "side"))
-        broker_intent = _position_intent_token(_extract_value(order, "position_intent"))
-        if broker_id and symbol and (
-            (broker_intent == "sell_to_close" and side == "sell")
-            or (broker_intent == "buy_to_close" and side == "buy")
-        ):
-            return True
-        store = getattr(getattr(self, "order_manager", None), "_intent_store", None)
-        get_intent = getattr(store, "get_intent", None)
-        if not client_id or not broker_id or not symbol or not callable(get_intent):
-            return False
-        try:
-            intent = get_intent(client_id)
-        except OMS_INTENT_STATUS_READ_EXC:
-            logger.warning("LIVE_CLOSING_INTENT_READ_FAILED", exc_info=True)
-            return False
-        if (
-            intent is None
-            or str(getattr(intent, "intent_id", "")) != client_id
-            or str(getattr(intent, "symbol", "")).upper() != symbol
-            or str(getattr(intent, "broker_order_id", "") or "") not in {"", broker_id}
-        ):
-            return False
-        try:
-            metadata = json.loads(str(getattr(intent, "metadata_json", "") or ""))
-        except (TypeError, ValueError):
-            return False
-        return bool(
-            isinstance(metadata, Mapping)
-            and metadata.get("source") in {"live_execution_engine", "opposite_side_cover"}
-            and metadata.get("closing_position") is True
-        )
-
     def _apply_pending_new_timeout_policy(self) -> bool:
         """Apply pending-new timeout actions for stale broker-open orders."""
 
@@ -3823,6 +3786,7 @@ class ExecutionEngine:
         if getattr(self, "_pending_new_policy_last_cycle_index", None) == cycle_index:
             return False
         self._pending_new_policy_last_cycle_index = cycle_index
+        self._pending_new_cancelled_orders = []
 
         policy_cfg = self._pending_new_policy_config()
         policy = str(policy_cfg.get("policy") or "off").strip().lower()
@@ -4273,17 +4237,6 @@ class ExecutionEngine:
                 )
                 or cancel_on_replace_suppressed
             )
-            if should_cancel and self._is_verified_live_closing_order(order):
-                logger.warning(
-                    "LIVE_CLOSING_ORDER_CANCEL_SUPPRESSED",
-                    extra={
-                        "symbol": symbol,
-                        "order_id": str(order_id),
-                        "client_order_id": str(client_order_id),
-                        "policy": policy,
-                    },
-                )
-                should_cancel = False
             if not action_success and should_cancel:
                 try:
                     self._cancel_order_alpaca(str(order_id))
@@ -4305,6 +4258,7 @@ class ExecutionEngine:
                     continue
                 action = "cancel"
                 action_success = True
+                self._pending_new_cancelled_orders.append(order)
                 replacement_attempts.pop(attempt_key, None)
                 replacement_last.pop(attempt_key, None)
 

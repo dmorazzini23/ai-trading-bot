@@ -46,10 +46,12 @@ side and a strictly positive authorized quantity. A lost live submit response is
 retried or moved back to a reusable intent state. Live cancel-and-resubmit
 limit replacements are held before the helper cancels anything until a durable
 replacement pretrade and identity contract is implemented. Pending-order
-maintenance may still cancel a stale opening order under its timeout policy.
-It preserves a broker-open closing order when the broker supplies a matching
-closing `position_intent` or a matching durable OMS intent verifies the closing
-purpose, even if that policy would otherwise cancel it.
+maintenance cancels a stale order under its timeout policy in every mode,
+closing orders included (owner decision, November 24, 2026): with
+`AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=symbol` the symbol stays out of the
+netting cycle until the broker stops listing the cancelled order,
+and the next cycle resubmits any exit at the current quote through the
+canonical route with its pretrade checks.
 This limitation must be resolved or explicitly accepted before live
 activation. Alpaca's [replace-order contract](https://docs.alpaca.markets/us/reference/replaceorderforaccount)
 does not permit native replacement of `pending_new` orders and warns that a

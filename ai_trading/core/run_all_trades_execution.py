@@ -8,6 +8,7 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.core.decision_journal import DecisionJournalRecorder
+from ai_trading.core.pending_order_runtime import hold_engine_timeout_cancels
 from ai_trading.governance.entry_control import (
     REPLAY_LIVE_ENTRY_CONTROL_ATTR,
     REPLAY_LIVE_PARITY_GATE_ATTR,
@@ -290,6 +291,9 @@ def execute_run_all_trades_cycle(
                         extra={"cause": exc.__class__.__name__, "detail": str(exc)},
                         exc_info=True,
                     )
+            # start_cycle runs the pending-new timeout policy; keep the symbols
+            # of the orders it cancelled out of this netting cycle.
+            hold_engine_timeout_cancels(runtime)
         try:
             be._run_netting_cycle(state, runtime, loop_id, loop_start)
             _propagate_replay_entry_control(

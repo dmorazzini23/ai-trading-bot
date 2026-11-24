@@ -1304,3 +1304,44 @@ def test_cycle_scope_is_unchanged_by_holds(monkeypatch, caplog):
         r.message in {"PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD", "PENDING_CANCEL_HOLD_LONG"}
         for r in caplog.records
     )
+
+
+def test_engine_timeout_cancel_holds_symbol_for_this_cycle_and_until_confirmed(monkeypatch):
+    runtime = _hold_runtime(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    clock = _clock(monkeypatch)
+    # An accepted exit beside a pending entry: pending confirmation drops
+    # "accepted", so AAPL is not in the blocked set the handler computed.
+    exit_order = _aged("accepted", "x", "AAPL", 40, clock, side="sell")
+    entry = _aged("pending_new", "e", "MSFT", 5, clock)
+    be._handle_pending_orders([exit_order, entry], runtime)
+    assert "AAPL" not in _blocked(runtime)
+
+    # start_cycle then runs the engine's timeout policy, which cancels it.
+    runtime.execution_engine._pending_new_cancelled_orders = [exit_order]
+    from ai_trading.core.pending_order_runtime import hold_engine_timeout_cancels
+
+    hold_engine_timeout_cancels(runtime)
+    assert "AAPL" in _blocked(runtime)
+    assert runtime.execution_engine._pending_new_cancelled_orders == []
+
+    clock.value += 30.0
+    be._handle_pending_orders([_aged("accepted", "x", "AAPL", 70, clock, side="sell"), entry], runtime)
+    assert "AAPL" in _blocked(runtime)
+    clock.value += 30.0
+    be._handle_pending_orders([entry], runtime)
+    assert "AAPL" not in _blocked(runtime)
+
+
+def test_engine_timeout_cancel_does_not_block_in_cycle_scope(monkeypatch):
+    runtime = _hold_runtime(monkeypatch, scope="cycle")
+    clock = _clock(monkeypatch)
+    entry = _aged("pending_new", "e", "MSFT", 5, clock)
+    be._handle_pending_orders([entry], runtime)
+    runtime.execution_engine._pending_new_cancelled_orders = [
+        _aged("accepted", "x", "AAPL", 40, clock, side="sell")
+    ]
+    from ai_trading.core.pending_order_runtime import hold_engine_timeout_cancels
+
+    hold_engine_timeout_cancels(runtime)
+    assert _blocked(runtime) == ("MSFT",)

@@ -56,11 +56,31 @@ def _remember_unconfirmed_cancels(
         for error in (getattr(cancel_result, "errors", None) or ())
         if isinstance(error, Mapping) and error.get("order_id") not in (None, "")
     }
+    _hold_orders(
+        runtime_state_map,
+        [
+            order
+            for order in orders
+            if str(be._extract_order_identifier(order) or "") not in failed_ids
+        ],
+        now=now,
+    )
+
+
+def _hold_orders(
+    runtime_state_map: dict[str, Any],
+    orders: Iterable[Any],
+    *,
+    now: float,
+) -> None:
+    """Hold each order whose cancel request the broker accepted."""
+
+    be = _bot_engine()
     table = _pending_cancel_hold_table(runtime_state_map)
     for order in orders:
         order_id = be._extract_order_identifier(order)
         symbol = _extract_pending_order_symbol(order)
-        if not order_id or not symbol or str(order_id) in failed_ids:
+        if not order_id or not symbol:
             continue
         previous = table.get(str(order_id))
         since = _safe_float(previous.get("since")) if isinstance(previous, dict) else None
@@ -834,9 +854,33 @@ def apply_pending_new_timeout_policy(runtime: Any) -> bool:
             exc_info=True,
         )
         return False
+    hold_engine_timeout_cancels(runtime)
     if isinstance(result, bool):
         return result
     return True
+
+
+def hold_engine_timeout_cancels(runtime: Any) -> None:
+    """Hold the symbols of orders the engine's pending-new policy cancelled.
+
+    The policy normally runs from ``start_cycle``, after this cycle's blocked
+    set was computed and before the netting cycle. Its cancels are requests,
+    so in symbol block scope each cancelled order's symbol joins the blocked
+    set now and stays held until the broker stops listing the order.
+    """
+
+    be = _bot_engine()
+    engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
+    cancelled = getattr(engine, "_pending_new_cancelled_orders", None)
+    if not isinstance(cancelled, list) or not cancelled:
+        return
+    orders = list(cancelled)
+    cancelled.clear()
+    runtime_state_map = be._ensure_runtime_state(runtime)
+    _hold_orders(runtime_state_map, orders, now=float(be.time.time()))
+    if be._pending_orders_block_scope() == "symbol":
+        current = getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ()) or ()
+        _block_symbols_awaiting_cancel(runtime, runtime_state_map, current)
 
 
 def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
@@ -1376,6 +1420,7 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
 
 __all__ = [
     "apply_pending_new_timeout_policy",
+    "hold_engine_timeout_cancels",
     "apply_pending_symbol_block_decay",
     "handle_pending_orders",
     "maybe_apply_pending_stale_sweep",

@@ -917,20 +917,22 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   a lock early, stop the service, delete the symbol's entry under `locks`,
   and start it again.
 
-### Pending-Order Cancels (Stale Sweep And Cleanup)
+### Pending-Order Cancels (Stale Sweep, Cleanup And Timeout Policy)
 
-- The stale sweep (`PENDING_STALE_SWEEP_APPLIED`) and the pending-order
-  cleanup (`PENDING_ORDERS_CANCELED`) send a cancel request; the order can
-  still fill until the broker stops listing it. With
+- The stale sweep (`PENDING_STALE_SWEEP_APPLIED`), the pending-order
+  cleanup (`PENDING_ORDERS_CANCELED`) and the execution engine's pending-new
+  timeout policy (`PENDING_NEW_TIMEOUT_ACTION`, run from `start_cycle`; it
+  cancels stale closing orders too, in every mode) send a cancel request;
+  the order can still fill until the broker stops listing it. With
   `AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=symbol`, a symbol is held out of the
   netting cycle (added to the pending blocked set) while either:
-  - the broker still lists an order whose cancel the sweep or cleanup
-    requested and the broker accepted, in any non-terminal status (for
-    example `pending_cancel`, or `partially_filled` when a fill raced the
+  - the broker still lists an order whose cancel the sweep, cleanup or
+    timeout policy requested and the broker accepted, in any non-terminal
+    status (for example `pending_cancel`, or `partially_filled` when a fill raced the
     cancel), whatever other orders are open; or
   - the broker lists an order for it as `pending_cancel` or
-    `pending_replace`, whoever asked for that (the engine's pending-new
-    timeout policy, startup cleanup, a cancel sent before a restart). This
+    `pending_replace`, whoever asked for that (startup cleanup, a cancel
+    sent before a restart, a manual cancel). This
     part needs no memory, so it also applies straight after a restart.
   The hold ends when a fresh open-order list no longer shows the order, shows
   it in a terminal status such as `filled`, or (second case only) shows it in
