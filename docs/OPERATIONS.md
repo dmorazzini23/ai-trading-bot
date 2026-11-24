@@ -497,20 +497,15 @@ Paper remains the default runtime mode. The normal progression is manual:
 paper_trade -> live_canary -> live_restricted -> live_normal
 ```
 
-When `AI_TRADING_REQUIRE_ML_MODEL=1`, the `paper_trade` profile may use the
-newest contract-compatible, verified governed shadow model only when
-`AI_TRADING_PAPER_ALLOW_SHADOW_MODEL=1`. This authority is paper-only and
-exists to collect the execution evidence needed for promotion. Live profiles
-never accept shadow governance and continue to require a verified production
-artifact. Do not promote a shadow candidate merely to restore trading; it must
-pass the normal offline, replay, and runtime evidence gates.
-
-Set `AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL=1` when the day sleeve is a
-required runtime dependency. `/healthz` then reports the governed artifact
-under `day_sleeve_model` with its model ID, governance authority, training
-timestamp, age, and maximum age. Missing, stale, or unverifiable artifacts make
-readiness unhealthy; they must be repaired by training and governance, not by
-editing timestamps or relaxing freshness and promotion gates.
+The day sleeve no longer serves a model (removed November 24, 2026). No
+strategy is qualified for new exposure. The rule scorer (`_score_from_bars`)
+may trade only while paper sampling is active, and every such proposal and
+order is labelled `rule_paper_sampling`: research-only, not promotion-eligible,
+and with no model, runtime, promotion or real-money authority. In every other
+mode, for every sleeve, proposals are blocked with `NO_QUALIFIED_STRATEGY` and
+the target is the current position, so held positions are frozen and exit only
+through the position backstop. A new strategy must be registered, qualified
+and promoted through the normal offline, replay and runtime evidence gates.
 
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
@@ -609,12 +604,14 @@ service until the bot context is first built, and always so in the standalone
 health app (`RUN_HEALTHCHECK=1`), which is a separate process. See
 `API_DOCUMENTATION.md` for field semantics.
 
-The shared health payload also exposes `operating_mode`. When its mode is
-`paper_diagnostics_only`, the configured paper diagnostic path is enabled but
-the required governed model remains unavailable. Diagnostic trades are not
-qualified-model performance. This explanation does not clear
-`required_model_stale`, change HTTP readiness, authorize promotion, or bypass
-other trading gates. The market-close recap includes the same explanation.
+The shared health payload also exposes `operating_mode`, which reports the
+strategy state: `strategy_state` is `no_qualified_strategy`, and `mode` is
+`paper_rule_sampling` (paper sampling active; rule-scorer trades are labelled
+research-only evidence, not strategy performance) or `close_only` (no new
+exposure; held positions are frozen). It never changes `ok`, `status` or the
+HTTP code, and it authorizes no promotion. The day-sleeve model readiness gate
+(`day_sleeve_model`, `required_model_stale`) was removed with the model. The
+market-close recap includes the same summary.
 
 Important `attention_flags` include:
 

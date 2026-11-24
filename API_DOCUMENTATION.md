@@ -101,7 +101,7 @@ curl -s http://127.0.0.1:9001/healthz | jq .
 
 Representative response fields (the payload has more top-level fields, for
 example `service_state`, `attention_flags`, `operating_mode`,
-`launch_profile`, `provider_authority` and `day_sleeve_model`):
+`launch_profile` and `provider_authority`):
 
 ```json
 {

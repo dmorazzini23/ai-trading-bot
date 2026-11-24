@@ -27,6 +27,15 @@ the three reset steps described above. The holdout stays unscored and
 reserved, and consumed budgets stay consumed. Where that review and the
 paragraphs below differ on what work is paused, the review governs.
 
+**Day-sleeve model retired from serving (November 24, 2026).** As the
+November 14 review required, the running bot no longer loads or serves the
+day-sleeve model. No strategy is qualified: the rule scorer trades only as
+research-only `rule_paper_sampling` evidence while paper sampling is active,
+and every other mode blocks new exposure with `NO_QUALIFIED_STRATEGY`. Health
+no longer reports `required_model_stale`. The policy file stays
+`enabled: true`; this note does not amend any registered contract or review,
+and the legacy startup model load is removed in a later step.
+
 Discretionary features, new models, and unregistered parameter searches are paused.
 Correctness fixes and work that resolves a named evidence blocker remain in scope.
 The September 30 [five-item follow-through](TRADING_IMPROVEMENTS_20260930.md)
