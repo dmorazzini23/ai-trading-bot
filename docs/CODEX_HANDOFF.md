@@ -1,6 +1,66 @@
 # Current handoff
 
-## November 23: five-change deploy done (`03344e00b`) (start here)
+## November 24: main deployed (`1553f2b60`) (start here)
+
+- **Running service:** `1553f2b60` since Tue Nov 24 21:07 UTC (closed, flat,
+  no open orders), owner-approved. Adds the unread-settings cleanup
+  (`745096a46`), the docs accuracy pass and the `POSITION_BACKSTOP_ARMED`
+  log line. Config hash is now `3084db64...` (owner-approved Nov 23;
+  `release_identity` pre-check passed both phases on this commit).
+- **Deploy order is stop-first:** back up the spec, stop the service, check
+  out the commit, edit SHA and hash in the spec, start.
+- **Pre-deploy:** full suite on this tree: 6,833 passed, 2 skipped. Session
+  on `03344e00b` was clean: 0 restarts, no tracebacks, one ERROR line
+  (`MODEL_REGISTRY_STALE`, expected). Six orders: MSFT buy unfilled; AAPL
+  buy and sell filled; AMZN two buys part-filled (1 share each), one sell
+  of 2 filled. Both closing orders filled in 11-14 s. No
+  `POSITION_BACKSTOP` line all session.
+- **Startup:** `IMPORT_PREFLIGHT_OK`, `ExecutionEngine initialized`,
+  `BROKER_SYNC`, `DrawdownCircuitBreaker initialized`; no errors or
+  tracebacks in the first four minutes; `NRestarts=0`; `/healthz` degraded
+  only for `required_model_stale` (unchanged).
+- **Rollback:** stop, `git checkout --detach 03344e00b`, restore
+  `runtime/release_spec.03344e00b.bak.json` (old SHA and hash
+  `49f5e469...`), start. `API_HOST` is gone from `.env`; `03344e00b` still
+  has that spec, so re-run the `release_identity` pre-check before relying
+  on the old hash.
+- **Wednesday Nov 25:** first session that can show
+  `POSITION_BACKSTOP_ARMED`; check that the stop arms for each position.
+- **Operator `.env`:** 77 more unread names deleted on Nov 24 and
+  `API_HOST` after this restart (1,635 lines). The two `.env.bak-*`
+  backups were deleted at the owner's request, so the pre-Nov 23 hashes
+  can no longer be reproduced from disk.
+- **GitHub:** 103 stale remote branches deleted on Nov 23-24 (owner's
+  request, no backups kept). Remaining: `main`, `gh-pages`,
+  `claude/research-candidates`.
+- **Built, NOT merged, NOT deployed:**
+  - `claude/exit-order-gaps` (from `1553f2b60`): holds a symbol until the
+    broker stops listing a cancelled order; part-filled closing orders
+    reach the stale sweep; the real-money cancel suppression and the
+    marketable-replace helper (incl. the 8 s order-TTL replacement) are
+    removed; every pending-new policy cancels at the normal timeout.
+  - `claude/day-sleeve-retire` (from `1553f2b60`): step 1 of retiring the
+    day-sleeve model. Model serving removed; the rule scorer trades only
+    under paper sampling, labelled `rule_paper_sampling`; otherwise
+    positions are held (`NO_QUALIFIED_STRATEGY`) and only the backstop
+    exits. Health reports the strategy state and drops
+    `required_model_stale`. Step 2 (legacy `trained_model.pkl` load, the
+    release-check model pin, the unit's `--models-root`) is a later deploy
+    that needs a unit install.
+  - Both edit `docs/OPERATIONS.md`; expect a merge conflict. Neither
+    changes a ConfigSpec. Each needs the owner's yes to merge and deploy.
+- **Shelved:** `claude/portfolio-manager-mode` is merged up with main but
+  shelved by the owner (Nov 24). Do not resume it unless told. It has an
+  unfixed snapshot-freshness skip under `live_portfolio`.
+- **Real-money preconditions still open:** no qualified strategy; the
+  readiness tool has no explicit "no qualified strategy" reason (owner
+  decision pending); broker behaviour for `position_intent` and long
+  `pending_cancel` unverified; the durable intent store's handling of a
+  re-sent close with a reused client id unverified.
+- **Research:** a pre-earnings hypothesis is drafted, not registered. It
+  waits on survivorship-free daily data and the owner's word.
+
+## November 23: five-change deploy done (`03344e00b`)
 
 - **Running service:** `03344e00b` since Mon Nov 23 21:47 UTC (closed,
   flat), owner-approved. Carries the full-close fix, exit pricing, breaker
