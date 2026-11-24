@@ -202,9 +202,10 @@ The answer is split across two artifacts:
   acceptable promotion and live-cost evidence, explicit live-account
   confirmation, a launch profile, and a canary plan before allowing live capital.
 
-The live-capital artifact can report `blocked`, `paper_only`,
-`live_canary_allowed`, or `live_allowed`. Only the operator may act on an
-allowed status; automation never flips execution mode or account authority.
+The live-capital artifact can report `blocked`, `live_canary_allowed`, or
+`live_allowed`. While no strategy is qualified it always reports `blocked`
+with the reason `no_qualified_strategy`, so `paper_only` no longer appears.
+Only the operator may act on an allowed status; automation never flips execution mode or account authority.
 
 ## Systemd
 
