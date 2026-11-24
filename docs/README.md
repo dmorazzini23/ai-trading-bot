@@ -30,7 +30,7 @@ section 3.
 - [SEED_TRADE_HISTORY.md](SEED_TRADE_HISTORY.md), [TRADE_UPDATES_STREAM.md](TRADE_UPDATES_STREAM.md): trade history seeding and the trade-updates stream.
 
 ## Strategy, risk and models
-- [MAX_FACTOR.md](MAX_FACTOR.md), [risk_engine.md](risk_engine.md), [precision_and_costs.md](precision_and_costs.md), [peak_performance.md](peak_performance.md): signals, stops, risk and costs.
+- [MAX_FACTOR.md](MAX_FACTOR.md), [risk_engine.md](risk_engine.md), [precision_and_costs.md](precision_and_costs.md): signals, stops, risk and costs.
 - [model_governance.md](model_governance.md): model promotion framework.
 - [SMALL_ACCOUNT_RISK_CONTRACT.md](SMALL_ACCOUNT_RISK_CONTRACT.md), [SMALL_ACCOUNT_EVALUATION.md](SMALL_ACCOUNT_EVALUATION.md): small-account limits.
 - [ROBUSTNESS_AUDIT.md](ROBUSTNESS_AUDIT.md), [TRADING_SYSTEM_CHECKLIST.md](TRADING_SYSTEM_CHECKLIST.md): robustness standard and checklist.
