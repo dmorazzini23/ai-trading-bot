@@ -889,118 +889,6 @@ def test_bracket_submit_preserves_mapping_legs(engine_factory, monkeypatch):
     assert stop_loss.limit_price == 119.5
 
 
-def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatch):
-    monkeypatch.setattr(lt, "get_tick_size", lambda _symbol: Decimal("0.1"))
-    engine = engine_factory()
-    captured: dict[str, Any] = {}
-    engine.order_ttl_seconds = 20
-    engine._cancel_order_alpaca = lambda _order_id: True
-    engine._get_order_status_alpaca = lambda _order_id: {
-        "status": "canceled",
-        "filled_qty": "0",
-    }
-
-    def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
-        captured["payload"] = dict(payload)
-        return {
-            "id": "replace-1",
-            "status": "accepted",
-            "qty": payload.get("quantity", 0),
-            "symbol": payload.get("symbol"),
-            "side": payload.get("side"),
-            "client_order_id": payload.get("client_order_id"),
-        }
-
-    engine._submit_order_to_alpaca = _capture_submit
-
-    replacement = engine._replace_limit_order_with_marketable(
-        symbol="AAPL",
-        side="buy",
-        qty=2,
-        existing_order_id="old-order",
-        client_order_id="cid-old",
-        order_data_snapshot={"symbol": "AAPL", "side": "buy", "quantity": 2, "type": "limit"},
-        limit_price=100.123,
-    )
-
-    assert replacement is not None
-    assert captured["payload"]["limit_price"] == pytest.approx(100.2)
-
-
-def test_ttl_replacement_reduces_qty_after_partial_fill(engine_factory):
-    engine = engine_factory()
-    captured: dict[str, Any] = {}
-    engine.order_ttl_seconds = 20
-    engine._cancel_order_alpaca = lambda _order_id: True
-    engine._get_order_status_alpaca = lambda _order_id: {
-        "status": "canceled",
-        "filled_qty": "3",
-    }
-
-    def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
-        captured["payload"] = dict(payload)
-        return {
-            "id": "replace-partial",
-            "status": "accepted",
-            "qty": payload.get("quantity", 0),
-            "symbol": payload.get("symbol"),
-            "side": payload.get("side"),
-            "client_order_id": payload.get("client_order_id"),
-        }
-
-    engine._submit_order_to_alpaca = _capture_submit
-
-    replacement = engine._replace_limit_order_with_marketable(
-        symbol="AAPL",
-        side="sell",
-        qty=5,
-        existing_order_id="old-order",
-        client_order_id="cid-old",
-        order_data_snapshot={"symbol": "AAPL", "side": "sell", "quantity": 5, "type": "limit"},
-        limit_price=100.0,
-    )
-
-    assert replacement is not None
-    assert captured["payload"]["quantity"] == 2
-
-
-def test_ttl_replacement_uses_tighter_default_slippage(engine_factory):
-    engine = engine_factory()
-    captured: dict[str, Any] = {}
-    engine.order_ttl_seconds = 8
-    engine._cancel_order_alpaca = lambda _order_id: True
-    engine._get_order_status_alpaca = lambda _order_id: {
-        "status": "canceled",
-        "filled_qty": "0",
-    }
-
-    def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
-        captured["payload"] = dict(payload)
-        return {
-            "id": "replace-2",
-            "status": "accepted",
-            "qty": payload.get("quantity", 0),
-            "symbol": payload.get("symbol"),
-            "side": payload.get("side"),
-            "client_order_id": payload.get("client_order_id"),
-        }
-
-    engine._submit_order_to_alpaca = _capture_submit
-
-    replacement = engine._replace_limit_order_with_marketable(
-        symbol="AAPL",
-        side="buy",
-        qty=2,
-        existing_order_id="old-order",
-        client_order_id="cid-old",
-        order_data_snapshot={"symbol": "AAPL", "side": "buy", "quantity": 2, "type": "limit"},
-        limit_price=100.0,
-    )
-
-    assert replacement is not None
-    assert captured["payload"]["limit_price"] == pytest.approx(100.04)
-
-
 def test_ambiguous_submit_timeout_suppresses_failover(engine_factory):
     class TimeoutTradingClient:
         def submit_order(self, *, order_data):
@@ -1649,3 +1537,47 @@ def test_insufficient_qty_rejection_is_nonretryable_not_conflict_retry(engine_fa
     assert client.submit_calls == 1
     assert policy_calls == []
     assert not any(r.msg.startswith("ORDER_CONFLICT_RETRY") for r in caplog.records)
+
+
+def test_execute_order_leaves_resting_limit_order_past_ttl(engine_factory, monkeypatch):
+    """A limit order still open after order_ttl_seconds is left resting: no
+    cancel and no second submit from execute_order (the timeout policy and
+    stale sweep handle it later)."""
+
+    submits: list[tuple[Any, ...]] = []
+    canceled: list[str] = []
+
+    def _submit_limit_stub(symbol, side, quantity, limit_price, **kwargs):
+        submits.append((symbol, side, quantity, limit_price))
+        return {
+            "id": f"ord-{len(submits)}",
+            "client_order_id": f"cid-{len(submits)}",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+        }
+
+    clock = {"now": 1000.0}
+
+    def _fake_monotonic() -> float:
+        clock["now"] += 30.0
+        return clock["now"]
+
+    engine = engine_factory(lambda order_data: {"id": "ok", **order_data})
+    engine.submit_limit_order = _submit_limit_stub
+    engine.order_ttl_seconds = 8
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._get_order_status_alpaca = lambda _order_id: {"status": "canceled", "filled_qty": "0"}
+    monkeypatch.setattr(lt.time, "monotonic", _fake_monotonic)
+
+    result = engine.execute_order("AAPL", "sell", 5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert len(submits) == 1
+    assert canceled == []
+    # The in-place replacement helper is gone. (In this harness the old
+    # helper bailed out before cancelling because no limit price reached it,
+    # so the two assertions above alone do not discriminate.)
+    assert not hasattr(lt.ExecutionEngine, "_replace_limit_order_with_marketable")
