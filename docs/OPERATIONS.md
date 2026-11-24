@@ -502,10 +502,23 @@ strategy is qualified for new exposure. The rule scorer (`_score_from_bars`)
 may trade only while paper sampling is active, and every such proposal and
 order is labelled `rule_paper_sampling`: research-only, not promotion-eligible,
 and with no model, runtime, promotion or real-money authority. In every other
-mode, for every sleeve, proposals are blocked with `NO_QUALIFIED_STRATEGY` and
-the target is the current position, so held positions are frozen and exit only
-through the position backstop. A new strategy must be registered, qualified
-and promoted through the normal offline, replay and runtime evidence gates.
+mode, for every sleeve, proposals are blocked with `NO_QUALIFIED_STRATEGY`, and
+the netted target for each symbol is the current position once, however many
+sleeves are configured. A last check before submission refuses any order that
+would grow a position or reverse its sign. Held positions therefore never
+grow; they are reduced or closed by the position backstop (stop-loss, maximum
+hold) and by gates that only reduce exposure, such as long-only short
+suppression, quarantine and the global caps. A new strategy must be
+registered, qualified and promoted through the normal offline, replay and
+runtime evidence gates.
+
+The allow condition is looser than the retired stale-model exemption in one
+place, and only in paper mode: with paper sampling active, the rule scorer now
+trades without the separate stale-model diagnostics opt-in flag and whatever
+the model state. The old path blocked it when that flag was off, when the
+model was disabled while required, or on an "unsafe" model error (contract,
+verification, checksum, signature, lineage or feature order). Outside paper
+mode it cannot trade.
 
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper

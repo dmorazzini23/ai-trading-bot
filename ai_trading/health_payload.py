@@ -1244,7 +1244,7 @@ def _operating_mode_snapshot() -> dict[str, Any]:
         return {**result, "rule_paper_sampling_enabled": True, "mode": "paper_rule_sampling",
                 "summary": "No qualified strategy; the rule scorer trades only as labelled paper sampling. These trades are not strategy performance."}
     return {**result, "mode": "close_only",
-            "summary": "No qualified strategy; no new exposure. Held positions are frozen and exit through the position backstop."}
+            "summary": "No qualified strategy; no new exposure. Held positions never grow; only the position backstop and exposure-reducing gates can reduce them."}
 
 
 def build_runtime_health_payload(
