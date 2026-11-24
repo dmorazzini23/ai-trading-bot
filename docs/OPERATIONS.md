@@ -917,6 +917,20 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   a lock early, stop the service, delete the symbol's entry under `locks`,
   and start it again.
 
+### Pending-Order Cancels (Stale Sweep And Cleanup)
+
+- The stale sweep (`PENDING_STALE_SWEEP_APPLIED`) and the pending-order
+  cleanup (`PENDING_ORDERS_CANCELED`) send a cancel request; the order can
+  still fill until the broker stops listing it. With
+  `AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=symbol`, the symbol of every order
+  whose cancel the broker accepted stays out of the netting cycle until the
+  open-order list fetched at the start of a later cycle no longer contains
+  that order, whatever its status (for example `pending_cancel`) and
+  whatever other orders are open. Only then can the cycle resubmit an exit,
+  so a second exit is never sent beside one that can still fill.
+  `PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD` logs each cycle a symbol is held
+  for this reason. The hold lives in memory and is gone after a restart.
+
 ### Other Packaged Timers And Units
 
 These units also ship under `packaging/systemd/` (schedules from the unit

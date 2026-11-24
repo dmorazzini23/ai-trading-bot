@@ -871,3 +871,138 @@ def test_cancel_open_orders_subset_never_falls_back_to_cancel_all(monkeypatch):
     assert result.total_open == 1
     assert result.cancelled == 0
     assert result.failed == 1
+
+
+def _symbol_scope_runtime_without_decay(monkeypatch, *, cleanup_interval: int) -> Any:
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=cleanup_interval),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ENABLED", "0")
+    # An api without get_order: pending confirmation keeps each order's listed status.
+    return types.SimpleNamespace(
+        state={},
+        api=types.SimpleNamespace(),
+        execution_engine=types.SimpleNamespace(_apply_pending_new_timeout_policy=lambda: False),
+    )
+
+
+def test_stale_sweep_holds_symbol_until_broker_stops_listing_cancelled_order(monkeypatch, caplog):
+    runtime = _symbol_scope_runtime_without_decay(monkeypatch, cleanup_interval=3600)
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "3600")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+    swept: list[Any] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: swept.extend(orders)
+        or be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=len(orders),
+            failed=0,
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[],
+        ),
+    )
+    now_dt = datetime(2026, 3, 2, 15, 0, 0, tzinfo=UTC)
+    clock = types.SimpleNamespace(value=now_dt.timestamp())
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    exit_order = _order(
+        "pending_new", "exit-aapl", symbol="AAPL", side="sell",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    entry_order = _order(
+        "pending_new", "entry-msft", symbol="MSFT", side="buy",
+        created_at=now_dt - timedelta(seconds=5),
+    )
+
+    assert be._handle_pending_orders([exit_order, entry_order], runtime) is True
+    assert [order.id for order in swept] == ["exit-aapl"]
+    assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
+
+    # Next cycle: the broker still lists the exit, now pending_cancel, beside a
+    # fresh entry. The cancel is not confirmed, so AAPL must stay blocked.
+    clock.value += 30.0
+    exit_cancelling = _order(
+        "pending_cancel", "exit-aapl", symbol="AAPL", side="sell",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders([exit_cancelling, entry_order], runtime) is True
+    assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
+    assert any(
+        record.message == "PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD" for record in caplog.records
+    )
+
+    # Once the broker no longer lists the exit, the cancel is confirmed and
+    # AAPL is released.
+    clock.value += 30.0
+    assert be._handle_pending_orders([entry_order], runtime) is True
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ("MSFT",)
+
+
+def test_stale_sweep_does_not_hold_symbol_when_cancel_request_failed(monkeypatch):
+    runtime = _symbol_scope_runtime_without_decay(monkeypatch, cleanup_interval=3600)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=0,
+            failed=len(orders),
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[{"order_id": "exit-aapl", "error": "rejected"}],
+        ),
+    )
+    now_dt = datetime(2026, 3, 2, 15, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(be.time, "time", lambda: now_dt.timestamp())
+    exit_order = _order(
+        "pending_new", "exit-aapl", symbol="AAPL", side="sell",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+
+    be._handle_pending_orders([exit_order], runtime)
+
+    assert not runtime.state.get("_pending_cancel_unconfirmed")
+
+
+def test_pending_cleanup_holds_symbol_until_broker_stops_listing_cancelled_order(monkeypatch):
+    runtime = _symbol_scope_runtime_without_decay(monkeypatch, cleanup_interval=30)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    cleaned: list[Any] = []
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda _runtime, orders, **_kwargs: cleaned.extend(orders)
+        or be.CancelAllResult(
+            total_open=len(orders),
+            cancelled=len(orders),
+            failed=0,
+            reason_code="PENDING_ORDERS_CLEANUP",
+            errors=[],
+        ),
+    )
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    exit_order = _order("pending_new", "exit-aapl", symbol="AAPL", side="sell")
+
+    assert be._handle_pending_orders([exit_order], runtime) is True
+    clock.value = 131.0
+    assert be._handle_pending_orders([exit_order], runtime) is False
+    assert [order.id for order in cleaned] == ["exit-aapl"]
+    # The netting cycle runs straight after cleanup; AAPL must not be in it.
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ("AAPL",)
+
+    clock.value = 161.0
+    exit_cancelling = _order("pending_cancel", "exit-aapl", symbol="AAPL", side="sell")
+    entry_order = _order("pending_new", "entry-msft", symbol="MSFT", side="buy")
+    be._handle_pending_orders([exit_cancelling, entry_order], runtime)
+    assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)

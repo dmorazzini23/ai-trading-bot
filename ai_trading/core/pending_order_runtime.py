@@ -15,6 +15,82 @@ def _bot_engine() -> Any:
     return importlib.import_module("ai_trading.core.bot_engine")
 
 
+# Orders whose cancel the sweep or cleanup requested, mapped to their symbol.
+# A cancel request is not a cancel: the order can still fill until the broker
+# stops listing it, so its symbol stays blocked until then.
+_PENDING_CANCEL_UNCONFIRMED_KEY = "_pending_cancel_unconfirmed"
+
+
+def _remember_unconfirmed_cancels(
+    runtime_state_map: dict[str, Any],
+    orders: Iterable[Any],
+    cancel_result: Any,
+) -> None:
+    """Record orders whose cancel request the broker accepted."""
+
+    be = _bot_engine()
+    if int(getattr(cancel_result, "cancelled", 0) or 0) <= 0:
+        return
+    failed_ids = {
+        str(error.get("order_id"))
+        for error in (getattr(cancel_result, "errors", None) or ())
+        if isinstance(error, Mapping) and error.get("order_id") not in (None, "")
+    }
+    tracked = runtime_state_map.get(_PENDING_CANCEL_UNCONFIRMED_KEY)
+    if not isinstance(tracked, dict):
+        tracked = {}
+    for order in orders:
+        order_id = be._extract_order_identifier(order)
+        symbol = _extract_pending_order_symbol(order)
+        if order_id and symbol and order_id not in failed_ids:
+            tracked[str(order_id)] = symbol
+    runtime_state_map[_PENDING_CANCEL_UNCONFIRMED_KEY] = tracked
+
+
+def _symbols_awaiting_cancel_confirmation(
+    runtime_state_map: dict[str, Any],
+    open_orders: Iterable[Any] | None,
+) -> dict[str, str]:
+    """Return ``{order_id: symbol}`` for requested cancels the broker still lists.
+
+    With ``open_orders`` (a fresh broker snapshot), orders no longer listed as
+    open are confirmed and forgotten. Without it, the tracked set is returned
+    unchanged.
+    """
+
+    tracked = runtime_state_map.get(_PENDING_CANCEL_UNCONFIRMED_KEY)
+    if not isinstance(tracked, dict) or not tracked:
+        return {}
+    if open_orders is None:
+        return {str(oid): str(sym) for oid, sym in tracked.items()}
+    be = _bot_engine()
+    open_ids: set[str] = set()
+    for order in open_orders:
+        if _extract_pending_order_status(order) in be._OPEN_ORDER_TERMINAL_STATUSES:
+            continue
+        order_id = be._extract_order_identifier(order)
+        if order_id:
+            open_ids.add(str(order_id))
+    held = {str(oid): str(sym) for oid, sym in tracked.items() if str(oid) in open_ids}
+    runtime_state_map[_PENDING_CANCEL_UNCONFIRMED_KEY] = held
+    return held
+
+
+def _block_symbols_awaiting_cancel(
+    runtime: Any,
+    runtime_state_map: dict[str, Any],
+    blocked_symbols: Iterable[str],
+) -> None:
+    """Add symbols with a just-requested cancel to this cycle's blocked set."""
+
+    awaiting_cancel = _symbols_awaiting_cancel_confirmation(runtime_state_map, None)
+    if awaiting_cancel:
+        be = _bot_engine()
+        be._set_pending_blocked_symbols(
+            runtime, set(blocked_symbols) | set(awaiting_cancel.values())
+        )
+
+
 def _safe_float(value: Any) -> float | None:
     try:
         parsed = float(value)
@@ -117,6 +193,7 @@ def maybe_apply_pending_stale_sweep(
         orders=selected_orders,
         reason_code="PENDING_STALE_SWEEP",
     )
+    _remember_unconfirmed_cancels(runtime_state_map, selected_orders, cancel_result)
     runtime_state_map[be._PENDING_STALE_SWEEP_LAST_TS_KEY] = float(now_ts)
     selected_ids: list[str] = []
     for order in selected_orders:
@@ -785,6 +862,8 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     last_warn_ts = _safe_float(runtime_state_map.get(be._PENDING_BACKLOG_LAST_WARN_TS_KEY))
 
     if not pending_ids:
+        # No open orders at all, so every requested cancel is confirmed.
+        _symbols_awaiting_cancel_confirmation(runtime_state_map, open_list)
         be._record_pending_order_slo_metrics(pending_count=0, oldest_pending_age_s=0.0)
         be._set_pending_blocked_symbols(runtime, ())
         if backlog_active or first_seen is not None:
@@ -843,6 +922,19 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         block_scope=block_scope,
         force_cleanup_after=force_cleanup_after,
     )
+    # A symbol whose order had a cancel requested stays blocked, whatever its
+    # status or age, until the broker stops listing that order: resubmitting
+    # earlier could put a second exit beside one that can still fill.
+    awaiting_cancel = _symbols_awaiting_cancel_confirmation(runtime_state_map, open_list)
+    if awaiting_cancel:
+        blocked_symbols = set(blocked_symbols) | set(awaiting_cancel.values())
+        be.logger.info(
+            "PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD",
+            extra={
+                "symbols": sorted(set(awaiting_cancel.values()))[: be._PENDING_ORDER_SAMPLE_LIMIT],
+                "order_ids": sorted(awaiting_cancel)[: be._PENDING_ORDER_SAMPLE_LIMIT],
+            },
+        )
     be._set_pending_blocked_symbols(runtime, blocked_symbols)
     if decay_telemetry is not None:
         decay_payload = dict(decay_telemetry)
@@ -1014,6 +1106,7 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         now_ts=now,
     )
     if stale_sweep_result is not None:
+        _block_symbols_awaiting_cancel(runtime, runtime_state_map, blocked_symbols)
         stale_sweep_payload = payload_base | {
             "age_s": int(max(age, 0)),
             "stale_sweep": stale_sweep_result,
@@ -1099,6 +1192,8 @@ def handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             exc_info=True,
         )
         return True
+    _remember_unconfirmed_cancels(runtime_state_map, cleanup_orders, cleanup_result)
+    _block_symbols_awaiting_cancel(runtime, runtime_state_map, blocked_symbols)
     if int(getattr(cleanup_result, "failed", 0) or 0) > 0:
         tracker[be._PENDING_ORDER_LAST_LOG_KEY] = now
         be.logger.warning(
