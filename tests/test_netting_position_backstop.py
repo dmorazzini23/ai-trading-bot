@@ -407,7 +407,7 @@ def test_unarmed_and_price_suspect_log_once_per_symbol_per_session(
     assert "NVDA" not in backstop.store.locks
 
 
-def test_armed_marker_logs_once_and_resets_on_close_and_unarmed_transitions(
+def test_armed_marker_logs_once_per_basis_and_again_on_reopen_or_change(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     def armed() -> list[logging.LogRecord]:
@@ -454,35 +454,40 @@ def test_armed_marker_logs_once_and_resets_on_close_and_unarmed_transitions(
         )
         assert [r.symbol for r in armed()] == ["AAPL", "TSLA", "AAPL"]
         assert armed()[-1].avg_entry == 101.0
-        # ARMED -> UNARMED logs, then UNARMED -> ARMED logs again.
-        _backstop(
-            tmp_path,
-            positions={"AAPL": 10, "TSLA": -4},
-            bases={"TSLA": 200.0},
-            unarmed={"AAPL": "stale_snapshot"},
-            now=NOW + timedelta(minutes=5),
-            backstop=backstop,
-        )
+        # An unarmed spell with an unchanged basis logs UNARMED once and no new ARMED.
+        for minutes, spell in ((5, True), (6, False), (7, True), (8, False)):
+            _backstop(
+                tmp_path,
+                positions={"AAPL": 10, "TSLA": -4},
+                bases={"TSLA": 200.0} if spell else {"AAPL": 101.0, "TSLA": 200.0},
+                unarmed={"AAPL": "stale_snapshot"} if spell else None,
+                now=NOW + timedelta(minutes=minutes),
+                backstop=backstop,
+            )
         assert [r.reason for r in unarmed()] == ["stale_snapshot"]
         assert len(armed()) == 3
+        # A scale-in changes quantity and entry price: armed again with the new stop.
         _backstop(
             tmp_path,
-            positions={"AAPL": 10, "TSLA": -4},
-            bases={"AAPL": 101.0, "TSLA": 200.0},
-            now=NOW + timedelta(minutes=6),
+            positions={"AAPL": 20, "TSLA": -4},
+            bases={"AAPL": 110.0, "TSLA": 200.0},
+            now=NOW + timedelta(minutes=9),
             backstop=backstop,
         )
         assert [r.symbol for r in armed()] == ["AAPL", "TSLA", "AAPL", "AAPL"]
-        # A later UNARMED for the same reason logs again after re-arming.
+        assert (armed()[-1].qty, armed()[-1].stop_price) == (20.0, pytest.approx(104.5))
+        # A side flip between two cycles logs the short stop.
         _backstop(
             tmp_path,
-            positions={"AAPL": 10, "TSLA": -4},
-            bases={"TSLA": 200.0},
-            unarmed={"AAPL": "stale_snapshot"},
-            now=NOW + timedelta(minutes=7),
+            positions={"AAPL": -20, "TSLA": -4},
+            bases={"AAPL": 120.0, "TSLA": 200.0},
+            now=NOW + timedelta(minutes=10),
             backstop=backstop,
         )
-        assert [r.reason for r in unarmed()] == ["stale_snapshot", "stale_snapshot"]
+        flipped = armed()[-1]
+        assert len(armed()) == 5
+        assert (flipped.side, flipped.stop_price, flipped.threshold) == ("short", pytest.approx(126.0), -0.05)
+        assert flipped.locked is False
 
 
 def test_breach_markers_carry_the_context(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

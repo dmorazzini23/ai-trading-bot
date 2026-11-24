@@ -444,7 +444,7 @@ class PositionBackstop:
         self._dirty = False
         self._logged: set[tuple[str, ...]] = set()
         self._previously_held: set[str] | None = None
-        self._armed: set[str] = set()
+        self._armed: dict[str, tuple[str, float, float]] = {}
         self._bars_since_arming: dict[str, tuple[datetime, Any, int]] = {}
         self._stall_logged: set[tuple[str, str]] = set()
         self._last_gates: dict[str, list[str]] = {}
@@ -545,7 +545,6 @@ class PositionBackstop:
         self._save()
         for symbol, reason in sorted(unarmed.items()):
             if symbol in self.positions and self._once("unarmed", symbol, reason):
-                self._armed.discard(symbol)
                 self.logger.info(
                     _symbol_marker("POSITION_BACKSTOP_UNARMED", symbol),
                     extra={"symbol": symbol, "reason": reason, "qty": self.positions[symbol]},
@@ -558,35 +557,36 @@ class PositionBackstop:
             )
 
     def _log_armed(self, unarmed: Mapping[str, str]) -> None:
-        """Log ``POSITION_BACKSTOP_ARMED`` once per arming of a held symbol.
+        """Log ``POSITION_BACKSTOP_ARMED`` when a held symbol's stop basis is new.
 
-        A symbol is armed while it is held with a valid basis and not reported
-        unarmed. Closing or going unarmed clears the state, so a reopening or
-        a re-arming logs again; arming also clears the symbol's UNARMED dedup
-        so a later unarmed transition is logged again.
+        Logged the first time a held symbol has a valid basis and again when
+        its side, quantity or entry price changes, or after the position is
+        closed and reopened. An unarmed spell with an unchanged basis does not
+        log again, so a snapshot that flaps between fresh and stale stays quiet.
         """
 
-        self._armed.intersection_update(
-            symbol for symbol in self.positions if symbol in self.bases and symbol not in unarmed
-        )
+        for symbol in [symbol for symbol in self._armed if symbol not in self.positions]:
+            del self._armed[symbol]
         for symbol, qty in sorted(self.positions.items()):
             basis = self.bases.get(symbol)
-            if basis is None or symbol in unarmed or symbol in self._armed:
+            if basis is None or symbol in unarmed:
                 continue
-            self._armed.add(symbol)
-            self._logged = {
-                key for key in self._logged if not (len(key) == 4 and key[1] == "unarmed" and key[2] == symbol)
-            }
+            side = _side_of(qty)
+            state = (side, qty, basis.avg_entry_price)
+            if self._armed.get(symbol) == state:
+                continue
+            self._armed[symbol] = state
             sign = 1.0 if qty > 0 else -1.0
             self.logger.info(
                 _symbol_marker("POSITION_BACKSTOP_ARMED", symbol),
                 extra={
                     "symbol": symbol,
-                    "side": _side_of(qty),
+                    "side": side,
                     "qty": qty,
                     "avg_entry": basis.avg_entry_price,
                     "stop_price": basis.avg_entry_price * (1.0 - sign * POSITION_STOP_LOSS_PCT),
                     "threshold": -POSITION_STOP_LOSS_PCT,
+                    "locked": symbol in self.store.locks,
                 },
             )
 
