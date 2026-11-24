@@ -942,6 +942,17 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   (`liquidate_positions_if_needed`) and the execution engine's own
   cancel/replace path rely on the open-sell / open-buy quantity clip
   instead.
+- The timeout policy never replaces an order in place.
+  `AI_TRADING_PENDING_NEW_POLICY=replace_widen` (and `replace`/`widen`)
+  cancels at `AI_TRADING_PENDING_NEW_TIMEOUT_SEC`, like `cancel`; `ladder`
+  cancels at `AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC`. The next netting
+  cycle resubmits an exit at the current quote through pretrade once the
+  hold clears; pretrade's duplicate check (same symbol, side, quantity and
+  bar) means that happens on a later bar than the cancelled order's. The
+  replace-only settings (`AI_TRADING_PENDING_NEW_REPLACE_WIDEN_BPS`,
+  `..._LADDER_WIDEN_STEP_BPS`, `..._REPLACE_MIN_INTERVAL_SEC`,
+  `..._REPLACE_MAX_PER_CYCLE`, `MARKETABLE_LIMIT_SLIPPAGE_BPS`) no longer
+  change behaviour.
 - While a symbol is held, everything the netting cycle would do for it
   waits, including the position backstop's stop-loss and maximum-hold exits.
   A held flat symbol also counts as pending for the position cap and the

@@ -582,7 +582,6 @@ def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_: None
 
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
@@ -629,7 +628,6 @@ def test_pending_timeout_cancels_stale_closing_order_in_every_mode(
     )
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_kwargs: None
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", policy)
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
@@ -661,7 +659,6 @@ def test_paper_pending_timeout_outcome_for_closing_order_is_unchanged(monkeypatc
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_kwargs: None
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", policy)
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
@@ -686,7 +683,6 @@ def test_pending_new_timeout_policy_idempotent_per_cycle(monkeypatch):
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_: None
 
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
@@ -706,86 +702,6 @@ def test_pending_new_timeout_policy_idempotent_per_cycle(monkeypatch):
     assert third_applied is True
 
 
-def test_pending_new_timeout_policy_ladder_replaces_then_cancels(monkeypatch):
-    engine = _engine_stub()
-    now_dt = datetime.now(UTC)
-    stale_order = SimpleNamespace(
-        id="ord-ladder-1",
-        symbol="AAPL",
-        side="buy",
-        qty="2",
-        status="pending_new",
-        type="limit",
-        limit_price="100.0",
-        client_order_id="cid-ladder-1",
-        created_at=now_dt - timedelta(seconds=120),
-    )
-    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
-    canceled: list[str] = []
-    replaced: list[dict[str, Any]] = []
-    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-
-    def _replace(**kwargs):
-        replaced.append(dict(kwargs))
-        return {"id": "ord-repl-1"}
-
-    engine._replace_limit_order_with_marketable = _replace
-    engine._engine_cycle_index = 1
-
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "1")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_WIDEN_STEP_BPS", "5")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS", "1")
-
-    first_applied = engine._apply_pending_new_timeout_policy()
-    engine._engine_cycle_index = 2
-    second_applied = engine._apply_pending_new_timeout_policy()
-
-    assert first_applied is True
-    assert second_applied is True
-    assert len(replaced) == 1
-    assert canceled == ["ord-ladder-1"]
-
-
-def test_pending_new_timeout_policy_replaces_sell_short_lifecycle_side(monkeypatch):
-    engine = _engine_stub()
-    now_dt = datetime.now(UTC)
-    stale_order = SimpleNamespace(
-        id="ord-short-ladder-1",
-        symbol="MSFT",
-        side="sell_short",
-        qty="3",
-        status="pending_new",
-        type="limit",
-        limit_price="99.0",
-        client_order_id="cid-short-ladder-1",
-        created_at=now_dt - timedelta(seconds=120),
-    )
-    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
-    replaced: list[dict[str, Any]] = []
-    engine._cancel_order_alpaca = lambda *_args, **_kwargs: None
-
-    def _replace_limit_order_with_marketable(**kwargs: Any) -> dict[str, str]:
-        replaced.append(dict(kwargs))
-        return {"id": "ord-repl-short"}
-
-    engine._replace_limit_order_with_marketable = _replace_limit_order_with_marketable
-    engine._engine_cycle_index = 1
-
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "1")
-
-    assert engine._apply_pending_new_timeout_policy() is True
-    assert replaced
-    assert replaced[0]["side"] == "sell_short"
-
-
 def test_pending_new_timeout_policy_hard_timeout_forces_cancel(monkeypatch):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)
@@ -802,9 +718,7 @@ def test_pending_new_timeout_policy_hard_timeout_forces_cancel(monkeypatch):
     )
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
-    replaced: list[dict[str, Any]] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **kwargs: replaced.append(dict(kwargs))
     engine._engine_cycle_index = 1
 
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
@@ -818,102 +732,85 @@ def test_pending_new_timeout_policy_hard_timeout_forces_cancel(monkeypatch):
 
     assert applied is True
     assert canceled == ["ord-hard-1"]
-    assert replaced == []
 
 
-def test_pending_new_timeout_policy_replace_churn_guard_blocks_rapid_replace(monkeypatch):
+def test_pending_new_timeout_policy_ladder_waits_for_hard_timeout(monkeypatch):
+    """With no in-place replacement, "ladder" neither replaces nor cancels
+    before the hard timeout (the hard-timeout test covers the cancel)."""
+
     engine = _engine_stub()
-    now_dt = datetime.now(UTC)
     stale_order = SimpleNamespace(
-        id="ord-guard-1",
-        symbol="AAPL",
-        side="buy",
-        qty="2",
-        status="pending_new",
-        type="limit",
-        limit_price="100.0",
-        client_order_id="cid-guard-1",
-        created_at=now_dt - timedelta(seconds=120),
+        id="ord-ladder-1", symbol="AAPL", side="buy", qty="2", status="pending_new",
+        type="limit", limit_price="100.0", client_order_id="cid-ladder-1",
+        created_at=datetime.now(UTC) - timedelta(seconds=120),
     )
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
-    replaced: list[dict[str, Any]] = []
     canceled: list[str] = []
-    monotonic_clock = {"value": 100.0}
-    monkeypatch.setattr(lt, "monotonic_time", lambda: monotonic_clock["value"])
-
-    def _replace(**kwargs):
-        replaced.append(dict(kwargs))
-        return {"id": f"ord-repl-{len(replaced)}"}
-
-    engine._replace_limit_order_with_marketable = _replace
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-
+    submitted: list[Any] = []
+    engine._submit_order_to_alpaca = lambda order_data: submitted.append(order_data)
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_REPLACE_MAX_PER_CYCLE", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_REPLACE_MIN_INTERVAL_SEC", "120")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "1")
 
-    engine._engine_cycle_index = 1
-    first_applied = engine._apply_pending_new_timeout_policy()
-    engine._engine_cycle_index = 2
-    monotonic_clock["value"] = 130.0
-    second_applied = engine._apply_pending_new_timeout_policy()
-
-    assert first_applied is True
-    assert second_applied is False
-    assert len(replaced) == 1
+    assert engine._apply_pending_new_timeout_policy() is False
     assert canceled == []
+    assert submitted == []
 
 
-def test_pending_new_timeout_policy_applies_dynamic_replace_controls(monkeypatch):
+def test_timed_out_paper_exit_is_cancelled_then_released_for_next_cycle(monkeypatch):
+    """Closest unit-level proof of the cancel-then-resubmit path.
+
+    Shows: in paper mode the timeout policy cancels a stale closing sell
+    without submitting anything itself; the pending-order runtime holds the
+    symbol out of this netting cycle; once the broker no longer lists the
+    order the symbol leaves the blocked set the netting cycle filters on, so
+    the next cycle evaluates (and may resubmit) the exit through the
+    canonical route. Does not run the netting cycle, pretrade or pricing.
+    """
+
+    from ai_trading.core import bot_engine as be
+    from ai_trading.core.pending_order_runtime import hold_engine_timeout_cancels
+
     engine = _engine_stub()
-    now_dt = datetime.now(UTC)
-    stale_order = SimpleNamespace(
-        id="ord-dyn-1",
-        symbol="AAPL",
-        side="buy",
-        qty="2",
-        status="pending_new",
-        type="limit",
-        limit_price="100.0",
-        client_order_id="cid-dyn-1",
-        created_at=now_dt - timedelta(seconds=120),
+    engine.execution_mode = "paper"
+    stale_exit = SimpleNamespace(
+        id="exit-1", client_order_id="cid-exit-1", symbol="AAPL", side="sell",
+        qty="5", status="accepted", type="limit", limit_price="100.0",
+        position_intent="sell_to_close",
+        created_at=datetime.now(UTC) - timedelta(seconds=120),
     )
-    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
-    replaced: list[dict[str, Any]] = []
-    engine._cancel_order_alpaca = lambda *_args, **_kwargs: None
-    def _replace_limit_order_with_marketable(**kwargs: Any) -> dict[str, str]:
-        replaced.append(dict(kwargs))
-        return {"id": "ord-dyn-repl"}
-
-    engine._replace_limit_order_with_marketable = _replace_limit_order_with_marketable
-    monkeypatch.setattr(
-        engine,
-        "_pending_new_dynamic_controls",
-        lambda **_: (
-            2,
-            0.0,
-            2,
-            {"enabled": True, "stress": 0.75},
-        ),
-    )
-
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_exit])
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    submitted: list[Any] = []
+    engine._submit_order_to_alpaca = lambda order_data: submitted.append(order_data)
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "replace_widen")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "2")
-    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_WIDEN_STEP_BPS", "5")
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "0")
+    monkeypatch.setattr(
+        be, "get_trading_config", lambda: SimpleNamespace(order_stale_cleanup_interval=3600)
+    )
+    runtime = SimpleNamespace(state={}, api=SimpleNamespace(), execution_engine=engine)
+    setattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
 
-    engine._engine_cycle_index = 3
-    applied = engine._apply_pending_new_timeout_policy()
+    # start_cycle: the policy cancels and submits nothing itself.
+    assert engine._apply_pending_new_timeout_policy() is True
+    assert canceled == ["exit-1"]
+    assert submitted == []
+    hold_engine_timeout_cancels(runtime)
+    assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
 
-    assert applied is True
-    assert replaced
-    assert replaced[0]["slippage_bps"] == 2
+    # Next loop: the broker still lists the order (cancel not yet final).
+    be._handle_pending_orders([SimpleNamespace(**{**vars(stale_exit), "status": "pending_cancel"})], runtime)
+    assert "AAPL" in getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR)
+
+    # Following loop: the cancel cleared; AAPL is back in the netting cycle.
+    be._handle_pending_orders([], runtime)
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
 
 
 def test_pending_new_timeout_policy_defaults_to_cancel(monkeypatch):
@@ -930,7 +827,6 @@ def test_pending_new_timeout_policy_defaults_to_cancel(monkeypatch):
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_: None
 
     monkeypatch.delenv("AI_TRADING_PENDING_NEW_POLICY", raising=False)
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
@@ -956,7 +852,6 @@ def test_pending_new_timeout_policy_returns_false_without_stale_orders(monkeypat
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [fresh_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_: None
 
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
@@ -1051,9 +946,6 @@ def test_pending_policy_routes_verified_sample_to_passive_reprice_only(monkeypat
             "reason": "ok",
         }
     )
-    engine._replace_limit_order_with_marketable = lambda **_: pytest.fail(
-        "sampling order reached generic marketable replacement"
-    )
     engine._cancel_order_alpaca = lambda *_: pytest.fail(
         "successful passive replacement should not be canceled again"
     )
@@ -1131,9 +1023,6 @@ def test_pending_policy_cancels_sampling_order_when_reprice_is_not_safe(
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
     engine._replace_paper_sampling_limit_passively = lambda **_: pytest.fail(
         "unsafe sample must not be replaced"
-    )
-    engine._replace_limit_order_with_marketable = lambda **_: pytest.fail(
-        "sampling order reached generic marketable replacement"
     )
     engine._engine_cycle_index = 1
 

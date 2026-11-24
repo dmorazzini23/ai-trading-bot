@@ -4087,155 +4087,26 @@ class ExecutionEngine:
                 )
                 continue
 
+            # The policy only cancels. There is no in-place replacement: the
+            # next netting cycle resubmits any exit at the current quote
+            # through the canonical route and its pretrade checks, once the
+            # broker stops listing the cancelled order. "replace_widen"
+            # therefore cancels at the timeout and "ladder" (which has no
+            # replacements to count) at the hard timeout.
             action = "cancel"
             action_success = False
-            replacement_suppressed = False
-            replacement_allowed = (
-                policy in {"replace_widen", "ladder"}
-                and symbol
-                and side in {"buy", "sell", "sell_short"}
-                and quantity > 0
-                and not hard_timeout_reached
-            )
             max_replacements_for_order = 1 if policy == "replace_widen" else max(
                 0,
                 int(ladder_max_replacements),
             )
-            if (
-                replacement_allowed
-                and attempts < max_replacements_for_order
-            ):
-                guard_reason: str | None = None
-                guard_remaining_s: float | None = None
-                symbol_guard_context: dict[str, Any] = {}
-                if (
-                    replace_max_per_cycle > 0
-                    and replacements_this_cycle >= replace_max_per_cycle
-                ):
-                    guard_reason = "cycle_cap"
-                else:
-                    last_replace_mono = _safe_float(replacement_last.get(attempt_key)) or 0.0
-                    if (
-                        replace_min_interval_s > 0.0
-                        and last_replace_mono > 0.0
-                    ):
-                        elapsed_replace_s = max(now_mono - last_replace_mono, 0.0)
-                        if elapsed_replace_s < replace_min_interval_s:
-                            guard_reason = "min_interval"
-                            guard_remaining_s = max(
-                                replace_min_interval_s - elapsed_replace_s,
-                                0.0,
-                            )
-                if guard_reason is None:
-                    symbol_guard_allowed, symbol_guard_context = (
-                        self._pending_new_symbol_replace_guard(
-                            symbol=symbol,
-                            now_mono=now_mono,
-                        )
-                    )
-                    if not symbol_guard_allowed:
-                        guard_reason = str(symbol_guard_context.get("reason") or "symbol_guard")
-                if guard_reason is not None:
-                    replacement_suppressed = True
-                    logger.info(
-                        "PENDING_NEW_REPLACE_GUARD_BLOCK",
-                        extra={
-                            "policy": policy,
-                            "reason": guard_reason,
-                            "remaining_s": (
-                                round(float(guard_remaining_s), 3)
-                                if guard_remaining_s is not None
-                                else None
-                            ),
-                            "symbol": symbol or None,
-                            "order_id": str(order_id),
-                            "client_order_id": (
-                                str(client_order_id)
-                                if client_order_id not in (None, "")
-                                else None
-                            ),
-                            "status": status,
-                            "age_s": round(age_s, 3) if age_s is not None else None,
-                            "attempts": int(attempts),
-                            "max_replacements": int(max_replacements_for_order),
-                            "replacements_this_cycle": int(replacements_this_cycle),
-                            "replace_max_per_cycle": int(replace_max_per_cycle),
-                            "replace_min_interval_s": float(replace_min_interval_s),
-                            "dynamic_stress": _safe_float(
-                                dynamic_replace_context.get("stress")
-                            ),
-                            "symbol_guard_context": (
-                                symbol_guard_context if symbol_guard_context else None
-                            ),
-                        },
-                    )
-                order_type = str(_extract_value(order, "type", "order_type") or "").strip().lower()
-                limit_price = _safe_float(
-                    _extract_value(order, "limit_price", "price", "stop_price")
-                )
-                if (
-                    not replacement_suppressed
-                    and order_type in {"limit", "stop_limit"}
-                    and limit_price is not None
-                ):
-                    replace_slippage_bps = int(
-                        max(
-                            0,
-                            replace_widen_bps
-                            + (max(0, attempts) * max(0, int(ladder_widen_step_bps))),
-                        )
-                    )
-                    snapshot: dict[str, Any] = {
-                        "symbol": symbol,
-                        "side": side,
-                        "quantity": quantity,
-                        "type": "limit",
-                        "limit_price": limit_price,
-                        "time_in_force": str(
-                            _extract_value(order, "time_in_force") or "day"
-                        ).strip().lower(),
-                        "extended_hours": bool(_extract_value(order, "extended_hours") or False),
-                    }
-                    replacement = self._replace_limit_order_with_marketable(
-                        symbol=symbol,
-                        side=side,
-                        qty=quantity,
-                        existing_order_id=order_id,
-                        client_order_id=client_order_id,
-                        order_data_snapshot=snapshot,
-                        limit_price=limit_price,
-                        slippage_bps=replace_slippage_bps,
-                    )
-                    if replacement is not None:
-                        action = "replace_widen"
-                        action_success = True
-                        replacement_attempts[attempt_key] = attempts + 1
-                        replacement_last[attempt_key] = now_mono
-                        self._record_pending_new_symbol_replace(
-                            symbol=symbol,
-                            now_mono=now_mono,
-                        )
-                        replacements_this_cycle += 1
-
-            cancel_on_replace_suppressed = bool(
-                replacement_suppressed
-                and age_s is not None
-                and age_s >= (float(timeout_s) + max(float(replace_min_interval_s), 15.0))
-            )
             should_cancel = bool(
-                policy == "cancel"
+                policy in {"cancel", "replace_widen"}
                 or hard_timeout_reached
                 or (
                     policy == "ladder"
                     and cancel_after_max_replacements
                     and attempts >= max_replacements_for_order
                 )
-                or (
-                    policy == "replace_widen"
-                    and not action_success
-                    and not replacement_suppressed
-                )
-                or cancel_on_replace_suppressed
             )
             if not action_success and should_cancel:
                 try:
@@ -14226,135 +14097,6 @@ class ExecutionEngine:
             context,
         )
 
-    def _pending_new_symbol_replace_guard(
-        self,
-        *,
-        symbol: str,
-        now_mono: float,
-    ) -> tuple[bool, dict[str, Any]]:
-        """Gate per-symbol replace churn and enforce minimum quote life."""
-
-        enabled = _resolve_bool_env("AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_GUARD_ENABLED")
-        if enabled is None:
-            enabled = True
-        symbol_token = str(symbol or "").strip().upper()
-        if not bool(enabled):
-            return True, {"enabled": False, "reason": "disabled", "symbol": symbol_token or None}
-        if not symbol_token:
-            return True, {"enabled": True, "reason": "symbol_missing"}
-
-        window_s = _config_float(
-            "AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_WINDOW_SEC",
-            300.0,
-        )
-        if window_s is None or not math.isfinite(float(window_s)):
-            window_s = 300.0
-        window_s = max(1.0, min(float(window_s), 3600.0))
-        max_per_window = _config_int(
-            "AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_MAX_PER_WINDOW",
-            4,
-        )
-        if max_per_window is None:
-            max_per_window = 4
-        max_per_window = max(1, min(int(max_per_window), 50))
-        min_quote_life_ms = _config_float(
-            "AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_MIN_QUOTE_LIFE_MS",
-            700.0,
-        )
-        if min_quote_life_ms is None or not math.isfinite(float(min_quote_life_ms)):
-            min_quote_life_ms = 700.0
-        min_quote_life_ms = max(0.0, min(float(min_quote_life_ms), 120000.0))
-        max_quote_age_ms = _config_float(
-            "AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_MAX_QUOTE_AGE_MS",
-            7000.0,
-        )
-        if max_quote_age_ms is None or not math.isfinite(float(max_quote_age_ms)):
-            max_quote_age_ms = 7000.0
-        max_quote_age_ms = max(0.0, min(float(max_quote_age_ms), 300000.0))
-
-        quote_status = runtime_state.observe_quote_status()
-        quote_age_ms = self._coerce_finite_float(quote_status.get("quote_age_ms"))
-        quote_allowed = True
-        quote_reason = "ok"
-        if quote_age_ms is not None and quote_age_ms < float(min_quote_life_ms):
-            quote_allowed = False
-            quote_reason = "quote_life_below_min"
-        if (
-            quote_allowed
-            and quote_age_ms is not None
-            and max_quote_age_ms > 0.0
-            and quote_age_ms > float(max_quote_age_ms)
-        ):
-            quote_allowed = False
-            quote_reason = "quote_age_above_max"
-        if not quote_allowed:
-            return False, {
-                "enabled": True,
-                "reason": quote_reason,
-                "symbol": symbol_token,
-                "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
-                "min_quote_life_ms": float(min_quote_life_ms),
-                "max_quote_age_ms": float(max_quote_age_ms),
-            }
-
-        raw_windows = getattr(self, "_pending_new_symbol_replace_mono", {}) or {}
-        windows = (
-            raw_windows
-            if isinstance(raw_windows, dict)
-            else {}
-        )
-        symbol_window_raw = windows.get(symbol_token)
-        if not isinstance(symbol_window_raw, deque):
-            symbol_window_raw = deque(maxlen=512)
-            windows[symbol_token] = symbol_window_raw
-        while symbol_window_raw and (float(now_mono) - float(symbol_window_raw[0])) > float(window_s):
-            symbol_window_raw.popleft()
-        replace_count = len(symbol_window_raw)
-        remaining = max(int(max_per_window) - int(replace_count), 0)
-        self._pending_new_symbol_replace_mono = windows
-        if replace_count >= int(max_per_window):
-            return False, {
-                "enabled": True,
-                "reason": "symbol_replace_budget",
-                "symbol": symbol_token,
-                "replace_count_window": int(replace_count),
-                "max_replace_per_window": int(max_per_window),
-                "window_sec": float(window_s),
-                "remaining": int(remaining),
-            }
-        return True, {
-            "enabled": True,
-            "reason": "ok",
-            "symbol": symbol_token,
-            "replace_count_window": int(replace_count),
-            "max_replace_per_window": int(max_per_window),
-            "window_sec": float(window_s),
-            "remaining": int(remaining),
-            "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
-            "min_quote_life_ms": float(min_quote_life_ms),
-            "max_quote_age_ms": float(max_quote_age_ms),
-        }
-
-    def _record_pending_new_symbol_replace(
-        self,
-        *,
-        symbol: str,
-        now_mono: float,
-    ) -> None:
-        """Record successful replace action for symbol-level churn guard."""
-
-        symbol_token = str(symbol or "").strip().upper()
-        if not symbol_token:
-            return
-        raw_windows = getattr(self, "_pending_new_symbol_replace_mono", {}) or {}
-        windows = raw_windows if isinstance(raw_windows, dict) else {}
-        window_raw = windows.get(symbol_token)
-        if not isinstance(window_raw, deque):
-            window_raw = deque(maxlen=512)
-            windows[symbol_token] = window_raw
-        window_raw.append(float(now_mono))
-        self._pending_new_symbol_replace_mono = windows
-
     def _queue_pressure_context(
         self,
         *,
@@ -20361,8 +20103,6 @@ class ExecutionEngine:
                 )
                 return None
 
-        order_data_snapshot = dict(order_data)
-        original_limit_price = order_data.get("limit_price")
         start_time = time.time()
         logger.info(
             "Submitting market order",
@@ -24550,49 +24290,6 @@ class ExecutionEngine:
                 )
 
         _handle_status_transition(status, source="final")
-
-        ttl_seconds = max(0, int(getattr(self, "order_ttl_seconds", 0)))
-        if (
-            order_type_normalized == "limit"
-            and ttl_seconds > 0
-            and (time.monotonic() - submit_started_at) >= ttl_seconds
-            and status_lower not in terminal_statuses
-        ):
-            previous_pending_id = order_id or client_order_id
-            ttl_snapshot = locals().get("order_data_snapshot", dict(order_data))
-            ttl_limit_price = locals().get("original_limit_price", order_data.get("limit_price"))
-            replacement = self._replace_limit_order_with_marketable(
-                symbol=symbol,
-                side=mapped_side,
-                qty=qty,
-                existing_order_id=previous_pending_id,
-                client_order_id=client_order_id or order_data.get("client_order_id"),
-                order_data_snapshot=ttl_snapshot,
-                limit_price=_safe_float(ttl_limit_price),
-            )
-            if replacement is not None:
-                (
-                    order_obj,
-                    status,
-                    filled_qty,
-                    requested_qty,
-                    order_id,
-                    client_order_id,
-                ) = replacement
-                final_status = status
-                status_lower = str(status).lower()
-                order_id_display = order_id or client_order_id
-                final_cancel_reason = None
-                if previous_pending_id:
-                    store = getattr(self, "_pending_orders", None) or {}
-                    store.pop(str(previous_pending_id), None)
-                    self._pending_orders = store
-                new_pending_id = order_id or client_order_id
-                if new_pending_id:
-                    store = getattr(self, "_pending_orders", None) or {}
-                    pending_entry = store.setdefault(str(new_pending_id), {})
-                    pending_entry["status"] = status_lower or "submitted"
-                    self._pending_orders = store
 
         if not (order_id or client_order_id):
             logger.error(
@@ -35230,169 +34927,6 @@ class ExecutionEngine:
             if failover_response is not None:
                 return failover_response
             raise
-
-    def _replace_limit_order_with_marketable(
-        self,
-        *,
-        symbol: str,
-        side: str,
-        qty: int,
-        existing_order_id: Any | None,
-        client_order_id: Any | None,
-        order_data_snapshot: Mapping[str, Any],
-        limit_price: float | None,
-        slippage_bps: int | None = None,
-    ) -> tuple[Any, str, float, float, Any, Any] | None:
-        """Cancel an idle limit order and replace it with a marketable limit."""
-
-        if normalize_execution_mode(getattr(self, "execution_mode", "paper")) == "live":
-            logger.warning(
-                "LIVE_REPLACEMENT_REQUIRES_DURABLE_PRETRADE",
-                extra={"symbol": symbol, "existing_order_id": existing_order_id},
-            )
-            return None
-        if limit_price is None:
-            return None
-        try:
-            base_price = float(limit_price)
-        except (TypeError, ValueError):
-            return None
-        slippage_value = (
-            int(slippage_bps)
-            if slippage_bps is not None
-            else int(getattr(self, "marketable_limit_slippage_bps", 4))
-        )
-        slippage_value = max(0, slippage_value)
-        basis = slippage_value / 10000.0
-        if side.lower() == "buy":
-            replacement_price = base_price * (1 + basis)
-        else:
-            replacement_price = base_price * (1 - basis)
-        replacement_payload = dict(order_data_snapshot)
-        snapped_replacement_price = round(replacement_price, 6)
-        try:
-            tick_size = get_tick_size(symbol)
-            snapped_replacement_price = float(
-                Money(replacement_price).quantize(tick_size).amount
-            )
-        except LIVE_TRADING_FALLBACK_EXC:
-            logger.debug(
-                "ORDER_TTL_REPLACE_PRICE_NORMALIZE_FAILED",
-                extra={"symbol": symbol, "replacement_price": replacement_price},
-                exc_info=True,
-            )
-        replacement_payload["limit_price"] = snapped_replacement_price
-        raw_client_order_id = str(
-            client_order_id or _stable_order_id(symbol, side)
-        ).strip()
-        if not raw_client_order_id:
-            raw_client_order_id = _stable_order_id(symbol, side)
-        safe_client_order_id = "".join(
-            ch for ch in raw_client_order_id if (ch.isalnum() or ch in {"-", "_", "."})
-        )
-        if not safe_client_order_id:
-            safe_client_order_id = _stable_order_id(symbol, side)
-        ttl_suffix = f"-ttl{int(time.monotonic() * 1000) % 100000:05d}"
-        max_base_len = max(1, 48 - len(ttl_suffix))
-        replacement_payload["client_order_id"] = (
-            f"{safe_client_order_id[:max_base_len]}{ttl_suffix}"
-        )[:48]
-        if existing_order_id:
-            try:
-                self._cancel_order_alpaca(existing_order_id)
-            except LIVE_TRADING_FALLBACK_EXC as exc:
-                logger.warning(
-                    "ORDER_TTL_CANCEL_FAILED",
-                    extra={
-                        "symbol": symbol,
-                        "side": side,
-                        "order_id": existing_order_id,
-                        "error": str(exc),
-                    },
-                )
-                return None
-            status_info: Any | None = None
-            deadline = monotonic_time() + 5.0
-            terminal_statuses = {"canceled", "cancelled", "filled", "expired", "rejected"}
-            while monotonic_time() <= deadline:
-                try:
-                    status_info = self._get_order_status_alpaca(str(existing_order_id))
-                except LIVE_TRADING_FALLBACK_EXC as exc:
-                    logger.warning(
-                        "ORDER_TTL_CANCEL_STATUS_FAILED",
-                        extra={
-                            "symbol": symbol,
-                            "side": side,
-                            "order_id": existing_order_id,
-                            "error": str(exc),
-                        },
-                    )
-                    return None
-                status_text = str(_extract_value(status_info, "status") or "").strip().lower()
-                if status_text in terminal_statuses:
-                    break
-                time.sleep(0.25)
-            else:
-                status_text = ""
-            if status_text not in terminal_statuses:
-                logger.warning(
-                    "ORDER_TTL_CANCEL_NOT_FINAL",
-                    extra={
-                        "symbol": symbol,
-                        "side": side,
-                        "order_id": existing_order_id,
-                        "status": status_text or None,
-                    },
-                )
-                return None
-            filled_qty = _safe_int(_extract_value(status_info, "filled_qty", "filled_quantity"), 0)
-            remaining_qty = max(int(qty) - int(filled_qty), 0)
-            if remaining_qty <= 0:
-                logger.info(
-                    "ORDER_TTL_REPLACE_SKIPPED_ALREADY_FILLED",
-                    extra={
-                        "symbol": symbol,
-                        "side": side,
-                        "order_id": existing_order_id,
-                        "filled_qty": int(filled_qty),
-                        "requested_qty": int(qty),
-                    },
-                )
-                return None
-            if "quantity" in replacement_payload:
-                replacement_payload["quantity"] = remaining_qty
-            if "qty" in replacement_payload:
-                replacement_payload["qty"] = remaining_qty
-            qty = remaining_qty
-        try:
-            replacement = self._submit_order_to_alpaca(replacement_payload)
-        except LIVE_TRADING_FALLBACK_EXC as exc:
-            logger.error(
-                "ORDER_TTL_REPLACE_FAILED",
-                extra={
-                    "symbol": symbol,
-                    "side": side,
-                    "order_id": existing_order_id,
-                    "error": str(exc),
-                },
-                exc_info=True,
-            )
-            return None
-        logger.info(
-            "ORDER_TTL_REPLACE",
-            extra={
-                "symbol": symbol,
-                "side": side,
-                "original_order_id": str(existing_order_id) if existing_order_id else None,
-                "original_client_order_id": str(client_order_id) if client_order_id else None,
-                "replacement_client_order_id": replacement_payload.get("client_order_id"),
-                "original_limit_price": limit_price,
-                "replacement_limit_price": replacement_payload["limit_price"],
-                "ttl_seconds": self.order_ttl_seconds,
-                "slippage_bps": slippage_value,
-            },
-        )
-        return _normalize_order_payload(replacement, qty)
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""

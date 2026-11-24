@@ -44,7 +44,6 @@ def test_pending_new_policy_counts_maintenance_not_new_orders(monkeypatch) -> No
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_: None
 
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")

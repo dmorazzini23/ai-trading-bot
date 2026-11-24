@@ -43,17 +43,17 @@ leaves that intent unresolved for identity-based reconciliation. The lower-level
 `ExecutionEngine._submit_order_to_alpaca` now requires a `SUBMITTING` intent
 from the canonical execution route, with matching client identity, symbol,
 side and a strictly positive authorized quantity. A lost live submit response is not blindly
-retried or moved back to a reusable intent state. Live cancel-and-resubmit
-limit replacements are held before the helper cancels anything until a durable
-replacement pretrade and identity contract is implemented. Pending-order
+retried or moved back to a reusable intent state. There is no in-place
+cancel-and-resubmit limit replacement in any mode: the former paper-only
+helper, which priced off the old limit, skipped pretrade and never read the
+position, was removed on November 24, 2026 (owner decision). Pending-order
 maintenance cancels a stale order under its timeout policy in every mode,
 closing orders included (owner decision, November 24, 2026): with
 `AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=symbol` the symbol stays out of the
 netting cycle until the broker stops listing the cancelled order,
 and the next cycle resubmits any exit at the current quote through the
 canonical route with its pretrade checks.
-This limitation must be resolved or explicitly accepted before live
-activation. Alpaca's [replace-order contract](https://docs.alpaca.markets/us/reference/replaceorderforaccount)
+Alpaca's [replace-order contract](https://docs.alpaca.markets/us/reference/replaceorderforaccount)
 does not permit native replacement of `pending_new` orders and warns that a
 successful replacement response does not guarantee the old order was replaced.
 The durable identity check is one
