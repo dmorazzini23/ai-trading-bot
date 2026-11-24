@@ -21,7 +21,6 @@ def _engine_stub() -> Any:
     engine._skip_last_logged_at = {}
     engine._skip_detail_last_logged_at = {}
     engine._engine_cycle_index = 1
-    engine.marketable_limit_slippage_bps = 10
     engine._capacity_broker = lambda client: client
     engine._open_order_qty_index = {}
     engine._pending_orders = {}
@@ -44,7 +43,6 @@ def test_pending_new_policy_counts_maintenance_not_new_orders(monkeypatch) -> No
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     canceled: list[str] = []
     engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
-    engine._replace_limit_order_with_marketable = lambda **_: None
 
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")

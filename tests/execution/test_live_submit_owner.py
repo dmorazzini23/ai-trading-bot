@@ -236,13 +236,3 @@ def test_paper_ambiguous_submit_is_not_retried_by_wrapper(
     assert attempts == ["stable-1"]
     assert engine.stats["retry_count"] == 0
 
-
-def test_live_replacement_never_cancels_before_new_intent_is_supported() -> None:
-    engine = _engine("live", SimpleNamespace(assert_submit_owner=lambda: None))
-    engine._cancel_order_alpaca = lambda _order_id: pytest.fail("original order canceled")
-    assert engine._replace_limit_order_with_marketable(
-        symbol="AAPL", side="buy", qty=2, existing_order_id="broker-original",
-        client_order_id="client-original",
-        order_data_snapshot={"symbol": "AAPL", "side": "buy", "quantity": 2},
-        limit_price=100.0,
-    ) is None

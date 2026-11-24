@@ -942,6 +942,76 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   a lock early, stop the service, delete the symbol's entry under `locks`,
   and start it again.
 
+### Pending-Order Cancels (Stale Sweep, Cleanup And Timeout Policy)
+
+- The stale sweep (`PENDING_STALE_SWEEP_APPLIED`), the pending-order
+  cleanup (`PENDING_ORDERS_CANCELED`) and the execution engine's pending-new
+  timeout policy (`PENDING_NEW_TIMEOUT_ACTION`, run from `start_cycle`; it
+  cancels stale closing orders too, in every mode) send a cancel request;
+  the order can still fill until the broker stops listing it. With
+  `AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=symbol`, a symbol is held out of the
+  netting cycle (added to the pending blocked set) while either:
+  - the broker still lists an order whose cancel the sweep, cleanup or
+    timeout policy requested and the broker accepted, in any non-terminal
+    status (for example `pending_cancel`, or `partially_filled` when a fill raced the
+    cancel), whatever other orders are open; or
+  - the broker lists an order for it as `pending_cancel` or
+    `pending_replace`, whoever asked for that (startup cleanup, a cancel
+    sent before a restart, a manual cancel). This
+    part needs no memory, so it also applies straight after a restart.
+  The hold ends when a fresh open-order list no longer shows the order, shows
+  it in a terminal status such as `filled`, or (second case only) shows it in
+  another status. There is no timeout. This stops the netting cycle from
+  resubmitting an exit beside one that can still fill. It does not cover
+  paths that do not read the blocked set: the end-of-day flatten
+  (`liquidate_positions_if_needed`) and the execution engine's own
+  cancel/replace path rely on the open-sell / open-buy quantity clip
+  instead.
+- The timeout policy never replaces an order in place. Every policy name
+  (`cancel`, `replace_widen`/`replace`/`widen`, `ladder`) cancels a stale
+  order once it is `AI_TRADING_PENDING_NEW_TIMEOUT_SEC` old; `off` disables
+  it. An order the broker already lists as `pending_cancel` is not
+  cancelled again. Once the hold clears, the next netting cycle may
+  resubmit the exit (if the target or backstop still calls for it) through
+  the canonical route and pretrade, priced from the current quote or bar.
+  A resubmission identical to the cancelled order (same symbol, side,
+  quantity, decision bar and price) is refused until a later bar: in every
+  mode by the engine's client-order-id dedupe
+  (`AI_TRADING_CLIENT_ORDER_ID_DEDUPE_ENABLED`, default on, 900 s window;
+  the client id is derived from those fields), and in paper mode also by
+  pretrade's OMS ledger check (`AI_TRADING_LEDGER_ENABLED`, default on; the
+  JSONL ledger is disabled in live mode). A changed quantity, for example
+  after a partial fill, gets a new id. The settings that only shaped the
+  removed replacement are no longer read: `AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC`,
+  `..._REPLACE_WIDEN_BPS`, `..._LADDER_MAX_REPLACEMENTS`,
+  `..._LADDER_WIDEN_STEP_BPS`, `..._LADDER_CANCEL_AFTER_MAX_REPLACEMENTS`,
+  `..._REPLACE_MIN_INTERVAL_SEC`, `..._REPLACE_MAX_PER_CYCLE`,
+  `..._DYNAMIC_ENABLED`, `..._SYMBOL_REPLACE_*`, and
+  `MARKETABLE_LIMIT_SLIPPAGE_BPS` (still a ConfigSpec, now unread).
+- While a symbol is held, everything the netting cycle would do for it
+  waits, including the position backstop's stop-loss and maximum-hold exits.
+  A held flat symbol also counts as pending for the position cap and the
+  pending-order count, as a symbol with a resting order already does.
+- `PENDING_CANCEL_UNCONFIRMED_SYMBOLS_HELD` (INFO) logs every cycle a hold
+  exists. `PENDING_CANCEL_HOLD_LONG` (WARNING) logs per order once a hold
+  reaches 300 s and then at most every 300 s, with `symbol`, `order_id`,
+  `last_status` (the last broker status seen), `held_s` and `source`
+  (`cancel_requested` or `broker_status`). A hold that keeps warning means
+  the broker still shows the order working; check it at the broker. The
+  remembered part of a hold lives in memory and is gone after a restart.
+- With `AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=cycle`, none of this applies:
+  the netting cycle does not filter symbols in that scope, so the hold would
+  add no protection, and the blocked set, position-cap occupancy and the
+  stale sweep's candidates are left exactly as they were before these
+  changes.
+- In symbol scope, a partly filled closing order (the broker lists
+  `sell_to_close` on a sell or `buy_to_close` on a buy) is a stale-sweep
+  candidate once it is
+  `AI_TRADING_PENDING_STALE_SWEEP_PARTIALLY_FILLED_SEC` old (default the
+  larger of 900 s and six times the sweep age), even while other orders are
+  pending. Partly filled opening orders are only considered when no
+  `new`/`pending_new` order is open, as before.
+
 ### Other Packaged Timers And Units
 
 These units also ship under `packaging/systemd/` (schedules from the unit
