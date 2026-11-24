@@ -8,7 +8,6 @@ _PYTEST_MODEL_REGISTRY_TMPDIR = tempfile.TemporaryDirectory(
     prefix="ai-trading-pytest-registry-"
 )
 os.environ["MODEL_REGISTRY_DIR"] = _PYTEST_MODEL_REGISTRY_TMPDIR.name
-os.environ["AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL"] = "0"
 
 # Keep every test run out of the production state directories. ``ai_trading.paths``
 # resolves LOG_DIR, DATA_DIR, MODELS_DIR, CACHE_DIR and OUTPUT_DIR once at import

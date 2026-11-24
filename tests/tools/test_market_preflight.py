@@ -16,9 +16,11 @@ class Response(io.BytesIO):
     (503, False, "blocked"), (503, True, "blocked"),
 ])
 def test_valid_readiness_report_does_not_fail_command(monkeypatch, capsys, status, ok, verdict):
-    payload = {"ok": ok, "status": "healthy", "reason": "required_model_stale",
+    payload = {"ok": ok, "status": "healthy", "reason": "replay_live_parity_gate_failed",
                "replay_live_parity_gate": {"ok": False},
-               "attention_flags": ["required_model_stale"]}
+               "attention_flags": ["replay_live_parity_gate_failed"],
+               "operating_mode": {"mode": "paper_rule_sampling",
+                                  "strategy_state": "no_qualified_strategy"}}
 
     def fetch(url, timeout):
         assert url == preflight.HEALTH_URL and timeout == 15
@@ -34,6 +36,8 @@ def test_valid_readiness_report_does_not_fail_command(monkeypatch, capsys, statu
     assert result["http_status"] == status
     assert result["replay_live_parity_gate"] == {"ok": False}
     assert result["attention_flags"] == payload["attention_flags"]
+    assert result["operating_mode"] == payload["operating_mode"]
+    assert "day_sleeve_model" not in result
 
 
 @pytest.mark.parametrize("body", [b"not JSON", b"[]", b'{}', b'{"ok":"false"}'])

@@ -14,7 +14,7 @@ def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
             "ok": False,
             "status": "healthy",
             "data_provider": {"status": "warming_up"},
-            "readiness_failures": ["required_model_stale"],
+            "readiness_failures": ["replay_live_parity_gate_failed"],
         }
     ).encode("utf-8")
 
@@ -35,7 +35,7 @@ def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
 
     assert payload["status"] == "healthy"
     assert payload["data_provider"] == {"status": "warming_up"}
-    assert payload["readiness_failures"] == ["required_model_stale"]
+    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
 
 
 def test_daily_research_report_blocks_live_profile_without_promotion(monkeypatch):

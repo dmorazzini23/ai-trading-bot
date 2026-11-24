@@ -145,7 +145,7 @@ def now_label() -> str:
 
 
 def humanize(code: Any) -> str:
-    """Internal codes as words: 'required_model_stale' -> 'required model stale'."""
+    """Internal codes as words: 'oms_invariants_failed' -> 'oms invariants failed'."""
 
     text = str(code if code not in (None, "") else "n/a").strip()
     if "_" not in text and not text.isupper():

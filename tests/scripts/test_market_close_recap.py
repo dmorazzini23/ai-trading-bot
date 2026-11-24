@@ -25,18 +25,18 @@ def _load_recap_module() -> ModuleType:
 recap = _load_recap_module()
 
 
-def test_recap_explains_diagnostics_without_hiding_readiness_failure(monkeypatch, tmp_path):
+def test_recap_explains_strategy_state_without_hiding_readiness_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(recap, 'RUNTIME_DIR', tmp_path)
     monkeypatch.setattr(recap, '_service_summary', lambda: 'ai-trading.service active')
     monkeypatch.setattr(recap, '_journal_summary', lambda day: 'No errors')
     monkeypatch.setattr(recap, '_health_summary', lambda: ('degraded', {
-        'ok': False, 'status': 'degraded', 'readiness_failures': ['required_model_stale'],
+        'ok': False, 'status': 'degraded', 'readiness_failures': ['replay_live_parity_gate_failed'],
         'broker': {'connected': True, 'positions_count': 0, 'open_orders_count': 0},
-        'operating_mode': {'summary': 'Paper diagnostics enabled; qualified model unavailable.'},
+        'operating_mode': {'summary': 'No qualified strategy; the rule scorer trades only as labelled paper sampling. These trades are not strategy performance.'},
     }))
     text = recap.build_recap()
-    assert 'required_model_stale' in text
-    assert 'Paper diagnostics enabled; qualified model unavailable.' in text
+    assert 'replay_live_parity_gate_failed' in text
+    assert 'No qualified strategy; the rule scorer trades only as labelled paper sampling. These trades are not strategy performance.' in text
     assert 'Healthy close' not in text
 
 
@@ -285,7 +285,7 @@ def test_session_date_does_not_roll_at_utc_midnight(monkeypatch):
 
 @pytest.mark.parametrize("connected,failures,active,healthy", [
     (True, [], True, True), (False, [], True, False),
-    (True, ["required_model_stale"], True, False), (True, [], False, False),
+    (True, ["replay_live_parity_gate_failed"], True, False), (True, [], False, False),
 ])
 def test_healthy_close_requires_connection_readiness_and_active_service(
     monkeypatch, connected, failures, active, healthy,
@@ -317,11 +317,11 @@ def _stub_recap_inputs(monkeypatch, *, journal: str, healthy: bool = False) -> N
     monkeypatch.setattr(recap, "_service_summary", lambda: "ai-trading.service active")
     monkeypatch.setattr(recap, "_health_summary", lambda: ("health", {
         "ok": healthy, "status": "healthy" if healthy else "degraded",
-        "reason": "runtime_health_ok" if healthy else "required_model_stale",
-        "readiness_failures": [] if healthy else ["required_model_stale"],
+        "reason": "runtime_health_ok" if healthy else "replay_live_parity_gate_failed",
+        "readiness_failures": [] if healthy else ["replay_live_parity_gate_failed"],
         "broker": {"connected": True, "positions_count": 0, "open_orders_count": 0},
         "provider_state": {"active": "alpaca", "status": "warming_up"},
-        "operating_mode": {"summary": "Paper diagnostics enabled; qualified model unavailable."},
+        "operating_mode": {"summary": "No qualified strategy; the rule scorer trades only as labelled paper sampling. These trades are not strategy performance."},
     }))
     monkeypatch.setattr(recap, "_fill_summary", lambda day: {
         "available": True, "day": day, "fills": 7, "qty": 8.0, "edge_bps": -1.6,
@@ -358,12 +358,12 @@ def test_build_recap_payload_reads_top_down_without_raw_journal_lines(monkeypatc
     assert blocks[2]["text"]["text"] == "*Service & data*"
     assert [field["text"] for field in blocks[2]["fields"]] == [
         "*Service*\nactive",
-        "*Health*\ndegraded — required model stale",
+        "*Health*\ndegraded — replay live parity gate failed",
         "*Broker*\nconnected — 0 positions, 0 open orders",
         "*Data provider*\nAlpaca — warming up",
     ]
     assert blocks[3]["text"]["text"] == (
-        "*Open flags*\n• Readiness: required model stale\n• Reset evidence reports missing or stale"
+        "*Open flags*\n• Readiness: replay live parity gate failed\n• Reset evidence reports missing or stale"
     )
     assert blocks[4]["text"]["text"].startswith("*Next action*\nLeave the service running.")
     text = _recap_payload_text(payload)

@@ -367,56 +367,6 @@ def _model_liveness_snapshot() -> dict[str, Any]:
     return {}
 
 
-def _day_sleeve_model_readiness_snapshot(*, allow_shadow: bool) -> dict[str, Any]:
-    enabled = _env_bool("AI_TRADING_DAY_SLEEVE_ML_ENABLED", True)
-    if not enabled:
-        return {
-            "enabled": False,
-            "available": False,
-            "ok": True,
-            "status": "disabled",
-            "reason": "day_sleeve_ml_disabled",
-        }
-    try:
-        from ai_trading.model_loader import day_sleeve_model_readiness_snapshot
-
-        return day_sleeve_model_readiness_snapshot(allow_shadow=allow_shadow)
-    except _HEALTH_FALLBACK_EXC as exc:
-        return {
-            "enabled": True,
-            "available": False,
-            "ok": False,
-            "status": "invalid",
-            "reason": "required_model_invalid",
-            "error": str(exc),
-            "allow_shadow": bool(allow_shadow),
-        }
-
-
-def _day_sleeve_model_readiness_snapshot_cached(
-    *,
-    allow_shadow: bool,
-    required: bool,
-) -> dict[str, Any]:
-    if required or not _health_snapshot_cache_enabled():
-        return _day_sleeve_model_readiness_snapshot(allow_shadow=allow_shadow)
-    return _cached_background_snapshot(
-        name=f"day_sleeve_model_{'shadow' if allow_shadow else 'production'}",
-        ttl_seconds=_health_snapshot_ttl_seconds("day_sleeve_model", 30.0),
-        placeholder={
-            "enabled": True,
-            "available": False,
-            "ok": False,
-            "status": "warming_up",
-            "reason": "warming_up",
-            "allow_shadow": bool(allow_shadow),
-        },
-        builder=lambda: _day_sleeve_model_readiness_snapshot(
-            allow_shadow=allow_shadow
-        ),
-    )
-
-
 def _database_readiness_snapshot() -> dict[str, Any]:
     enabled = _env_bool("AI_TRADING_HEALTH_DB_READINESS_ENABLED", True)
     if not enabled:
@@ -1273,32 +1223,28 @@ def build_alpaca_health_payload(
     return payload
 
 
-def _operating_mode_snapshot(model: Mapping[str, Any]) -> dict[str, Any]:
-    """Explain diagnostic authority without changing any readiness decision."""
+def _operating_mode_snapshot() -> dict[str, Any]:
+    """Report strategy authority without changing any readiness decision."""
     result: dict[str, Any] = {
-        "model_ready": bool(model.get("enabled") and model.get("ok")),
-        "paper_diagnostics_enabled": False,
-        "diagnostic_results_are_model_performance": False,
+        "strategy_state": "no_qualified_strategy",
+        "qualified_strategy": False,
+        "rule_paper_sampling_enabled": False,
+        "results_are_strategy_performance": False,
         "promotion_authority": False,
     }
-    if not model.get("enabled"):
-        return {**result, "mode": "model_not_required", "summary": "Model readiness is not required by this health configuration."}
-    if model.get("ok"):
-        return {**result, "mode": "model_ready", "summary": "Governed model ready; other readiness gates still apply."}
-    reason = model.get("reason")
-    error = ("Active model for 'day_sleeve' is stale" if reason == "required_model_stale"
-             else "unavailable" if reason == "required_model_unavailable" else None)
     try:
         from ai_trading.config.management import get_trading_config
-        from ai_trading.runtime.paper_sampling import stale_model_diagnostics_allowed
+        from ai_trading.runtime.paper_sampling import rule_paper_sampling_allowed
 
-        allowed = stale_model_diagnostics_allowed(get_trading_config(), model_error=error)
+        allowed = rule_paper_sampling_allowed(get_trading_config())
     except _HEALTH_FALLBACK_EXC:
-        return {**result, "mode": "model_blocked", "summary": "Qualified model unavailable; diagnostic configuration could not be verified."}
+        return {**result, "mode": "close_only",
+                "summary": "No qualified strategy; paper rule sampling could not be verified from configuration."}
     if allowed:
-        return {**result, "paper_diagnostics_enabled": True, "mode": "paper_diagnostics_only",
-                "summary": "Paper diagnostics enabled; qualified model unavailable. Diagnostic trades are not qualified-model performance."}
-    return {**result, "mode": "model_blocked", "summary": "Qualified model unavailable; paper diagnostics are not authorized for this model state."}
+        return {**result, "rule_paper_sampling_enabled": True, "mode": "paper_rule_sampling",
+                "summary": "No qualified strategy; the rule scorer trades only as labelled paper sampling. These trades are not strategy performance."}
+    return {**result, "mode": "close_only",
+            "summary": "No qualified strategy; no new exposure. Held positions are frozen and exit through the position backstop."}
 
 
 def build_runtime_health_payload(
@@ -1357,26 +1303,7 @@ def build_runtime_health_payload(
         execution_mode in {"paper", "sim", "simulation"}
         and not live_execution_mode
     )
-    require_day_sleeve_model = _env_bool(
-        "AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL",
-        False,
-    )
-    allow_shadow_model = bool(
-        paper_evidence_mode
-        and _env_bool("AI_TRADING_PAPER_ALLOW_SHADOW_MODEL", False)
-    )
-    day_sleeve_model = _day_sleeve_model_readiness_snapshot_cached(
-        allow_shadow=allow_shadow_model,
-        required=require_day_sleeve_model,
-    )
     latest_training_attempt = _latest_training_attempt_snapshot()
-    day_sleeve_model_failure = bool(
-        day_sleeve_model.get("enabled", False)
-        and not bool(day_sleeve_model.get("ok"))
-    )
-    day_sleeve_model_reason = str(
-        day_sleeve_model.get("reason") or "required_model_unavailable"
-    ).strip()
     require_replay_live_parity_gate = _env_bool(
         "AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE",
         _default_fail_closed_outside_tests(),
@@ -1684,9 +1611,6 @@ def build_runtime_health_payload(
     if replay_gate_readiness_failure:
         overall_ok = False
         degraded = True
-    if require_day_sleeve_model and day_sleeve_model_failure:
-        overall_ok = False
-        degraded = True
     if service_degraded_for_health:
         overall_ok = False
     if not overall_ok:
@@ -1712,19 +1636,7 @@ def build_runtime_health_payload(
         readiness_failures.append("oms_lifecycle_parity_failed")
     if replay_gate_readiness_failure:
         readiness_failures.append("replay_live_parity_gate_failed")
-    if require_day_sleeve_model and day_sleeve_model_failure:
-        readiness_failures.append(day_sleeve_model_reason)
     readiness_gates = {
-        "day_sleeve_model": _build_contract_gate_status(
-            day_sleeve_model,
-            required=require_day_sleeve_model,
-            failure_reason=day_sleeve_model_reason,
-            attention_flag=day_sleeve_model_reason,
-            action=(
-                "Train and govern a fresh compatible day-sleeve artifact; "
-                "do not relax promotion or execution gates."
-            ),
-        ),
         "oms_invariants": _build_contract_gate_status(
             oms_invariants,
             required=require_oms_invariants,
@@ -1763,10 +1675,6 @@ def build_runtime_health_payload(
         observe_oms_lifecycle_parity=oms_lifecycle_parity_failure,
         trade_updates_stream=trade_updates_stream,
     )
-    if require_day_sleeve_model and day_sleeve_model_failure:
-        attention_flags = _dedupe_flags(
-            [*attention_flags, day_sleeve_model_reason]
-        )
     broker_account_configuration = _broker_account_configuration_snapshot()
     if broker_account_configuration.get("available") and broker_account_configuration.get(
         "mismatches"
@@ -1855,8 +1763,7 @@ def build_runtime_health_payload(
         "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
         "data_status": data_status,
         "model_liveness": model_liveness,
-        "day_sleeve_model": day_sleeve_model,
-        "operating_mode": _operating_mode_snapshot(day_sleeve_model),
+        "operating_mode": _operating_mode_snapshot(),
         "latest_training_attempt": latest_training_attempt,
         "database": database_readiness,
         "oms_invariants": oms_invariants,

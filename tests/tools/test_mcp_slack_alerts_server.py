@@ -32,7 +32,7 @@ def test_operational_states_distinguish_abstention_from_qualification_and_incide
     }
     assert slack_srv._operational_state(healthy) == "healthy_abstention"
     qualified = {**healthy, "ok": False, "status": "degraded",
-                 "attention_flags": ["required_model_stale", "replay_live_parity_gate_failed"]}
+                 "attention_flags": ["replay_live_parity_gate_failed"]}
     assert slack_srv._operational_state(qualified) == "blocked_qualification"
     assert qualified["ok"] is False
     assert slack_srv._operational_state({**qualified, "data_provider": {"safe_mode": True}}) == "degraded_data"
@@ -1282,7 +1282,7 @@ def _market_closed_degraded_snapshot() -> dict[str, Any]:
         "edge_realism_gap_ratio": 0.07,
         "health_ok": False,
         "health_status": "degraded",
-        "health_reason": "required_model_stale",
+        "health_reason": "replay_live_parity_gate_failed",
         "provider_status": "warming_up",
         "provider_active": "alpaca",
         "provider_reason": "market_closed",
@@ -1354,7 +1354,7 @@ def test_safe_health_payload_retries_timed_out_read_with_longer_timeout(monkeypa
             return slack_srv._health_unavailable_payload(
                 port=port, url="http://127.0.0.1:9001/healthz", error="timed out"
             )
-        return {"ok": False, "status": "degraded", "reason": "required_model_stale",
+        return {"ok": False, "status": "degraded", "reason": "replay_live_parity_gate_failed",
                 "broker": {"status": "connected"}}
 
     monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
@@ -1362,7 +1362,7 @@ def test_safe_health_payload_retries_timed_out_read_with_longer_timeout(monkeypa
     health = slack_srv._safe_health_payload(port=9001, timeout_s=5.0, retry_timeout_s=25.0)
 
     assert timeouts == [5.0, 25.0]
-    assert health["reason"] == "required_model_stale"
+    assert health["reason"] == "replay_live_parity_gate_failed"
     assert health["broker"]["status"] == "connected"
 
 
@@ -1392,13 +1392,13 @@ def test_safe_health_payload_does_not_retry_a_readable_payload_or_when_disabled(
         timeouts.append(timeout_s)
         if port == 9002:
             raise TimeoutError("timed out")
-        return {"ok": False, "status": "degraded", "reason": "required_model_stale"}
+        return {"ok": False, "status": "degraded", "reason": "replay_live_parity_gate_failed"}
 
     monkeypatch.setattr(slack_srv, "_health_payload", _fake_health_payload)
 
     assert slack_srv._safe_health_payload(port=9001, timeout_s=5.0, retry_timeout_s=25.0)[
         "reason"
-    ] == "required_model_stale"
+    ] == "replay_live_parity_gate_failed"
     assert slack_srv._safe_health_payload(port=9002, timeout_s=5.0)["reason"] == (
         "health_payload_unavailable"
     )
@@ -1419,7 +1419,7 @@ def test_collect_runtime_snapshot_recovers_market_closed_state_after_slow_health
         return {
             "ok": False,
             "status": "degraded",
-            "reason": "required_model_stale",
+            "reason": "replay_live_parity_gate_failed",
             "data_provider": {"status": "warming_up", "active": "alpaca", "reason": "market_closed"},
             "broker": {"status": "connected"},
             "service_state": {"status": "ready", "phase": "active", "reason": "market_closed"},
@@ -2530,7 +2530,7 @@ _INCIDENT_SNAPSHOT: dict[str, Any] = {
     "top_rejection_concentration_gate": "LONG_ONLY_SHORT_SUPPRESSED",
     "top_rejection_concentration_ratio": 0.0889,
     "health_status": "degraded",
-    "health_reason": "required_model_stale",
+    "health_reason": "replay_live_parity_gate_failed",
     "operational_state": "blocked_qualification",
     "provider_active": "alpaca",
     "provider_status": "warming_up",
@@ -2547,13 +2547,13 @@ def test_incident_payload_structure_for_single_trigger() -> None:
     blocks = payload["blocks"]
     assert blocks[0]["text"]["text"] == "🟠 Runtime health is degraded"
     assert payload["text"] == (
-        "[WARNING] Runtime health is degraded — health: required model stale · go/no-go: fail — 4 checks"
+        "[WARNING] Runtime health is degraded — health: replay live parity gate failed · go/no-go: fail — 4 checks"
     )
     assert blocks[1]["text"]["text"] == "*What happened*\n• Runtime health is degraded"
     impact = blocks[2]
     assert impact["text"]["text"] == "*Impact*"
     assert [field["text"] for field in impact["fields"]] == [
-        "*Health*\nDegraded — required model stale",
+        "*Health*\nDegraded — replay live parity gate failed",
         "*Go/No-Go*\nFail — 4 checks",
         "*Data provider*\nAlpaca — warming up",
         "*Broker*\nconnected",
@@ -2639,7 +2639,7 @@ def test_eod_payload_reads_top_down_and_lists_open_flags() -> None:
         "open_position_reconciliation_mismatch_count": 2,
         "open_position_reconciliation_max_abs_delta_qty": 3.0,
         "health_status": "degraded",
-        "health_reason": "required_model_stale",
+        "health_reason": "replay_live_parity_gate_failed",
         "provider_active": "alpaca",
         "provider_status": "healthy",
         "using_backup": False,
@@ -2687,7 +2687,7 @@ def test_eod_payload_reads_top_down_and_lists_open_flags() -> None:
     assert flags == [
         "*Open flags*",
         "• Go/no-go failed: win rate",
-        "• Health degraded: required model stale",
+        "• Health degraded: replay live parity gate failed",
         "• P&L mismatch between accounting and fills: -$4.70",
         "• Training gate not ready: training not complete for report date",
         "• Position reconciliation: 2 mismatches, max qty delta 3.000",

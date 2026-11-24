@@ -34,7 +34,7 @@ def collect_health() -> dict[str, Any]:
         "status", "reason", "attention_flags", "readiness_failures",
         "readiness_gates", "replay_live_parity_gate", "service_state",
         "broker", "data_provider", "alpaca", "entry_control",
-        "day_sleeve_model", "latest_training_attempt",
+        "operating_mode", "latest_training_attempt",
     )
     return {
         "report_status": "complete",

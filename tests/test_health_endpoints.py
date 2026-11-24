@@ -762,7 +762,7 @@ def test_runtime_health_payload_db_requirement_marks_degraded(monkeypatch):
 
 
 @pytest.mark.parametrize("market_closed", [False, True])
-def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
+def test_runtime_health_reports_strategy_state_without_model_readiness(
     monkeypatch, market_closed,
 ):
     if market_closed:
@@ -778,22 +778,16 @@ def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
         })
     monkeypatch.setenv("EXECUTION_MODE", "paper")
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
-    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL", "1")
     monkeypatch.setattr(
         health_payload_module,
-        "_day_sleeve_model_readiness_snapshot_cached",
-        lambda **_kwargs: {
-            "enabled": True,
-            "available": True,
-            "ok": False,
-            "status": "stale",
-            "reason": "required_model_stale",
-            "model_id": "ml-edge-shadow",
-            "governance_status": "shadow",
-            "serving_authority": "paper_only",
-            "trained_at": "2026-07-17T20:03:50+00:00",
-            "age_days": 24.0,
-            "max_age_days": 14,
+        "_operating_mode_snapshot",
+        lambda: {
+            "strategy_state": "no_qualified_strategy",
+            "qualified_strategy": False,
+            "mode": "paper_rule_sampling",
+            "rule_paper_sampling_enabled": True,
+            "results_are_strategy_performance": False,
+            "promotion_authority": False,
         },
     )
     monkeypatch.setattr(
@@ -816,14 +810,15 @@ def test_runtime_health_required_stale_day_sleeve_model_marks_degraded(
         ok_mode="connectivity",
     )
 
-    assert payload["ok"] is False
-    assert payload["status"] == "degraded"
-    assert payload["reason"] == "required_model_stale"
-    assert "required_model_stale" in payload["readiness_failures"]
-    assert "required_model_stale" in payload["attention_flags"]
-    assert payload["readiness_gates"]["day_sleeve_model"]["status"] == "required_failed"
-    assert payload["day_sleeve_model"]["model_id"] == "ml-edge-shadow"
-    assert payload["day_sleeve_model"]["age_days"] == 24.0
+    assert payload["ok"] is True
+    assert payload["status"] != "degraded"
+    assert payload["readiness_failures"] == []
+    assert "day_sleeve_model" not in payload
+    assert "day_sleeve_model" not in payload["readiness_gates"]
+    assert "required_model_stale" not in payload["readiness_failures"]
+    assert "required_model_stale" not in payload["attention_flags"]
+    assert payload["operating_mode"]["mode"] == "paper_rule_sampling"
+    assert payload["operating_mode"]["strategy_state"] == "no_qualified_strategy"
     assert payload["latest_training_attempt"]["status"] == "skipped"
     assert payload["latest_training_attempt"]["reason"] == "no_qualified_candidate"
     assert payload["latest_training_attempt"]["runtime_authority"] is False

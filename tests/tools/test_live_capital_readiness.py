@@ -29,7 +29,7 @@ def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
             "status": "healthy",
             "broker": {"connected": True},
             "database": {"ok": True},
-            "readiness_failures": ["required_model_stale"],
+            "readiness_failures": ["replay_live_parity_gate_failed"],
         }
     ).encode("utf-8")
 
@@ -50,7 +50,7 @@ def test_health_from_endpoint_keeps_json_http_error_body(monkeypatch) -> None:
 
     assert payload["broker"] == {"connected": True}
     assert payload["database"] == {"ok": True}
-    assert payload["readiness_failures"] == ["required_model_stale"]
+    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
 
 
 def test_live_capital_readiness_blocks_without_live_cost(monkeypatch):

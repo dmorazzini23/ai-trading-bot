@@ -13,7 +13,7 @@ def _eod_snapshot(**overrides: Any) -> dict[str, Any]:
     snapshot: dict[str, Any] = {
         "report_date": "2026-10-16",
         "go_no_go_gate_passed": False,
-        "go_no_go_failed_checks": ["required_model_stale"],
+        "go_no_go_failed_checks": ["replay_live_parity_gate_failed"],
         "net_pnl": 0.76,
         "pnl_basis": "same_day_fills",
         "profit_factor": 1.1,
@@ -25,7 +25,7 @@ def _eod_snapshot(**overrides: Any) -> dict[str, Any]:
         "open_position_reconciliation_mismatch_count": 0,
         "open_position_reconciliation_max_abs_delta_qty": 0.0,
         "health_status": "degraded",
-        "health_reason": "required_model_stale",
+        "health_reason": "replay_live_parity_gate_failed",
         "provider_status": "warming_up",
         "provider_reason": "market_closed",
         "provider_active": "alpaca",
@@ -49,7 +49,7 @@ def _stub_training_gate(monkeypatch) -> None:
     monkeypatch.setattr(slack_srv, "_block_eod_on_training_gate", lambda args: False)
 
 
-def test_eod_summary_eligible_after_close_while_health_reason_is_stale_model(monkeypatch) -> None:
+def test_eod_summary_eligible_after_close_while_health_reason_is_readiness_block(monkeypatch) -> None:
     _stub_training_gate(monkeypatch)
     monkeypatch.setattr(slack_srv, "_collect_eod_summary_snapshot", lambda args: _eod_snapshot())
 
@@ -73,7 +73,7 @@ def test_eod_summary_not_eligible_during_session(monkeypatch) -> None:
     assert result["eligible"] is False
 
 
-def test_notify_eod_summary_sends_after_close_despite_stale_model_reason(
+def test_notify_eod_summary_sends_after_close_despite_readiness_block_reason(
     monkeypatch, tmp_path: Path
 ) -> None:
     _stub_training_gate(monkeypatch)
@@ -155,7 +155,7 @@ def test_eod_snapshot_prefers_same_day_fill_fields_over_cumulative_trade_history
     report = {
         "go_no_go": {
             "gate_passed": False,
-            "failed_checks": ["required_model_stale"],
+            "failed_checks": ["replay_live_parity_gate_failed"],
             "observed": {"trade_metric_scope": "all_time", "net_pnl": -3.94, "closed_trades": 1, "win_rate": 0.0},
         },
         "trade_history": {
@@ -179,7 +179,7 @@ def test_eod_snapshot_prefers_same_day_fill_fields_over_cumulative_trade_history
         "_safe_health_payload",
         lambda **kwargs: {
             "status": "degraded",
-            "reason": "required_model_stale",
+            "reason": "replay_live_parity_gate_failed",
             "data_provider": {"status": "warming_up", "reason": "market_closed", "active": "alpaca"},
             "broker": {"status": "connected"},
             "timestamp": "2026-10-16T20:05:00Z",

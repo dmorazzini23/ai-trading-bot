@@ -36,7 +36,7 @@ def test_times_render_in_eastern() -> None:
 
 
 def test_humanize_turns_codes_into_words() -> None:
-    assert fmt.humanize("required_model_stale") == "required model stale"
+    assert fmt.humanize("replay_live_parity_gate_failed") == "replay live parity gate failed"
     assert fmt.humanize("LONG_ONLY_SHORT_SUPPRESSED") == "long only short suppressed"
     assert fmt.humanize("alpaca") == "alpaca"
     assert fmt.humanize(None) == "n/a"

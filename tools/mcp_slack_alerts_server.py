@@ -611,7 +611,7 @@ def _operational_state(health: dict[str, Any]) -> str:
             or provider_status in {"degraded", "disconnected", "down", "unavailable", "error", "stale"}
             or (provider_status in {"warming_up", "unknown"} and provider_reason != "market_closed")):
         return "degraded_data"
-    if flags & {"required_model_stale", "replay_live_parity_gate_failed", "model_governance_failed", "promotion_blocked"}:
+    if flags & {"replay_live_parity_gate_failed", "model_governance_failed", "promotion_blocked"}:
         return "blocked_qualification"
     if health.get("ok") is not True and str(health.get("status") or "").lower() != "healthy":
         return "degraded_unclassified"
@@ -2395,7 +2395,7 @@ def tool_runtime_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         args.get("require_market_closed"),
         default=_bool_arg(os.getenv("AI_TRADING_SLACK_EOD_REQUIRE_MARKET_CLOSED"), default=True),
     )
-    # The health reason is a readiness verdict (for example ``required_model_stale``)
+    # The health reason is a readiness verdict (for example ``replay_live_parity_gate_failed``)
     # and keeps precedence over ``market_closed`` for months at a time; the data
     # provider reason reports the session state regardless.
     market_closed = _market_closed_snapshot(snapshot)

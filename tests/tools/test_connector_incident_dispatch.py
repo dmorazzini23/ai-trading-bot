@@ -275,28 +275,28 @@ def test_format_preflight_report_summarizes_health() -> None:
             "readiness_verdict": "blocked",
             "status": "degraded",
             "http_status": 503,
-            "reason": "required_model_stale",
-            "attention_flags": ["required_model_stale"],
+            "reason": "replay_live_parity_gate_failed",
+            "attention_flags": ["replay_live_parity_gate_failed"],
             "service_state": {"status": "ready", "phase": "active"},
             "broker": {"status": "connected", "positions_count": 0, "open_orders_count": 0},
             "data_provider": {"active": "alpaca", "status": "healthy"},
         }
     )
     blocks = payload["blocks"]
-    assert payload["text"] == "[WARNING] Market preflight · blocked — required model stale · 1 flags"
+    assert payload["text"] == "[WARNING] Market preflight · blocked — replay live parity gate failed · 1 flags"
     assert blocks[0] == {
         "type": "header",
         "text": {"type": "plain_text", "text": "🟠 Market preflight · blocked", "emoji": True},
     }
     assert [field["text"] for field in blocks[1]["fields"]] == [
-        "*Health*\nDegraded (HTTP 503) — required model stale",
+        "*Health*\nDegraded (HTTP 503) — replay live parity gate failed",
         "*Service*\nready (active)",
         "*Broker*\nconnected — 0 positions, 0 open orders",
         "*Data provider*\nAlpaca — healthy",
     ]
-    assert blocks[2]["text"]["text"] == "*Open flags*\n• required model stale"
+    assert blocks[2]["text"]["text"] == "*Open flags*\n• replay live parity gate failed"
     assert blocks[3]["type"] == "context"
-    assert "required_model_stale" not in json.dumps(blocks)
+    assert "replay_live_parity_gate_failed" not in json.dumps(blocks)
 
 
 def test_format_preflight_report_ready_verdict_is_ok() -> None:
