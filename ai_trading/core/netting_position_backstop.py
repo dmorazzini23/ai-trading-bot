@@ -444,6 +444,7 @@ class PositionBackstop:
         self._dirty = False
         self._logged: set[tuple[str, ...]] = set()
         self._previously_held: set[str] | None = None
+        self._armed: dict[str, tuple[str, float, float]] = {}
         self._bars_since_arming: dict[str, tuple[datetime, Any, int]] = {}
         self._stall_logged: set[tuple[str, str]] = set()
         self._last_gates: dict[str, list[str]] = {}
@@ -548,10 +549,45 @@ class PositionBackstop:
                     _symbol_marker("POSITION_BACKSTOP_UNARMED", symbol),
                     extra={"symbol": symbol, "reason": reason, "qty": self.positions[symbol]},
                 )
+        self._log_armed(unarmed)
         if self.cap_limit is not None and len(self.positions) > self.cap_limit and self._once("cap_exceeded"):
             self.logger.warning(
                 "POSITION_CAP_EXCEEDED",
                 extra={"positions": len(self.positions), "cap": self.cap_limit, "symbols": sorted(self.positions)},
+            )
+
+    def _log_armed(self, unarmed: Mapping[str, str]) -> None:
+        """Log ``POSITION_BACKSTOP_ARMED`` when a held symbol's stop basis is new.
+
+        Logged the first time a held symbol has a valid basis and again when
+        its side, quantity or entry price changes, or after the position is
+        closed and reopened. An unarmed spell with an unchanged basis does not
+        log again, so a snapshot that flaps between fresh and stale stays quiet.
+        """
+
+        for symbol in [symbol for symbol in self._armed if symbol not in self.positions]:
+            del self._armed[symbol]
+        for symbol, qty in sorted(self.positions.items()):
+            basis = self.bases.get(symbol)
+            if basis is None or symbol in unarmed:
+                continue
+            side = _side_of(qty)
+            state = (side, qty, basis.avg_entry_price)
+            if self._armed.get(symbol) == state:
+                continue
+            self._armed[symbol] = state
+            sign = 1.0 if qty > 0 else -1.0
+            self.logger.info(
+                _symbol_marker("POSITION_BACKSTOP_ARMED", symbol),
+                extra={
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "avg_entry": basis.avg_entry_price,
+                    "stop_price": basis.avg_entry_price * (1.0 - sign * POSITION_STOP_LOSS_PCT),
+                    "threshold": -POSITION_STOP_LOSS_PCT,
+                    "locked": symbol in self.store.locks,
+                },
             )
 
     def evaluate_symbol(
