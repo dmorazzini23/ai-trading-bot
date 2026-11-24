@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ai_trading.config.runtime import TradingConfig
 from ai_trading.core import bot_engine, governance_runtime
 from ai_trading.core import netting as netting_mod
 from ai_trading.core.netting import SleeveConfig
@@ -93,9 +92,16 @@ def _run_cycle(
         "AI_TRADING_KILL_SWITCH": "1",
         "AI_TRADING_WARMUP_MODE": "0",
         "AI_TRADING_EVENT_DRIVEN_NEW_BAR_ONLY": "0",
+        # Pin the profile that decides short permissions (paper_trade allows
+        # them, as on the running bot) instead of inheriting EXECUTION_MODE.
+        "AI_TRADING_LAUNCH_PROFILE": "paper_trade",
     }.items():
         monkeypatch.setenv(key, value)
-    cfg = TradingConfig.from_env(allow_missing_drawdown=True).update(
+    for key in ("TRADING__ALLOW_SHORTS", "AI_TRADING_LAUNCH_PROFILE_PAPER_TRADE_ALLOW_SHORTS"):
+        monkeypatch.delenv(key, raising=False)
+    # Build the class bot_engine checks: any other config is replaced by
+    # get_trading_config() and the cycle would silently use env defaults.
+    cfg = bot_engine.TradingConfig.from_env(allow_missing_drawdown=True).update(
         data_contract_enabled=False,
         recon_enabled=False,
         ledger_enabled=False,
@@ -107,6 +113,7 @@ def _run_cycle(
     runtime = SimpleNamespace(
         cfg=cfg, tickers=list(_SYMBOLS), universe_tickers=list(_SYMBOLS), api=None
     )
+    assert bot_engine._resolve_trading_config(runtime) is cfg
     frames = {symbol: _bars(symbol) for symbol in _SYMBOLS}
     captured: list[tuple[str, Any, Any]] = []
     real_net = netting_mod.net_targets_for_symbol
