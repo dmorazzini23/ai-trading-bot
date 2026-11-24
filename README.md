@@ -23,6 +23,12 @@ configuration, and never trade with money you cannot afford to lose.
 - Timezones: stdlib `zoneinfo` only.
 - Main API: Flask on `0.0.0.0:9001` by default.
 - Health and metrics: `/health`, `/healthz`, and `/metrics` on `API_PORT`.
+  `/metrics` answers loopback callers by default; remote callers need
+  `AI_TRADING_METRICS_BEARER_TOKEN` or an entry in
+  `AI_TRADING_METRICS_ALLOWED_REMOTE_ADDRS` (see
+  [API_DOCUMENTATION.md](API_DOCUMENTATION.md)).
+- `/diag` and `/operator/*` require operator authentication
+  (`Authorization: Bearer` plus `X-AI-Trading-Operator-Id`).
 - Standalone health app: `RUN_HEALTHCHECK=1 ./venv/bin/python -m ai_trading.app`
   on `HEALTHCHECK_PORT` (default `8081`).
 - Configuration access: `ai_trading.config.management`.
@@ -98,9 +104,9 @@ broad test run is explicitly approved.
 | Alpaca self-check | `./venv/bin/python ai_trading/scripts/self_check.py` |
 | Research backtest | `./venv/bin/python -m ai_trading.strategies.backtester --symbols SPY QQQ --data-dir ./data --start 2024-01-01 --end 2024-03-31` |
 | Offline replay | `./venv/bin/python -m ai_trading.tools.offline_replay --data-dir ./data --symbols SPY,AAPL --output-json artifacts/offline_replay.json` |
-| Retrain meta learner | `./venv/bin/python -m ai_trading.retrain --trade-log data/trades.csv --model-path runtime/meta_model.joblib` |
-| Runtime diagnostics | `curl -s http://127.0.0.1:9001/diag \| jq .` |
-| Operator presets | `curl -s http://127.0.0.1:9001/operator/presets \| jq .` |
+| Retrain meta learner (manual only; research-reset limits on training in `AGENTS.md` section 8 apply) | `./venv/bin/python -m ai_trading.retrain --trade-log data/trades.csv --model-path runtime/meta_model.joblib` |
+| Runtime diagnostics | `curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" http://127.0.0.1:9001/diag \| jq .` |
+| Operator presets | `curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" -H "X-AI-Trading-Operator-Id: $OPERATOR_ID" http://127.0.0.1:9001/operator/presets \| jq .` |
 
 ## Architecture At A Glance
 
@@ -130,6 +136,11 @@ sudo systemctl enable --now ai-trading.service
 sudo systemctl status ai-trading.service
 curl -s http://127.0.0.1:9001/healthz | jq .
 ```
+
+The packaged unit refuses to start unless
+`/var/lib/ai-trading-bot/runtime/release_spec.json` matches the checkout,
+config, schema and model. Read "Release identity check" in
+[docs/OPERATIONS.md](docs/OPERATIONS.md) before installing or restarting it.
 
 Use these deployment references:
 

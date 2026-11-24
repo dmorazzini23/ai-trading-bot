@@ -46,6 +46,107 @@ window for the API socket to become free. If the port stays busy, the process
 exits with status `98`, and the packaged systemd unit uses
 `RestartPreventExitStatus=98` so operators can resolve the conflict explicitly.
 
+### Release Identity Check
+
+`packaging/systemd/ai-trading.service` runs `ai_trading.tools.release_identity`
+twice as `ExecStartPre`, both times against
+`/var/lib/ai-trading-bot/runtime/release_spec.json` with
+`--models-root /var/lib/ai-trading-bot/models`:
+
+1. `--pre-migration`, writing
+   `/var/lib/ai-trading-bot/runtime/release_identity_pre_migration.json`;
+2. `alembic upgrade head`;
+3. the normal (post-migration) check, writing
+   `/var/lib/ai-trading-bot/runtime/release_identity_preflight.json`.
+
+The tool exits `1` and writes a `blocked` report when any check fails, so
+the service does not start. The spec must hold exactly these fields:
+`schema_version` (`1`), `tested_commit_sha`, `resolved_config_hash`,
+`launch_profile_hash`, `schema_revision`, and `model_artifact` with exactly
+`path` and `sha256`. The report's `checks` are:
+
+- `spec_version`, `spec_fields`: the spec shape above.
+- `tested_commit`: `tested_commit_sha` is a 40-character SHA equal to the
+  checkout's `HEAD`.
+- `clean_checkout`: `git status --porcelain` is empty (no modified or
+  untracked files).
+- `config_hash`, `profile_hash`: the hashes the checkout computes from the
+  current config and launch profile equal the spec.
+- `schema_revision`: the checkout's single Alembic head equals the spec; the
+  pre-migration phase also accepts an older applied revision on that history,
+  the normal phase requires the applied revision to equal the spec.
+- `model_artifact`: the SHA-256 of `model_artifact.path` (a relative path
+  inside `--models-root`) equals `model_artifact.sha256`.
+- `model_path_matches_runtime`: that file is the one `AI_TRADING_MODEL_PATH`
+  names.
+
+The report's `observed` block lists the values the checkout computed.
+
+`resolved_config_hash` digests a sanitized snapshot of every entry in
+`CONFIG_SPECS` (`ai_trading/config/runtime.py`). Any ConfigSpec change, such
+as adding, removing or renaming a spec, changes the hash even when `.env` is
+unchanged, and startup stays blocked until the spec is updated. Five failed
+starts within 300 seconds also trip the unit's start limit
+(`StartLimitIntervalSec=300`, `StartLimitBurst=5`).
+
+Safe deploy order (as `aiuser`, outside market hours):
+
+1. Copy the live spec to a scratch file and edit the copy for the candidate.
+   From a clean checkout of the candidate commit, with the same environment
+   the unit uses (its `Environment=` lines plus
+   `/run/ai-trading-bot/ai-trading-runtime.env`), run the tool against the
+   copy with `--output` pointing at scratch files, once with
+   `--pre-migration` and once without:
+
+   ```bash
+   cd <candidate-checkout>
+   PYTHONPATH=<candidate-checkout> /home/aiuser/ai-trading-bot/venv/bin/python \
+     -m ai_trading.tools.release_identity --pre-migration \
+     --spec <scratch>/release_spec.json \
+     --models-root /var/lib/ai-trading-bot/models \
+     --output <scratch>/pre_migration.json
+   PYTHONPATH=<candidate-checkout> /home/aiuser/ai-trading-bot/venv/bin/python \
+     -m ai_trading.tools.release_identity \
+     --spec <scratch>/release_spec.json \
+     --models-root /var/lib/ai-trading-bot/models \
+     --output <scratch>/preflight.json
+   ```
+
+   The venv is an editable install of `/home/aiuser/ai-trading-bot`.
+   `PYTHONPATH` makes modules that exist in the candidate load from it, but a
+   module the candidate deleted still resolves from the running checkout.
+   Confirm the report's `observed.git_commit_hash` is the candidate commit,
+   and set `AI_TRADING_DATA_DIR` to a scratch directory so the run writes
+   nothing under `/var/lib/ai-trading-bot`.
+
+   The tool finds the database from `DATABASE_URL` or
+   `AI_TRADING_OMS_INTENT_STORE_PATH` (default `runtime/oms_intents.db`,
+   relative to the current directory). If neither is absolute in the runtime
+   env, export
+   `AI_TRADING_OMS_INTENT_STORE_PATH=/home/aiuser/ai-trading-bot/runtime/oms_intents.db`
+   (the path the unit uses) for the dry run, and check that
+   `observed.schema_revision` is not null.
+
+   If the candidate adds a migration, the normal run can pass
+   `schema_revision` only after the migration, which the unit runs between
+   the two checks.
+2. Back up the live spec, for example
+   `cp -p /var/lib/ai-trading-bot/runtime/release_spec.json /var/lib/ai-trading-bot/runtime/release_spec.json.bak`.
+3. `sudo systemctl stop ai-trading.service`, so the running process cannot
+   load new code or restart against a spec that does not match yet.
+4. Check out the candidate commit in `/home/aiuser/ai-trading-bot` and confirm
+   `git status --porcelain` is empty.
+5. Update the live spec with the reviewed values.
+6. `sudo systemctl start ai-trading.service`, then check both report files
+   and `curl -sS http://127.0.0.1:9001/healthz`.
+
+Rollback: stop the service, check out the previous commit, restore the spec
+backup, start the service. After five failed starts within 300 seconds, run
+`sudo systemctl reset-failed ai-trading.service` before starting again.
+
+See [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md) for the reviewed-evidence
+requirements.
+
 ### Important Paths
 
 - `TRADE_LOG_PATH` defaults to `/var/log/ai-trading-bot/trades.jsonl` unless
@@ -64,29 +165,42 @@ exits with status `98`, and the packaged systemd unit uses
    `python3 -c "from ai_trading.config.management import get_env; print(get_env('ALPACA_DATA_FEED'))"`
 3. Check the control-plane snapshot:
    `curl -s -H 'Authorization: Bearer <operator-token>' -H 'X-AI-Trading-Operator-Id: <operator-id>' http://127.0.0.1:9001/operator/control-plane | jq .`
-4. Check environment diagnostics:
-   `curl -s http://127.0.0.1:9001/diag | jq .`
+4. Check environment diagnostics (operator auth required):
+   `curl -s -H 'Authorization: Bearer <operator-token>' -H 'X-AI-Trading-Operator-Id: <operator-id>' http://127.0.0.1:9001/diag | jq .`
 
 ### Operator Mutation Auth
 
-All `/operator/*` endpoints now fail closed unless in-code auth is configured.
+`/diag` and all `/operator/*` endpoints fail closed unless in-code auth is
+configured.
 
 - Required:
   `AI_TRADING_OPERATOR_TOKEN_MAP`
   Example:
   `{"ops@example.com":"<token-1>","approver@example.com":"<token-2>"}`
-- Optional scoped allowlists:
-  - `AI_TRADING_OPERATOR_READERS`
-  - `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS`
-  - `AI_TRADING_OPERATOR_APPROVERS`
-  - `AI_TRADING_OPERATOR_ROLLBACK_OPERATORS`
+  A shared `AI_TRADING_OPERATOR_API_TOKEN` is accepted only when the token
+  map is empty and `AI_TRADING_ALLOW_SHARED_OPERATOR_TOKEN` is set, and only
+  for read routes
+  while `AI_TRADING_OPERATOR_READERS` is empty; it never works for the
+  mutating routes.
+- Scoped allowlists:
+  - `AI_TRADING_OPERATOR_READERS` (optional, read routes)
+  - `AI_TRADING_OPERATOR_OVERRIDE_OPERATORS` (required for manual-override
+    `POST`/`DELETE`)
+  - `AI_TRADING_OPERATOR_APPROVERS` (required for governance approval)
+  - `AI_TRADING_OPERATOR_ROLLBACK_OPERATORS` (required for governance rollback)
 - Requests must send:
   - `Authorization: Bearer <operator-specific-token>`
   - `X-AI-Trading-Operator-Id: <operator-id>`
 
-Do not rely on network placement alone for `/operator/control-plane`,
+Do not rely on network placement alone for `/diag`, `/operator/presets`,
+`/operator/plan`, `/operator/control-plane` and its section routes,
 `/operator/control-plane/manual-overrides`, `/operator/governance`, or the
 mutating governance routes.
+
+`/metrics` uses a separate check: loopback callers are allowed by default
+(`AI_TRADING_METRICS_ALLOWED_REMOTE_ADDRS`, default `127.0.0.1,::1`); other
+callers need a bearer token matching `AI_TRADING_METRICS_BEARER_TOKEN`, unless
+`AI_TRADING_METRICS_ALLOW_UNAUTHENTICATED=1`.
 
 ### Live Durability Policy
 
@@ -245,6 +359,13 @@ For daily runs, `daily_readiness_latest.json` is the canonical operator answer;
 `daily_research_latest.json` is a compatibility alias. The automation report
 itself is `daily_research_automation_latest.json` and is the only latest pointer
 used to decide whether a completion notification describes the current run.
+
+While the research reset in `config/research_reset.json` is enabled (it is),
+`build_research_steps` in `ai_trading.tools.research_automation` replaces
+every scheduled cadence, and the manual `strategy-change` workflow, with three
+reset steps: `broker_accounting_evidence`, `paper_evidence_review` and
+`research_reset_scorecard`. The cadence descriptions below apply only when
+the reset policy is not active.
 
 Daily automation refreshes evidence and lightweight candidates. Weekly
 automation searches horizons, objectives, symbol expansion, exits, and sizing.
@@ -523,8 +644,9 @@ problem is not hidden by a stale model:
 | `degraded_unclassified` | Health is degraded without one of the above diagnoses. | Investigate the raw health fields; do not classify it as healthy abstention. |
 
 The existing connector timer is a separate systemd process that probes the
-application each minute. On September 23 it was enabled while the older
-30-minute healthcheck timer was disabled. This detects application failure
+application each minute. As recorded on September 23, 2026, it was enabled
+on the host while the older 30-minute healthcheck timer was disabled; check the
+current state with `systemctl list-timers 'ai-trading*'`. This detects application failure
 while the host and timer remain alive; it cannot detect loss of the host itself.
 The state label enriches snapshots and incident text without changing
 notification destinations or alert triggers. When triggers clear, the Slack
@@ -789,6 +911,36 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   a lock early, stop the service, delete the symbol's entry under `locks`,
   and start it again.
 
+### Other Packaged Timers And Units
+
+These units also ship under `packaging/systemd/` (schedules from the unit
+files; whether each is installed and enabled is host state, so check
+`systemctl list-timers 'ai-trading*'`):
+
+- `ai-trading-connectors.timer`: every minute (2 minutes after boot), runs
+  `scripts/connector_incident_dispatch.py` (Slack incident connectors).
+- `ai-trading-healthcheck.timer`: every 30 minutes, runs
+  `scripts/runtime_phase1_health_check_runner.sh`.
+- `ai-trading-runtime-report.timer`: Mon..Fri 16:20 America/New_York, runs
+  `scripts/refresh_runtime_reports.sh`.
+- `ai-trading-replay-governance.timer`: Mon..Fri 05:20 America/New_York and
+  20 minutes after boot, runs `ai_trading.tools.replay_governance --force`
+  and writes
+  `/var/lib/ai-trading-bot/runtime/replay_governance_refresh_latest.json`.
+- `ai-trading-host-heartbeat.timer`: every two minutes, runs
+  `ai_trading.tools.host_heartbeat` (host liveness to CloudWatch; see
+  [INDEPENDENT_HOST_MONITOR.md](INDEPENDENT_HOST_MONITOR.md)).
+- `ai-trading-runtime-backup-sync.timer`: daily 23:30 UTC, runs
+  `ai_trading.tools.runtime_recovery_backup` then
+  `scripts/sync_runtime_backups_to_s3.sh` (see
+  [RUNTIME_RECOVERY.md](RUNTIME_RECOVERY.md)).
+- `ai-trading-research-manual@.service`: no timer; runs
+  `scripts/run_research_automation.sh manual <workflow>` for the instance name.
+- `user/ai-trading-evidence-verification.timer` (user unit): fixed dates
+  2026-09-07 and 2026-09-08 23:00 UTC, runs
+  `ai_trading.tools.scheduled_evidence_verification --session 2026-09-08`.
+  Both dates have passed.
+
 ### Runtime JSONL retention
 
 `ai-trading-runtime-prune.timer` (every 30 minutes) runs
@@ -883,7 +1035,8 @@ then start the service. Delete `venv.bak` once a session has run cleanly.
 
 For the current control matrix, scenario drills, and operator cadence, see
 [docs/ROBUSTNESS_AUDIT.md](/home/aiuser/ai-trading-bot/docs/ROBUSTNESS_AUDIT.md).
-# Research evidence validation
+
+### Research evidence validation
 
 Scheduled daily accelerator runs require validated historical input via
 `--require-validated-data`. When the historical workflow is enabled, automation
@@ -975,7 +1128,8 @@ fill-derived evidence for every item before reporting acceptable realism.
 `status=ready` indicates report construction succeeded; inspect
 `cost_realism.acceptable` for the execution-validation result.
 
-Read-only verification outputs from this implementation are under
+Historical record (September 6, 2026; not the current state). Read-only
+verification outputs from this implementation are under
 `artifacts/research_completion/`. The September 6, 2026 cost refresh rejects all
 7,384 fills and 18,697 TCA rows as older than the three-session window. The
 validated historical dataset covers 126 sessions for AAPL, AMZN, and MSFT.
@@ -993,18 +1147,6 @@ their break-even execution cost is consequently null. The candidate comparison
 report now retains `candidate_evaluations` for screened-out and stopped
 experiments as well as ranked survivors. Zero measured net edge ranks above
 negative edge; missing/non-finite evidence ranks last.
-
-Validation for this change: `bash scripts/agent_validate_changed.sh
---skip-runtime-smoke` passed lint, type, compile, forbidden-pattern checks and
-590 related tests. After the final candidate-report/ranking changes, the seven
-pipeline tests and targeted lint/type/compile checks passed again. The default
-validation command reached its health smoke step but could not access the
-service from the sandbox. A separate read-only health request outside the
-sandbox succeeded, as did the non-sending incident snapshot. The service still
-reports model-staleness and replay-parity attention flags; these research
-changes do not remove those gates. To roll back, revert this patch's source and
-test changes and retain the research artifacts and retirement ledger for audit;
-no service unit or trading-authority configuration was changed.
 
 ### Scheduled Slack Reports
 

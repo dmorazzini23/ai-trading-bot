@@ -22,20 +22,23 @@ The peak-performance system provides:
 Prevents duplicate order submissions through TTL-based caching:
 
 ```python
-from ai_trading.execution.idempotency import is_duplicate_order, mark_order_submitted
+from ai_trading.execution.idempotency import OrderIdempotencyCache
+
+cache = OrderIdempotencyCache()
 
 # Check for duplicates before submission
-is_dup, existing_id = is_duplicate_order("AAPL", "buy", 100.0)
-if not is_dup:
+key = cache.generate_key("AAPL", "buy", 100.0)
+if not cache.is_duplicate(key):
     order_id = submit_order("AAPL", "buy", 100.0)
-    mark_order_submitted("AAPL", "buy", 100.0, order_id)
+    cache.mark_submitted(key, order_id)
 ```
+
+`check_and_mark_submitted(key, order_id)` does the check and the mark atomically.
 
 **Key Features:**
 - TTL cache with configurable expiration (default 5 minutes)
 - Thread-safe operations with RLock
 - Bucketed timestamps to handle minor timing differences
-- Global cache instance for system-wide deduplication
 
 ### 2. Position Reconciliation (`ai_trading.execution.reconcile`)
 
@@ -67,14 +70,14 @@ print(f"Took {len(result.actions_taken)} corrective actions")
 Tracks per-symbol execution costs for accurate position sizing:
 
 ```python
-from ai_trading.execution.costs import get_symbol_costs, calculate_execution_cost
+from ai_trading.execution.costs import get_cost_model, get_symbol_costs
 
 # Get cost parameters for symbol
 costs = get_symbol_costs("AAPL")
 print(f"Half spread: {costs.half_spread_bps}bps, Slippage K: {costs.slip_k}")
 
 # Calculate execution cost for trade
-cost_info = calculate_execution_cost("AAPL", position_value=10000, volume_ratio=1.5)
+cost_info = get_cost_model().calculate_position_impact("AAPL", position_value=10000, volume_ratio=1.5)
 print(f"Total cost: {cost_info['cost_bps']:.1f}bps (${cost_info['cost_dollars']:.2f})")
 ```
 
@@ -94,17 +97,23 @@ print(f"Total cost: {cost_info['cost_bps']:.1f}bps (${cost_info['cost_dollars']:
 Intelligent order placement with adaptive strategies:
 
 ```python
-from ai_trading.execution.order_policy import create_smart_order
+from ai_trading.execution.order_policy import (
+    MarketData,
+    OrderUrgency,
+    get_smart_router,
+)
 
 # Create optimized order
-order_request = create_smart_order(
+market_data = MarketData(
     symbol="AAPL",
-    side="buy", 
-    quantity=100,
     bid=150.25,
     ask=150.30,
+    mid=150.275,
+    spread_bps=3.3,
     volume_ratio=1.2,
-    urgency="medium"
+)
+order_request = get_smart_router().create_order_request(
+    "AAPL", "buy", 100, market_data, urgency=OrderUrgency.MEDIUM
 )
 
 print(f"Order type: {order_request['type']}")
@@ -127,48 +136,22 @@ print(f"Limit price: ${order_request['limit_price']:.4f}")
 ### Environment Variables
 
 ```bash
-# Determinism controls
-AI_TRADING_SPEC_OVERRIDE=false    # Allow hash mismatches in development
-
 # Performance tuning
 OPENBLAS_NUM_THREADS=1            # Limit BLAS threading
 OMP_NUM_THREADS=1                 # Limit OpenMP threading
 MKL_NUM_THREADS=1                 # Limit MKL threading
 NUMEXPR_NUM_THREADS=1             # Limit NumExpr threading
 
-# Risk controls
-RISK_TARGET_VOL=0.10              # 10% volatility target
-MAX_TURNOVER_DAILY=1.0            # 100% daily turnover limit
-DRAWDOWN_THRESHOLD=0.08           # 8% drawdown threshold
-
-# Cost model
-COST_MODEL_VERSION=2.0            # Cost model version
-MAX_COST_BPS=20.0                 # Maximum acceptable execution cost
 ```
+
+Risk, turnover and cost limits are `ConfigSpec` entries in
+`ai_trading/config/runtime.py`; list them there rather than relying on ad-hoc
+variable names.
 
 ### Systemd Service Configuration
 
-```ini
-[Unit]
-Description=AI Trading Bot
-After=network.target
-
-[Service]
-Type=simple
-User=trading
-WorkingDirectory=/opt/ai-trading-bot
-ExecStart=/opt/ai-trading-bot/start.sh
-Restart=on-failure
-RestartSec=10
-
-# Performance environment
-Environment=OPENBLAS_NUM_THREADS=1
-Environment=OMP_NUM_THREADS=1
-Environment=MKL_NUM_THREADS=1
-
-[Install]
-WantedBy=multi-user.target
-```
+The packaged unit is `packaging/systemd/ai-trading.service`; see
+`docs/DEPLOYING.md` for deployment.
 
 ### Monitoring and Alerts
 
@@ -193,25 +176,11 @@ WantedBy=multi-user.target
 ### Continuous Integration Checks
 
 ```bash
-# Lint and format
-flake8 ai_trading/
-black ai_trading/
-
-# Unit tests
-pytest tests/ -v --cov=ai_trading
-
-# Import validation
-python -c "import ai_trading; import ai_trading.main"
+# Default post-change validation (see AGENTS.md section 4 for variants)
+bash scripts/agent_validate_changed.sh
 ```
 
 ## Best Practices
-
-### Development Workflow
-
-1. **Feature Development**: Use unlocked specification mode
-2. **Testing**: Validate with deterministic seeds and hash checking
-3. **Staging**: Lock specification and validate compatibility
-4. **Production**: Deploy with locked spec and monitoring
 
 ### Risk Management
 
@@ -255,7 +224,6 @@ python -c "import ai_trading; import ai_trading.main"
 
 Monitor log files for key patterns:
 - `"Position drift detected"` - Reconciliation issues
-- `"Feature drift detected"` - Model degradation
 - `"High volume detected"` - Order parameter adjustments
 - `"Order faded"` - Execution challenges
 

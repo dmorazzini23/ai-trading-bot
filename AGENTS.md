@@ -1,6 +1,6 @@
 # AGENTS: Operating Contract & Playbook
 
-**Last updated:** 2026-04-25
+**Last updated:** 2026-11-23
 **Runtime targets:** Ubuntu 24.04 • Python 3.12.3 • zoneinfo-only • API on :9001 • health on shared `:9001` or standalone `HEALTHCHECK_PORT` (default :8081)
 
 This document is the authoritative playbook for Codex-style editing in this repository. If reality drifts, update this file immediately.

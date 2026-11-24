@@ -33,7 +33,7 @@ Default SLO thresholds:
 
 #### Recording Metrics
 ```python
-from ai_trading.monitoring.slo import get_slo_monitor, record_latency
+from ai_trading.monitoring.slo import get_slo_monitor, record_order_reject_rate
 
 # Get SLO monitor
 monitor = get_slo_monitor()
@@ -43,10 +43,12 @@ monitor.record_metric('order_latency_ms', 45.2)
 monitor.record_metric('position_skew_pct', 1.8)
 monitor.record_metric('live_sharpe_ratio', 0.65)
 
-# Convenience functions
-record_latency('order_execution', 67.3)
-record_performance_metric('turnover_ratio', 1.2, tags={'strategy': 'momentum'})
+# Convenience function for the order reject rate SLO
+record_order_reject_rate(1.5)
 ```
+
+`record_execution_drift`, `record_realized_slippage` and
+`record_order_pacing_cap_hit_rate` are the other module-level helpers.
 
 #### Checking SLO Status
 ```python
@@ -77,18 +79,6 @@ for alert in alerts:
 ```
 
 ### Circuit Breakers
-
-#### Built-in Circuit Breakers
-```python
-from ai_trading.monitoring.slo import setup_default_circuit_breakers
-
-# Setup default circuit breakers
-setup_default_circuit_breakers()
-
-# This registers:
-# - Trading pause on critical latency/error rate
-# - Position size reduction on performance degradation
-```
 
 #### Custom Circuit Breakers
 ```python

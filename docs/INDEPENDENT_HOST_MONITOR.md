@@ -4,7 +4,7 @@
 
 The packaged heartbeat service and two-minute timer are installed and
 enabled. Manual and scheduled host runs through 04:00 UTC published value 1.
-The owner created the alarm in Ohio account `399705375437`; CloudShell
+The owner created the alarm in Ohio account `<aws-account-id>`; CloudShell
 read-back matched the settings below and confirmed one SNS subscription.
 The alarm was initially `INSUFFICIENT_DATA` immediately after creation; the
 owner then confirmed `OK`. The owner ran the authorized, labelled
@@ -68,12 +68,12 @@ systemctl status ai-trading-host-heartbeat.timer --no-pager
 
 After recurring value 1 appears for custom metric `AITrading/Host`,
 `PaperRuntimeResponding`, `Host=ai-trading-primary`, an AWS administrator in
-account `399705375437` should create the alarm against the **existing**
+account `<aws-account-id>` should create the alarm against the **existing**
 confirmed SNS topic. Do not run the full provisioning script for this setup:
 it also calls `sns subscribe`, which is unnecessary for the confirmed email.
 The CloudWatch alarm settings are: Minimum, 180-second period, 2 of 2
 datapoints, less than 1, missing data breaching, and both alarm and OK actions
-to `arn:aws:sns:us-east-2:399705375437:ai-trading-host-failure`. Confirm the
+to `arn:aws:sns:us-east-2:<aws-account-id>:ai-trading-host-failure`. Confirm the
 alarm becomes `OK` after recurring metrics arrive.
 
 For the actual notification drill, record the alarm state and subscription
