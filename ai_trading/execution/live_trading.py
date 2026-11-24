@@ -2748,7 +2748,6 @@ class ExecutionEngine:
         self._pending_new_policy_last_cycle_index: int | None = None
         self._pending_new_ladder_replacements: dict[str, int] = {}
         self._pending_new_replace_last_mono: dict[str, float] = {}
-        self._pending_new_symbol_replace_mono: dict[str, deque[float]] = {}
         # Orders the pending-new timeout policy cancelled in its latest run;
         # the pending-order runtime takes them to hold their symbols until the
         # broker stops listing them.
@@ -2884,7 +2883,6 @@ class ExecutionEngine:
         self._cycle_account: Any | None = None
         self._cycle_account_fetched: bool = False
         self.order_ttl_seconds = 0
-        self.marketable_limit_slippage_bps = 4
         self.max_participation_rate: float | None = None
         try:
             key, secret = get_alpaca_creds()
@@ -2973,7 +2971,6 @@ class ExecutionEngine:
         self._pending_new_actions_this_cycle = 0
         self._pending_new_ladder_replacements = {}
         self._pending_new_replace_last_mono = {}
-        self._pending_new_symbol_replace_mono = {}
         self._pending_new_replacements_this_cycle = 0
         self._cycle_maintenance_actions = 0
 
@@ -3074,92 +3071,10 @@ class ExecutionEngine:
             max_actions = 2
         max_actions = max(0, min(int(max_actions), 50))
 
-        replace_widen_bps = _config_int_alias(
-            (
-                "AI_TRADING_PENDING_NEW_REPLACE_WIDEN_BPS",
-                "EXECUTION_PENDING_NEW_REPLACE_WIDEN_BPS",
-            ),
-            int(getattr(self, "marketable_limit_slippage_bps", 4)),
-        )
-        if replace_widen_bps is None:
-            replace_widen_bps = int(getattr(self, "marketable_limit_slippage_bps", 4))
-        replace_widen_bps = max(0, min(int(replace_widen_bps), 1000))
-
-        hard_timeout_s = _config_float(
-            "AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC",
-            None,
-        )
-        if hard_timeout_s is None:
-            hard_timeout_s = _config_float(
-                "EXECUTION_PENDING_NEW_HARD_TIMEOUT_SEC",
-                None,
-            )
-        if hard_timeout_s is None:
-            hard_timeout_s = max(timeout_s * 1.5, timeout_s + 30.0)
-        hard_timeout_s = max(float(timeout_s), min(float(hard_timeout_s), 7200.0))
-
-        ladder_max_replacements = _config_int_alias(
-            (
-                "AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS",
-                "EXECUTION_PENDING_NEW_LADDER_MAX_REPLACEMENTS",
-            ),
-            2,
-        )
-        if ladder_max_replacements is None:
-            ladder_max_replacements = 2
-        ladder_max_replacements = max(0, min(int(ladder_max_replacements), 8))
-
-        ladder_widen_step_bps = _config_int_alias(
-            (
-                "AI_TRADING_PENDING_NEW_LADDER_WIDEN_STEP_BPS",
-                "EXECUTION_PENDING_NEW_LADDER_WIDEN_STEP_BPS",
-            ),
-            5,
-        )
-        if ladder_widen_step_bps is None:
-            ladder_widen_step_bps = 5
-        ladder_widen_step_bps = max(0, min(int(ladder_widen_step_bps), 200))
-
-        cancel_after_max_replacements = _resolve_bool_env(
-            "AI_TRADING_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS"
-        )
-        if cancel_after_max_replacements is None:
-            cancel_after_max_replacements = _resolve_bool_env(
-                "EXECUTION_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS"
-            )
-        if cancel_after_max_replacements is None:
-            cancel_after_max_replacements = True
-
-        replace_min_interval_s = _config_float(
-            "AI_TRADING_PENDING_NEW_REPLACE_MIN_INTERVAL_SEC",
-            30.0,
-        )
-        if replace_min_interval_s is None:
-            replace_min_interval_s = 30.0
-        replace_min_interval_s = max(0.0, min(float(replace_min_interval_s), 1800.0))
-
-        replace_max_per_cycle = _config_int_alias(
-            (
-                "AI_TRADING_PENDING_NEW_REPLACE_MAX_PER_CYCLE",
-                "EXECUTION_PENDING_NEW_REPLACE_MAX_PER_CYCLE",
-            ),
-            1,
-        )
-        if replace_max_per_cycle is None:
-            replace_max_per_cycle = 1
-        replace_max_per_cycle = max(0, min(int(replace_max_per_cycle), max(1, int(max_actions))))
-
         return {
             "policy": policy,
             "timeout_s": float(timeout_s),
-            "hard_timeout_s": float(hard_timeout_s),
             "max_actions": int(max_actions),
-            "replace_widen_bps": int(replace_widen_bps),
-            "ladder_max_replacements": int(ladder_max_replacements),
-            "ladder_widen_step_bps": int(ladder_widen_step_bps),
-            "cancel_after_max_replacements": bool(cancel_after_max_replacements),
-            "replace_min_interval_s": float(replace_min_interval_s),
-            "replace_max_per_cycle": int(replace_max_per_cycle),
         }
 
     def _paper_sampling_passive_reprice_config(self) -> dict[str, Any]:
@@ -3791,35 +3706,7 @@ class ExecutionEngine:
         policy_cfg = self._pending_new_policy_config()
         policy = str(policy_cfg.get("policy") or "off").strip().lower()
         timeout_s = float(policy_cfg.get("timeout_s") or 0.0)
-        hard_timeout_s = float(policy_cfg.get("hard_timeout_s") or timeout_s)
         max_actions = int(policy_cfg.get("max_actions") or 0)
-        replace_widen_bps = int(policy_cfg.get("replace_widen_bps") or 0)
-        ladder_max_replacements = int(policy_cfg.get("ladder_max_replacements") or 0)
-        ladder_widen_step_bps = int(policy_cfg.get("ladder_widen_step_bps") or 0)
-        cancel_after_max_replacements = bool(
-            policy_cfg.get("cancel_after_max_replacements", True)
-        )
-        replace_min_interval_s = max(
-            0.0,
-            float(policy_cfg.get("replace_min_interval_s") or 0.0),
-        )
-        replace_max_per_cycle = max(
-            0,
-            int(policy_cfg.get("replace_max_per_cycle") or 0),
-        )
-        base_replace_widen_bps = int(replace_widen_bps)
-        base_replace_min_interval_s = float(replace_min_interval_s)
-        base_replace_max_per_cycle = int(replace_max_per_cycle)
-        (
-            replace_widen_bps,
-            replace_min_interval_s,
-            replace_max_per_cycle,
-            dynamic_replace_context,
-        ) = self._pending_new_dynamic_controls(
-            base_replace_widen_bps=base_replace_widen_bps,
-            base_replace_min_interval_s=base_replace_min_interval_s,
-            base_replace_max_per_cycle=base_replace_max_per_cycle,
-        )
         paper_sampling_reprice_cfg = self._paper_sampling_passive_reprice_config()
         paper_sampling_reprice_enabled = bool(
             paper_sampling_reprice_cfg.get("enabled", False)
@@ -3887,6 +3774,11 @@ class ExecutionEngine:
                 continue
             paper_sampling_context = self._paper_sampling_pending_context(order)
             sampling_marker = paper_sampling_context is not None
+            if status == "pending_cancel" and not sampling_marker:
+                # Someone already asked the broker to cancel it; cancelling
+                # again only draws a rejection. The pending-cancel hold keeps
+                # its symbol out of the cycle and warns if it lingers.
+                continue
             sampling_reprice_allowed = bool(
                 paper_sampling_reprice_enabled
                 and paper_sampling_context is not None
@@ -3938,7 +3830,6 @@ class ExecutionEngine:
                     0,
                 )
             )
-            hard_timeout_reached = bool(age_s is not None and age_s >= hard_timeout_s)
             if not order_id:
                 continue
 
@@ -4055,6 +3946,10 @@ class ExecutionEngine:
                     action_success = True
                     replacement_attempts.pop(attempt_key, None)
                     replacement_last.pop(attempt_key, None)
+                # Every successful sampling action cancelled this order (the
+                # passive reprice cancels the parent before any child), so its
+                # symbol is held until the broker stops listing it.
+                self._pending_new_cancelled_orders.append(order)
                 actions_taken += 1
                 self._pending_new_actions_this_cycle += 1
                 self._cycle_maintenance_actions = int(
@@ -4087,27 +3982,14 @@ class ExecutionEngine:
                 )
                 continue
 
-            # The policy only cancels. There is no in-place replacement: the
-            # next netting cycle resubmits any exit at the current quote
-            # through the canonical route and its pretrade checks, once the
-            # broker stops listing the cancelled order. "replace_widen"
-            # therefore cancels at the timeout and "ladder" (which has no
-            # replacements to count) at the hard timeout.
+            # The policy only cancels, at the timeout, under every policy name
+            # ("cancel", "replace_widen", "ladder"). There is no in-place
+            # replacement: once the broker stops listing the cancelled order,
+            # the next netting cycle may resubmit an exit through the
+            # canonical route and its pretrade checks.
             action = "cancel"
             action_success = False
-            max_replacements_for_order = 1 if policy == "replace_widen" else max(
-                0,
-                int(ladder_max_replacements),
-            )
-            should_cancel = bool(
-                policy in {"cancel", "replace_widen"}
-                or hard_timeout_reached
-                or (
-                    policy == "ladder"
-                    and cancel_after_max_replacements
-                    and attempts >= max_replacements_for_order
-                )
-            )
+            should_cancel = True
             if not action_success and should_cancel:
                 try:
                     self._cancel_order_alpaca(str(order_id))
@@ -4121,7 +4003,6 @@ class ExecutionEngine:
                             "order_id": str(order_id),
                             "status": status,
                             "age_s": round(age_s, 3) if age_s is not None else None,
-                            "hard_timeout_s": float(hard_timeout_s),
                             "attempts": int(attempts),
                         },
                         exc_info=True,
@@ -4154,12 +4035,9 @@ class ExecutionEngine:
                     "status": status,
                     "age_s": round(age_s, 3) if age_s is not None else None,
                     "timeout_s": float(timeout_s),
-                    "hard_timeout_s": float(hard_timeout_s),
                     "attempts": int(attempts),
-                    "max_replacements": int(max_replacements_for_order),
                     "actions_taken": actions_taken,
                     "max_actions": max_actions,
-                    "dynamic_stress": _safe_float(dynamic_replace_context.get("stress")),
                 },
             )
 
@@ -4191,22 +4069,6 @@ class ExecutionEngine:
         self._pending_new_replacements_this_cycle = int(
             max(replacements_this_cycle, 0)
         )
-        symbol_replace_raw = getattr(self, "_pending_new_symbol_replace_mono", {}) or {}
-        if isinstance(symbol_replace_raw, dict) and symbol_replace_raw:
-            active_symbols = {
-                str(_extract_value(item, "symbol") or "").strip().upper()
-                for item in open_orders
-                if str(_extract_value(item, "symbol") or "").strip()
-            }
-            pruned_symbol_windows: dict[str, deque[float]] = {}
-            for symbol_key, raw_window in symbol_replace_raw.items():
-                if not isinstance(raw_window, deque):
-                    continue
-                while raw_window and (float(now_mono) - float(raw_window[0])) > 3600.0:
-                    raw_window.popleft()
-                if raw_window and (str(symbol_key).upper() in active_symbols):
-                    pruned_symbol_windows[str(symbol_key).upper()] = raw_window
-            self._pending_new_symbol_replace_mono = pruned_symbol_windows
         return actions_taken > 0
 
     def _duplicate_intent_window_seconds(self) -> float:
@@ -13924,179 +13786,6 @@ class ExecutionEngine:
                 failure_log="MARKOUT_FEEDBACK_WRITE_FAILED",
             )
 
-    def _pending_new_dynamic_controls(
-        self,
-        *,
-        base_replace_widen_bps: int,
-        base_replace_min_interval_s: float,
-        base_replace_max_per_cycle: int,
-    ) -> tuple[int, float, int, dict[str, Any]]:
-        """Derive dynamic pending-new replace controls from live microstructure."""
-
-        dynamic_enabled = _resolve_bool_env("AI_TRADING_PENDING_NEW_DYNAMIC_ENABLED")
-        if dynamic_enabled is None:
-            dynamic_enabled = True
-        context: dict[str, Any] = {
-            "enabled": bool(dynamic_enabled),
-            "base_replace_widen_bps": int(base_replace_widen_bps),
-            "base_replace_min_interval_s": float(base_replace_min_interval_s),
-            "base_replace_max_per_cycle": int(base_replace_max_per_cycle),
-        }
-        if not dynamic_enabled:
-            return (
-                int(base_replace_widen_bps),
-                float(base_replace_min_interval_s),
-                int(base_replace_max_per_cycle),
-                context,
-            )
-
-        quote_state = runtime_state.observe_quote_status()
-        bid = self._coerce_finite_float(quote_state.get("bid"))
-        ask = self._coerce_finite_float(quote_state.get("ask"))
-        quote_age_ms = self._coerce_finite_float(quote_state.get("quote_age_ms"))
-        spread_bps: float | None = None
-        if (
-            bid is not None
-            and ask is not None
-            and bid > 0.0
-            and ask > bid
-        ):
-            mid = (bid + ask) / 2.0
-            if mid > 0.0:
-                spread_bps = ((ask - bid) / mid) * 10000.0
-
-        slippage_vol_bps = self._execution_slippage_volatility_bps()
-        markout_context = self._observe_markout_feedback()
-        markout_toxic = bool(markout_context.get("toxic"))
-        spread_stress = min(
-            max(((spread_bps or 0.0) - 6.0) / 18.0, 0.0),
-            1.0,
-        )
-        age_stress = min(
-            max(((quote_age_ms or 0.0) - 1200.0) / 5000.0, 0.0),
-            1.0,
-        )
-        vol_stress = min(
-            max((float(slippage_vol_bps) - 4.0) / 20.0, 0.0),
-            1.0,
-        )
-        stress = max(spread_stress, age_stress, vol_stress)
-        if markout_toxic:
-            stress = min(1.0, stress + 0.3)
-
-        effective_widen_bps = int(round(float(base_replace_widen_bps) * (1.0 - 0.45 * stress)))
-        if base_replace_widen_bps > 0:
-            effective_widen_bps = max(1, effective_widen_bps)
-        effective_widen_bps = max(0, min(effective_widen_bps, 1000))
-
-        effective_replace_min_interval_s = float(base_replace_min_interval_s) * (1.0 + 2.0 * stress)
-        effective_replace_min_interval_s = max(
-            float(base_replace_min_interval_s),
-            min(float(effective_replace_min_interval_s), 1800.0),
-        )
-
-        effective_replace_max_per_cycle = int(
-            round(float(base_replace_max_per_cycle) * (1.0 - 0.75 * stress))
-        )
-        if stress >= 0.75:
-            effective_replace_max_per_cycle = 0
-        elif base_replace_max_per_cycle > 0:
-            effective_replace_max_per_cycle = max(1, effective_replace_max_per_cycle)
-        effective_replace_max_per_cycle = max(
-            0,
-            min(effective_replace_max_per_cycle, int(base_replace_max_per_cycle)),
-        )
-
-        markout_override = self._current_markout_execution_override()
-        override_scale = self._coerce_finite_float(
-            markout_override.get("replace_max_per_cycle_scale")
-        )
-        if (
-            bool(markout_override.get("active"))
-            and override_scale is not None
-            and base_replace_max_per_cycle > 0
-        ):
-            scaled_cap = int(
-                round(float(effective_replace_max_per_cycle) * max(float(override_scale), 0.05))
-            )
-            effective_replace_max_per_cycle = max(
-                0,
-                min(int(base_replace_max_per_cycle), int(scaled_cap)),
-            )
-        autotune_override = self._current_execution_autotune_override()
-        autotune_scale = self._coerce_finite_float(
-            autotune_override.get("replace_max_per_cycle_scale")
-        )
-        if (
-            bool(autotune_override.get("active"))
-            and autotune_scale is not None
-            and base_replace_max_per_cycle > 0
-        ):
-            scaled_cap = int(
-                round(float(effective_replace_max_per_cycle) * max(float(autotune_scale), 0.05))
-            )
-            effective_replace_max_per_cycle = max(
-                0,
-                min(int(base_replace_max_per_cycle), int(scaled_cap)),
-            )
-
-        learning_adjustment = self._execution_learning_route_adjustment(
-            side=None,
-            execution_profile_context=None,
-        )
-        learning_scale = self._coerce_finite_float(
-            learning_adjustment.get("replace_max_per_cycle_scale")
-        )
-        if (
-            bool(learning_adjustment.get("active"))
-            and learning_scale is not None
-            and base_replace_max_per_cycle > 0
-        ):
-            scaled_cap = int(
-                round(float(effective_replace_max_per_cycle) * max(float(learning_scale), 0.05))
-            )
-            effective_replace_max_per_cycle = max(
-                0,
-                min(int(base_replace_max_per_cycle), int(scaled_cap)),
-            )
-
-        context.update(
-            {
-                "spread_bps": float(spread_bps) if spread_bps is not None else None,
-                "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
-                "slippage_volatility_bps": float(slippage_vol_bps),
-                "markout_toxic": bool(markout_toxic),
-                "stress": float(stress),
-                "effective_replace_widen_bps": int(effective_widen_bps),
-                "effective_replace_min_interval_s": float(effective_replace_min_interval_s),
-                "effective_replace_max_per_cycle": int(effective_replace_max_per_cycle),
-                "markout_execution_override_active": bool(
-                    markout_override.get("active")
-                ),
-                "markout_execution_override_scale": (
-                    float(override_scale) if override_scale is not None else None
-                ),
-                "execution_autotune_override_active": bool(
-                    autotune_override.get("active")
-                ),
-                "execution_autotune_override_scale": (
-                    float(autotune_scale) if autotune_scale is not None else None
-                ),
-                "execution_learning_adjustment_active": bool(
-                    learning_adjustment.get("active")
-                ),
-                "execution_learning_replace_scale": (
-                    float(learning_scale) if learning_scale is not None else None
-                ),
-            }
-        )
-        return (
-            int(effective_widen_bps),
-            float(effective_replace_min_interval_s),
-            int(effective_replace_max_per_cycle),
-            context,
-        )
-
     def _queue_pressure_context(
         self,
         *,
@@ -14140,24 +13829,8 @@ class ExecutionEngine:
             0,
             _safe_int(getattr(self, "_pending_new_replacements_this_cycle", 0), 0),
         )
+        # In-place replacements were removed; no per-symbol replace churn exists.
         replace_symbol_window = 0
-        symbol_windows_raw = getattr(self, "_pending_new_symbol_replace_mono", None)
-        if isinstance(symbol_windows_raw, Mapping) and symbol_token:
-            symbol_window_raw = symbol_windows_raw.get(symbol_token)
-            if isinstance(symbol_window_raw, deque):
-                now_mono = float(monotonic_time())
-                window_s = _config_float(
-                    "AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_WINDOW_SEC",
-                    300.0,
-                )
-                if window_s is None or not math.isfinite(float(window_s)):
-                    window_s = 300.0
-                window_s = max(1.0, min(float(window_s), 3600.0))
-                replace_symbol_window = sum(
-                    1
-                    for ts in symbol_window_raw
-                    if (now_mono - float(_safe_float(ts) or 0.0)) <= float(window_s)
-                )
         pending_score = min(float(pending_total) / 8.0, 1.0)
         symbol_score = min(float(pending_symbol) / 3.0, 1.0)
         replace_score = min(float(replace_cycle) / 3.0, 1.0)
@@ -18414,7 +18087,6 @@ class ExecutionEngine:
         self.order_timeout_seconds = int(settings.order_timeout_seconds)
         self.slippage_limit_bps = int(settings.slippage_limit_bps)
         self.order_ttl_seconds = int(getattr(settings, "order_ttl_seconds", 8))
-        self.marketable_limit_slippage_bps = int(getattr(settings, "marketable_limit_slippage_bps", 4))
         raw_participation_rate = getattr(settings, "max_participation_rate", None)
         try:
             parsed_participation_rate = float(raw_participation_rate)

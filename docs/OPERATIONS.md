@@ -942,17 +942,27 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   (`liquidate_positions_if_needed`) and the execution engine's own
   cancel/replace path rely on the open-sell / open-buy quantity clip
   instead.
-- The timeout policy never replaces an order in place.
-  `AI_TRADING_PENDING_NEW_POLICY=replace_widen` (and `replace`/`widen`)
-  cancels at `AI_TRADING_PENDING_NEW_TIMEOUT_SEC`, like `cancel`; `ladder`
-  cancels at `AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC`. The next netting
-  cycle resubmits an exit at the current quote through pretrade once the
-  hold clears; pretrade's duplicate check (same symbol, side, quantity and
-  bar) means that happens on a later bar than the cancelled order's. The
-  replace-only settings (`AI_TRADING_PENDING_NEW_REPLACE_WIDEN_BPS`,
-  `..._LADDER_WIDEN_STEP_BPS`, `..._REPLACE_MIN_INTERVAL_SEC`,
-  `..._REPLACE_MAX_PER_CYCLE`, `MARKETABLE_LIMIT_SLIPPAGE_BPS`) no longer
-  change behaviour.
+- The timeout policy never replaces an order in place. Every policy name
+  (`cancel`, `replace_widen`/`replace`/`widen`, `ladder`) cancels a stale
+  order once it is `AI_TRADING_PENDING_NEW_TIMEOUT_SEC` old; `off` disables
+  it. An order the broker already lists as `pending_cancel` is not
+  cancelled again. Once the hold clears, the next netting cycle may
+  resubmit the exit (if the target or backstop still calls for it) through
+  the canonical route and pretrade, priced from the current quote or bar.
+  A resubmission identical to the cancelled order (same symbol, side,
+  quantity, decision bar and price) is refused until a later bar: in every
+  mode by the engine's client-order-id dedupe
+  (`AI_TRADING_CLIENT_ORDER_ID_DEDUPE_ENABLED`, default on, 900 s window;
+  the client id is derived from those fields), and in paper mode also by
+  pretrade's OMS ledger check (`AI_TRADING_LEDGER_ENABLED`, default on; the
+  JSONL ledger is disabled in live mode). A changed quantity, for example
+  after a partial fill, gets a new id. The settings that only shaped the
+  removed replacement are no longer read: `AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC`,
+  `..._REPLACE_WIDEN_BPS`, `..._LADDER_MAX_REPLACEMENTS`,
+  `..._LADDER_WIDEN_STEP_BPS`, `..._LADDER_CANCEL_AFTER_MAX_REPLACEMENTS`,
+  `..._REPLACE_MIN_INTERVAL_SEC`, `..._REPLACE_MAX_PER_CYCLE`,
+  `..._DYNAMIC_ENABLED`, `..._SYMBOL_REPLACE_*`, and
+  `MARKETABLE_LIMIT_SLIPPAGE_BPS` (still a ConfigSpec, now unread).
 - While a symbol is held, everything the netting cycle would do for it
   waits, including the position backstop's stop-loss and maximum-hold exits.
   A held flat symbol also counts as pending for the position cap and the

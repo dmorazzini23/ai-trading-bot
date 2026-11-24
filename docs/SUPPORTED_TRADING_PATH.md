@@ -50,9 +50,10 @@ position, was removed on November 24, 2026 (owner decision). Pending-order
 maintenance cancels a stale order under its timeout policy in every mode,
 closing orders included (owner decision, November 24, 2026): with
 `AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE=symbol` the symbol stays out of the
-netting cycle until the broker stops listing the cancelled order,
-and the next cycle resubmits any exit at the current quote through the
-canonical route with its pretrade checks.
+netting cycle until the broker stops listing the cancelled order.
+A later cycle may then resubmit the exit through the canonical route with
+its pretrade checks; a resubmission identical to the cancelled order waits
+for a later bar (see `docs/OPERATIONS.md`, Pending-Order Cancels).
 Alpaca's [replace-order contract](https://docs.alpaca.markets/us/reference/replaceorderforaccount)
 does not permit native replacement of `pending_new` orders and warns that a
 successful replacement response does not guarantee the old order was replaced.

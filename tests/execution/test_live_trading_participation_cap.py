@@ -43,7 +43,6 @@ def _build_engine(monkeypatch):
     engine._cycle_account = None
     engine._cycle_account_fetched = True
     engine.order_ttl_seconds = 0
-    engine.marketable_limit_slippage_bps = 10
     engine.max_participation_rate = None
     engine.trading_client = SimpleNamespace()
     engine.settings = None

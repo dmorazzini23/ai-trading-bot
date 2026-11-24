@@ -505,6 +505,59 @@ def test_execute_cycle_logs_symbol_scoped_pending_block_then_runs_netting(
     assert data_provider_updates[0]["status"] == "healthy"
 
 
+def test_execute_cycle_blocks_symbol_cancelled_by_start_cycle_timeout_policy(
+    monkeypatch,
+) -> None:
+    """start_cycle runs the engine's timeout policy after the pending-order
+    handler; a symbol it cancels is in the blocked set when netting runs."""
+
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "0")
+    monkeypatch.setattr(bot_engine, "_decision_log_runtime_path", lambda: "runtime/test-decisions.jsonl")
+    monkeypatch.setattr(bot_engine, "list_open_orders", lambda _api: [])
+    monkeypatch.setattr(bot_engine, "_handle_pending_orders", lambda orders, runtime: True)
+    monkeypatch.setattr(bot_engine, "_pending_orders_block_scope", lambda: "symbol")
+    monkeypatch.setattr(bot_engine, "_resolve_runtime_info_log_ttl_seconds", lambda *_a, **_k: 1.0)
+    monkeypatch.setattr(bot_engine, "_should_emit_runtime_info_log", lambda *_a, **_k: False)
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"status": "healthy", "using_backup": False},
+    )
+    monkeypatch.setattr(bot_engine.runtime_state, "update_data_provider_state", lambda **_k: None)
+    seen_at_netting: list[set[str]] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "_run_netting_cycle",
+        lambda _state, runtime, *_a, **_k: seen_at_netting.append(
+            set(getattr(runtime, bot_engine._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR))
+        ),
+    )
+    cancelled_exit = SimpleNamespace(id="exit-1", symbol="NVDA", side="sell", status="accepted")
+    engine = SimpleNamespace(_pending_new_cancelled_orders=[])
+
+    def _start_cycle() -> None:
+        engine._pending_new_cancelled_orders.append(cancelled_exit)
+
+    engine.start_cycle = _start_cycle
+    runtime = SimpleNamespace(state={}, execution_engine=engine)
+    setattr(runtime, bot_engine._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ("MSFT",))
+
+    execute_run_all_trades_cycle(
+        state=SimpleNamespace(),
+        runtime=runtime,
+        cfg_runtime=SimpleNamespace(post_submit_broker_sync=False),
+        loop_id="loop-timeout-cancel",
+        loop_start=0.0,
+        api=SimpleNamespace(list_orders=lambda: []),
+    )
+
+    assert seen_at_netting == [{"MSFT", "NVDA"}]
+    assert engine._pending_new_cancelled_orders == []
+
+
 def test_execute_cycle_runs_netting_when_config_disables_it(monkeypatch) -> None:
     """The cycle has one route; the retired ``AI_TRADING_NETTING_ENABLED=0`` is ignored."""
     _clear_parity_cache()

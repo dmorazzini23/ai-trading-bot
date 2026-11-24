@@ -1537,3 +1537,47 @@ def test_insufficient_qty_rejection_is_nonretryable_not_conflict_retry(engine_fa
     assert client.submit_calls == 1
     assert policy_calls == []
     assert not any(r.msg.startswith("ORDER_CONFLICT_RETRY") for r in caplog.records)
+
+
+def test_execute_order_leaves_resting_limit_order_past_ttl(engine_factory, monkeypatch):
+    """A limit order still open after order_ttl_seconds is left resting: no
+    cancel and no second submit from execute_order (the timeout policy and
+    stale sweep handle it later)."""
+
+    submits: list[tuple[Any, ...]] = []
+    canceled: list[str] = []
+
+    def _submit_limit_stub(symbol, side, quantity, limit_price, **kwargs):
+        submits.append((symbol, side, quantity, limit_price))
+        return {
+            "id": f"ord-{len(submits)}",
+            "client_order_id": f"cid-{len(submits)}",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+        }
+
+    clock = {"now": 1000.0}
+
+    def _fake_monotonic() -> float:
+        clock["now"] += 30.0
+        return clock["now"]
+
+    engine = engine_factory(lambda order_data: {"id": "ok", **order_data})
+    engine.submit_limit_order = _submit_limit_stub
+    engine.order_ttl_seconds = 8
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._get_order_status_alpaca = lambda _order_id: {"status": "canceled", "filled_qty": "0"}
+    monkeypatch.setattr(lt.time, "monotonic", _fake_monotonic)
+
+    result = engine.execute_order("AAPL", "sell", 5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert len(submits) == 1
+    assert canceled == []
+    # The in-place replacement helper is gone. (In this harness the old
+    # helper bailed out before cancelling because no limit price reached it,
+    # so the two assertions above alone do not discriminate.)
+    assert not hasattr(lt.ExecutionEngine, "_replace_limit_order_with_marketable")

@@ -21,7 +21,6 @@ def _engine_stub() -> Any:
     engine._skip_last_logged_at = {}
     engine._skip_detail_last_logged_at = {}
     engine._engine_cycle_index = 1
-    engine.marketable_limit_slippage_bps = 10
     engine._capacity_broker = lambda client: client
     engine._open_order_qty_index = {}
     engine._pending_orders = {}
