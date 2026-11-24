@@ -170,6 +170,8 @@ class NettingSymbolProcessor:
     prepare_symbol_approval_func: Callable[..., Any]
     prepare_submit_prelude_func: Callable[..., Any]
     execute_submission_func: Callable[..., Any]
+    # False when no strategy is qualified: orders may only reduce a position.
+    new_exposure_allowed: bool
     # PositionBackstop for the cycle; None leaves every decision unchanged.
     position_backstop: Any = None
 
@@ -928,6 +930,34 @@ def process_netting_symbol(
             config_snapshot=symbol_snapshot,
         )
         return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
+
+    if not processor.new_exposure_allowed:
+        # Last point that sizes the order: without a qualified strategy no
+        # order may grow a position or reverse its sign, whatever upstream
+        # sizing produced; reductions (exits, caps, quarantine) still pass.
+        post_trade_shares = int(current_shares) + int(delta_shares)
+        if abs(post_trade_shares) > abs(int(current_shares)) or (
+            post_trade_shares * int(current_shares) < 0
+        ):
+            _extend_gates(gates, ["NO_QUALIFIED_STRATEGY"])
+            _record_decision(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                metrics=_terminal_metrics(
+                    {},
+                    stage="no_qualified_strategy",
+                    reason="NO_QUALIFIED_STRATEGY",
+                    context={
+                        "current_shares": int(current_shares),
+                        "requested_delta_shares": int(delta_shares),
+                    },
+                ),
+                config_snapshot=symbol_snapshot,
+            )
+            return NettingSymbolProcessResult(attempted_increment=0, submitted_increment=0)
 
     approval_context = approval_result.approval_context
     approval = approval_result.approval

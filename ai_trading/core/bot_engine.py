@@ -30020,6 +30020,14 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             proposals,
             float(getattr(cfg, "disagree_ratio_threshold", 0.35)),
         )
+    if not rule_sampling_allowed:
+        # Every proposal is blocked at the current position, and netting sums
+        # them, so N sleeves would net to N times the position. Hold it once.
+        for symbol, target in targets.items():
+            target.target_dollars = float(positions.get(symbol, 0.0) or 0.0) * float(
+                latest_price.get(symbol, 0.0) or 0.0
+            )
+            target.reasons.append("NO_QUALIFIED_STRATEGY")
 
     net_edge_raw_by_symbol: dict[str, float] = {}
     for symbol, target in targets.items():
@@ -30272,6 +30280,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         prepare_symbol_approval_func=prepare_netting_symbol_approval,
         prepare_submit_prelude_func=prepare_netting_submit_prelude,
         execute_submission_func=execute_netting_submission,
+        new_exposure_allowed=bool(rule_sampling_allowed),
         position_backstop=position_backstop,
     )
 

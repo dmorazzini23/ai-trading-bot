@@ -176,35 +176,61 @@ def _last_price(symbol: str) -> float:
     return float(_bars(symbol)["close"].iloc[-2])  # the forming bar is excluded
 
 
+_SLEEVE_SETS = {
+    "one": (("day", "5Min"),),
+    "two": (("day", "5Min"), ("swing", "1Hour")),
+    "three": (("day", "5Min"), ("swing", "1Hour"), ("longshort", "1Day")),
+}
+
+
+def _assert_position_held(symbol: str, dollars: float) -> None:
+    position = _POSITIONS.get(symbol, 0.0)
+    if position == 0.0:
+        assert dollars == 0.0
+        return
+    # dollars = current shares x one recent close: same size, same sign.
+    closes = _bars(symbol)["close"]
+    implied_price = dollars / position
+    assert any(
+        implied_price == pytest.approx(float(close), rel=1e-12)
+        for close in (closes.iloc[-1], closes.iloc[-2])
+    ), (symbol, dollars)
+
+
+@pytest.mark.parametrize("allocation", ["0", "1"])
+@pytest.mark.parametrize("sleeve_set", list(_SLEEVE_SETS))
 @pytest.mark.parametrize("cfg_updates", [
     {**_LIVE, "paper_sampling_enabled": True},
     {**_PAPER, "paper_sampling_enabled": False},
 ])
 def test_without_paper_sampling_no_sleeve_can_increase_exposure(
-    monkeypatch: pytest.MonkeyPatch, cfg_updates: dict[str, Any]
+    monkeypatch: pytest.MonkeyPatch,
+    cfg_updates: dict[str, Any],
+    sleeve_set: str,
+    allocation: str,
 ) -> None:
-    captured = _run_cycle(
-        monkeypatch,
-        cfg_updates=cfg_updates,
-        sleeves=(("day", "5Min"), ("swing", "15Min")),
-    )
+    monkeypatch.setenv("AI_TRADING_ALLOCATION_ENABLED", allocation)
+    sleeves = _SLEEVE_SETS[sleeve_set]
+    captured = _run_cycle(monkeypatch, cfg_updates=cfg_updates, sleeves=sleeves)
 
-    assert {proposal.sleeve for _symbol, proposal, _net in captured} == {"day", "swing"}
-    for symbol, proposal, _net in captured:
+    assert {proposal.sleeve for _symbol, proposal, _net in captured} == {
+        name for name, _timeframe in sleeves
+    }
+    nets: dict[str, Any] = {}
+    for symbol, proposal, net in captured:
         assert proposal.blocked is True
         assert proposal.reason_code == "NO_QUALIFIED_STRATEGY"
         assert proposal.debug["rule_paper_sampling"] is False
         assert proposal.debug["evidence_partition"] == "no_qualified_strategy_shadow"
         assert proposal.debug["research_only"] is True
         assert proposal.debug["promotion_eligible"] is False
-        position = _POSITIONS.get(symbol, 0.0)
-        if position == 0.0:
-            assert proposal.target_dollars == 0.0
-            continue
-        # target = current shares x a recent close: the position is held.
-        implied_price = proposal.target_dollars / position
-        closes = _bars(symbol)["close"]
-        assert float(closes.min()) <= implied_price <= float(closes.max())
+        nets[symbol] = net
+    assert set(nets) == set(_SYMBOLS)
+    for symbol, net in nets.items():
+        # The netted target holds the position once, however many sleeves.
+        assert "NO_QUALIFIED_STRATEGY" in net.reasons
+        _assert_position_held(symbol, float(net.target_dollars))
+        assert int(net.target_shares) == int(_POSITIONS.get(symbol, 0.0))
 
 
 def test_without_paper_sampling_day_targets_hold_current_positions(

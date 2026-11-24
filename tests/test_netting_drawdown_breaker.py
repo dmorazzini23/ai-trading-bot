@@ -653,6 +653,8 @@ def _run_cycle(
     )
     monkeypatch.setattr("ai_trading.core.netting.compute_sleeve_proposal", _proposal)
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
+    # These cycles exercise sizing and exits on the paper rule-sampling path.
+    monkeypatch.setattr(bot_engine, "rule_paper_sampling_allowed", lambda _cfg: True)
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
     monkeypatch.setattr(
         "ai_trading.oms.ledger.deterministic_client_order_id",

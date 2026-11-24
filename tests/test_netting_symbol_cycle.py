@@ -267,6 +267,7 @@ def _make_processor(**overrides: Any) -> tuple[NettingSymbolProcessor, list[dict
         prepare_symbol_approval_func=prepare_symbol_approval_func,
         prepare_submit_prelude_func=prepare_submit_prelude_func,
         execute_submission_func=execute_submission_func,
+        new_exposure_allowed=True,
     )
     for key, value in overrides.items():
         setattr(processor, key, value)
@@ -740,3 +741,57 @@ def test_submitted_decision_records_arrival_quote_not_runtime_snapshot_quote() -
     for key, value in evidence.items():
         assert metrics[key] == value
 
+
+@pytest.mark.parametrize(
+    ("current_shares", "target_dollars", "submits"),
+    [
+        (10, 200.0, False),  # long grows: 10 -> 20
+        (-5, -100.0, False),  # short grows: -5 -> -10
+        (0, 100.0, False),  # flat opens
+        (10, -50.0, True),  # a reversal is cut to flat first: a pure close
+        (10, 50.0, True),  # long reduces: 10 -> 5
+        (-5, 0.0, True),  # short closes
+    ],
+)
+def test_process_netting_symbol_without_qualified_strategy_only_reduces(
+    current_shares: int, target_dollars: float, submits: bool
+) -> None:
+    submitted: list[dict[str, Any]] = []
+
+    def execute_submission_func(**kwargs: Any) -> Any:
+        submitted.append(kwargs)
+        return SimpleNamespace(
+            status="submitted",
+            gates_added=("OK_TRADE",),
+            attempted_increment=1,
+            submitted_increment=1,
+            metrics={},
+            tca_record=None,
+            order_payload={"client_order_id": "cid-1"},
+            decision_trace_id="trace-1",
+            order_intent_contract={"intent": "dummy"},
+        )
+
+    processor, records = _make_processor(
+        execute_submission_func=execute_submission_func,
+        positions={"AAPL": current_shares},
+        new_exposure_allowed=False,
+    )
+
+    result = process_netting_symbol(
+        processor=processor,
+        symbol="AAPL",
+        net_target=_make_net_target(bar_ts=processor.now, target_dollars=target_dollars),
+        orders_submitted=0,
+    )
+
+    if submits:
+        assert len(submitted) == 1
+        post_trade = current_shares + int(submitted[0]["delta_shares"])
+        assert abs(post_trade) < abs(current_shares)
+        assert submitted[0]["side"] == ("sell" if current_shares > 0 else "buy")
+        assert post_trade * current_shares >= 0
+    else:
+        assert submitted == []
+        assert result.submitted_increment == 0
+        assert "NO_QUALIFIED_STRATEGY" in records[-1]["gates"]

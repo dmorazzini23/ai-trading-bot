@@ -263,6 +263,8 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(
         ),
     )
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
+    # These cycles exercise sizing and exits on the paper rule-sampling path.
+    monkeypatch.setattr(bot_engine, "rule_paper_sampling_allowed", lambda _cfg: True)
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
     monkeypatch.setattr(
         "ai_trading.oms.ledger.deterministic_client_order_id",
@@ -518,6 +520,8 @@ def test_netting_cycle_pacing_headroom_uses_submitted_orders(monkeypatch) -> Non
         ),
     )
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
+    # These cycles exercise sizing and exits on the paper rule-sampling path.
+    monkeypatch.setattr(bot_engine, "rule_paper_sampling_allowed", lambda _cfg: True)
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
     monkeypatch.setattr(
         "ai_trading.oms.ledger.deterministic_client_order_id",
@@ -690,6 +694,8 @@ def test_netting_cycle_clamps_cross_zero_reversal_before_submit(monkeypatch) -> 
         ),
     )
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
+    # These cycles exercise sizing and exits on the paper rule-sampling path.
+    monkeypatch.setattr(bot_engine, "rule_paper_sampling_allowed", lambda _cfg: True)
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
     monkeypatch.setattr(
         "ai_trading.oms.ledger.deterministic_client_order_id",

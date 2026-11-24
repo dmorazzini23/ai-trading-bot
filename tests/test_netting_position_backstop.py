@@ -1467,6 +1467,8 @@ def _patch_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Any, 
     )
     monkeypatch.setattr("ai_trading.core.netting.compute_sleeve_proposal", _proposal)
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
+    # These cycles exercise sizing and exits on the paper rule-sampling path.
+    monkeypatch.setattr(bot_engine, "rule_paper_sampling_allowed", lambda _cfg: True)
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
     monkeypatch.setattr(
         "ai_trading.oms.ledger.deterministic_client_order_id",
@@ -2031,3 +2033,41 @@ def test_attack_optimizer_reject_holds_an_upsized_trim_and_passes_a_full_close(
     else:
         assert not _OVERRIDE_MARKERS & set(gates)
         assert records[0]["metrics"]["terminal_reason"] == "PORTFOLIO_OPTIMIZER_REJECT"
+
+
+def test_netting_cycle_without_qualified_strategy_still_takes_backstop_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With no qualified strategy the entry is refused; the stop-loss exit is not."""
+
+    written, submitted = _patch_cycle(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot_engine, "rule_paper_sampling_allowed", lambda _cfg: False)
+    cfg = TradingConfig.from_env(allow_missing_drawdown=True).update(
+        data_contract_enabled=False,
+        recon_enabled=False,
+        ledger_enabled=False,
+        rth_only=False,
+        allow_extended=True,
+        decision_log_path=None,
+    )
+    sync = _sync(SimpleNamespace(symbol="MSFT", qty="15", side="long", avg_entry_price="110.0"))
+    runtime = SimpleNamespace(
+        cfg=cfg,
+        tickers=["AAPL", "MSFT"],
+        universe_tickers=["AAPL", "MSFT"],
+        api=None,
+        execution_engine=SimpleNamespace(
+            _last_submit_outcome={},
+            _get_account_snapshot=lambda: SimpleNamespace(id="acct-1", equity="100000"),
+            _broker_sync=sync,
+        ),
+    )
+    state = bot_engine.BotState()
+    state.last_order_bar_ts = _NoBarDedupeDict()
+
+    bot_engine._run_netting_cycle(state, runtime, "loop", 0.0)
+
+    assert submitted == [("MSFT", 15, "sell")]
+    gates = {str(r.symbol).upper(): list(r.gates or []) for r in written}
+    assert "POSITION_STOP_LOSS_EXIT" in gates["MSFT"]
+    assert "NO_QUALIFIED_STRATEGY" in gates["AAPL"]
