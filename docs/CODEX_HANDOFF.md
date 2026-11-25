@@ -1,6 +1,60 @@
 # Current handoff
 
-## November 25: exit-order fixes, day-sleeve step 1 and readiness block deployed (`7ade302ee`) (start here)
+## November 25 (evening): day-sleeve step 2, slippage-spec removal and loop-stall alert deployed (`92dddb269`) (start here)
+
+- **Running bot:** `92dddb269` since 22:33:59 UTC November 25, no restarts.
+  Config hash `c635a50662cdfbb4a7a0ad6b2af414a11eaca6697edc3267ae63975aaf232fc7`
+  (was `3084db64…`; owner approved). Health `healthy`; only flag
+  `replay_live_parity_gate_failed`. `decision_loop.monitored: true`,
+  threshold 900 s. Paper burn-in counters reset on a config hash change.
+- **Deployed:** legacy startup model load and ML liveness leg removed; release
+  check no longer pins a model (`--models-root` ignored, logged as
+  `RELEASE_IDENTITY_MODELS_ROOT_IGNORED`); `marketable_limit_slippage_bps` and
+  `warn_if_model_missing` ConfigSpecs removed; alert-only decision-loop
+  watchdog (`DECISION_LOOP_STALLED`, `docs/OPERATIONS.md`).
+- **Validation:** full suite on `92dddb269`: 6,874 passed, 2 skipped. Release
+  check passed both phases. Bot was flat at the stop.
+- **Rollback:** stop, `git checkout --detach 7ade302ee`, restore
+  `runtime/release_spec.7ade302ee.bak.json`, start.
+- **Installed systemd unit is still the old one** (passes `--models-root`).
+  New code runs under it. Owner installs the packaged unit once, after the
+  model-leftovers deploy (that branch edits the unit again). The new unit does
+  not start code older than step 2.
+- **`.env`:** `MARKETABLE_LIMIT_SLIPPAGE_BPS` and
+  `AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS` removed (1,623 lines).
+  `AI_TRADING_ML_SHADOW_ENABLED` must stay on: it gates the pre-rank quote
+  refresh (feeds the de-risk gate) and the per-cycle pre-rank snapshot row.
+  A rename was considered and dropped.
+- **Session November 25 on `7ade302ee`:** clean. `rule_paper_sampling` labels on
+  all orders; `POSITION_BACKSTOP_ARMED` seen for the first time (AMZN, MSFT).
+  A new position is unarmed (`no_basis`) for one cycle until the broker-sync
+  snapshot includes it.
+- **Merged to main, test only:** SLO monitor isolation fix
+  (`tests/monitoring/test_slo_institutional.py`).
+- **Built, not merged, not deployed:**
+  - `claude/liveness-alerts` (`e1531bf32`): RL liveness alert at error level;
+    Slack "Signal age" line without ML. No config change.
+  - `claude/model-leftovers` (`fc28964c5`): removes `signal_ml`,
+    `model_loader`, helpers, `strict_model_loading` ConfigSpec and
+    `AI_TRADING_MODEL_MODULE` from the unit and `start.sh`. Reviewed; changes
+    the config hash; full suite not yet run. After its deploy these `.env`
+    names can go: `AI_TRADING_REQUIRE_ML_MODEL`,
+    `AI_TRADING_ML_USE_REGIME_THRESHOLDS`, `AI_TRADING_MODEL_MANIFEST_PATH`,
+    `AI_TRADING_ML_SHADOW_MODEL_MODULE`, `AI_TRADING_ML_SHADOW_MODEL_PATH`,
+    `AI_TRADING_MODEL_MODULE`.
+- **Open owner decision:** `replay_live_parity_gate_failed` is permanently on
+  because its economics check (250 samples, positive net edge) cannot pass
+  with only the rule sampler; all parity checks pass. Proposal: in paper, raise
+  the flag only for parity/freshness/contract failures and report economics
+  separately; gate semantics for real money unchanged.
+- **Research:** earnings draft `d60cc5a60` on `claude/earnings-trial-runner`
+  (unregistered). Owner delegated the "distinct" ruling: stands on condition
+  that out-of-basket entries pass on their own. Desk comparison ranked
+  earnings first (about 8–12% pass chance on full-history data), dividend
+  ex-date run-up second. Nothing registered; waits on Sharadar data
+  (reminder December 3).
+
+## November 25: exit-order fixes, day-sleeve step 1 and readiness block deployed (`7ade302ee`)
 
 - **Running service:** `7ade302ee` since Wed Nov 25 00:30 UTC (closed, flat,
   no open orders), owner-approved. Config hash unchanged (`3084db64...`);
