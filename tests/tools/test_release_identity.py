@@ -1,8 +1,7 @@
-"""Release identity must fail closed on untested code, schema or model bytes."""
+"""Release identity must fail closed on untested code, config or schema."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -23,14 +22,9 @@ def _sqlite_schema(path: Path, revision: str) -> str:
     return f"sqlite:///{path}"
 
 
-def test_release_identity_matches_exact_code_config_schema_and_model(
+def test_release_identity_matches_exact_code_config_and_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    model_root = tmp_path / "models"
-    model_root.mkdir()
-    model_path = model_root / "candidate.bin"
-    model_path.write_bytes(b"qualified-artifact-bytes")
-    model_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
     database_url = _sqlite_schema(tmp_path / "oms.db", "rev-current")
     commit = "a" * 40
     monkeypatch.setattr(release_identity, "_git_identity", lambda _root: (commit, False))
@@ -47,16 +41,20 @@ def test_release_identity_matches_exact_code_config_schema_and_model(
         "schema_version": 1, "tested_commit_sha": commit,
         "resolved_config_hash": "config-1", "launch_profile_hash": "profile-1",
         "schema_revision": "rev-current",
-        "model_artifact": {"path": "candidate.bin", "sha256": model_hash},
     }
     kwargs = {
         "cfg": SimpleNamespace(), "repo_root": tmp_path,
         "alembic_ini": tmp_path / "alembic.ini",
-        "database_url": database_url, "models_root": model_root,
-        "configured_model_path": str(model_path),
+        "database_url": database_url,
     }
 
-    assert release_identity.verify_release_identity(spec, **kwargs)["status"] == "pass"
+    passed = release_identity.verify_release_identity(spec, **kwargs)
+    assert passed["status"] == "pass"
+    assert set(passed["checks"]) == {
+        "spec_version", "spec_fields", "tested_commit", "clean_checkout",
+        "config_hash", "profile_hash", "schema_revision",
+    }
+    assert passed["observed"]["model_identity"] == "absent"
 
     with sqlite3.connect(tmp_path / "oms.db") as connection:
         connection.execute("UPDATE alembic_version SET version_num = 'rev-previous'")
@@ -67,12 +65,6 @@ def test_release_identity_matches_exact_code_config_schema_and_model(
     with sqlite3.connect(tmp_path / "oms.db") as connection:
         connection.execute("UPDATE alembic_version SET version_num = 'rev-current'")
 
-    model_path.write_bytes(b"different-artifact-bytes")
-    changed_model = release_identity.verify_release_identity(spec, **kwargs)
-    assert changed_model["status"] == "blocked"
-    assert changed_model["checks"]["model_artifact"] is False
-
-    model_path.write_bytes(b"qualified-artifact-bytes")
     monkeypatch.setattr(release_identity, "_git_identity", lambda _root: (commit, True))
     dirty = release_identity.verify_release_identity(spec, **kwargs)
     assert dirty["checks"]["clean_checkout"] is False
@@ -83,11 +75,6 @@ def test_release_identity_matches_exact_code_config_schema_and_model(
     assert stale_schema["checks"]["schema_revision"] is False
 
     monkeypatch.setattr(release_identity, "_schema_head", lambda _ini: "rev-current")
-    wrong_runtime_model = release_identity.verify_release_identity(
-        spec, **{**kwargs, "configured_model_path": str(tmp_path / "other-model.bin")}
-    )
-    assert wrong_runtime_model["checks"]["model_path_matches_runtime"] is False
-
     unexpected_field = release_identity.verify_release_identity(
         {**spec, "accidental_secret": "do-not-persist"}, **kwargs
     )
@@ -95,19 +82,46 @@ def test_release_identity_matches_exact_code_config_schema_and_model(
     assert "do-not-persist" not in json.dumps(unexpected_field)
 
 
-def test_release_identity_rejects_missing_database_and_model_escape(
+def test_release_identity_accepts_spec_written_with_legacy_model_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live spec still has ``model_artifact``; only the SHA changes at deploy."""
+
+    database_url = _sqlite_schema(tmp_path / "oms.db", "rev-current")
+    commit = "c" * 40
+    monkeypatch.setattr(release_identity, "_git_identity", lambda _root: (commit, False))
+    monkeypatch.setattr(release_identity, "_schema_head", lambda _ini: "rev-current")
+    monkeypatch.setattr(
+        release_identity, "build_run_manifest",
+        lambda _cfg: {
+            "mode": "paper", "resolved_config_hash": "config-1",
+            "launch_profile_hash": "profile-1",
+        },
+    )
+    legacy_spec = {
+        "schema_version": 1, "tested_commit_sha": commit,
+        "resolved_config_hash": "config-1", "launch_profile_hash": "profile-1",
+        "schema_revision": "rev-current",
+        # No file exists for this pin: the model is no longer checked.
+        "model_artifact": {"path": "trained_model.pkl", "sha256": "f" * 64},
+    }
+    result = release_identity.verify_release_identity(
+        legacy_spec, cfg=SimpleNamespace(), repo_root=tmp_path,
+        alembic_ini=tmp_path / "alembic.ini", database_url=database_url,
+    )
+    assert result["status"] == "pass"
+    assert "model_artifact" not in result["checks"]
+    assert "model_path_matches_runtime" not in result["checks"]
+    assert result["observed"]["model_identity"] == "legacy_field_ignored"
+    assert "f" * 64 not in json.dumps(result)
+
+
+def test_release_identity_rejects_missing_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     missing_db = tmp_path / "missing.db"
     assert release_identity._applied_schema_revision(f"sqlite:///{missing_db}") is None
     assert not missing_db.exists()
-
-    model_root = tmp_path / "models"
-    model_root.mkdir()
-    outside = tmp_path / "secret.txt"
-    outside.write_text("not a model", encoding="utf-8")
-    assert release_identity._model_sha256(model_root, "../secret.txt") is None
-    assert release_identity._model_sha256(model_root, str(outside)) is None
 
     monkeypatch.setattr(release_identity, "_git_identity", lambda _root: ("b" * 40, False))
     monkeypatch.setattr(release_identity, "_schema_head", lambda _ini: "rev")
@@ -121,16 +135,14 @@ def test_release_identity_rejects_missing_database_and_model_escape(
     spec = {
         "schema_version": 1, "tested_commit_sha": "b" * 40,
         "resolved_config_hash": "config", "launch_profile_hash": "profile",
-        "schema_revision": "rev", "model_artifact": None,
+        "schema_revision": "rev",
     }
     result = release_identity.verify_release_identity(
         spec, cfg=SimpleNamespace(), repo_root=tmp_path,
         alembic_ini=tmp_path / "alembic.ini",
-        database_url=f"sqlite:///{missing_db}", models_root=model_root,
-        configured_model_path=None,
+        database_url=f"sqlite:///{missing_db}",
     )
     assert result["status"] == "blocked"
-    assert result["checks"]["model_artifact"] is False
     assert result["checks"]["schema_revision"] is False
 
 
@@ -141,26 +153,31 @@ def test_pre_migration_requires_known_revision_in_checkout_history() -> None:
     assert not release_identity._schema_path_contains(alembic_ini, "unrelated_revision")
 
 
+@pytest.mark.parametrize("models_root_args", [[], ["--models-root", "IGNORED"]])
 def test_release_identity_cli_writes_non_secret_blocked_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, models_root_args: list[str]
 ) -> None:
+    """``--models-root`` is optional and ignored, so old and new units both run."""
+
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
     output = tmp_path / "report.json"
     monkeypatch.setattr(release_identity, "get_trading_config", lambda: SimpleNamespace())
     monkeypatch.setattr(release_identity, "_database_url_from_runtime", lambda: "sqlite:///missing.db")
-    monkeypatch.setattr(
-        release_identity, "verify_release_identity",
-        lambda *_args, **_kwargs: {
-            "status": "blocked", "checks": {"model_artifact": False},
-        },
-    )
+    seen_kwargs: list[dict[str, object]] = []
 
-    assert release_identity.main([
-        "--spec", str(spec_path), "--models-root", str(tmp_path),
-        "--output", str(output),
-    ]) == 1
+    def _verify(*_args: object, **kwargs: object) -> dict[str, object]:
+        seen_kwargs.append(kwargs)
+        return {"status": "blocked", "checks": {"schema_revision": False}}
+
+    monkeypatch.setattr(release_identity, "verify_release_identity", _verify)
+
+    argv = ["--spec", str(spec_path), "--output", str(output)]
+    argv += [str(tmp_path) if arg == "IGNORED" else arg for arg in models_root_args]
+    assert release_identity.main(argv) == 1
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "blocked"
+    assert "models_root" not in seen_kwargs[0]
+    assert "configured_model_path" not in seen_kwargs[0]
 
 
 def test_packaged_service_checks_identity_before_and_after_migration() -> None:

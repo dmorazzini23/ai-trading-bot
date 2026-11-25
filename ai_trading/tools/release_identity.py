@@ -1,9 +1,16 @@
-"""Read-only predeployment identity check for code, config, schema and model."""
+"""Read-only predeployment identity check for code, config and schema.
+
+The runtime serves no ML model, so the check no longer pins a model artifact.
+A spec written before that change still carries a ``model_artifact`` entry; it
+is accepted and ignored so the deploy needs only the commit SHA edited. The
+``--models-root`` option is accepted and ignored for the same reason, while the
+installed systemd unit may still pass it. Both can be removed once the live
+spec and the installed unit no longer carry them.
+"""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
 import subprocess
@@ -21,8 +28,18 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ai_trading.config.management import get_env
 from ai_trading.config.runtime import get_trading_config
+from ai_trading.logging import get_logger
 from ai_trading.runtime.atomic_io import atomic_write_text
 from ai_trading.runtime.run_manifest import build_run_manifest
+
+logger = get_logger(__name__)
+
+_SPEC_FIELDS = frozenset({
+    "schema_version", "tested_commit_sha", "resolved_config_hash",
+    "launch_profile_hash", "schema_revision",
+})
+# Written by specs from before the model pin was removed; ignored if present.
+_LEGACY_SPEC_FIELD = "model_artifact"
 
 
 def _git_identity(repo_root: Path) -> tuple[str | None, bool | None]:
@@ -86,26 +103,6 @@ def _applied_schema_revision(database_url: str) -> str | None:
     return str(rows[0][0]) if len(rows) == 1 else None
 
 
-def _model_sha256(models_root: Path, relative_path: str) -> str | None:
-    root = models_root.resolve()
-    if Path(relative_path).is_absolute():
-        return None
-    target = (root / relative_path).resolve()
-    if not target.is_relative_to(root) or not target.is_file():
-        return None
-    before = target.stat()
-    digest = hashlib.sha256()
-    with target.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    after = target.stat()
-    if (before.st_ino, before.st_size, before.st_mtime_ns) != (
-        after.st_ino, after.st_size, after.st_mtime_ns
-    ):
-        return None
-    return digest.hexdigest()
-
-
 def verify_release_identity(
     spec: Mapping[str, Any],
     *,
@@ -113,8 +110,6 @@ def verify_release_identity(
     repo_root: Path,
     alembic_ini: Path,
     database_url: str,
-    models_root: Path,
-    configured_model_path: str | None,
     pre_migration: bool = False,
 ) -> dict[str, Any]:
     """Compare a reviewed release specification with observed local identity."""
@@ -126,38 +121,15 @@ def verify_release_identity(
     except (OSError, sqlite3.DatabaseError, SQLAlchemyError, RuntimeError, ValueError):
         applied_revision = None
     head_revision = _schema_head(alembic_ini)
-    model_spec = spec.get("model_artifact")
-    model_path = model_spec.get("path") if isinstance(model_spec, Mapping) else None
-    model_hash = (
-        _model_sha256(models_root, str(model_path))
-        if isinstance(model_path, str) and model_path.strip()
-        else None
-    )
-    expected_model_hash = (
-        str(model_spec.get("sha256") or "").lower()
-        if isinstance(model_spec, Mapping) else None
-    )
     expected_commit = str(spec.get("tested_commit_sha") or "").lower()
     expected_config = str(spec.get("resolved_config_hash") or "").lower()
     expected_profile = str(spec.get("launch_profile_hash") or "").lower()
     expected_schema = str(spec.get("schema_revision") or "")
     mode = str(manifest.get("mode") or "").lower()
-    resolved_model_path = (
-        (models_root.resolve() / str(model_path)).resolve()
-        if isinstance(model_path, str) and model_path.strip() and not Path(model_path).is_absolute()
-        else None
-    )
-    configured_model = (
-        Path(configured_model_path).expanduser().resolve()
-        if configured_model_path else None
-    )
+    legacy_model_field = _LEGACY_SPEC_FIELD in spec
     checks = {
         "spec_version": spec.get("schema_version") == 1,
-        "spec_fields": set(spec) == {
-            "schema_version", "tested_commit_sha", "resolved_config_hash",
-            "launch_profile_hash", "schema_revision", "model_artifact",
-        } and isinstance(model_spec, Mapping)
-        and set(model_spec) == {"path", "sha256"},
+        "spec_fields": set(spec) - {_LEGACY_SPEC_FIELD} == _SPEC_FIELDS,
         "tested_commit": len(expected_commit) == 40
         and all(char in "0123456789abcdef" for char in expected_commit)
         and commit == expected_commit,
@@ -170,12 +142,6 @@ def verify_release_identity(
         and (applied_revision == expected_schema or (
             pre_migration and _schema_path_contains(alembic_ini, applied_revision)
         )),
-        "model_artifact": bool(expected_model_hash)
-        and model_hash is not None
-        and model_hash == expected_model_hash,
-        "model_path_matches_runtime": resolved_model_path is not None
-        and configured_model is not None
-        and resolved_model_path == configured_model,
     }
     return {
         "status": "pass" if all(checks.values()) else "blocked",
@@ -189,8 +155,7 @@ def verify_release_identity(
             "launch_profile_hash": manifest["launch_profile_hash"],
             "schema_revision": applied_revision,
             "schema_head": head_revision,
-            "model_artifact_sha256": model_hash,
-            "model_identity": "absent" if model_spec is None else "provided",
+            "model_identity": "legacy_field_ignored" if legacy_model_field else "absent",
             "mode": mode,
         },
     }
@@ -213,10 +178,18 @@ def _database_url_from_runtime() -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True, type=Path)
-    parser.add_argument("--models-root", required=True, type=Path)
+    parser.add_argument(
+        "--models-root", type=Path, default=None,
+        help="Ignored. Accepted while the installed systemd unit still passes it.",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--pre-migration", action="store_true")
     args = parser.parse_args(argv)
+    if args.models_root is not None:
+        logger.info(
+            "RELEASE_IDENTITY_MODELS_ROOT_IGNORED",
+            extra={"reason": "no_runtime_model_pin"},
+        )
     repo_root = Path(__file__).resolve().parents[2]
     try:
         spec = json.loads(args.spec.read_text(encoding="utf-8"))
@@ -228,8 +201,6 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=repo_root,
             alembic_ini=repo_root / "alembic.ini",
             database_url=_database_url_from_runtime(),
-            models_root=args.models_root,
-            configured_model_path=str(get_env("AI_TRADING_MODEL_PATH", "", cast=str) or ""),
             pre_migration=bool(args.pre_migration),
         )
     except (OSError, ValueError, RuntimeError) as exc:
