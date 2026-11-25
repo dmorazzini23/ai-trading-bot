@@ -586,6 +586,8 @@ neither "unavailable" nor the stale-model pattern. Outside paper mode it cannot
 trade. The new rule is stricter in the other direction: with
 `AI_TRADING_REQUIRE_ML_MODEL=0` the old path did not gate the rule scorer at
 all, in any mode, while it now trades only under active paper sampling.
+Nothing reads `AI_TRADING_REQUIRE_ML_MODEL` any more; it can be deleted from
+`.env`.
 
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
