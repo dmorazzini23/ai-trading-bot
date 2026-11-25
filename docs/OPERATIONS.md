@@ -987,7 +987,7 @@ Safety backstops in the netting cycle, not strategy rules. Code:
   `..._LADDER_WIDEN_STEP_BPS`, `..._LADDER_CANCEL_AFTER_MAX_REPLACEMENTS`,
   `..._REPLACE_MIN_INTERVAL_SEC`, `..._REPLACE_MAX_PER_CYCLE`,
   `..._DYNAMIC_ENABLED`, `..._SYMBOL_REPLACE_*`, and
-  `MARKETABLE_LIMIT_SLIPPAGE_BPS` (still a ConfigSpec, now unread).
+  `MARKETABLE_LIMIT_SLIPPAGE_BPS` (its ConfigSpec is removed too).
 - While a symbol is held, everything the netting cycle would do for it
   waits, including the position backstop's stop-loss and maximum-hold exits.
   A held flat symbol also counts as pending for the position cap and the
