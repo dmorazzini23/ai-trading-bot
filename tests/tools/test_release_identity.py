@@ -192,6 +192,8 @@ def test_packaged_service_checks_identity_before_and_after_migration() -> None:
     start = unit.index("ExecStart=/bin/bash")
     assert sync < before < migrate < after < start
     assert unit.count("sync_env_runtime.sh") == 1
+    # The model pin is gone; the tool still accepts the flag for older units.
+    assert "--models-root" not in unit
 
 
 def test_isolated_migration_rollback_restores_preupgrade_oms_state(tmp_path: Path) -> None:
