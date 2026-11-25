@@ -44,7 +44,6 @@ def _probe_model_and_universe():
     os.getenv('AI_TRADING_TICKERS_FILE', 'tickers.csv')
     os.getenv('AI_TRADING_TICKERS_CSV')
     os.getenv('AI_TRADING_MODEL_PATH')
-    os.getenv('AI_TRADING_MODEL_MODULE')
     try:
         import joblib
     except (ImportError, KeyError, ValueError, TypeError):
@@ -52,13 +51,7 @@ def _probe_model_and_universe():
 
 def _probe_model_config():
     import os
-    p = os.getenv('AI_TRADING_MODEL_PATH')
-    m = os.getenv('AI_TRADING_MODEL_MODULE')
-    if p:
-        pass
-    elif m:
-        pass
-    else:
+    if not os.getenv('AI_TRADING_MODEL_PATH'):
         return False
     try:
         import joblib

@@ -162,8 +162,6 @@ from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import load_verified_joblib_artifact
 from ai_trading.models.contracts import (
     DAY_SLEEVE_ML_BAR_TIMEFRAME,
-    LIVE_ML_BAR_TIMEFRAME,
-    LIVE_ML_FEATURE_COLUMNS,
     normalize_bar_timeframe,
 )
 from ai_trading.features.input_provenance import describe_batch
@@ -1692,7 +1690,6 @@ def _record_prerank_shadow_snapshot(
 ) -> None:
     """Emit a lightweight shadow snapshot from the active prerank path.
 
-    This path is exercised even when legacy ``signal_ml`` hooks are bypassed.
     Recording here guarantees shadow artifacts reflect the real execution flow.
     """
 
@@ -5170,14 +5167,6 @@ def _sentiment_evidence_is_authoritative(ticker: str) -> bool:
     return bool(isinstance(evidence, Mapping) and evidence.get("authoritative") is True)
 
 
-def _model_file_signature(path: str) -> tuple[int, int] | None:
-    try:
-        stats = Path(path).stat()
-    except OSError:
-        return None
-    return int(stats.st_mtime_ns), int(stats.st_size)
-
-
 def _runtime_execution_mode() -> str:
     try:
         raw = get_env("EXECUTION_MODE", "sim")
@@ -5192,141 +5181,6 @@ def _live_execution_blocks_yahoo_fallback() -> bool:
 
 def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool:
     return execution_mode == "paper" and bool(allow_paper_train)
-
-
-_SHADOW_MODEL_CACHE: Any | None = None
-_SHADOW_MODEL_CACHE_META: dict[str, Any] | None = None
-
-
-def _shadow_model_cache_matches(path: str, modname: str) -> bool:
-    if _SHADOW_MODEL_CACHE is None:
-        return False
-    meta = _SHADOW_MODEL_CACHE_META or {}
-    kind = str(meta.get("kind") or "")
-    if path:
-        if kind != "file":
-            return False
-        if str(meta.get("path") or "") != path:
-            return False
-        return bool(meta.get("signature") == _model_file_signature(path))
-    if modname:
-        return kind == "module" and str(meta.get("module") or "") == modname
-    return False
-
-
-def _set_shadow_model_cache(
-    model: Any,
-    *,
-    kind: str,
-    path: str | None = None,
-    module: str | None = None,
-) -> Any:
-    global _SHADOW_MODEL_CACHE, _SHADOW_MODEL_CACHE_META
-    _SHADOW_MODEL_CACHE = model
-    meta: dict[str, Any] = {"kind": kind}
-    if path:
-        meta["path"] = path
-        meta["signature"] = _model_file_signature(path)
-    if module:
-        meta["module"] = module
-    _SHADOW_MODEL_CACHE_META = meta
-    return model
-
-
-def _load_shadow_model() -> Any | None:
-    if not bool(get_env("AI_TRADING_ML_SHADOW_ENABLED", False, cast=bool)):
-        return None
-    shadow_path = str(get_env("AI_TRADING_ML_SHADOW_MODEL_PATH", "") or "").strip()
-    shadow_mod = str(get_env("AI_TRADING_ML_SHADOW_MODEL_MODULE", "") or "").strip()
-    if not shadow_path and not shadow_mod:
-        return None
-    if _shadow_model_cache_matches(shadow_path, shadow_mod):
-        return _SHADOW_MODEL_CACHE
-    if shadow_path:
-        if not os.path.isfile(shadow_path):
-            logger.warning(
-                "ML_SHADOW_MODEL_MISSING",
-                extra={"model_path": shadow_path},
-            )
-            return None
-        try:
-            model = load_verified_joblib_artifact(shadow_path)
-        except COMMON_EXC as exc:  # noqa: BLE001
-            logger.warning(
-                "ML_SHADOW_MODEL_LOAD_FAILED",
-                extra={"model_path": shadow_path, "error": str(exc)},
-            )
-            return None
-        return _set_shadow_model_cache(model, kind="file", path=shadow_path)
-    try:
-        module = importlib.import_module(shadow_mod)
-    except COMMON_EXC as exc:  # noqa: BLE001
-        logger.warning(
-            "ML_SHADOW_MODEL_IMPORT_FAILED",
-            extra={"model_module": shadow_mod, "error": str(exc)},
-        )
-        return None
-    factory = getattr(module, "get_model", None) or getattr(module, "Model", None)
-    if not callable(factory):
-        logger.warning(
-            "ML_SHADOW_MODEL_FACTORY_MISSING",
-            extra={"model_module": shadow_mod},
-        )
-        return None
-    try:
-        model = factory()
-    except COMMON_EXC as exc:  # noqa: BLE001
-        logger.warning(
-            "ML_SHADOW_MODEL_FACTORY_FAILED",
-            extra={"model_module": shadow_mod, "error": str(exc)},
-        )
-        return None
-    return _set_shadow_model_cache(model, kind="module", module=shadow_mod)
-
-
-def _predict_class_and_probability(model: Any, X: np.ndarray) -> tuple[Any, float]:
-    proba_row_raw = model.predict_proba(X)[0]
-    proba_row = np.asarray(proba_row_raw, dtype=float)
-    if proba_row.ndim == 0:
-        p_edge = float(np.clip(proba_row.item(), 0.0, 1.0))
-    else:
-        classes = getattr(model, "classes_", None)
-        positive_index: int | None = None
-        if classes is not None:
-            try:
-                classes_list = list(classes)
-            except TypeError:
-                classes_list = []
-            if len(classes_list) == int(proba_row.shape[0]):
-                for idx, label in enumerate(classes_list):
-                    try:
-                        if int(label) == 1:
-                            positive_index = int(idx)
-                            break
-                    except (TypeError, ValueError):
-                        continue
-        if positive_index is None:
-            positive_index = 1 if int(proba_row.shape[0]) > 1 else 0
-        positive_index = max(0, min(int(proba_row.shape[0]) - 1, int(positive_index)))
-        p_edge = float(np.clip(float(proba_row[positive_index]), 0.0, 1.0))
-    orientation_raw = str(getattr(model, "edge_score_orientation_", "direct") or "").strip().lower()
-    if orientation_raw in {"inverse", "inverted", "flip"}:
-        p_edge = float(np.clip(1.0 - p_edge, 0.0, 1.0))
-    pred = 1 if p_edge >= 0.5 else 0
-    confidence = p_edge if pred == 1 else (1.0 - p_edge)
-    return pred, float(np.clip(confidence, 0.0, 1.0))
-
-
-def _model_timeframe_compatible_for_live_inference(model: Any) -> tuple[bool, str]:
-    required = normalize_bar_timeframe(getattr(model, "required_bar_timeframe_", ""))
-    if not required:
-        metadata = getattr(model, "artifact_manifest_metadata_", None)
-        if isinstance(metadata, Mapping):
-            required = normalize_bar_timeframe(metadata.get("required_bar_timeframe"))
-    if not required:
-        return True, ""
-    expected = normalize_bar_timeframe(LIVE_ML_BAR_TIMEFRAME)
-    return required == expected, required
 
 
 def _ml_shadow_log_path() -> Path:
@@ -5428,121 +5282,6 @@ def _ml_shadow_quote_snapshot(symbol: str | None = None) -> dict[str, Any]:
     }
 
 
-def _latest_numeric_column(frame: pd.DataFrame, names: Sequence[str]) -> float | None:
-    for name in names:
-        if name not in frame.columns or frame.empty:
-            continue
-        value = _finite_float_or_none(frame[name].iloc[-1])
-        if value is not None:
-            return value
-    return None
-
-
-def _latest_timestamp_column(
-    frame: pd.DataFrame,
-    names: Sequence[str],
-    *,
-    allow_index: bool = True,
-) -> str | None:
-    for name in names:
-        if name not in frame.columns or frame.empty:
-            continue
-        value = frame[name].iloc[-1]
-        try:
-            parsed = pd.to_datetime(value, errors="coerce", utc=True)
-        except (TypeError, ValueError):
-            continue
-        if not pd.isna(parsed):
-            return str(parsed.isoformat())
-    if allow_index and isinstance(frame.index, pd.DatetimeIndex) and len(frame.index) > 0:
-        latest = frame.index[-1]
-        if not pd.isna(latest):
-            return str(pd.Timestamp(latest).tz_convert(UTC).isoformat())
-    return None
-
-
-def _ml_shadow_market_snapshot(
-    frame: pd.DataFrame,
-    quote: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    close = _latest_numeric_column(frame, ("close", "last_price", "price"))
-    bid = _latest_numeric_column(frame, ("bid", "bid_price", "quote_bid"))
-    ask = _latest_numeric_column(frame, ("ask", "ask_price", "quote_ask"))
-    if isinstance(quote, Mapping):
-        bid = _finite_float_or_none(quote.get("bid")) or bid
-        ask = _finite_float_or_none(quote.get("ask")) or ask
-    spread_bps: float | None = None
-    if bid is not None and ask is not None and bid > 0.0 and ask >= bid:
-        mid = (bid + ask) / 2.0
-        if mid > 0.0:
-            spread_bps = float(((ask - bid) / mid) * 10000.0)
-    quote_ts = _latest_timestamp_column(
-        frame,
-        ("quote_ts", "quote_timestamp", "quote_time"),
-        allow_index=False,
-    )
-    if isinstance(quote, Mapping):
-        quote_ts = str(quote.get("quote_timestamp") or "") or quote_ts
-    quote_age_ms: float | None = None
-    if isinstance(quote, Mapping):
-        quote_age_ms = _finite_float_or_none(quote.get("quote_age_ms"))
-    if quote_age_ms is None and quote_ts and (bid is not None or ask is not None):
-        try:
-            parsed_quote_ts = pd.to_datetime(quote_ts, errors="coerce", utc=True)
-            if not pd.isna(parsed_quote_ts):
-                quote_age_ms = max(
-                    0.0,
-                    float((datetime.now(UTC) - parsed_quote_ts.to_pydatetime()).total_seconds() * 1000.0),
-                )
-        except (TypeError, ValueError, OverflowError):
-            quote_age_ms = None
-    bar_timestamp = _latest_timestamp_column(frame, ("timestamp", "ts", "time"))
-    session_regime = _session_bucket_from_ts(_parse_iso_timestamp(bar_timestamp))
-    return {
-        "bar_timestamp": bar_timestamp,
-        "entry_close": close,
-        "bid": bid,
-        "ask": ask,
-        "spread_bps": spread_bps,
-        "quote_timestamp": quote_ts,
-        "quote_age_ms": quote_age_ms,
-        "session_regime": session_regime,
-    }
-
-
-def _ml_shadow_cost_snapshot(
-    market: Mapping[str, Any],
-    quote: Mapping[str, Any],
-) -> dict[str, Any]:
-    spread_bps = _finite_float_or_none(market.get("spread_bps"))
-    quote_age_ms = _finite_float_or_none(market.get("quote_age_ms"))
-    bid = _finite_float_or_none(market.get("bid"))
-    ask = _finite_float_or_none(market.get("ask"))
-    if bid is None:
-        bid = _finite_float_or_none(quote.get("bid"))
-    if ask is None:
-        ask = _finite_float_or_none(quote.get("ask"))
-    if spread_bps is None and bid is not None and ask is not None and bid > 0.0 and ask >= bid:
-        mid = (bid + ask) / 2.0
-        if mid > 0.0:
-            spread_bps = float(((ask - bid) / mid) * 10000.0)
-    if quote_age_ms is None:
-        quote_age_ms = _finite_float_or_none(quote.get("quote_age_ms"))
-    entry_close = _finite_float_or_none(market.get("entry_close"))
-    return {
-        "phase": "decision",
-        "spread_bps": spread_bps,
-        "quote_age_ms": quote_age_ms,
-        "expected_entry_price": entry_close,
-        "observed_bid": bid,
-        "observed_ask": ask,
-        "submitted_price": None,
-        "fill_price": None,
-        "slippage_bps": None,
-        "slippage_source": "pending_fill",
-    }
-
-
 def _is_day_sleeve_ml_timeframe(sleeve_name: Any, timeframe: Any) -> bool:
     return (
         str(sleeve_name or "").strip().lower() == "day"
@@ -5624,123 +5363,6 @@ def _day_sleeve_waiting_for_first_finalized_bar(
     except (AttributeError, TypeError, ValueError):
         return False
     return bool(latest_session_date < now_eastern.date())
-
-
-def _ml_shadow_feature_snapshot(
-    feature_names: Sequence[str],
-    feature_values: Sequence[Any],
-) -> dict[str, float | None]:
-    snapshot: dict[str, float | None] = {}
-    for name, value in zip(feature_names, feature_values):
-        snapshot[str(name)] = _finite_float_or_none(value)
-    return snapshot
-
-
-def _model_shadow_threshold(model: Any, *, min_confidence: float) -> dict[str, Any]:
-    threshold = max(0.0, float(min_confidence))
-    source = "min_confidence"
-    global_threshold = _finite_float_or_none(getattr(model, "edge_global_threshold_", None))
-    if global_threshold is not None:
-        threshold = max(threshold, float(global_threshold))
-        source = "global"
-    return {"effective_threshold": float(threshold), "threshold_source": source}
-
-
-def _evaluate_training_serving_skew(
-    *,
-    model: Any,
-    feature_names: Sequence[str],
-    feature_values: Sequence[float],
-    symbol: str | None,
-    input_timestamp: str | None = None,
-) -> dict[str, Any] | None:
-    if not bool(get_env("AI_TRADING_ML_SKEW_MONITOR_ENABLED", True, cast=bool)):
-        return None
-    stats = getattr(model, "training_feature_stats_", None)
-    if not isinstance(stats, Mapping):
-        return None
-    z_scores: list[float] = []
-    outlier_count = 0
-    outlier_features: list[str] = []
-    feature_evidence: dict[str, Any] = {}
-    observed = 0
-    max_abs_z = 0.0
-    for feature, raw_value in zip(feature_names, feature_values):
-        feature_stats = stats.get(str(feature))
-        if not isinstance(feature_stats, Mapping):
-            continue
-        try:
-            value = float(raw_value)
-            mean_value = float(feature_stats.get("mean", 0.0))
-            std_value = float(feature_stats.get("std", 0.0))
-            p05_value = float(feature_stats.get("p05", mean_value))
-            p95_value = float(feature_stats.get("p95", mean_value))
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(value):
-            continue
-        feature_evidence[str(feature)] = {
-            "value": value,
-            "training_mean": mean_value if math.isfinite(mean_value) else None,
-            "training_std": std_value if math.isfinite(std_value) else None,
-            "training_p05": p05_value if math.isfinite(p05_value) else None,
-            "training_p95": p95_value if math.isfinite(p95_value) else None,
-        }
-        observed += 1
-        if std_value > 1e-9 and math.isfinite(std_value):
-            abs_z = abs((value - mean_value) / std_value)
-            z_scores.append(float(abs_z))
-            max_abs_z = max(max_abs_z, float(abs_z))
-        if value < min(p05_value, p95_value) or value > max(p05_value, p95_value):
-            outlier_count += 1
-            outlier_features.append(str(feature))
-    if observed <= 0:
-        return None
-    mean_abs_z = float(np.mean(z_scores)) if z_scores else 0.0
-    outlier_ratio = float(outlier_count) / float(observed)
-    breach_mean_abs_z = float(
-        get_env("AI_TRADING_ML_SKEW_MEAN_ABS_Z_THRESHOLD", 2.5, cast=float)
-    )
-    breach_outlier_ratio = float(
-        get_env("AI_TRADING_ML_SKEW_OUTLIER_RATIO_THRESHOLD", 0.35, cast=float)
-    )
-    breached = bool(mean_abs_z >= breach_mean_abs_z or outlier_ratio >= breach_outlier_ratio)
-    payload = {
-        "symbol": symbol,
-        "mean_abs_z": float(mean_abs_z),
-        "max_abs_z": float(max_abs_z),
-        "outlier_ratio": float(outlier_ratio),
-        "outlier_features": outlier_features,
-        "observed_features": int(observed),
-        "thresholds": {
-            "mean_abs_z": float(breach_mean_abs_z),
-            "outlier_ratio": float(breach_outlier_ratio),
-        },
-        "breached": breached,
-    }
-    if breached:
-        # Fingerprint the actual in-memory estimator, never an unrelated current
-        # file at a configured path. This is not an artifact-file checksum.
-        import joblib
-
-        fingerprint = None
-        fingerprint_error = None
-        try:
-            fingerprint = joblib.hash(model, hash_name="sha1")
-        except (TypeError, ValueError, AttributeError, pickle.PicklingError) as exc:
-            fingerprint_error = type(exc).__name__
-        payload.update(
-            feature_evidence=feature_evidence,
-            input_timestamp=input_timestamp,
-            input_timestamp_basis="frame_last_row_label" if input_timestamp else "unavailable",
-            recorded_at=datetime.now(UTC).isoformat(),
-            model_class=f"{type(model).__module__}.{type(model).__qualname__}",
-            model_state_fingerprint=fingerprint,
-            model_state_fingerprint_algorithm="joblib_sha1",
-            model_state_fingerprint_error=fingerprint_error,
-        )
-        logger.warning("ML_TRAINING_SERVING_SKEW", extra=payload)
-    return payload
 
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
@@ -6181,10 +5803,6 @@ from ai_trading.risk.circuit_breakers import (
 from ai_trading.utils.timefmt import (
     utc_now_iso,  # AI-AGENT-REF: Import UTC timestamp utilities
 )
-
-# AI-AGENT-REF: Avoid importing model_loader (and pandas) at import-time.
-# _load_ml_model() lazily imports model_loader and mirrors its registry cache.
-
 
 # AI-AGENT-REF: lazy numpy loader for improved import performance
 # AI-AGENT-REF: numpy is a hard dependency - import directly
@@ -7027,8 +6645,6 @@ else:  # pragma: no cover - no rebalance without Alpaca
 original_rebalance = _maybe_rebalance_impl
 
 
-import pickle
-
 # AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
 if not get_env("PYTEST_RUNNING") and ALPACA_AVAILABLE:
     try:
@@ -7504,24 +7120,6 @@ class StrategyAllocator:
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 finnhub_client = None
 
-# AI-AGENT-REF: Add cache size management to prevent memory leaks
-_ML_MODEL_CACHE: dict[str, Any] = {}
-_ML_MODEL_CACHE_MAX_SIZE = 100  # Limit cache size to prevent memory issues
-
-
-def _cleanup_ml_model_cache():
-    """Clean up ML model cache if it gets too large."""
-    global _ML_MODEL_CACHE
-    if len(_ML_MODEL_CACHE) > _ML_MODEL_CACHE_MAX_SIZE:
-        # Keep only the most recently used items (simple LRU-like behavior)
-        # For now, just clear half the cache when it gets too large
-        items_to_remove = len(_ML_MODEL_CACHE) // 2
-        keys_to_remove = list(_ML_MODEL_CACHE.keys())[:items_to_remove]
-        for key in keys_to_remove:
-            _ML_MODEL_CACHE.pop(key, None)
-        logger.info("Cleaned up ML model cache, removed %d items", items_to_remove)
-
-
 logger = get_logger(__name__)
 
 
@@ -7723,66 +7321,6 @@ def _call_provider_factory(factory: Any, symbol: str):
         return factory(symbol)
     except COMMON_EXC:
         return factory() if callable(factory) else factory
-
-
-def _load_ml_model(symbol: str):
-    """Return an ML model for ``symbol`` with basic validation."""
-
-    # AI-AGENT-REF: Check cache size and cleanup if needed
-    _cleanup_ml_model_cache()
-
-    from ai_trading import model_loader as _model_loader
-
-    cached = _ML_MODEL_CACHE.get(symbol)
-    if cached is not None:
-        if _model_loader.validate_cached_model(symbol):
-            module = sys.modules.get("ai_trading.model_loader")
-            if module is not None:
-                registry = getattr(module, "ML_MODELS", None)
-                if isinstance(registry, dict):
-                    registry[symbol] = cached
-            return cached
-        _ML_MODEL_CACHE.pop(symbol, None)
-        _model_loader.ML_MODELS.pop(symbol, None)
-        _model_loader.ML_MODEL_CACHE_META.pop(symbol, None)
-
-    registry = _model_loader.ML_MODELS
-    model = registry.get(symbol)
-    if model is not None and not _model_loader.validate_cached_model(symbol):
-        registry.pop(symbol, None)
-        _model_loader.ML_MODEL_CACHE_META.pop(symbol, None)
-        model = None
-    if model is None:
-        try:
-            model = _model_loader.load_model(symbol)
-        except RuntimeError as exc:
-            logger.error(
-                "MODEL_LOAD_ERROR", extra={"symbol": symbol, "error": str(exc)}
-            )
-            strict = bool(
-                get_env("AI_TRADING_STRICT_MODEL_LOADING", "0", cast=int)
-            )
-            if strict:
-                raise
-            model = None
-
-    if model is not None and not (
-        hasattr(model, "predict") and hasattr(model, "predict_proba")
-    ):
-        logger.error(
-            "MODEL_INTERFACE_MISSING", extra={"symbol": symbol}
-        )
-        model = None
-
-    if model is None:
-        registry.pop(symbol, None)
-        _ML_MODEL_CACHE.pop(symbol, None)
-        _model_loader.ML_MODEL_CACHE_META.pop(symbol, None)
-        return None
-
-    registry[symbol] = model
-    _ML_MODEL_CACHE[symbol] = model
-    return model
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
@@ -14355,329 +13893,6 @@ class SignalManager:
             logger.exception("Error in signal_vsa")
             return None
 
-    def signal_ml(
-        self, df: pd.DataFrame, model: Any | None = None, symbol: str | None = None
-    ) -> tuple[int, float, str] | None:
-        """Machine learning prediction signal with probability logging."""
-        if model is None and symbol is not None:
-            model = _load_ml_model(symbol)
-        if model is None or not (
-            hasattr(model, "predict") and hasattr(model, "predict_proba")
-        ):
-            require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
-            _path = str(get_env("AI_TRADING_MODEL_PATH", "") or "")
-            _mod = str(get_env("AI_TRADING_MODEL_MODULE", "") or "")
-            if require_model:
-                logger.error(
-                    "ML_MODEL_REQUIRED_MISSING",
-                    extra={
-                        "symbol": symbol,
-                        "model_path": _path,
-                        "model_module": _mod,
-                    },
-                )
-            if not getattr(self, "_ml_warned", False):
-                logger.warning(
-                    "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE "
-                    f"(AI_TRADING_MODEL_PATH={_path!r}, AI_TRADING_MODEL_MODULE={_mod!r})",
-                    extra={
-                        "model_path": _path,
-                        "model_module": _mod,
-                        "fallback_to_vsa": False,
-                    },
-                )
-                self._ml_warned = True
-            return None
-        try:
-            if hasattr(model, "feature_names_in_"):
-                feat = list(model.feature_names_in_)
-            else:
-                feat = list(LIVE_ML_FEATURE_COLUMNS)
-            timeframe_ok, required_timeframe = _model_timeframe_compatible_for_live_inference(model)
-            if not timeframe_ok:
-                logger.error(
-                    "ML_SIGNAL_MODEL_TIMEFRAME_MISMATCH",
-                    extra={
-                        "symbol": symbol,
-                        "required_bar_timeframe": required_timeframe,
-                        "serving_bar_timeframe": LIVE_ML_BAR_TIMEFRAME,
-                    },
-                )
-                return None
-            df = _augment_ml_inference_features(df, feat)
-            missing = [column for column in feat if column not in df.columns]
-            if missing:
-                logger.error(
-                    "ML_SIGNAL_MISSING_FEATURES",
-                    extra={"symbol": symbol, "missing_features": missing},
-                )
-                return None
-            X = df[feat].iloc[-1].values.reshape(1, -1)
-            try:
-                pred, proba = _predict_class_and_probability(model, X)
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as e:  # AI-AGENT-REF: narrow exception
-                logger.error("signal_ml predict failed: %s", e)
-                return None
-            skew_payload = _evaluate_training_serving_skew(
-                model=model,
-                feature_names=feat,
-                feature_values=X[0],
-                symbol=symbol,
-                input_timestamp=(
-                    df.index[-1].isoformat()
-                    if isinstance(df.index, pd.DatetimeIndex) and not df.empty
-                    else None
-                ),
-            )
-            shadow_payload: dict[str, Any] | None = None
-            shadow_model: Any | None = None
-            shadow_pred: Any | None = None
-            shadow_proba: float | None = None
-            if bool(get_env("AI_TRADING_ML_SHADOW_ENABLED", False, cast=bool)):
-                shadow_model = _load_shadow_model()
-                if shadow_model is not None and hasattr(shadow_model, "predict") and hasattr(
-                    shadow_model, "predict_proba"
-                ):
-                    try:
-                        shadow_pred, shadow_proba = _predict_class_and_probability(shadow_model, X)
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ) as exc:
-                        logger.warning(
-                            "ML_SHADOW_PREDICT_FAILED",
-                            extra={"symbol": symbol, "error": str(exc)},
-                        )
-            try:
-                prediction_for_log: int | str = int(pred)
-            except (TypeError, ValueError):
-                prediction_for_log = str(pred)
-            min_confidence = float(get_env("AI_TRADING_ML_MIN_CONFIDENCE", 0.0, cast=float))
-            effective_threshold = float(min_confidence)
-            regime_threshold: float | None = None
-            regime_label = "sideways"
-            threshold_source = "min_confidence"
-            if bool(get_env("AI_TRADING_ML_USE_REGIME_THRESHOLDS", True, cast=bool)):
-                thresholds_raw = getattr(model, "edge_thresholds_by_regime_", None)
-                threshold_map: dict[str, float] = {}
-                if isinstance(thresholds_raw, Mapping):
-                    for key, value in thresholds_raw.items():
-                        try:
-                            threshold_map[str(key).strip().lower()] = float(value)
-                        except (TypeError, ValueError):
-                            continue
-
-                close_arr = np.asarray([], dtype=float)
-                if "close" in df.columns:
-                    try:
-                        close_arr = np.asarray(df["close"].astype(float).to_numpy(), dtype=float)
-                    except (AttributeError, TypeError, ValueError):
-                        close_arr = np.asarray([], dtype=float)
-
-                if close_arr.size >= 25:
-                    lookback = min(20, close_arr.size - 1)
-                    if lookback >= 5:
-                        recent = close_arr[-(lookback + 1) :]
-                        returns = np.diff(recent) / np.maximum(recent[:-1], 1e-9)
-                        trend = float((recent[-1] / max(recent[0], 1e-9)) - 1.0)
-                        vol = float(np.std(returns))
-                        baseline = np.diff(close_arr) / np.maximum(close_arr[:-1], 1e-9)
-                        baseline_vol = float(np.std(baseline)) if baseline.size else 0.0
-                        if vol >= max(0.02, baseline_vol * 1.2):
-                            regime_label = "volatile"
-                        elif trend >= 0.02:
-                            regime_label = "uptrend"
-                        elif trend <= -0.02:
-                            regime_label = "downtrend"
-                        else:
-                            regime_label = "sideways"
-
-                alias_map = {
-                    "trending": "uptrend",
-                    "bull": "uptrend",
-                    "mean_reversion": "downtrend",
-                    "bear": "downtrend",
-                    "high_volatility": "volatile",
-                }
-                regime_key = alias_map.get(regime_label, regime_label)
-                if threshold_map:
-                    if regime_key in threshold_map:
-                        regime_threshold = float(threshold_map[regime_key])
-                        threshold_source = "regime"
-                    elif "sideways" in threshold_map:
-                        regime_threshold = float(threshold_map["sideways"])
-                        threshold_source = "regime_sideways_fallback"
-                if regime_threshold is None:
-                    global_threshold_raw = getattr(model, "edge_global_threshold_", None)
-                    try:
-                        if global_threshold_raw is not None:
-                            regime_threshold = float(global_threshold_raw)
-                            threshold_source = "global"
-                    except (TypeError, ValueError):
-                        regime_threshold = None
-                if regime_threshold is not None:
-                    effective_threshold = max(effective_threshold, float(regime_threshold))
-
-            symbol_penalty_details: dict[str, float] | None = None
-            if pred == 1 and symbol:
-                penalties_raw = getattr(model, "edge_negative_symbol_penalties_", None)
-                if isinstance(penalties_raw, Mapping):
-                    entry = penalties_raw.get(str(symbol).strip().upper())
-                    if isinstance(entry, Mapping):
-                        threshold_bump = float(
-                            np.clip(
-                                float(entry.get("threshold_bump", 0.0) or 0.0),
-                                0.0,
-                                0.95,
-                            )
-                        )
-                        confidence_scale = float(
-                            np.clip(
-                                float(entry.get("confidence_scale", 1.0) or 1.0),
-                                0.1,
-                                1.0,
-                            )
-                        )
-                        proba = float(np.clip(float(proba) * confidence_scale, 0.0, 1.0))
-                        effective_threshold = float(
-                            np.clip(float(effective_threshold) + threshold_bump, 0.0, 0.99)
-                        )
-                        threshold_source = (
-                            f"{threshold_source}+symbol_penalty"
-                            if threshold_source
-                            else "symbol_penalty"
-                        )
-                        symbol_penalty_details = {
-                            "threshold_bump": float(threshold_bump),
-                            "confidence_scale": float(confidence_scale),
-                            "negative_share": float(entry.get("negative_share", 0.0) or 0.0),
-                        }
-
-            if shadow_model is not None and shadow_pred is not None and shadow_proba is not None:
-                shadow_threshold = _model_shadow_threshold(
-                    shadow_model,
-                    min_confidence=min_confidence,
-                )
-                quote_snapshot = _ml_shadow_quote_snapshot(symbol=symbol)
-                market_snapshot = _ml_shadow_market_snapshot(df, quote=quote_snapshot)
-                challenger_threshold = float(shadow_threshold["effective_threshold"])
-                champion_would_trade = bool(
-                    pred == 1 and (effective_threshold <= 0.0 or float(proba) >= effective_threshold)
-                )
-                challenger_would_trade = bool(
-                    shadow_pred == 1
-                    and (challenger_threshold <= 0.0 or float(shadow_proba) >= challenger_threshold)
-                )
-                shadow_payload = {
-                    "ts": datetime.now(UTC).isoformat(),
-                    "mode": "ml_signal_shadow",
-                    "symbol": symbol,
-                    "champion_prediction": str(pred),
-                    "champion_probability": float(proba),
-                    "champion_effective_threshold": float(effective_threshold),
-                    "champion_threshold_source": threshold_source,
-                    "champion_would_trade": champion_would_trade,
-                    "challenger_prediction": str(shadow_pred),
-                    "challenger_probability": float(shadow_proba),
-                    "challenger_effective_threshold": challenger_threshold,
-                    "challenger_threshold_source": str(shadow_threshold["threshold_source"]),
-                    "challenger_would_trade": challenger_would_trade,
-                    "agreement": bool(champion_would_trade == challenger_would_trade),
-                    "probability_delta": float(abs(float(shadow_proba) - float(proba))),
-                    "features": _ml_shadow_feature_snapshot(feat, X[0]),
-                    "market": market_snapshot,
-                    "provider": _ml_shadow_provider_snapshot(),
-                    "quote_status": quote_snapshot,
-                    "cost": _ml_shadow_cost_snapshot(market_snapshot, quote_snapshot),
-                    "session_regime": market_snapshot.get("session_regime"),
-                    "regime_profile": get_regime_signal_profile(),
-                    "market_regime": regime_label,
-                }
-                if isinstance(skew_payload, Mapping):
-                    shadow_payload["skew"] = dict(skew_payload)
-                _record_shadow_prediction(shadow_payload)
-                divergence_threshold = max(
-                    0.0,
-                    float(
-                        get_env(
-                            "AI_TRADING_ML_SHADOW_DIVERGENCE_THRESHOLD",
-                            0.20,
-                            cast=float,
-                        )
-                    ),
-                )
-                if float(shadow_payload["probability_delta"]) >= divergence_threshold:
-                    logger.info("ML_SHADOW_DIVERGENCE", extra=shadow_payload)
-
-            if pred != 1:
-                logger.info(
-                    "ML_SIGNAL_NO_POSITIVE_EDGE",
-                    extra={
-                        "symbol": symbol,
-                        "prediction": prediction_for_log,
-                        "probability": proba,
-                        "threshold_source": threshold_source,
-                        "shadow_enabled": bool(shadow_payload),
-                    },
-                )
-                return None
-            if effective_threshold > 0.0 and proba < effective_threshold:
-                logger.info(
-                    "ML_SIGNAL_BELOW_CONFIDENCE",
-                    extra={
-                        "symbol": symbol,
-                        "prediction": prediction_for_log,
-                        "probability": proba,
-                        "min_confidence": min_confidence,
-                        "effective_threshold": effective_threshold,
-                        "regime_threshold": regime_threshold,
-                        "regime": regime_label,
-                        "threshold_source": threshold_source,
-                        "symbol_penalty": symbol_penalty_details,
-                        "shadow_enabled": bool(shadow_payload),
-                    },
-                )
-                return None
-            logger.info(
-                "ML_SIGNAL",
-                extra={
-                    "prediction": prediction_for_log,
-                    "probability": proba,
-                    "threshold_source": threshold_source,
-                    "symbol_penalty": symbol_penalty_details,
-                    "shadow_enabled": bool(shadow_payload),
-                    "skew_breached": bool(skew_payload and skew_payload.get("breached")),
-                },
-            )
-            return 1, proba, "ml"
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.exception(f"signal_ml failed: {e}")
-            return None
-
     def signal_sentiment(
         self, ctx: BotContext, ticker: str, df: pd.DataFrame = None, model: Any = None
     ) -> tuple[int, float, str] | None:
@@ -14913,7 +14128,7 @@ class SignalManager:
                     "METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals"
                 )
                 # Use component names emitted by SignalManager so gating stays coherent.
-                allowed_tags = {"momentum", "mean_reversion", "ml", "regime"}
+                allowed_tags = {"momentum", "mean_reversion", "regime"}
             elif symbol_upper and not symbol_has_history:
                 if symbol_upper not in _METALEARN_FALLBACK_SYMBOL_LOGGED:
                     logger.info(
@@ -14981,7 +14196,6 @@ class SignalManager:
         signal_factories = {
             "momentum": lambda: self.signal_momentum(df, model),
             "mean_reversion": lambda: self.signal_mean_reversion(df, model),
-            "ml": lambda: self.signal_ml(df, model, ticker),
             "sentiment": lambda: self.signal_sentiment(ctx, ticker, df, model),
             "regime": lambda: self.signal_regime(ctx, state, df, model),
             "stochrsi": lambda: self.signal_stochrsi(df, model),
@@ -17198,72 +16412,6 @@ def _position_opened_at(state: BotState, symbol: str) -> datetime | None:
     if isinstance(cooldown_at, datetime):
         return cooldown_at
     return None
-
-
-def _augment_ml_inference_features(df: pd.DataFrame, feature_names: list[str]) -> pd.DataFrame:
-    """Derive compact fallback features expected by after-hours trained models."""
-
-    if not feature_names:
-        return df
-    required = {str(name) for name in feature_names}
-    if required.issubset(set(df.columns)):
-        return df
-
-    frame = df.copy()
-    close = pd.to_numeric(frame.get("close"), errors="coerce") if "close" in frame.columns else None
-    close_abs = close.abs().replace(0.0, np.nan) if close is not None else None
-
-    if "signal" in required and "signal" not in frame.columns:
-        if "macds" in frame.columns:
-            frame["signal"] = pd.to_numeric(frame["macds"], errors="coerce")
-        elif "macd" in frame.columns:
-            frame["signal"] = pd.to_numeric(frame["macd"], errors="coerce")
-
-    if "atr_pct" in required and "atr_pct" not in frame.columns:
-        if close_abs is not None and "atr" in frame.columns:
-            atr = pd.to_numeric(frame["atr"], errors="coerce")
-            frame["atr_pct"] = (atr / close_abs) * 100.0
-
-    if "vwap_distance" in required and "vwap_distance" not in frame.columns:
-        if close is not None and "vwap" in frame.columns:
-            vwap = pd.to_numeric(frame["vwap"], errors="coerce").replace(0.0, np.nan)
-            frame["vwap_distance"] = (close / vwap) - 1.0
-
-    if "sma_spread" in required and "sma_spread" not in frame.columns:
-        if close_abs is not None and "sma_50" in frame.columns and "sma_200" in frame.columns:
-            sma_50 = pd.to_numeric(frame["sma_50"], errors="coerce")
-            sma_200 = pd.to_numeric(frame["sma_200"], errors="coerce")
-            frame["sma_spread"] = (sma_50 - sma_200) / close_abs
-
-    if "macd_signal_gap" in required and "macd_signal_gap" not in frame.columns:
-        if "macd" in frame.columns:
-            macd = pd.to_numeric(frame["macd"], errors="coerce")
-            if "signal" in frame.columns:
-                signal = pd.to_numeric(frame["signal"], errors="coerce")
-            elif "macds" in frame.columns:
-                signal = pd.to_numeric(frame["macds"], errors="coerce")
-            else:
-                signal = macd
-            frame["macd_signal_gap"] = macd - signal
-
-    if "rsi_centered" in required and "rsi_centered" not in frame.columns and "rsi" in frame.columns:
-        rsi = pd.to_numeric(frame["rsi"], errors="coerce")
-        frame["rsi_centered"] = (rsi - 50.0) / 50.0
-
-    for column in (
-        "signal",
-        "atr_pct",
-        "vwap_distance",
-        "sma_spread",
-        "macd_signal_gap",
-        "rsi_centered",
-    ):
-        if column in frame.columns:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce").replace(
-                [np.inf, -np.inf], np.nan
-            )
-    return frame
-
 
 
 def _normalize_entry_side(raw_side: Any) -> str | None:

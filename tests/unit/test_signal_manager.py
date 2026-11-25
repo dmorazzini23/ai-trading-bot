@@ -49,7 +49,6 @@ def test_signal_manager_evaluate_updates_last_components(monkeypatch):
     stubbed = {
         "signal_momentum": (1, 0.1, "momentum"),
         "signal_mean_reversion": (1, 0.1, "mean_reversion"),
-        "signal_ml": (1, 0.1, "ml"),
         "signal_sentiment": (1, 0.1, "sentiment"),
         "signal_regime": (1, 0.1, "regime"),
         "signal_stochrsi": (1, 0.1, "stochrsi"),
@@ -123,7 +122,6 @@ def test_signal_manager_regime_routing_filters_components(monkeypatch):
     stubbed = {
         "signal_momentum": (1, 0.1, "momentum"),
         "signal_mean_reversion": (1, 0.1, "mean_reversion"),
-        "signal_ml": (1, 0.1, "ml"),
         "signal_sentiment": (1, 0.1, "sentiment"),
         "signal_regime": (1, 0.1, "regime"),
         "signal_stochrsi": (1, 0.1, "stochrsi"),
@@ -142,9 +140,8 @@ def test_signal_manager_regime_routing_filters_components(monkeypatch):
 
     assert signal == 1
     assert confidence == 0.50
-    assert label == "momentum+ml+regime+obv"
+    assert label == "momentum+regime+obv"
     assert call_counts.get("momentum", 0) == 1
-    assert call_counts.get("ml", 0) == 1
     assert call_counts.get("regime", 0) == 1
     assert call_counts.get("obv", 0) == 1
     assert call_counts.get("mean_reversion", 0) == 0
@@ -158,7 +155,7 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     monkeypatch.setattr(
         bot_engine,
         "load_global_signal_performance",
-        lambda: {"momentum": 1.0, "ml": 0.2},
+        lambda: {"momentum": 1.0, "vsa": 0.2},
         raising=False,
     )
     monkeypatch.setattr(
@@ -170,7 +167,7 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     monkeypatch.setattr(
         manager,
         "load_signal_weights",
-        lambda: {"momentum": 0.8, "ml": 0.1},
+        lambda: {"momentum": 0.8, "vsa": 0.1},
         raising=False,
     )
     monkeypatch.setattr(
@@ -194,8 +191,8 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     )
     monkeypatch.setattr(
         manager,
-        "signal_ml",
-        _stub_signal((-1, 0.5, "ml")),
+        "signal_vsa",
+        _stub_signal((-1, 0.5, "vsa")),
         raising=False,
     )
     monkeypatch.setattr(manager, "signal_mean_reversion", _stub_signal(None), raising=False)
@@ -203,7 +200,6 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     monkeypatch.setattr(manager, "signal_regime", _stub_signal(None), raising=False)
     monkeypatch.setattr(manager, "signal_stochrsi", _stub_signal(None), raising=False)
     monkeypatch.setattr(manager, "signal_obv", _stub_signal(None), raising=False)
-    monkeypatch.setattr(manager, "signal_vsa", _stub_signal(None), raising=False)
 
     df = pd.DataFrame({"close": pd.Series(range(250), dtype="float64")})
     ctx = _ns()
@@ -211,7 +207,7 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     _signal, _confidence, _label = manager.evaluate(ctx, state, df, "TST", None)
     by_label = {label: weight for _side, weight, label in manager.last_components}
     assert by_label["momentum"] == pytest.approx(1.5)
-    assert by_label["ml"] < 0.1
+    assert by_label["vsa"] < 0.1
 
 
 def test_signal_manager_zero_sum_components_hold_instead_of_buy(monkeypatch):
@@ -221,14 +217,13 @@ def test_signal_manager_zero_sum_components_hold_instead_of_buy(monkeypatch):
     monkeypatch.setattr(bot_engine, "composite_signal_confidence", lambda _conf: 0.5, raising=False)
     monkeypatch.setattr(bot_engine, "_METALEARN_FALLBACK_SYMBOL_LOGGED", set(), raising=False)
     monkeypatch.setattr(manager, "signal_momentum", _stub_signal((1, 0.5, "momentum")), raising=False)
-    monkeypatch.setattr(manager, "signal_ml", _stub_signal((-1, 0.5, "ml")), raising=False)
+    monkeypatch.setattr(manager, "signal_vsa", _stub_signal((-1, 0.5, "vsa")), raising=False)
     for name in (
         "signal_mean_reversion",
         "signal_sentiment",
         "signal_regime",
         "signal_stochrsi",
         "signal_obv",
-        "signal_vsa",
     ):
         monkeypatch.setattr(manager, name, _stub_signal(None), raising=False)
 
@@ -240,7 +235,7 @@ def test_signal_manager_zero_sum_components_hold_instead_of_buy(monkeypatch):
         None,
     )
 
-    assert (signal, confidence, label) == (0, 0.5, "momentum+ml")
+    assert (signal, confidence, label) == (0, 0.5, "momentum+vsa")
 
 
 def test_signal_manager_gate_downweights_non_qualified_tags(monkeypatch):
@@ -279,8 +274,8 @@ def test_signal_manager_gate_downweights_non_qualified_tags(monkeypatch):
     )
     monkeypatch.setattr(
         manager,
-        "signal_ml",
-        _stub_signal((1, 0.4, "ml")),
+        "signal_vsa",
+        _stub_signal((1, 0.4, "vsa")),
         raising=False,
     )
     monkeypatch.setattr(manager, "signal_mean_reversion", _stub_signal(None), raising=False)
@@ -288,7 +283,6 @@ def test_signal_manager_gate_downweights_non_qualified_tags(monkeypatch):
     monkeypatch.setattr(manager, "signal_regime", _stub_signal(None), raising=False)
     monkeypatch.setattr(manager, "signal_stochrsi", _stub_signal(None), raising=False)
     monkeypatch.setattr(manager, "signal_obv", _stub_signal(None), raising=False)
-    monkeypatch.setattr(manager, "signal_vsa", _stub_signal(None), raising=False)
 
     df = pd.DataFrame({"close": pd.Series(range(250), dtype="float64")})
     ctx = _ns()
@@ -296,4 +290,4 @@ def test_signal_manager_gate_downweights_non_qualified_tags(monkeypatch):
     _signal, _confidence, _label = manager.evaluate(ctx, state, df, "TST", None)
     by_label = {label: weight for _side, weight, label in manager.last_components}
     assert by_label["momentum"] == pytest.approx(0.4)
-    assert by_label["ml"] == pytest.approx(0.08)
+    assert by_label["vsa"] == pytest.approx(0.08)

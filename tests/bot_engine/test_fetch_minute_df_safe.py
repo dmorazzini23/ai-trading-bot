@@ -2290,11 +2290,6 @@ def test_signal_manager_evaluate_with_shorter_history(monkeypatch):
 
     monkeypatch.setattr(bot_engine.SignalManager, "signal_sentiment", _stub_sentiment)
     monkeypatch.setattr(bot_engine.SignalManager, "signal_regime", _stub_regime)
-    monkeypatch.setattr(
-        bot_engine.SignalManager,
-        "signal_ml",
-        lambda self, df, model=None, symbol=None: (1, 0.05, "ml"),
-    )
     monkeypatch.setattr(bot_engine, "load_global_signal_performance", lambda: {})
     monkeypatch.setattr(bot_engine, "signals_evaluated", None, raising=False)
 

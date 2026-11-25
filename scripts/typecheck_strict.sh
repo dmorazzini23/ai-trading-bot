@@ -60,7 +60,6 @@ fi
   ai_trading/execution/live_trading.py \
   ai_trading/settings.py \
   ai_trading/main.py \
-  ai_trading/model_loader.py \
   ai_trading/logging/__init__.py \
   ai_trading/logging_filters.py \
   ai_trading/http/pooling.py \

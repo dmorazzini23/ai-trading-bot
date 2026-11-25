@@ -14,11 +14,6 @@ def _patch_signals(monkeypatch):
     monkeypatch.setattr(SignalManager, "signal_mean_reversion", lambda self, df, model=None: None)
     monkeypatch.setattr(
         SignalManager,
-        "signal_ml",
-        lambda self, df, model=None, symbol=None: None,
-    )
-    monkeypatch.setattr(
-        SignalManager,
         "signal_sentiment",
         lambda self, ctx, ticker, df, model=None: None,
     )

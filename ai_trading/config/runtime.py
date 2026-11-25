@@ -1343,13 +1343,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         max_value=1.0,
     ),
     ConfigSpec(
-        field="strict_model_loading",
-        env=("AI_TRADING_STRICT_MODEL_LOADING",),
-        cast="bool",
-        default=False,
-        description="When true, missing ML models raise immediately instead of falling back to neutral mode.",
-    ),
-    ConfigSpec(
         field="health_tick_seconds",
         env=("HEALTH_TICK_SECONDS", "AI_TRADING_HEALTH_TICK_SECONDS"),
         cast="float",

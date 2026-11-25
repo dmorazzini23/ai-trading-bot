@@ -316,7 +316,6 @@ _dummy_mod = types.ModuleType("dummy_model")
 setattr(_dummy_mod, "get_model", _get_model)
 setattr(_dummy_mod, "_DummyModel", _DummyModel)
 sys.modules["dummy_model"] = _dummy_mod
-os.environ.setdefault("AI_TRADING_MODEL_MODULE", "dummy_model")
 os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.1")
 os.environ.setdefault("DOLLAR_RISK_LIMIT", "0.05")
 os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")

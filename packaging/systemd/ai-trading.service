@@ -18,7 +18,6 @@ Environment=AI_TRADING_RUNTIME_ENV_DST=/run/ai-trading-bot/ai-trading-runtime.en
 Environment=AI_TRADING_RUNTIME_ENV_PATH=/run/ai-trading-bot/ai-trading-runtime.env
 EnvironmentFile=-/run/ai-trading-bot/ai-trading-runtime.env
 Environment=AI_TRADING_DOTENV_RUNTIME_OVERRIDE=1
-Environment=AI_TRADING_MODEL_MODULE=ai_trading.model_loader
 Environment=AI_TRADING_MODEL_PATH=/var/lib/ai-trading-bot/models/trained_model.pkl
 Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
 Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
