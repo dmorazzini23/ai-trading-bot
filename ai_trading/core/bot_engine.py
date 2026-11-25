@@ -374,6 +374,9 @@ _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
 _PENDING_ORDER_WARMUP_REMAINING_KEY = "warmup_cycles_remaining"
 _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR = "_cycle_pending_blocked_symbols"
+# ``(monotonic fetch time, rows)`` of the broker position rows behind the last
+# ``compute_current_positions`` result, or ``None``; read by the position backstop.
+_BROKER_POSITION_ROWS_ATTR = "_cycle_broker_position_rows"
 _PENDING_SYMBOL_DECAY_TRACKER_KEY = "_pending_symbol_decay_tracker"
 _RUNTIME_INFO_LOG_TRACKER_KEY = "_runtime_info_log_tracker"
 _PENDING_SYMBOL_DECAY_MIN_SEC_DEFAULT = 45.0
@@ -7201,15 +7204,24 @@ def _whole_share_position_qty(symbol: Any, raw_qty: Any) -> int:
 
 
 def compute_current_positions(ctx: Any) -> dict[str, int]:
+    """Broker positions as whole shares.
+
+    On a broker read the rows behind the result, with the time they were
+    fetched, are kept on ``ctx`` under ``_BROKER_POSITION_ROWS_ATTR`` so the
+    position backstop can take each entry price from the same read as the
+    quantity. Any other outcome clears them.
+    """
+
     try:
-        if hasattr(ctx.api, "list_positions"):
-            positions = ctx.api.list_positions()
-            logger.debug("Raw Alpaca positions: %s", positions)
-            return {p.symbol: _whole_share_position_qty(p.symbol, p.qty) for p in positions}
-        if hasattr(ctx.api, "get_all_positions"):
-            positions = ctx.api.get_all_positions()
-            logger.debug("Raw Alpaca positions: %s", positions)
-            return {p.symbol: _whole_share_position_qty(p.symbol, p.qty) for p in positions}
+        setattr(ctx, _BROKER_POSITION_ROWS_ATTR, None)
+        for method_name in ("list_positions", "get_all_positions"):
+            if hasattr(ctx.api, method_name):
+                fetched_at = float(monotonic_time())
+                positions = tuple(getattr(ctx.api, method_name)())
+                logger.debug("Raw Alpaca positions: %s", positions)
+                current = {p.symbol: _whole_share_position_qty(p.symbol, p.qty) for p in positions}
+                setattr(ctx, _BROKER_POSITION_ROWS_ATTR, (fetched_at, positions))
+                return current
         engine = getattr(ctx, "execution_engine", None)
         if engine is not None:
             ledger = getattr(engine, "position_ledger", {})
@@ -20680,11 +20692,15 @@ def _position_entry_basis(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Broker average entry prices that can arm the position stop loss.
 
-    Reads the execution engine's broker-sync snapshot (no broker call). A
-    basis is valid only when the snapshot is fresh, its quantity equals the
-    cycle's position and the price is finite and positive. Returns
-    ``(bases, unarmed)``; ``unarmed`` maps each held symbol without a valid
-    basis to ``no_basis``, ``qty_mismatch`` or ``stale_snapshot``.
+    Reads broker position rows the engine already holds (no broker call of
+    its own): first the rows behind this cycle's ``positions`` (kept by
+    ``compute_current_positions``), so a position that filled after the last
+    broker sync arms on the first cycle that holds it; without them, the
+    execution engine's broker-sync snapshot. A basis is valid only when the
+    rows are fresh, their quantity equals the cycle's position and the price
+    is finite and positive. Returns ``(bases, unarmed)``; ``unarmed`` maps
+    each held symbol without a valid basis to ``no_basis``, ``qty_mismatch``
+    or ``stale_snapshot``.
     """
 
     from ai_trading.core.netting_position_backstop import (
@@ -20699,25 +20715,30 @@ def _position_entry_basis(
             held[str(raw_symbol).strip().upper()] = float(qty)
     if not held:
         return {}, {}
-    engine = getattr(runtime, "execution_engine", None)
-    snapshot = getattr(engine, "_broker_sync", None) if engine is not None else None
-    if snapshot is None:
-        return {}, {symbol: "no_basis" for symbol in held}
-    snapshot_ts = _safe_float(getattr(snapshot, "timestamp", None))
-    age_s = (
-        float(monotonic_time()) - snapshot_ts
-        if snapshot_ts is not None and math.isfinite(snapshot_ts)
-        else None
-    )
-    if (
-        not bool(getattr(snapshot, "positions_fresh", False))
-        or age_s is None
-        or age_s < 0.0
-        or age_s > POSITION_BACKSTOP_BASIS_MAX_AGE_SECONDS
-    ):
-        return {}, {symbol: "stale_snapshot" for symbol in held}
+
+    def _fresh(timestamp: Any) -> bool:
+        ts = _safe_float(timestamp)
+        if ts is None or not math.isfinite(ts):
+            return False
+        age_s = float(monotonic_time()) - ts
+        return 0.0 <= age_s <= POSITION_BACKSTOP_BASIS_MAX_AGE_SECONDS
+
+    cycle_rows = getattr(runtime, _BROKER_POSITION_ROWS_ATTR, None)
+    rows: tuple[Any, ...]
+    if isinstance(cycle_rows, tuple) and len(cycle_rows) == 2 and _fresh(cycle_rows[0]):
+        rows = tuple(cycle_rows[1] or ())
+    else:
+        engine = getattr(runtime, "execution_engine", None)
+        snapshot = getattr(engine, "_broker_sync", None) if engine is not None else None
+        if snapshot is None:
+            return {}, {symbol: "no_basis" for symbol in held}
+        if not bool(getattr(snapshot, "positions_fresh", False)) or not _fresh(
+            getattr(snapshot, "timestamp", None)
+        ):
+            return {}, {symbol: "stale_snapshot" for symbol in held}
+        rows = tuple(getattr(snapshot, "positions", ()) or ())
     broker_rows: dict[str, tuple[float | None, float | None]] = {}
-    for position in tuple(getattr(snapshot, "positions", ()) or ()):
+    for position in rows:
         symbol = str(_broker_position_field(position, "symbol") or "").strip().upper()
         if not symbol:
             continue

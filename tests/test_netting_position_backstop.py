@@ -598,6 +598,147 @@ def test_entry_basis_without_a_snapshot_is_unarmed() -> None:
     assert bot_engine._position_entry_basis(_runtime(None), {}) == ({}, {})
 
 
+# ---- entry basis from the rows behind the cycle's positions -----------------
+
+
+def _row(symbol: str, qty: str, avg: str, side: str = "long") -> Any:
+    return SimpleNamespace(symbol=symbol, qty=qty, side=SimpleNamespace(value=side), avg_entry_price=avg)
+
+
+def _broker_runtime(snapshot: Any, *rows: Any) -> Any:
+    """Runtime whose broker read returns ``rows`` and whose engine holds ``snapshot``."""
+
+    return SimpleNamespace(
+        api=SimpleNamespace(get_all_positions=lambda: list(rows)),
+        execution_engine=SimpleNamespace(_broker_sync=snapshot),
+    )
+
+
+def _cycle_basis(runtime: Any) -> tuple[dict[str, float], dict[str, Any], dict[str, str]]:
+    positions = bot_engine.compute_current_positions(runtime)
+    bases, unarmed = bot_engine._position_entry_basis(runtime, positions)
+    return positions, bases, unarmed
+
+
+def test_a_fill_after_the_last_broker_sync_arms_on_the_first_cycle_that_holds_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """November 25: MSFT filled after the 19:12:02 sync (open_orders=1, positions=1).
+
+    The next cycle's broker read holds MSFT; the sync snapshot, 94 s old and
+    still fresh, does not. The stop must arm from the cycle's own read.
+    """
+
+    snapshot = _sync(_row("AMZN", "1", "246.29"), age_s=94.0)
+    runtime = _broker_runtime(snapshot, _row("AMZN", "1", "246.29"), _row("MSFT", "1", "492.23"))
+
+    positions, bases, unarmed = _cycle_basis(runtime)
+
+    assert positions == {"AMZN": 1, "MSFT": 1}
+    assert bases == {"AMZN": PositionBasis(246.29, 1.0), "MSFT": PositionBasis(492.23, 1.0)}
+    assert unarmed == {}
+    # The snapshot alone is what left MSFT unarmed for a cycle.
+    assert bot_engine._position_entry_basis(_runtime(snapshot), positions) == (
+        {"AMZN": PositionBasis(246.29, 1.0)},
+        {"MSFT": "no_basis"},
+    )
+    backstop = PositionBackstop(tmp_path / "runtime" / "position_backstop_state.json", LOGGER)
+    with caplog.at_level(logging.INFO):
+        backstop.begin_cycle(
+            now=NOW, positions=positions, bases=bases, unarmed=unarmed, cap_limit=None, pending_symbols=()
+        )
+        step = backstop.evaluate_symbol(symbol="MSFT", current_shares=1, delta_shares=0, price=467.0, bar_ts=NOW)
+    assert sorted(r.symbol for r in _messages(caplog, "POSITION_BACKSTOP_ARMED")) == ["AMZN", "MSFT"]
+    assert step.action == "exit"
+    assert step.snapshot is not None and step.snapshot["reason"] == "stop_loss"
+    assert _messages(caplog, "POSITION_BACKSTOP_UNARMED") == []
+
+
+@pytest.mark.parametrize(
+    ("snapshot_rows", "cycle_rows", "expected_positions", "expected_bases"),
+    [
+        # Partial fill: the stop covers the shares filled so far at their price.
+        ((), (_row("MSFT", "3", "492.10"),), {"MSFT": 3}, {"MSFT": PositionBasis(492.10, 3.0)}),
+        # Add to a held position: the broker's new average, not the snapshot's.
+        (
+            (_row("AAPL", "10", "100"),),
+            (_row("AAPL", "15", "102"),),
+            {"AAPL": 15},
+            {"AAPL": PositionBasis(102.0, 15.0)},
+        ),
+        # Partial sell: the remaining shares keep the broker's average.
+        ((_row("AAPL", "10", "100"),), (_row("AAPL", "4", "100"),), {"AAPL": 4}, {"AAPL": PositionBasis(100.0, 4.0)}),
+        # New short.
+        ((), (_row("NVDA", "-4", "50", side="short"),), {"NVDA": -4}, {"NVDA": PositionBasis(50.0, -4.0)}),
+        # Closed between the snapshot and the cycle: nothing held, nothing armed.
+        ((_row("MSFT", "1", "492.23"),), (), {}, {}),
+    ],
+)
+def test_cycle_rows_track_partial_fills_adds_sells_and_closes(
+    snapshot_rows: tuple[Any, ...],
+    cycle_rows: tuple[Any, ...],
+    expected_positions: dict[str, int],
+    expected_bases: dict[str, Any],
+) -> None:
+    runtime = _broker_runtime(_sync(*snapshot_rows), *cycle_rows)
+
+    assert _cycle_basis(runtime) == (expected_positions, expected_bases, {})
+
+
+def test_cycle_rows_still_fail_closed_on_quantity_or_price() -> None:
+    runtime = _broker_runtime(
+        _sync(_row("TSLA", "2", "200"), _row("AMD", "3", "100")),
+        _row("MSFT", "1.5", "492.23"),
+        _row("TSLA", "2", "nan"),
+        _row("AMD", "3", "0"),
+        _row("AAPL", "10", "100"),
+    )
+
+    positions, bases, unarmed = _cycle_basis(runtime)
+
+    assert positions == {"MSFT": 1, "TSLA": 2, "AMD": 3, "AAPL": 10}
+    assert bases == {"AAPL": PositionBasis(100.0, 10.0)}
+    # The cycle's own rows decide; an older snapshot price is not used instead.
+    assert unarmed == {"MSFT": "qty_mismatch", "TSLA": "no_basis", "AMD": "no_basis"}
+    # Positions that do not match the rows they came from are not armed.
+    assert bot_engine._position_entry_basis(runtime, {"AAPL": 12}) == ({}, {"AAPL": "qty_mismatch"})
+
+
+def test_stale_cycle_rows_fall_back_to_the_snapshot_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = _broker_runtime(None, _row("AAPL", "10", "100"))
+    positions = bot_engine.compute_current_positions(runtime)
+    fetched_at, rows = getattr(runtime, bot_engine._BROKER_POSITION_ROWS_ATTR)
+    setattr(runtime, bot_engine._BROKER_POSITION_ROWS_ATTR, (fetched_at - 601.0, rows))
+
+    assert bot_engine._position_entry_basis(runtime, positions) == ({}, {"AAPL": "no_basis"})
+    runtime.execution_engine._broker_sync = _sync(_row("AAPL", "10", "100"), age_s=601.0)
+    assert bot_engine._position_entry_basis(runtime, positions) == ({}, {"AAPL": "stale_snapshot"})
+    runtime.execution_engine._broker_sync = _sync(_row("AAPL", "10", "99"))
+    assert bot_engine._position_entry_basis(runtime, positions) == ({"AAPL": PositionBasis(99.0, 10.0)}, {})
+
+
+def test_a_failed_or_brokerless_position_read_clears_the_cycle_rows() -> None:
+    runtime = _broker_runtime(None, _row("AAPL", "10", "100"))
+    bot_engine.compute_current_positions(runtime)
+    assert getattr(runtime, bot_engine._BROKER_POSITION_ROWS_ATTR) is not None
+
+    def _fail() -> list[Any]:
+        raise ConnectionError("broker down")
+
+    runtime.api = SimpleNamespace(get_all_positions=_fail)
+    with pytest.raises(RuntimeError, match="broker_positions_unavailable"):
+        bot_engine.compute_current_positions(runtime)
+    assert getattr(runtime, bot_engine._BROKER_POSITION_ROWS_ATTR) is None
+    assert bot_engine._position_entry_basis(runtime, {"AAPL": 10}) == ({}, {"AAPL": "no_basis"})
+
+    runtime.api = SimpleNamespace(get_all_positions=lambda: [_row("AAPL", "10", "100")])
+    bot_engine.compute_current_positions(runtime)
+    runtime.api = None
+    runtime.execution_engine.position_ledger = {"AAPL": 10}
+    assert bot_engine.compute_current_positions(runtime) == {"AAPL": 10}
+    assert getattr(runtime, bot_engine._BROKER_POSITION_ROWS_ATTR) is None
+
+
 # ---- process_netting_symbol --------------------------------------------------
 
 
@@ -1565,6 +1706,55 @@ def test_netting_cycle_exits_a_stopped_position_and_blocks_nothing_else(
     saved = json.loads((tmp_path / "runtime" / "position_backstop_state.json").read_text())
     assert saved["locks"]["MSFT"]["reason"] == "stop_loss"
     assert saved["episodes"]["MSFT"]["opened_at_source"] == "first_seen"
+
+
+def test_netting_cycle_stops_a_position_filled_after_the_last_broker_sync(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The sync snapshot still shows MSFT as an open order; the cycle's broker read holds it."""
+
+    real_compute_current_positions = bot_engine.compute_current_positions
+    written, submitted = _patch_cycle(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot_engine, "compute_current_positions", real_compute_current_positions)
+    cfg = TradingConfig.from_env(allow_missing_drawdown=True).update(
+        data_contract_enabled=False,
+        recon_enabled=False,
+        ledger_enabled=False,
+        rth_only=False,
+        allow_extended=True,
+        decision_log_path=None,
+    )
+    sync = BrokerSyncResult(
+        open_orders=(SimpleNamespace(symbol="MSFT", side="buy", qty="15"),),
+        positions=(),
+        open_buy_by_symbol={"MSFT": 15.0},
+        open_sell_by_symbol={},
+        timestamp=float(monotonic_time()) - 94.0,
+        positions_fresh=True,
+    )
+    runtime = SimpleNamespace(
+        cfg=cfg,
+        tickers=["AAPL", "MSFT"],
+        universe_tickers=["AAPL", "MSFT"],
+        api=SimpleNamespace(get_all_positions=lambda: [_row("MSFT", "15", "110.0")]),
+        execution_engine=SimpleNamespace(
+            _last_submit_outcome={},
+            _get_account_snapshot=lambda: SimpleNamespace(id="acct-1", equity="100000"),
+            _broker_sync=sync,
+        ),
+    )
+    state = bot_engine.BotState()
+    state.last_order_bar_ts = _NoBarDedupeDict()
+
+    with caplog.at_level(logging.INFO):
+        bot_engine._run_netting_cycle(state, runtime, "loop", 0.0)
+
+    assert ("MSFT", 15, "sell") in submitted
+    gates = {str(r.symbol).upper(): list(r.gates or []) for r in written}
+    assert "POSITION_STOP_LOSS_EXIT" in gates["MSFT"]
+    assert _messages(caplog, "POSITION_BACKSTOP_UNARMED") == []
+    (armed,) = _messages(caplog, "POSITION_BACKSTOP_ARMED")
+    assert (armed.symbol, armed.avg_entry) == ("MSFT", 110.0)
 
 
 # ---- review follow-up: thin-liquidity cap, soft throttles, store, restart --------

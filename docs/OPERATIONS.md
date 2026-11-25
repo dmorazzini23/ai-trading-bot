@@ -971,10 +971,13 @@ Safety backstops in the netting cycle, not strategy rules. Code:
 - **Stop loss:** a held position is exited when the cycle's netting price (last
   finalized bar close) is 5% against the broker's `avg_entry_price`
   (`POSITION_STOP_LOSS_PCT`, shorts symmetric). The entry price comes from the
-  execution engine's broker-sync snapshot; with no fresh snapshot (600 s), a
-  quantity that differs from the cycle's position, or no usable price the
-  symbol is unarmed for the cycle (`POSITION_BACKSTOP_UNARMED`, once per symbol
-  and session). `POSITION_BACKSTOP_ARMED` (INFO, with side, qty, `avg_entry`,
+  same broker position read that gave the cycle its positions, so a position
+  that filled after the previous cycle's broker sync arms on the first cycle
+  that holds it. Without that read (for example the broker-less ledger) it
+  comes from the execution engine's broker-sync snapshot. With no fresh rows
+  (600 s), a quantity that differs from the cycle's position, or no usable
+  price the symbol is unarmed for the cycle (`POSITION_BACKSTOP_UNARMED`, once
+  per symbol and session). `POSITION_BACKSTOP_ARMED` (INFO, with side, qty, `avg_entry`,
   `stop_price` and `locked`) is logged when a held symbol first has a valid
   basis, again when its side, quantity or entry price changes or the position
   is closed and reopened, and once per held symbol after a restart. It means
