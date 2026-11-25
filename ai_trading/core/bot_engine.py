@@ -1611,13 +1611,17 @@ def _build_symbol_return_correlation_matrix(
     return matrix
 
 
+# No ML model serves runtime decisions: proposals come from the non-model rule
+# scorer (``_score_from_bars``). Orders, decision records and TCA rows name it,
+# so openings still carry the model_id/model_version the submit-context check
+# requires. Rows written before this carried the legacy artifact's file name
+# and ``mtime_ns:size`` signature instead.
+RULE_SCORER_MODEL_ID = "rule_scorer"
+RULE_SCORER_MODEL_VERSION = "score_from_bars"
+
+
 def _execution_model_lineage() -> dict[str, str]:
     """Return model lineage fields for execution telemetry."""
-
-    def _text_or_empty(value: Any) -> str:
-        if value in (None, ""):
-            return ""
-        return str(value).strip()
 
     model_id = str(get_env("AI_TRADING_MODEL_ID", "", cast=str) or "").strip()
     model_version = str(get_env("AI_TRADING_MODEL_VERSION", "", cast=str) or "").strip()
@@ -1626,54 +1630,11 @@ def _execution_model_lineage() -> dict[str, str]:
     model_artifact_hash = str(
         get_env("AI_TRADING_MODEL_ARTIFACT_HASH", "", cast=str) or ""
     ).strip()
-    model_meta = _MODEL_CACHE_META if isinstance(_MODEL_CACHE_META, MappingABC) else {}
 
-    if not model_id:
-        for key in ("path", "module", "kind"):
-            value = model_meta.get(key)
-            if value in (None, ""):
-                continue
-            if key == "path":
-                model_id = Path(str(value)).name
-            else:
-                model_id = str(value).strip()
-            if model_id:
-                break
-
-    if not model_version:
-        signature = model_meta.get("signature")
-        if (
-            isinstance(signature, tuple)
-            and len(signature) >= 2
-            and all(isinstance(v, int) for v in signature[:2])
-        ):
-            model_version = f"{int(signature[0])}:{int(signature[1])}"
-        elif model_meta.get("module") not in (None, ""):
-            model_version = str(model_meta.get("module")).strip()
-
-    if not dataset_hash:
-        for key in ("dataset_hash", "dataset_fingerprint", "dataset_fp"):
-            dataset_hash = _text_or_empty(model_meta.get(key))
-            if dataset_hash:
-                break
-
-    if not feature_version:
-        for key in ("feature_version", "feature_set_version", "features_version"):
-            feature_version = _text_or_empty(model_meta.get(key))
-            if feature_version:
-                break
-
-    if not model_artifact_hash:
-        for key in ("model_artifact_hash", "model_hash", "artifact_hash", "hash"):
-            model_artifact_hash = _text_or_empty(model_meta.get(key))
-            if model_artifact_hash:
-                break
-
-    resolved: dict[str, str] = {}
-    if model_id:
-        resolved["model_id"] = str(model_id)
-    if model_version:
-        resolved["model_version"] = str(model_version)
+    resolved: dict[str, str] = {
+        "model_id": model_id or RULE_SCORER_MODEL_ID,
+        "model_version": model_version or RULE_SCORER_MODEL_VERSION,
+    }
     if dataset_hash:
         resolved["dataset_hash"] = str(dataset_hash)
     if feature_version:
@@ -1957,7 +1918,7 @@ def _record_symbol_starvation_alert(
 
 
 def _prefetch_ml_shadow_quote(runtime: Any | None, symbol: str) -> None:
-    """Warm per-symbol quote telemetry before writing ML shadow predictions."""
+    """Refresh the global and per-symbol quote status from the latest quote."""
 
     normalized_symbol = str(symbol or "").strip().upper()
     if not normalized_symbol:
@@ -1999,16 +1960,18 @@ def _prefetch_ml_shadow_quote(runtime: Any | None, symbol: str) -> None:
         )
 
 
-def _record_prerank_ml_signal_shadow(
+def _refresh_prerank_quote_status(
     *,
     selected_symbols: Sequence[str],
     runtime: Any | None,
 ) -> None:
-    """Evaluate selected prerank symbols through the ML shadow path.
+    """Refresh the global quote status for the selected prerank symbols.
 
-    Some live execution flows use netting/prerank candidates without invoking the
-    legacy component signal aggregator. This keeps challenger telemetry aligned
-    with the actual candidate path while remaining strictly observational.
+    This ran inside the legacy model's shadow scoring until that scoring was
+    removed. The primary-feed de-risk gate later in the same cycle reads the
+    status it leaves, so the same flags, limit, symbols and order are kept: up
+    to the limit of selected symbols plus ``AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS``,
+    each refreshed only when minute (or daily) bars are available for it.
     """
 
     if runtime is None:
@@ -2034,44 +1997,30 @@ def _record_prerank_ml_signal_shadow(
     except BOT_ENGINE_FALLBACK_EXC:
         limit = 10
     limit = max(1, min(limit, 50))
-    try:
-        model = _load_required_model()
-    except BOT_ENGINE_FALLBACK_EXC as exc:
-        logger.warning(
-            "ML_SHADOW_PRERANK_SIGNAL_MODEL_UNAVAILABLE",
-            extra={"error": str(exc)},
-        )
-        return
-    if model is None or not (hasattr(model, "predict") and hasattr(model, "predict_proba")):
-        return
-    feature_names = _model_feature_names(model)
-    manager = globals().get("signal_manager")
-    if not isinstance(manager, SignalManager):
-        manager = SignalManager()
     raw_extra_symbols = str(get_env("AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS", "", cast=str) or "")
     extra_symbols = [
         token.strip().upper()
         for token in raw_extra_symbols.split(",")
         if token and token.strip()
     ]
-    symbols_to_score: list[str] = []
+    symbols_to_refresh: list[str] = []
     seen_symbols: set[str] = set()
     for raw_symbol in list(selected_symbols)[:limit] + extra_symbols:
         symbol = str(raw_symbol).strip().upper()
         if not symbol or symbol in seen_symbols:
             continue
         seen_symbols.add(symbol)
-        symbols_to_score.append(symbol)
-        if len(symbols_to_score) >= 50:
+        symbols_to_refresh.append(symbol)
+        if len(symbols_to_refresh) >= 50:
             break
 
-    for symbol in symbols_to_score:
+    for symbol in symbols_to_refresh:
         frame: pd.DataFrame | None = None
         try:
             frame = fetch_minute_df_safe(symbol)
         except BOT_ENGINE_FALLBACK_EXC as exc:
             logger.debug(
-                "ML_SHADOW_PRERANK_SIGNAL_MINUTE_UNAVAILABLE",
+                "PRERANK_QUOTE_REFRESH_MINUTE_UNAVAILABLE",
                 extra={"symbol": symbol, "error": str(exc)},
             )
             frame = None
@@ -2083,72 +2032,13 @@ def _record_prerank_ml_signal_shadow(
                     frame = daily_getter(symbol)
             except BOT_ENGINE_FALLBACK_EXC as exc:
                 logger.debug(
-                    "ML_SHADOW_PRERANK_SIGNAL_DAILY_UNAVAILABLE",
+                    "PRERANK_QUOTE_REFRESH_DAILY_UNAVAILABLE",
                     extra={"symbol": symbol, "error": str(exc)},
                 )
                 frame = None
         if frame is None or getattr(frame, "empty", True):
             continue
-        try:
-            _prefetch_ml_shadow_quote(runtime, symbol)
-            prepared_frame = _prepare_prerank_ml_shadow_frame(
-                frame,
-                feature_names=feature_names,
-                symbol=symbol,
-            )
-            manager.signal_ml(prepared_frame, model=model, symbol=symbol)
-        except BOT_ENGINE_FALLBACK_EXC as exc:
-            logger.warning(
-                "ML_SHADOW_PRERANK_SIGNAL_FAILED",
-                extra={"symbol": symbol, "error": str(exc)},
-            )
-
-
-def _prepare_prerank_ml_shadow_frame(
-    frame: pd.DataFrame,
-    *,
-    feature_names: Sequence[str],
-    symbol: str,
-) -> pd.DataFrame:
-    required = {str(name) for name in feature_names}
-    if required.issubset(set(frame.columns)):
-        return frame
-    work = frame.copy()
-    try:
-        work = compute_macd(work)
-        work = compute_macds(work)
-        work = compute_atr(work)
-        work = compute_vwap(work)
-        work = compute_sma(work, windows=(50, 200))
-        if "rsi" not in work.columns and "close" in work.columns:
-            close = pd.to_numeric(work["close"], errors="coerce")
-            delta = close.diff()
-            gain = delta.clip(lower=0.0)
-            loss = -delta.clip(upper=0.0)
-            avg_gain = gain.rolling(14, min_periods=1).mean()
-            avg_loss = loss.rolling(14, min_periods=1).mean()
-            rs = avg_gain / avg_loss.replace(0.0, np.nan)
-            rsi_values = 100.0 - (100.0 / (1.0 + rs))
-            neutral = (avg_gain == 0.0) & (avg_loss == 0.0)
-            work["rsi"] = rsi_values.where(~neutral, 50.0).fillna(50.0)
-        work = _augment_ml_inference_features(work, list(feature_names))
-        for column in feature_names:
-            name = str(column)
-            if name not in work.columns:
-                work[name] = 0.0
-            work[name] = (
-                pd.to_numeric(work[name], errors="coerce")
-                .replace([np.inf, -np.inf], np.nan)
-                .ffill()
-                .fillna(0.0)
-            )
-    except BOT_ENGINE_FALLBACK_EXC as exc:
-        logger.debug(
-            "ML_SHADOW_PRERANK_FEATURE_PREP_FAILED",
-            extra={"symbol": symbol, "error": str(exc)},
-        )
-        work = _augment_ml_inference_features(frame.copy(), list(feature_names))
-    return work
+        _prefetch_ml_shadow_quote(runtime, symbol)
 
 
 def _pre_rank_execution_candidates(
@@ -2550,7 +2440,7 @@ def _pre_rank_execution_candidates(
         top_n=top_n,
         runtime=runtime,
     )
-    _record_prerank_ml_signal_shadow(
+    _refresh_prerank_quote_status(
         selected_symbols=selected,
         runtime=runtime,
     )
@@ -5280,148 +5170,12 @@ def _sentiment_evidence_is_authoritative(ticker: str) -> bool:
     return bool(isinstance(evidence, Mapping) and evidence.get("authoritative") is True)
 
 
-def _sha256_file(path: str) -> str:
-    """Compute sha256 digest for model artifacts."""  # AI-AGENT-REF: hash for model logging
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()[:12]
-
-
-def _placeholder_len(samples: Any) -> int:
-    """Best-effort length detection for placeholder predictions."""
-
-    if samples is None:
-        return 1
-    try:
-        length = len(samples)  # type: ignore[arg-type]
-    except COMMON_EXC:  # pragma: no cover - defensive fallback
-        return 1
-    return max(1, int(length))
-
-
-class _ModelPlaceholder:
-    """Lightweight model used in tests when no real model is configured."""
-
-    __slots__ = ("reason",)
-
-    is_placeholder_model = True
-    classes_ = (0, 1)
-    feature_names_in_ = LIVE_ML_FEATURE_COLUMNS
-
-    def __init__(self, reason: str) -> None:
-        self.reason = reason
-
-    def predict(self, samples: Any = None, *args: Any, **kwargs: Any) -> list[int]:
-        count = _placeholder_len(samples)
-        return [0] * count
-
-    def predict_proba(
-        self, samples: Any = None, *args: Any, **kwargs: Any
-    ) -> list[list[float]]:
-        count = _placeholder_len(samples)
-        return [[0.5, 0.5] for _ in range(count)]
-
-    def __repr__(self) -> str:  # pragma: no cover - repr formatting is simple
-        return f"<ModelPlaceholder reason={self.reason}>"
-
-
-class _ModelDisabled:
-    """Explicit runtime sentinel used when no approved real model is available."""
-
-    __slots__ = ("reason", "configured_path", "fallback_path")
-
-    is_disabled_model = True
-
-    def __init__(
-        self,
-        reason: str,
-        *,
-        configured_path: str = "",
-        fallback_path: str = "",
-    ) -> None:
-        self.reason = reason
-        self.configured_path = configured_path
-        self.fallback_path = fallback_path
-
-    def __repr__(self) -> str:  # pragma: no cover - repr formatting is simple
-        return (
-            "<ModelDisabled "
-            f"reason={self.reason} "
-            f"configured_path={self.configured_path!r} "
-            f"fallback_path={self.fallback_path!r}>"
-        )
-
-
-_MODEL_CACHE: Any | None = None
-_MODEL_CACHE_META: dict[str, Any] | None = None
-
-
 def _model_file_signature(path: str) -> tuple[int, int] | None:
     try:
         stats = Path(path).stat()
     except OSError:
         return None
     return int(stats.st_mtime_ns), int(stats.st_size)
-
-
-def _required_model_cache_matches(path: str, modname: str) -> bool:
-    if _MODEL_CACHE is None:
-        return False
-    meta = _MODEL_CACHE_META or {}
-    kind = str(meta.get("kind") or "")
-    if path:
-        if kind not in {"file", "disabled"}:
-            return False
-        if str(meta.get("path") or "") != path:
-            return False
-        resolved_path = str(meta.get("resolved_path") or path)
-        if not bool(meta.get("signature") == _model_file_signature(resolved_path)):
-            return False
-        if kind == "file" and _runtime_model_governance_required(
-            execution_mode=_runtime_execution_mode(),
-            require_model=bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool)),
-            configured_artifact=True,
-        ):
-            registry_meta = meta.get("registry_meta")
-            _enforce_runtime_model_governance(
-                model_path=resolved_path,
-                source=str(meta.get("source") or "cache"),
-                registry_meta=registry_meta if isinstance(registry_meta, Mapping) else None,
-            )
-        return True
-    if modname:
-        return kind == "module" and str(meta.get("module") or "") == modname
-    return kind in {"placeholder", "disabled"}
-
-
-def _set_required_model_cache(
-    model: Any,
-    *,
-    kind: str,
-    path: str | None = None,
-    module: str | None = None,
-    resolved_path: str | None = None,
-    source: str | None = None,
-    registry_meta: Mapping[str, Any] | None = None,
-) -> Any:
-    global _MODEL_CACHE, _MODEL_CACHE_META
-    _MODEL_CACHE = model
-    metadata: dict[str, Any] = {"kind": kind}
-    if path:
-        metadata["path"] = path
-        effective_path = resolved_path or path
-        metadata["resolved_path"] = effective_path
-        metadata["signature"] = _model_file_signature(effective_path)
-    if module:
-        metadata["module"] = module
-    if source:
-        metadata["source"] = source
-    if registry_meta:
-        metadata["registry_meta"] = dict(registry_meta)
-    _MODEL_CACHE_META = metadata
-    return model
 
 
 def _runtime_execution_mode() -> str:
@@ -5436,601 +5190,8 @@ def _live_execution_blocks_yahoo_fallback() -> bool:
     return _runtime_execution_mode() == "live"
 
 
-def _runtime_model_governance_required(
-    *,
-    execution_mode: str,
-    require_model: bool,
-    configured_artifact: bool = False,
-) -> bool:
-    explicit = bool(
-        get_env("AI_TRADING_REQUIRE_MODEL_REGISTRY_APPROVAL", False, cast=bool)
-    )
-    return explicit or (
-        execution_mode == "live" and (bool(require_model) or bool(configured_artifact))
-    )
-
-
-def _parse_model_governance_timestamp(value: Any) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
-def _model_governance_is_fresh(info: Mapping[str, Any]) -> tuple[bool, str]:
-    max_age_days = int(
-        get_env("AI_TRADING_MODEL_MAX_AGE_DAYS", 14, cast=int)
-    )
-    if max_age_days <= 0:
-        return True, "freshness_disabled"
-    governance = info.get("governance", {})
-    runtime_promotion = (
-        governance.get("runtime_promotion", {})
-        if isinstance(governance, Mapping)
-        else {}
-    )
-    timestamp = None
-    if isinstance(runtime_promotion, Mapping):
-        timestamp = _parse_model_governance_timestamp(
-            runtime_promotion.get("promoted_at")
-        )
-    if timestamp is None:
-        timestamp = _parse_model_governance_timestamp(info.get("registered_at"))
-    if timestamp is None:
-        return False, "missing_model_governance_timestamp"
-    age_days = (datetime.now(UTC) - timestamp).total_seconds() / 86400.0
-    if age_days > float(max_age_days):
-        return False, "model_governance_stale"
-    return True, "fresh"
-
-
-def _find_registry_entry_for_model_path(model_path: str) -> tuple[str, dict[str, Any]] | None:
-    try:
-        from ai_trading.model_registry import ModelRegistry
-    except COMMON_EXC:
-        logger.debug("MODEL_REGISTRY_IMPORT_FAILED", exc_info=True)
-        return None
-    try:
-        registry = ModelRegistry()
-    except COMMON_EXC:
-        logger.debug("MODEL_REGISTRY_INIT_FAILED", exc_info=True)
-        return None
-    try:
-        resolved = str(Path(model_path).expanduser().resolve())
-    except OSError:
-        resolved = str(Path(model_path).expanduser())
-    for model_id, info in registry.model_index.items():
-        paths_to_check: list[str] = []
-        artifact_path = str(info.get("artifact_path", "") or "").strip()
-        if artifact_path:
-            paths_to_check.append(artifact_path)
-        governance = info.get("governance", {})
-        runtime_promotion = (
-            governance.get("runtime_promotion", {})
-            if isinstance(governance, Mapping)
-            else {}
-        )
-        if isinstance(runtime_promotion, Mapping):
-            promoted_path = str(runtime_promotion.get("model_path", "") or "").strip()
-            if promoted_path:
-                paths_to_check.append(promoted_path)
-        for candidate in paths_to_check:
-            try:
-                candidate_resolved = str(Path(candidate).expanduser().resolve())
-            except OSError:
-                candidate_resolved = str(Path(candidate).expanduser())
-            if candidate_resolved == resolved:
-                return str(model_id), dict(info)
-    return None
-
-
-def _enforce_runtime_model_governance(
-    *,
-    model_path: str,
-    source: str,
-    registry_meta: Mapping[str, Any] | None = None,
-) -> None:
-    registry_entry: tuple[str, dict[str, Any]] | None = None
-    if registry_meta and registry_meta.get("model_id"):
-        try:
-            from ai_trading.model_registry import ModelRegistry
-
-            registry = ModelRegistry()
-            model_id = str(registry_meta.get("model_id"))
-            info = registry.model_index.get(model_id)
-            if isinstance(info, dict):
-                registry_entry = (model_id, dict(info))
-        except COMMON_EXC:
-            registry_entry = None
-    if registry_entry is None:
-        registry_entry = _find_registry_entry_for_model_path(model_path)
-    if registry_entry is None:
-        logger.error(
-            "MODEL_GOVERNANCE_REJECTED",
-            extra={"model_path": model_path, "source": source, "reason_code": "registry_entry_missing"},
-        )
-        raise RuntimeError("MODEL_GOVERNANCE_REJECTED: registry_entry_missing")
-    model_id, info = registry_entry
-    governance = info.get("governance", {})
-    status = (
-        str(governance.get("status", "") or "").strip().lower()
-        if isinstance(governance, Mapping)
-        else ""
-    )
-    if status != "production":
-        logger.error(
-            "MODEL_GOVERNANCE_REJECTED",
-            extra={
-                "model_path": model_path,
-                "model_id": model_id,
-                "status": status or "missing",
-                "reason_code": "model_not_production",
-            },
-        )
-        raise RuntimeError("MODEL_GOVERNANCE_REJECTED: model_not_production")
-    fresh, reason = _model_governance_is_fresh(info)
-    if not fresh:
-        logger.error(
-            "MODEL_GOVERNANCE_REJECTED",
-            extra={
-                "model_path": model_path,
-                "model_id": model_id,
-                "reason_code": reason,
-            },
-        )
-        raise RuntimeError(f"MODEL_GOVERNANCE_REJECTED: {reason}")
-    logger.info(
-        "MODEL_GOVERNANCE_ACCEPTED",
-        extra={"model_path": model_path, "model_id": model_id, "source": source},
-    )
-
-
 def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool:
     return execution_mode == "paper" and bool(allow_paper_train)
-
-
-def _model_payload_is_placeholder(model: Any) -> bool:
-    if getattr(model, "is_placeholder_model", False):
-        return True
-    return bool(isinstance(model, dict) and model.get("placeholder") is True)
-
-
-def _resolve_registry_production_model_path(
-    configured_model_path: str = "",
-) -> tuple[str, dict[str, Any]] | None:
-    strategies_raw = str(
-        get_env(
-            "AI_TRADING_MODEL_REGISTRY_FALLBACK_STRATEGIES",
-            "after_hours_ml_edge,ml_edge",
-        )
-        or "after_hours_ml_edge,ml_edge"
-    ).strip()
-    strategies = [
-        token.strip()
-        for token in strategies_raw.split(",")
-        if token and token.strip()
-    ]
-    if not strategies:
-        return None
-
-    candidate_bases: list[Path | None] = []
-    registry_env = str(
-        get_env("MODEL_REGISTRY_DIR", "", cast=str, resolve_aliases=False) or ""
-    ).strip()
-    if registry_env:
-        candidate_bases.append(Path(registry_env).expanduser())
-    if configured_model_path:
-        try:
-            configured_root = Path(configured_model_path).expanduser().resolve().parent.parent
-        except OSError:
-            configured_root = None
-        candidate_bases.append(configured_root)
-    candidate_bases.append(None)
-
-    registries: list[tuple[str, Any]] = []
-    seen_registry_paths: set[str] = set()
-    try:
-        from ai_trading.model_registry import ModelRegistry
-    except COMMON_EXC:
-        logger.debug("MODEL_REGISTRY_FALLBACK_LOOKUP_FAILED", exc_info=True)
-        return None
-    for base in candidate_bases:
-        base_key = str(base or "<default>")
-        if base_key in seen_registry_paths:
-            continue
-        seen_registry_paths.add(base_key)
-        try:
-            registry = ModelRegistry(base) if base is not None else ModelRegistry()
-        except COMMON_EXC:
-            logger.debug(
-                "MODEL_REGISTRY_FALLBACK_INIT_FAILED",
-                extra={"registry_base": base_key},
-                exc_info=True,
-            )
-            continue
-        registries.append((base_key, registry))
-
-    for strategy in strategies:
-        for base_key, registry in registries:
-            try:
-                viable_lookup = getattr(registry, "get_viable_production_model", None)
-                if callable(viable_lookup):
-                    production = viable_lookup(strategy)
-                else:
-                    production = registry.get_production_model(strategy)
-            except COMMON_EXC:
-                logger.debug(
-                    "MODEL_REGISTRY_FALLBACK_STRATEGY_LOOKUP_FAILED",
-                    extra={"strategy": strategy, "registry_base": base_key},
-                    exc_info=True,
-                )
-                continue
-            if not production:
-                continue
-            model_id, info = production
-            production_path = str(info.get("production_path") or "").strip()
-            if production_path and os.path.isfile(production_path):
-                manifest_path = str(info.get("production_manifest_path") or "").strip()
-                return production_path, {
-                    "model_id": model_id,
-                    "strategy": strategy,
-                    "registry_base": base_key,
-                    "source": str(info.get("production_path_source") or "registry_production"),
-                    "manifest_path": manifest_path,
-                }
-            artifact_path = str(info.get("artifact_path") or "").strip()
-            if artifact_path and os.path.isfile(artifact_path):
-                manifest_path = str(info.get("manifest_path") or "").strip()
-                return artifact_path, {
-                    "model_id": model_id,
-                    "strategy": strategy,
-                    "registry_base": base_key,
-                    "source": "registry_production",
-                    "manifest_path": manifest_path,
-                }
-    return None
-
-
-def _disable_runtime_ml(
-    *,
-    reason: str,
-    configured_path: str = "",
-    fallback_path: str = "",
-    extra: dict[str, Any] | None = None,
-) -> Any:
-    details: dict[str, Any] = {
-        "reason": reason,
-        "configured_path": configured_path,
-        "fallback_path": fallback_path,
-    }
-    if extra:
-        details.update(extra)
-    logger.warning("MODEL_RUNTIME_DISABLED", extra=details)
-    disabled = _ModelDisabled(
-        reason,
-        configured_path=configured_path,
-        fallback_path=fallback_path,
-    )
-    return _set_required_model_cache(
-        disabled,
-        kind="disabled",
-        path=configured_path or None,
-        resolved_path=fallback_path or configured_path or None,
-    )
-
-
-def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
-    """Load ML model from path or module with explicit non-placeholder fallback."""  # AI-AGENT-REF: strict model loader
-    path = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
-    modname = str(get_env("AI_TRADING_MODEL_MODULE", "") or "").strip()
-    if _required_model_cache_matches(path, modname):
-        return _MODEL_CACHE
-    if _MODEL_CACHE is not None:
-        logger.info(
-            "MODEL_CACHE_INVALIDATED",
-            extra={
-                "path": path,
-                "model_module": modname,
-            },
-        )
-
-    if path:
-        execution_mode = _runtime_execution_mode()
-        require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
-        require_governance = _runtime_model_governance_required(
-            execution_mode=execution_mode,
-            require_model=require_model,
-            configured_artifact=True,
-        )
-        strict_runtime = execution_mode == "live" and not (
-            _is_testing_env() or is_runtime_contract_testing_mode()
-        )
-        active_path = path
-        active_source = "configured"
-        registry_meta: dict[str, Any] = {}
-
-        if not os.path.isfile(active_path):
-            registry_fallback = _resolve_registry_production_model_path(path)
-            if registry_fallback is not None:
-                active_path, registry_meta = registry_fallback
-                active_source = "registry_production"
-                logger.warning(
-                    "MODEL_RUNTIME_FALLBACK_SELECTED",
-                    extra={
-                        "configured_path": path,
-                        "fallback_path": active_path,
-                        **registry_meta,
-                    },
-                )
-            elif strict_runtime and require_model:
-                logger.error(
-                    "MODEL_VERIFICATION_FAILED",
-                    extra={
-                        "model_path": active_path,
-                        "manifest_path": str(get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or ""),
-                        "reason_code": "MODEL_FILE_MISSING",
-                        "execution_mode": execution_mode,
-                    },
-                )
-                raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_FILE_MISSING")
-            else:
-                return _disable_runtime_ml(
-                    reason="missing_real_model_artifact",
-                    configured_path=path,
-                )
-
-        manifest_override = None
-        if active_source == "configured":
-            manifest_override = str(
-                get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or ""
-            ).strip() or None
-        else:
-            manifest_override = str(registry_meta.get("manifest_path") or "").strip() or None
-            logger.info(
-                "MODEL_ARTIFACT_VERIFIED_VIA_REGISTRY",
-                extra={
-                    "configured_path": path,
-                    "fallback_path": active_path,
-                    **registry_meta,
-                },
-            )
-
-        mdl = load_verified_joblib_artifact(
-            active_path,
-            manifest_path=manifest_override,
-        )
-        if require_governance:
-            _enforce_runtime_model_governance(
-                model_path=active_path,
-                source=active_source,
-                registry_meta=registry_meta,
-            )
-        if _model_payload_is_placeholder(mdl):
-            registry_fallback = (
-                _resolve_registry_production_model_path(path)
-                if active_source == "configured"
-                else None
-            )
-            if registry_fallback is not None:
-                active_path, registry_meta = registry_fallback
-                active_source = "registry_production"
-                logger.warning(
-                    "MODEL_RUNTIME_FALLBACK_SELECTED",
-                    extra={
-                        "configured_path": path,
-                        "fallback_path": active_path,
-                        "reason": "configured_placeholder_artifact",
-                        **registry_meta,
-                    },
-                )
-                logger.info(
-                    "MODEL_ARTIFACT_VERIFIED_VIA_REGISTRY",
-                    extra={
-                        "configured_path": path,
-                        "fallback_path": active_path,
-                        **registry_meta,
-                    },
-                )
-                manifest_override = str(registry_meta.get("manifest_path") or "").strip() or None
-                mdl = load_verified_joblib_artifact(
-                    active_path,
-                    manifest_path=manifest_override,
-                )
-            elif strict_runtime and require_model:
-                logger.error(
-                    "MODEL_VERIFICATION_FAILED",
-                    extra={
-                        "model_path": active_path,
-                        "reason_code": "MODEL_PLACEHOLDER_ARTIFACT",
-                        "execution_mode": execution_mode,
-                    },
-                )
-                raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_PLACEHOLDER_ARTIFACT")
-            else:
-                return _disable_runtime_ml(
-                    reason="placeholder_artifact_detected",
-                    configured_path=path,
-                    fallback_path=active_path if active_source != "configured" else "",
-                    extra=registry_meta if active_source != "configured" else None,
-                )
-
-        if _model_payload_is_placeholder(mdl):
-            if strict_runtime and require_model:
-                logger.error(
-                    "MODEL_VERIFICATION_FAILED",
-                    extra={
-                        "model_path": active_path,
-                        "reason_code": "MODEL_PLACEHOLDER_ARTIFACT",
-                        "execution_mode": execution_mode,
-                    },
-                )
-                raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_PLACEHOLDER_ARTIFACT")
-            return _disable_runtime_ml(
-                reason="placeholder_artifact_detected",
-                configured_path=path,
-                fallback_path=active_path if active_source != "configured" else "",
-                extra=registry_meta if active_source != "configured" else None,
-            )
-        try:
-            digest = _sha256_file(active_path)
-        except OSError:  # hashing is best-effort; missing/perm issues shouldn't crash
-            digest = "unknown"
-        logger.info(
-            "MODEL_LOADED",
-            extra={
-                "source": active_source,
-                "path": active_path,
-                "sha": digest,
-                **registry_meta,
-            },
-        )
-        return _set_required_model_cache(
-            mdl,
-            kind="file",
-            path=path,
-            resolved_path=active_path,
-            source=active_source,
-            registry_meta=registry_meta,
-        )
-
-    if modname:
-        execution_mode = _runtime_execution_mode()
-        require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
-        if _runtime_model_governance_required(
-            execution_mode=execution_mode,
-            require_model=require_model,
-            configured_artifact=True,
-        ) and not bool(get_env("AI_TRADING_MODEL_MODULE_APPROVED", False, cast=bool)):
-            logger.error(
-                "MODEL_GOVERNANCE_REJECTED",
-                extra={
-                    "model_module": modname,
-                    "reason_code": "module_requires_explicit_approval",
-                },
-            )
-            raise RuntimeError(
-                "MODEL_GOVERNANCE_REJECTED: module_requires_explicit_approval"
-            )
-        try:
-            mod = importlib.import_module(modname)
-        except COMMON_EXC as e:  # noqa: BLE001
-            logger.error(
-                "MODEL_MODULE_IMPORT_FAILED",
-                extra={"module": modname, "error": str(e)},
-            )
-            raise RuntimeError(
-                f"Failed to import AI_TRADING_MODEL_MODULE='{modname}': {e}"
-            ) from e
-        factory = getattr(mod, "get_model", None) or getattr(mod, "Model", None)
-        if not factory:
-            logger.error(
-                "MODEL_MODULE_FACTORY_MISSING", extra={"module": modname}
-            )
-            raise RuntimeError(
-                f"Module '{modname}' missing get_model()/Model() factory."
-            )
-        mdl = factory() if callable(factory) else factory
-        logger.info(
-            "MODEL_LOADED",
-            extra={
-                "source": "module",
-                "model_module": modname,
-            },  # AI-AGENT-REF: avoid reserved key
-        )
-        return _set_required_model_cache(mdl, kind="module", module=modname)
-
-    if allow_test_placeholder and _is_testing_env():
-        detected = [key for key in _TEST_ENV_VARS if _truthy_env(get_env(key))]
-        logger.info(
-            "MODEL_PLACEHOLDER_IN_USE",
-            extra={"source": "test", "detected_env": detected},
-        )
-        placeholder = _ModelPlaceholder("testing_env")
-        return _set_required_model_cache(placeholder, kind="placeholder")
-
-    msg = (
-        "Model required but not configured. "
-        "Set one of: "
-        "AI_TRADING_MODEL_PATH=<abs path to .joblib/.pkl> "
-        "or AI_TRADING_MODEL_MODULE=<import.path with get_model()/Model()>."
-    )
-    logger.error(
-        "MODEL_CONFIG_MISSING",
-            extra={
-                "hint_paths": ["AI_TRADING_MODEL_PATH", "TradingConfig.ml_model_path"],
-                "hint_modules": ["AI_TRADING_MODEL_MODULE", "TradingConfig.ml_model_module"],
-            },
-    )
-    raise RuntimeError(msg)
-
-
-def _refresh_required_model_cache_from_path(
-    model_path: str,
-    *,
-    manifest_path: str | None = None,
-    reason: str = "runtime",
-) -> bool:
-    candidate = str(model_path or "").strip()
-    if not candidate:
-        return False
-    resolved = Path(candidate)
-    if not resolved.is_absolute():
-        resolved = (Path(BASE_DIR) / resolved).resolve()
-    if not resolved.is_file():
-        logger.warning(
-            "MODEL_HOT_RELOAD_SKIPPED",
-            extra={"reason": "missing_file", "path": str(resolved)},
-        )
-        return False
-
-    try:
-        model = load_verified_joblib_artifact(
-            resolved,
-            manifest_path=manifest_path or None,
-        )
-    except COMMON_EXC as exc:  # noqa: BLE001
-        logger.warning(
-            "MODEL_HOT_RELOAD_FAILED",
-            extra={"path": str(resolved), "error": str(exc)},
-        )
-        return False
-
-    registry_meta: dict[str, Any] = {}
-    if _runtime_model_governance_required(
-        execution_mode=_runtime_execution_mode(),
-        require_model=bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool)),
-        configured_artifact=True,
-    ):
-        _enforce_runtime_model_governance(
-            model_path=str(resolved),
-            source=f"hot_reload:{reason}",
-            registry_meta=registry_meta,
-        )
-    _set_required_model_cache(
-        model,
-        kind="file",
-        path=str(resolved),
-        resolved_path=str(resolved),
-        source=f"hot_reload:{reason}",
-        registry_meta=registry_meta,
-    )
-    runtime_ctx = _get_runtime_context_or_none()
-    if runtime_ctx is not None:
-        try:
-            runtime_ctx.model = model
-        except COMMON_EXC:
-            logger.debug("MODEL_HOT_RELOAD_RUNTIME_ASSIGN_FAILED", exc_info=True)
-    logger.info(
-        "MODEL_HOT_RELOAD_APPLIED",
-        extra={"path": str(resolved), "reason": reason},
-    )
-    return True
 
 
 _SHADOW_MODEL_CACHE: Any | None = None
@@ -10569,34 +9730,17 @@ def abspath(fname: str) -> str:
     return str((Path(BASE_DIR) / str(fname)).resolve())
 
 
-# AI-AGENT-REF: safe ML model path resolution
-DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
+# Retraining (``load_or_retrain_daily``) reads this path; no runtime decision
+# loads a model from it.
 MODEL_PATH: str | None = None
-USE_ML = False
 
 
-def _refresh_model_loading_flags(*, log_missing: bool = False) -> None:
-    """Refresh runtime model-path flags when startup explicitly bootstraps."""
-    global MODEL_PATH, USE_ML
+def _refresh_model_loading_flags() -> None:
+    """Resolve ``MODEL_PATH`` for the retraining code when startup bootstraps."""
+    global MODEL_PATH
 
     env_model = get_env("AI_TRADING_MODEL_PATH")
-    model_path = abspath_safe(env_model or getattr(S, "model_path", None))
-    warn_if_missing = bool(
-        config.get_env("AI_TRADING_WARN_IF_MODEL_MISSING", "0", cast=int)
-    )
-    if model_path and os.path.exists(model_path):
-        MODEL_PATH = model_path
-        USE_ML = True
-        return
-    MODEL_PATH = model_path
-    USE_ML = False
-    if (
-        log_missing
-        and model_path
-        and os.path.abspath(model_path) != DEFAULT_MODEL_PATH
-        and warn_if_missing
-    ):
-        logger.warning("ML_MODEL_MISSING", extra={"path": model_path})
+    MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
 
 
 def abspath_repo_root(fname: str) -> str:
@@ -11421,7 +10565,7 @@ def bootstrap_runtime_defaults(*, log_import_checks: bool = True) -> None:
     if hasattr(np, "random"):
         np.random.seed(SEED)
 
-    _refresh_model_loading_flags(log_missing=log_import_checks)
+    _refresh_model_loading_flags()
     MODEL_RF_PATH = abspath_safe(getattr(CFG, "model_rf_path", None))
     MODEL_XGB_PATH = abspath_safe(getattr(CFG, "model_xgb_path", None))
     MODEL_LGB_PATH = abspath_safe(getattr(CFG, "model_lgb_path", None))
@@ -16652,17 +15796,6 @@ class LazyBotContext:
         self._context.exec_engine = None
         _ensure_execution_engine(self._context)
         data_fetcher = fetcher
-        # One-time, mandatory model load
-        if getattr(self._context, "model", None) is None:
-            if _MODEL_CACHE is None:
-                try:
-                    self._context.model = _load_required_model(allow_test_placeholder=True)
-                except TypeError as exc:
-                    if "allow_test_placeholder" not in str(exc):
-                        raise
-                    self._context.model = _load_required_model()
-            else:
-                self._context.model = _MODEL_CACHE
 
         # Propagate the capital_scaler to the risk engine so that position_size
         risk_engine_obj = getattr(self._context, "risk_engine", None)
@@ -18131,11 +17264,6 @@ def _augment_ml_inference_features(df: pd.DataFrame, feature_names: list[str]) -
             )
     return frame
 
-
-def _model_feature_names(model) -> list[str]:
-    if hasattr(model, "feature_names_in_"):
-        return list(model.feature_names_in_)
-    return list(LIVE_ML_FEATURE_COLUMNS)
 
 
 def _normalize_entry_side(raw_side: Any) -> str | None:
@@ -20554,14 +19682,6 @@ def on_market_close() -> None:
                         outcome,
                     )
             if isinstance(outcome, Mapping):
-                promoted_model_path = str(outcome.get("promoted_model_path") or "").strip()
-                promoted_manifest_path = str(outcome.get("promoted_manifest_path") or "").strip()
-                if promoted_model_path:
-                    _refresh_required_model_cache_from_path(
-                        promoted_model_path,
-                        manifest_path=promoted_manifest_path or None,
-                        reason="after_hours_training",
-                    )
                 rl_overlay_outcome = outcome.get("rl_overlay")
                 if isinstance(rl_overlay_outcome, Mapping):
                     promoted_rl_model_path = str(

@@ -4410,7 +4410,7 @@ def test_maybe_train_rl_overlay_skips_promotion_when_governance_shadow(
     assert result.get("promoted_governance_path") is None
 
 
-def test_on_market_close_applies_promoted_model_artifacts(
+def test_on_market_close_reloads_promoted_rl_artifact_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4421,7 +4421,7 @@ def test_on_market_close_applies_promoted_model_artifacts(
         def now(_tz=None):
             return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
 
-    calls: dict[str, list[dict[str, object]]] = {"ml": [], "rl": []}
+    calls: dict[str, list[dict[str, object]]] = {"rl": []}
     marker_path = tmp_path / "after_hours.marker.json"
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
@@ -4429,15 +4429,6 @@ def test_on_market_close_applies_promoted_model_artifacts(
     monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
     monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
     monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
-    def _refresh_required_model_cache(path, manifest_path=None, reason="runtime"):
-        calls["ml"].append({"path": path, "manifest_path": manifest_path, "reason": reason})
-        return True
-
-    monkeypatch.setattr(
-        bot_engine,
-        "_refresh_required_model_cache_from_path",
-        _refresh_required_model_cache,
-    )
     def _reload_rl_agent(model_path=None, reason="runtime", force=False, use_rl_enabled=None):
         calls["rl"].append(
             {
@@ -4469,13 +4460,8 @@ def test_on_market_close_applies_promoted_model_artifacts(
 
     bot_engine.on_market_close()
 
-    assert calls["ml"] == [
-        {
-            "path": "/tmp/ml-promoted.joblib",
-            "manifest_path": "/tmp/ml-promoted.manifest.json",
-            "reason": "after_hours_training",
-        }
-    ]
+    # No runtime ML model is served, so a promoted ML artifact is not hot-loaded.
+    assert not hasattr(bot_engine, "_refresh_required_model_cache_from_path")
     assert calls["rl"] == [
         {
             "model_path": "/tmp/rl-promoted.zip",

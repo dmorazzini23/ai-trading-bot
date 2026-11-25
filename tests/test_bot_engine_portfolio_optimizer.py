@@ -53,43 +53,37 @@ def test_portfolio_optimizer_allows_trade_maps_reject_decision() -> None:
     assert context["reason"] == "correlation too high"
 
 
-def test_execution_model_lineage_uses_cache_meta_when_env_missing(monkeypatch) -> None:
-    monkeypatch.delenv("AI_TRADING_MODEL_ID", raising=False)
-    monkeypatch.delenv("AI_TRADING_MODEL_VERSION", raising=False)
-    monkeypatch.setattr(
-        bot_engine,
-        "_MODEL_CACHE_META",
-        {"path": "/tmp/models/live.joblib", "signature": (1234, 1700000000)},
-        raising=False,
-    )
+def test_execution_model_lineage_names_rule_scorer_when_env_missing(monkeypatch) -> None:
+    for name in (
+        "AI_TRADING_MODEL_ID",
+        "AI_TRADING_MODEL_VERSION",
+        "AI_TRADING_DATASET_HASH",
+        "AI_TRADING_FEATURE_VERSION",
+        "AI_TRADING_MODEL_ARTIFACT_HASH",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
     lineage = bot_engine._execution_model_lineage()
 
-    assert lineage["model_id"] == "live.joblib"
-    assert lineage["model_version"] == "1234:1700000000"
+    # Openings must carry model_id/model_version for the submit-context check;
+    # the decision source is the rule scorer, not a model artifact.
+    assert lineage == {"model_id": "rule_scorer", "model_version": "score_from_bars"}
+    assert not hasattr(bot_engine, "_MODEL_CACHE_META")
 
 
-def test_execution_model_lineage_includes_extended_lineage_fields(monkeypatch) -> None:
+def test_execution_model_lineage_explicit_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_MODEL_ID", "ml-prod")
     monkeypatch.setenv("AI_TRADING_MODEL_VERSION", "v1")
-    monkeypatch.delenv("AI_TRADING_DATASET_HASH", raising=False)
-    monkeypatch.delenv("AI_TRADING_FEATURE_VERSION", raising=False)
-    monkeypatch.delenv("AI_TRADING_MODEL_ARTIFACT_HASH", raising=False)
-    monkeypatch.setattr(
-        bot_engine,
-        "_MODEL_CACHE_META",
-        {
-            "dataset_fingerprint": "ds-123",
-            "feature_set_version": "feat-9",
-            "model_hash": "artifact-xyz",
-        },
-        raising=False,
-    )
+    monkeypatch.setenv("AI_TRADING_DATASET_HASH", "ds-123")
+    monkeypatch.setenv("AI_TRADING_FEATURE_VERSION", "feat-9")
+    monkeypatch.setenv("AI_TRADING_MODEL_ARTIFACT_HASH", "artifact-xyz")
 
     lineage = bot_engine._execution_model_lineage()
 
-    assert lineage["model_id"] == "ml-prod"
-    assert lineage["model_version"] == "v1"
-    assert lineage["dataset_hash"] == "ds-123"
-    assert lineage["feature_version"] == "feat-9"
-    assert lineage["model_artifact_hash"] == "artifact-xyz"
+    assert lineage == {
+        "model_id": "ml-prod",
+        "model_version": "v1",
+        "dataset_hash": "ds-123",
+        "feature_version": "feat-9",
+        "model_artifact_hash": "artifact-xyz",
+    }

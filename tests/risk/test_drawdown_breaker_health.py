@@ -301,7 +301,6 @@ def test_unavailable_log_is_rate_limited(monkeypatch: pytest.MonkeyPatch, caplog
 def _build_lazy_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     from ai_trading.core import bot_engine
 
-    monkeypatch.setattr(bot_engine, "_load_required_model", lambda **_: object())
     monkeypatch.setattr(bot_engine, "_resolve_runtime_artifact_path", lambda rel: tmp_path / "breaker.json")
     lazy = bot_engine.LazyBotContext()
     lazy._ensure_initialized()
