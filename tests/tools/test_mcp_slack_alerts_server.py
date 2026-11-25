@@ -43,6 +43,38 @@ def test_operational_states_distinguish_abstention_from_qualification_and_incide
     assert slack_srv._operational_state({**healthy, "ok": False, "status": "degraded"}) == "degraded_unclassified"
 
 
+def test_operational_state_keeps_qualification_label_when_paper_withholds_replay_flag() -> None:
+    healthy = {
+        "ok": True, "status": "healthy", "attention_flags": [],
+        "broker": {"status": "connected", "fresh": True},
+        "data_provider": {"status": "warming_up", "reason": "market_closed"},
+        "service_state": {"reason": "market_closed"},
+    }
+    withheld = {
+        **healthy,
+        "replay_live_parity_gate": {
+            "ok": False,
+            "replay_economics": {
+                "qualified": False,
+                "withheld_attention_flag": "replay_live_parity_gate_failed",
+            },
+        },
+    }
+    assert slack_srv._operational_state(withheld) == "blocked_qualification"
+    # Same label as the flag itself produced before the paper display change.
+    assert slack_srv._operational_state(
+        {**healthy, "attention_flags": ["replay_live_parity_gate_failed"]}
+    ) == "blocked_qualification"
+    not_withheld = {
+        **healthy,
+        "replay_live_parity_gate": {
+            "ok": True,
+            "replay_economics": {"qualified": False, "withheld_attention_flag": None},
+        },
+    }
+    assert slack_srv._operational_state(not_withheld) == "healthy_abstention"
+
+
 def test_evaluate_incident_triggers_catches_regressions() -> None:
     snapshot = {
         "go_no_go_gate_passed": False,

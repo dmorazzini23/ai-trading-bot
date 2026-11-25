@@ -803,6 +803,33 @@ Important `attention_flags` include:
 - `oms_invariants_failed`
 - `oms_lifecycle_parity_failed`
 
+In paper mode with the replay gate monitor-only (the default;
+`AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER` off),
+`replay_live_parity_gate_failed` is raised only for a real parity problem:
+any failed gate check other than `replay_counterfactual`, or a gate that is
+unavailable. `replay_counterfactual` is an economics test (enough capped
+samples with a positive net edge) that cannot pass while no strategy is
+qualified, so when it is the only failed check the flag is not raised. The
+`replay_live_parity_gate` health block then carries, in paper mode only:
+
+- `parity_ok` and `parity_failed_checks` — the gate with the economics check
+  set aside;
+- `replay_economics` — `qualified`, `sample_size`, `min_samples`,
+  `net_edge_bps`, `min_net_edge_bps`, `failed_criteria`, `reason`, a plain
+  `summary`, and `withheld_attention_flag` (set to
+  `replay_live_parity_gate_failed` when the flag was withheld for this reason).
+
+This is display only. The gate's own `ok`, `status` and `failed_checks`,
+`readiness_failures`, `entry_control` (stage `shadow`), shadow-evidence
+collection, the runtime go/no-go and live-capital readiness
+(`replay_governance_not_ok`) are unchanged. In live mode, or with the paper
+gate enforced, the flag, readiness failure and block are exactly as before.
+The market preflight Slack report shows the economics summary as an
+informational line, and the incident snapshot keeps the
+`blocked_qualification` state when the flag was withheld. The operator
+control-plane snapshot (`build_control_plane_snapshot`) still raises the flag
+for any gate failure.
+
 The non-sending incident snapshot also exposes `operational_state`. It labels
 the observation for triage; `/healthz` readiness and the runtime exposure gates
 remain authoritative. The labels are evaluated in priority order, so a broker

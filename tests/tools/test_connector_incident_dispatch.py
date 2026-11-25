@@ -315,6 +315,45 @@ def test_format_preflight_report_ready_verdict_is_ok() -> None:
     )
     assert payload["blocks"][0]["text"]["text"] == "🟢 Market preflight · ready"
     assert payload["blocks"][2]["text"]["text"] == "*Open flags*\n• none"
+    assert len(payload["blocks"]) == 4
+
+
+def test_format_preflight_report_shows_replay_economics_as_information() -> None:
+    summary = (
+        "Replay economics not qualified: 92 of 250 capped samples, net edge -5.70 bps "
+        "(minimum 0.00 bps). Paper mode: informational, not a parity failure, so the "
+        "replay parity attention flag is not raised."
+    )
+    payload = dispatch.format_preflight_report(
+        {
+            "report_status": "complete",
+            "readiness_verdict": "ready",
+            "status": "healthy",
+            "http_status": 200,
+            "reason": "market_closed",
+            "attention_flags": [],
+            "replay_live_parity_gate": {
+                "ok": False,
+                "failed_checks": ["replay_counterfactual"],
+                "replay_economics": {
+                    "qualified": False,
+                    "withheld_attention_flag": "replay_live_parity_gate_failed",
+                    "summary": summary,
+                },
+            },
+            "service_state": {"status": "ready", "phase": "active"},
+            "broker": {"status": "connected", "positions_count": 0, "open_orders_count": 0},
+            "data_provider": {"active": "alpaca", "status": "healthy"},
+        }
+    )
+    blocks = payload["blocks"]
+    assert payload["text"] == "[OK] Market preflight · ready — market closed · 0 flags"
+    assert blocks[2]["text"]["text"] == "*Open flags*\n• none"
+    assert blocks[3] == {
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"Informational: {summary}"}],
+    }
+    assert "replay_live_parity_gate_failed" not in json.dumps(blocks)
 
 
 def test_format_preflight_report_flags_unreadable_health() -> None:

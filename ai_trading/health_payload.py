@@ -69,7 +69,7 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
 def _safe_nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -246,6 +246,105 @@ def _build_contract_gate_status(
         if snapshot.get("total_violations") is not None:
             gate["total_violations"] = snapshot.get("total_violations")
     return gate
+
+
+# The replay gate's ``replay_counterfactual`` check is an economics test (enough
+# capped samples with a positive net edge), not a replay/live parity test.
+REPLAY_ECONOMICS_CHECK = "replay_counterfactual"
+REPLAY_PARITY_ATTENTION_FLAG = "replay_live_parity_gate_failed"
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _replay_economics_summary(
+    gate: Mapping[str, Any],
+    *,
+    withheld_attention_flag: str | None,
+) -> dict[str, Any]:
+    """Describe the replay counterfactual (economics) check for display only.
+
+    Never changes the gate's ``ok`` or ``failed_checks``.
+    """
+
+    observed_raw = gate.get("observed")
+    observed = observed_raw if isinstance(observed_raw, Mapping) else {}
+    thresholds_raw = gate.get("thresholds")
+    thresholds = thresholds_raw if isinstance(thresholds_raw, Mapping) else {}
+    governance_raw = gate.get("replay_governance")
+    governance = governance_raw if isinstance(governance_raw, Mapping) else {}
+    counterfactual_raw = governance.get("counterfactual")
+    counterfactual = counterfactual_raw if isinstance(counterfactual_raw, Mapping) else {}
+    criteria_raw = counterfactual.get("checks")
+    criteria = criteria_raw if isinstance(criteria_raw, Mapping) else {}
+
+    qualified = observed.get("replay_counterfactual_passed") is True
+    available = observed.get("replay_counterfactual_available") is True
+    required = thresholds.get("require_counterfactual_passed") is not False
+    sample_size = _safe_nonnegative_int(
+        observed.get("replay_counterfactual_candidate_samples")
+    )
+    min_samples = _safe_nonnegative_int(
+        observed.get("replay_counterfactual_required_samples")
+    )
+    net_edge_bps = _finite_float_or_none(
+        observed.get("replay_counterfactual_candidate_net_edge_bps")
+    )
+    min_net_edge_bps = _finite_float_or_none(
+        observed.get("replay_counterfactual_required_net_edge_bps")
+    )
+    failed_criteria = [
+        str(name) for name, passed in criteria.items() if passed is not True
+    ]
+    if qualified:
+        reason = "qualified"
+    elif not available:
+        reason = "counterfactual_unavailable"
+    elif not required:
+        reason = "not_required"
+    elif min_samples and sample_size < min_samples:
+        reason = "insufficient_samples"
+    elif (
+        net_edge_bps is not None
+        and min_net_edge_bps is not None
+        and net_edge_bps <= min_net_edge_bps
+    ):
+        reason = "net_edge_not_above_minimum"
+    else:
+        reason = "counterfactual_not_passed"
+    edge_text = f"{net_edge_bps:.2f}" if net_edge_bps is not None else "n/a"
+    min_edge_text = f"{min_net_edge_bps:.2f}" if min_net_edge_bps is not None else "n/a"
+    summary = (
+        f"Replay economics {'qualified' if qualified else 'not qualified'}: "
+        f"{sample_size} of {min_samples} capped samples, net edge {edge_text} bps "
+        f"(minimum {min_edge_text} bps)."
+    )
+    if withheld_attention_flag:
+        summary += (
+            " Paper mode: informational, not a parity failure, so the replay "
+            "parity attention flag is not raised."
+        )
+    return {
+        "check": REPLAY_ECONOMICS_CHECK,
+        "required": required,
+        "available": available,
+        "qualified": qualified,
+        "sample_size": sample_size,
+        "min_samples": min_samples,
+        "net_edge_bps": net_edge_bps,
+        "min_net_edge_bps": min_net_edge_bps,
+        "failed_criteria": failed_criteria,
+        "reason": reason,
+        "withheld_attention_flag": withheld_attention_flag,
+        "summary": summary,
+    }
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1709,6 +1808,47 @@ def build_runtime_health_payload(
         if isinstance(failed_checks_raw, (list, tuple, set))
         else []
     )
+    # Display only: in monitor-only paper mode, a gate whose sole failed check
+    # is the economics (counterfactual) test does not raise the parity
+    # attention flag. The gate's ok/failed_checks, readiness and entry control
+    # below are computed exactly as before.
+    replay_parity_failed_checks = [
+        check for check in failed_checks if check != REPLAY_ECONOMICS_CHECK
+    ]
+    replay_economics_only_failure = bool(
+        replay_gate_enabled
+        and replay_gate_available
+        and not replay_gate_ok
+        and failed_checks
+        and not replay_parity_failed_checks
+    )
+    replay_attention_flag_withheld = bool(
+        replay_gate_monitor_only
+        and replay_economics_only_failure
+        and REPLAY_PARITY_ATTENTION_FLAG in attention_flags
+    )
+    if replay_attention_flag_withheld:
+        attention_flags = [
+            flag for flag in attention_flags if flag != REPLAY_PARITY_ATTENTION_FLAG
+        ]
+    replay_live_parity_gate_payload: dict[str, Any] = replay_live_parity_gate
+    if paper_evidence_mode and replay_gate_enabled:
+        replay_live_parity_gate_payload = {
+            **replay_live_parity_gate,
+            "parity_ok": bool(
+                replay_gate_available
+                and (replay_gate_ok or replay_economics_only_failure)
+            ),
+            "parity_failed_checks": replay_parity_failed_checks,
+            "replay_economics": _replay_economics_summary(
+                replay_live_parity_gate,
+                withheld_attention_flag=(
+                    REPLAY_PARITY_ATTENTION_FLAG
+                    if replay_attention_flag_withheld
+                    else None
+                ),
+            ),
+        }
     if replay_gate_failure:
         entry_stage = "shadow"
     elif paper_evidence_mode:
@@ -1789,7 +1929,7 @@ def build_runtime_health_payload(
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
-        "replay_live_parity_gate": replay_live_parity_gate,
+        "replay_live_parity_gate": replay_live_parity_gate_payload,
         "trade_updates_stream": trade_updates_stream,
         "readiness_gates": readiness_gates,
         "readiness_failures": readiness_failures,
