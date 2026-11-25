@@ -1,6 +1,30 @@
 # Current handoff
 
-## November 25 (evening): day-sleeve step 2, slippage-spec removal and loop-stall alert deployed (`92dddb269`) (start here)
+## November 25 (late): leftover model code removal and liveness alert fix deployed (`11fe01837`) (start here)
+
+- **Running bot:** `11fe01837` since 23:27:28 UTC November 25, no restarts,
+  health `healthy`. Config hash
+  `043df3509073df05038c8731f2eb48363e004687934c0c85a941ba921260a738`
+  (owner approved). Full suite on this commit: 6,838 passed, 2 skipped.
+- **Deployed:** `signal_ml`, `ai_trading/model_loader.py`, their helpers and
+  the `strict_model_loading` ConfigSpec removed; `AI_TRADING_MODEL_MODULE`
+  removed from the packaged unit and `start.sh`; RL liveness alert at error
+  level; Slack "Signal age" line without ML.
+- **Rollback:** stop, `git checkout --detach 92dddb269`, restore
+  `runtime/release_spec.92dddb269.bak.json`, start.
+- **`.env`:** six unread names removed (1,617 lines). Release check passes.
+- **Owner still to do:** install the packaged unit once
+  (`sudo install -m 0644 /home/aiuser/ai-trading-bot/packaging/systemd/ai-trading.service /etc/systemd/system/ai-trading.service`,
+  `sudo systemctl daemon-reload`, `sudo systemctl restart ai-trading.service`).
+  After that, a rollback to code older than step 2 needs the old unit back.
+- **Not yet traded:** first session on this code is Friday November 27
+  (half day, closes 18:00 UTC).
+- **In progress (owner approved, not merged):** `claude/parity-flag-scope`
+  (paper-only display scoping of `replay_live_parity_gate_failed`),
+  `claude/backstop-basis` (arm the backstop on a new position's first cycle),
+  `claude/earnings-trial-runner` (offline runner; nothing registered).
+
+## November 25 (evening): day-sleeve step 2, slippage-spec removal and loop-stall alert deployed (`92dddb269`)
 
 - **Running bot:** `92dddb269` since 22:33:59 UTC November 25, no restarts.
   Config hash `c635a50662cdfbb4a7a0ad6b2af414a11eaca6697edc3267ae63975aaf232fc7`
