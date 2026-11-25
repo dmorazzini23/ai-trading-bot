@@ -586,8 +586,18 @@ neither "unavailable" nor the stale-model pattern. Outside paper mode it cannot
 trade. The new rule is stricter in the other direction: with
 `AI_TRADING_REQUIRE_ML_MODEL=0` the old path did not gate the rule scorer at
 all, in any mode, while it now trades only under active paper sampling.
-Nothing reads `AI_TRADING_REQUIRE_ML_MODEL` any more; it can be deleted from
-`.env`.
+
+Since the removal of the unreachable `SignalManager.signal_ml` path and
+`ai_trading.model_loader`, nothing reads these `.env` names any more; they can
+be deleted from `.env`: `AI_TRADING_REQUIRE_ML_MODEL`,
+`AI_TRADING_ML_USE_REGIME_THRESHOLDS`, `AI_TRADING_MODEL_MANIFEST_PATH`,
+`AI_TRADING_ML_SHADOW_MODEL_MODULE`, `AI_TRADING_ML_SHADOW_MODEL_PATH` and
+`AI_TRADING_MODEL_MODULE`. Deploy note: the same change removed the
+`strict_model_loading` ConfigSpec (`AI_TRADING_STRICT_MODEL_LOADING`), which
+changes the resolved config hash. Update `release_spec.json` with the owner's
+approval before restarting, or startup is refused. The config snapshot hash
+changes too, so on the first paper cycle the burn-in counters reset with reason
+`config_hash_changed` (see `ai_trading/governance/rollout.py`).
 
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
@@ -772,9 +782,14 @@ keeps that code's switches: `AI_TRADING_ML_SHADOW_ENABLED`,
 `AI_TRADING_ML_SHADOW_QUOTE_PREFETCH_ENABLED`. Turning
 `AI_TRADING_ML_SHADOW_ENABLED` off turns the refresh off, which can leave a
 stale or synthetic quote from an earlier order in the status the de-risk gate
-reads. No shadow predictions are written any more
-(`ml_shadow_predictions.jsonl` stops growing), so the phase-1 health check
-skips its shadow-artifact check for lack of ML activity.
+reads, so it must stay on in production; its default is off.
+
+The same flag also gates the prerank shadow snapshot: with
+`AI_TRADING_ML_SHADOW_ENABLED` on and `AI_TRADING_ML_SHADOW_PRERANK_ENABLED`
+not turned off (default on), each prerank pass still appends one
+`execution_candidate_prerank` row to `ml_shadow_predictions.jsonl`
+(`AI_TRADING_ML_SHADOW_LOG_PATH`). No per-symbol model shadow predictions are
+written any more.
 
 Important `attention_flags` include:
 
