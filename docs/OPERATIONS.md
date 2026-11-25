@@ -707,6 +707,38 @@ instead of ML ages. The RL-signal leg (`USE_RL_AGENT` with a loaded RL agent)
 and the after-hours-training leg are unchanged, and only the RL-signal leg can
 trigger the canary auto-rollback (flag file, kill switch, optional command).
 
+#### Decision loop stalled (alert only)
+
+A watchdog thread (`ai_trading/monitoring/decision_loop_watchdog.py`, checks
+every 30 s) watches the scheduler loop in `ai_trading.main`, which records
+progress each time an iteration finishes (including closed-market, halted and
+failed cycles). During the regular NYSE session only (holidays and half-day
+afternoons excluded), if no iteration has finished for more than 900 s it logs
+`ALERT_DECISION_LOOP_STALLED` at ERROR with `seconds_since_progress`,
+`last_cycle_index` and `last_progress_ts`, repeated at most every 30 minutes
+while the stall lasts. The journal alerts below send it to Slack as a new error.
+`DECISION_LOOP_RECOVERED` (WARNING, with `stalled_seconds`) follows once an
+iteration finishes again. The health payload carries `decision_loop` and, while
+stalled, the attention flag `decision_loop_stalled`; neither changes `ok`,
+`status` or the HTTP code. Normal market-hours spacing is about 95 s (worst
+seen 123 s, Nov 17-25, 2026); the watchdog starts with the loop, so the first
+900 s after a start never alert.
+
+The alert never halts trading, writes the kill switch or rollback flag, cancels
+orders or blocks submissions. The position stop-loss backstop runs inside this
+loop, so while it is stalled no backstop exits happen. What to do:
+
+1. `systemctl status ai-trading.service` and `curl -sS http://127.0.0.1:9001/healthz`
+   (`decision_loop.seconds_since_progress`, `service_state`).
+2. `journalctl -u ai-trading.service --since "-30 min" --no-pager | tail -n 200`:
+   the last `CYCLE_TIMING` line and what follows it (a hung broker/data call,
+   repeated exceptions, or nothing at all).
+3. Check open positions at the broker; with the backstop not running, handle
+   any position past its stop by hand if needed.
+4. If the loop does not resume, restart the service
+   (`sudo systemctl restart ai-trading.service`) and confirm `CYCLE_TIMING`
+   lines and `DECISION_LOOP_RECOVERED` or a cleared flag.
+
 Orders, decision records and TCA rows carry `model_id` `rule_scorer` and
 `model_version` `score_from_bars` (unless `AI_TRADING_MODEL_ID` /
 `AI_TRADING_MODEL_VERSION` override them). Rows written before November 25,

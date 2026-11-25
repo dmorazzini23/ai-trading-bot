@@ -2,6 +2,7 @@ import logging
 import types
 
 from ai_trading import main
+from ai_trading.monitoring import decision_loop_watchdog
 
 
 class _DummyMetric:
@@ -93,11 +94,27 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
         "_maybe_build_bad_session_replay_dataset",
         lambda **kwargs: replay_triggers.append(dict(kwargs)),
     )
+    progress: list[int | None] = []
+    watchdog_started: list[bool] = []
+    monkeypatch.setattr(
+        decision_loop_watchdog,
+        "note_decision_loop_progress",
+        lambda *, cycle_index=None, now=None: progress.append(cycle_index),
+    )
+    monkeypatch.setattr(
+        decision_loop_watchdog,
+        "start_decision_loop_watchdog",
+        lambda **_kwargs: watchdog_started.append(True),
+    )
 
     with caplog.at_level(logging.ERROR, logger=main.logger.name):
         main.main(["--iterations", "2", "--interval", "1"])
 
     assert calls["count"] == 3  # warm-up + two scheduler iterations
+    # Both the normal and the exception path count as a finished iteration;
+    # the watchdog thread is not started under tests.
+    assert progress == [1, 2]
+    assert watchdog_started == []
     scheduler_errors = [
         record
         for record in caplog.records

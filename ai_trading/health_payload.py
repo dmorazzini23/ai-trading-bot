@@ -106,6 +106,7 @@ def _build_runtime_attention_flags(
     observe_oms_invariants: bool = False,
     observe_oms_lifecycle_parity: bool = False,
     trade_updates_stream: Mapping[str, Any] | None = None,
+    decision_loop: Mapping[str, Any] | None = None,
 ) -> list[str]:
     flags: list[str] = []
     provider_reason_normalized = _normalized_token(provider_state.get("reason"))
@@ -203,6 +204,9 @@ def _build_runtime_attention_flags(
         and not bool(oms_lifecycle_parity.get("ok"))
     ):
         flags.append("oms_lifecycle_parity_failed")
+    # Non-fatal: the decision-loop watchdog is alert-only and never changes ok/status.
+    if isinstance(decision_loop, Mapping) and bool(decision_loop.get("stalled")):
+        flags.append("decision_loop_stalled")
 
     return _dedupe_flags(flags)
 
@@ -366,6 +370,18 @@ def _model_liveness_snapshot() -> dict[str, Any]:
     except AI_TRADING_FALLBACK_EXCEPTIONS:
         pass
     return {}
+
+
+def _decision_loop_snapshot() -> dict[str, Any]:
+    try:
+        from ai_trading.monitoring.decision_loop_watchdog import (
+            get_decision_loop_snapshot,
+        )
+
+        return dict(get_decision_loop_snapshot())
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        logger.debug("DECISION_LOOP_SNAPSHOT_FAILED", extra={"error": str(exc)})
+        return {"monitored": False, "stalled": False, "error": str(exc)}
 
 
 def _database_readiness_snapshot() -> dict[str, Any]:
@@ -1272,6 +1288,7 @@ def build_runtime_health_payload(
     )
     quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})
     model_liveness = _model_liveness_snapshot()
+    decision_loop = _decision_loop_snapshot()
     database_readiness = _database_readiness_snapshot_cached()
     oms_invariants = _oms_invariants_snapshot_cached()
     oms_lifecycle_parity = _oms_lifecycle_parity_snapshot_cached()
@@ -1676,6 +1693,7 @@ def build_runtime_health_payload(
         observe_oms_invariants=oms_invariants_failure,
         observe_oms_lifecycle_parity=oms_lifecycle_parity_failure,
         trade_updates_stream=trade_updates_stream,
+        decision_loop=decision_loop,
     )
     broker_account_configuration = _broker_account_configuration_snapshot()
     if broker_account_configuration.get("available") and broker_account_configuration.get(
@@ -1765,6 +1783,7 @@ def build_runtime_health_payload(
         "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
         "data_status": data_status,
         "model_liveness": model_liveness,
+        "decision_loop": decision_loop,
         "operating_mode": _operating_mode_snapshot(),
         "latest_training_attempt": latest_training_attempt,
         "database": database_readiness,
@@ -1854,6 +1873,7 @@ def build_control_plane_snapshot(
     service_state: dict[str, Any] = _safe_observe(runtime_state.observe_service_status, {})
     quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})
     model_liveness = _model_liveness_snapshot()
+    decision_loop = _decision_loop_snapshot()
     database_readiness = _database_readiness_snapshot()
     oms_invariants = _oms_invariants_snapshot()
     oms_lifecycle_parity = _oms_lifecycle_parity_snapshot()
@@ -1927,6 +1947,7 @@ def build_control_plane_snapshot(
         replay_live_parity_gate=replay_live_parity_gate,
         include_optional_contract_failures=True,
         trade_updates_stream=_trade_updates_stream_snapshot(),
+        decision_loop=decision_loop,
     )
 
     return {
@@ -2017,6 +2038,7 @@ def build_control_plane_snapshot(
             "failed_checks": go_no_go.get("failed_checks"),
         },
         "liveness": model_liveness,
+        "decision_loop": decision_loop,
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,

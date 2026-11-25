@@ -1448,3 +1448,62 @@ def test_runtime_health_payload_requires_replay_live_parity_by_default_outside_p
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
     assert payload.get("reason") == "replay_live_parity_gate_failed"
+
+
+def _stalled_decision_loop() -> dict:
+    return {
+        "monitored": True,
+        "stalled": True,
+        "alert_only": True,
+        "seconds_since_progress": 1200.0,
+        "stall_threshold_seconds": 900.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "builder_kwargs",
+    [
+        {},
+        {"force_ok_for_pytest": False, "healthy_status_mode": "healthy", "ok_mode": "connectivity"},
+    ],
+)
+def test_runtime_health_decision_loop_stall_is_non_fatal_flag(monkeypatch, builder_kwargs):
+    monkeypatch.setattr(
+        health_payload_module,
+        "_decision_loop_snapshot",
+        lambda: {"monitored": True, "stalled": False, "alert_only": True},
+    )
+    baseline = health_payload_module.build_runtime_health_payload(**builder_kwargs)
+    monkeypatch.setattr(health_payload_module, "_decision_loop_snapshot", _stalled_decision_loop)
+    stalled = health_payload_module.build_runtime_health_payload(**builder_kwargs)
+
+    assert "decision_loop_stalled" not in baseline["attention_flags"]
+    assert "decision_loop_stalled" in stalled["attention_flags"]
+    assert stalled["decision_loop"]["stalled"] is True
+    for key in ("ok", "status", "readiness_failures", "entry_control"):
+        assert stalled[key] == baseline[key], key
+
+
+def test_control_plane_snapshot_reports_decision_loop_stall(monkeypatch):
+    monkeypatch.setattr(health_payload_module, "_decision_loop_snapshot", _stalled_decision_loop)
+
+    snapshot = health_payload_module.build_control_plane_snapshot()
+
+    assert "decision_loop_stalled" in snapshot["attention_flags"]
+    assert snapshot["decision_loop"]["stalled"] is True
+
+
+def test_decision_loop_snapshot_never_raises(monkeypatch):
+    from ai_trading.monitoring import decision_loop_watchdog
+
+    def _boom(**_kwargs):
+        raise RuntimeError("watchdog state unavailable")
+
+    monkeypatch.setattr(decision_loop_watchdog, "get_decision_loop_snapshot", _boom)
+
+    snapshot = health_payload_module._decision_loop_snapshot()
+    assert snapshot["stalled"] is False
+    assert snapshot["monitored"] is False
+    payload = health_payload_module.build_runtime_health_payload()
+    assert "decision_loop_stalled" not in payload["attention_flags"]
+    assert payload["decision_loop"]["error"] == "watchdog state unavailable"
