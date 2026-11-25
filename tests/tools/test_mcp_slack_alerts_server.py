@@ -2658,7 +2658,7 @@ def test_eod_payload_reads_top_down_and_lists_open_flags() -> None:
                 "rows": 300868,
                 "model_id": "ml_edge-histgb-236ba0fe-20260717200350-4045d5c5",
             },
-            "model_liveness": {"ml_age_s": 5400.0},
+            "model_liveness": {"rl_age_s": 5400.0},
         },
         "timestamp": "2026-10-16T20:45:00Z",
     }
@@ -2693,7 +2693,8 @@ def test_eod_payload_reads_top_down_and_lists_open_flags() -> None:
         "• Position reconciliation: 2 mismatches, max qty delta 3.000",
     ]
     rendered = _block_text(payload)
-    assert "Signal age: ML 90m, RL n/a" in rendered
+    signal_line = next(line for line in rendered.splitlines() if "Signal age:" in line)
+    assert signal_line.endswith("Signal age: RL 90m")
     assert "236ba0fe" not in rendered
 
 

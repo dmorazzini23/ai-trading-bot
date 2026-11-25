@@ -967,11 +967,8 @@ def _collect_learning_snapshot(args: dict[str, Any], health: dict[str, Any]) -> 
             "reason": execution_autotune.get("reason"),
         },
         "model_liveness": {
-            "last_ml_signal_ts": model_liveness_obj.get("last_ml_signal_ts"),
             "last_rl_signal_ts": model_liveness_obj.get("last_rl_signal_ts"),
-            "ml_age_s": model_liveness_obj.get("ml_age_s"),
             "rl_age_s": model_liveness_obj.get("rl_age_s"),
-            "ml_since_start_s": model_liveness_obj.get("ml_since_start_s"),
             "rl_since_start_s": model_liveness_obj.get("rl_since_start_s"),
         },
     }
@@ -2012,10 +2009,7 @@ def _eod_message_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
                 f"Autotune: {slack_fmt.humanize(exec_autotune.get('profile_bias'))} "
                 f"({slack_fmt.fmt_count(exec_autotune.get('sample_count'))} samples)"
             ),
-            (
-                f"Signal age: ML {slack_fmt.fmt_age(model_liveness.get('ml_age_s'))}, "
-                f"RL {slack_fmt.fmt_age(model_liveness.get('rl_age_s'))}"
-            ),
+            f"Signal age: RL {slack_fmt.fmt_age(model_liveness.get('rl_age_s'))}",
         ),
         slack_fmt.context_block(f"Generated {slack_fmt.fmt_time(snapshot.get('timestamp'))}"),
     ]
