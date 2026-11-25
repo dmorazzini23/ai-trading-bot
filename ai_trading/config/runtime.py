@@ -1414,14 +1414,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=0,
     ),
     ConfigSpec(
-        field="marketable_limit_slippage_bps",
-        env=("MARKETABLE_LIMIT_SLIPPAGE_BPS",),
-        cast="int",
-        default=4,
-        description="Basis-point offset applied when converting stale limit orders into marketable limits.",
-        min_value=0,
-    ),
-    ConfigSpec(
         field="order_timeout_seconds",
         env=("ORDER_TIMEOUT_SECONDS",),
         cast="int",

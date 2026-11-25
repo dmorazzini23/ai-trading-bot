@@ -159,7 +159,6 @@ def test_refresh_settings_sets_participation_rate(monkeypatch):
             order_timeout_seconds=30,
             slippage_limit_bps=5,
             order_ttl_seconds=12,
-            marketable_limit_slippage_bps=8,
             max_participation_rate=0.03,
             price_provider_order=("alpaca_quote",),
             data_feed_intraday="iex",
