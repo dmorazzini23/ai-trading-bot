@@ -145,7 +145,12 @@ def _event_for_metric(metric: str) -> str:
 
 
 def _severity_for_metric(metric: str) -> str:
-    _ = metric
+    # ERROR-level lines are the only ones the Slack forwarder delivers. A stale
+    # RL signal only occurs when USE_RL_AGENT is on, so it is meant for an
+    # operator. The after-hours leg stays at warning: scheduled training is
+    # blocked by config/research_reset.json, so it would breach permanently.
+    if metric == _METRIC_RL_SIGNAL:
+        return "error"
     return "warning"
 
 

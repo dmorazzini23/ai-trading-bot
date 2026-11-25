@@ -53,6 +53,7 @@ def test_after_hours_training_liveness_ignores_signal_market_gates(monkeypatch) 
 
     assert [breach["metric"] for breach in breaches] == ["after_hours_training"]
     assert breaches[0]["event"] == "AFTER_HOURS_TRAINING_COMPLETE"
+    assert breaches[0]["severity"] == "warning"
     assert breaches[0]["market_open"] is False
     assert breaches[0]["signals_expected_now"] is False
 
@@ -124,7 +125,7 @@ def test_liveness_payload_includes_phase_and_age_fields(monkeypatch) -> None:
 
     assert [breach["metric"] for breach in breaches] == ["rl_signal"]
     breach = breaches[0]
-    assert breach["severity"] == "warning"
+    assert breach["severity"] == "error"
     assert breach["ml_expected"] is False
     assert breach["ml_status"] == "no_model_expected"
     assert "last_rl_signal_ts" in breach
