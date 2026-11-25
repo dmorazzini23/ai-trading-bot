@@ -72,7 +72,6 @@ export AI_TRADING_LOG_DIR="${AI_TRADING_LOG_DIR:-/var/log/ai-trading-bot}"
 export AI_TRADING_MODELS_DIR="${AI_TRADING_MODELS_DIR:-/var/lib/ai-trading-bot/models}"
 export AI_TRADING_OUTPUT_DIR="${AI_TRADING_OUTPUT_DIR:-/var/lib/ai-trading-bot/output}"
 export AI_TRADING_MODEL_PATH="${AI_TRADING_MODEL_PATH:-/var/lib/ai-trading-bot/models/trained_model.pkl}"
-export AI_TRADING_MODEL_MODULE="${AI_TRADING_MODEL_MODULE:-ai_trading.simple_models}"
 export TRADE_LOG_PATH="${TRADE_LOG_PATH:-/var/log/ai-trading-bot/trades.jsonl}"
 export BOT_LOG_FILE="${BOT_LOG_FILE:-/var/log/ai-trading-bot/bot.log}"
 export API_PORT="${API_PORT:-9001}"
@@ -111,7 +110,6 @@ fi
 
 # Mirror the later systemd model override drop-in after runtime env is loaded.
 export AI_TRADING_MODEL_PATH="/var/lib/ai-trading-bot/models/trained_model.pkl"
-export AI_TRADING_MODEL_MODULE="ai_trading.simple_models"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 

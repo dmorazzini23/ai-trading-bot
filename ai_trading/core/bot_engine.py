@@ -14128,7 +14128,7 @@ class SignalManager:
                     "METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals"
                 )
                 # Use component names emitted by SignalManager so gating stays coherent.
-                allowed_tags = {"momentum", "mean_reversion", "ml", "regime"}
+                allowed_tags = {"momentum", "mean_reversion", "regime"}
             elif symbol_upper and not symbol_has_history:
                 if symbol_upper not in _METALEARN_FALLBACK_SYMBOL_LOGGED:
                     logger.info(
