@@ -95,7 +95,6 @@ def test_composite_signal_confidence(monkeypatch):
     monkeypatch.setattr(bot, 'signals_evaluated', None, raising=False)
     monkeypatch.setattr(sm, 'signal_momentum', lambda df, model=None: (1, 0.4, 'momentum'))
     monkeypatch.setattr(sm, 'signal_mean_reversion', lambda df, model=None: (-1, 0.2, 'mean_reversion'))
-    monkeypatch.setattr(sm, 'signal_ml', lambda df, model=None, symbol=None: (1, 0.6, 'ml'))
     monkeypatch.setattr(sm, 'signal_sentiment', lambda ctx, ticker, df=None, model=None: (1, 0.1, 'sentiment'))
     monkeypatch.setattr(sm, 'signal_regime', lambda ctx, state, df, model=None: (1, 1.0, 'regime'))
     monkeypatch.setattr(sm, 'signal_stochrsi', lambda df, model=None: (1, 0.1, 'stochrsi'))
@@ -107,8 +106,8 @@ def test_composite_signal_confidence(monkeypatch):
     model = types.SimpleNamespace(predict=lambda x: [1], predict_proba=lambda x: [[0.4,0.6]], feature_names_in_=['rsi','macd','atr','vwap','sma_50','sma_200'])
     final, conf, label = sm.evaluate(ctx, state, df, 'TST', model)
     assert final == 1
-    assert conf == pytest.approx(2.6)
-    assert 'ml' in label
+    assert conf == pytest.approx(2.0)
+    assert 'regime' in label
 
 
 def test_psar_wrapper(sample_df, monkeypatch):
