@@ -190,8 +190,8 @@ Use these stable strings to anchor surgical edits:
   word for each claim. Still forbidden: unregistered searches; scheduled or
   automatic training (keep `enabled: true` in the policy file, which is what
   blocks it); retraining the day-sleeve model (its runtime serving was
-  removed on November 24, 2026; the legacy startup model load is a later
-  step); scoring the September 9–December 8 holdout;
+  removed on November 24, 2026, and the legacy startup model load on
+  November 25, 2026); scoring the September 9–December 8 holdout;
   reusing consumed campaign budgets; any change to the real-money gate.
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
 - Adding behavior to legacy compatibility entrypoints instead of the canonical

@@ -19,11 +19,13 @@ market hours, the runtime waits for the next NYSE session unless
 
 The unit refuses to start unless
 `/var/lib/ai-trading-bot/runtime/release_spec.json` matches the checkout
-(clean, at `tested_commit_sha`), config, launch profile, schema and model. Any
+(clean, at `tested_commit_sha`), config, launch profile and schema. Any
 ConfigSpec change alters `resolved_config_hash` and blocks startup until the
 spec is updated. Follow "Release Identity Check" in
 [docs/OPERATIONS.md](docs/OPERATIONS.md) for the checks and the safe deploy
-order before every restart onto a new commit.
+order before every restart onto a new commit. The unit change that drops
+`--models-root` has its own ordering rules: see "Deploying day-sleeve step 2"
+in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Environment Sync
 

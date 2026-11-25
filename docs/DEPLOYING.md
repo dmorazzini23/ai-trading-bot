@@ -72,8 +72,8 @@ Production execution note:
 
 Before deploying a candidate, run the read-only release identity preflight
 described in [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md). It compares the tested
-commit, effective config/profile, applied migration and configured model bytes
-against a reviewed release specification. The installed packaged unit enforces
+commit, effective config/profile and applied migration against a reviewed
+release specification (no model is pinned; the runtime serves none). The installed packaged unit enforces
 checks before and after Alembic migration and refuses startup without a valid
 release specification at `/var/lib/ai-trading-bot/runtime/release_spec.json`.
 The spec's `tested_commit_sha` must equal the checkout's `HEAD`, the checkout

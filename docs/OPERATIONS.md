@@ -50,8 +50,7 @@ exits with status `98`, and the packaged systemd unit uses
 
 `packaging/systemd/ai-trading.service` runs `ai_trading.tools.release_identity`
 twice as `ExecStartPre`, both times against
-`/var/lib/ai-trading-bot/runtime/release_spec.json` with
-`--models-root /var/lib/ai-trading-bot/models`:
+`/var/lib/ai-trading-bot/runtime/release_spec.json`:
 
 1. `--pre-migration`, writing
    `/var/lib/ai-trading-bot/runtime/release_identity_pre_migration.json`;
@@ -62,8 +61,13 @@ twice as `ExecStartPre`, both times against
 The tool exits `1` and writes a `blocked` report when any check fails, so
 the service does not start. The spec must hold exactly these fields:
 `schema_version` (`1`), `tested_commit_sha`, `resolved_config_hash`,
-`launch_profile_hash`, `schema_revision`, and `model_artifact` with exactly
-`path` and `sha256`. The report's `checks` are:
+`launch_profile_hash` and `schema_revision`. The runtime serves no ML model,
+so there is no model pin: a `model_artifact` entry left over from older specs
+is accepted and ignored (`observed.model_identity` reads
+`legacy_field_ignored`), and `--models-root` is accepted and ignored (logged
+as `RELEASE_IDENTITY_MODELS_ROOT_IGNORED`) for units installed before
+November 25, 2026. Any other extra field fails `spec_fields`. The report's
+`checks` are:
 
 - `spec_version`, `spec_fields`: the spec shape above.
 - `tested_commit`: `tested_commit_sha` is a 40-character SHA equal to the
@@ -75,10 +79,6 @@ the service does not start. The spec must hold exactly these fields:
 - `schema_revision`: the checkout's single Alembic head equals the spec; the
   pre-migration phase also accepts an older applied revision on that history,
   the normal phase requires the applied revision to equal the spec.
-- `model_artifact`: the SHA-256 of `model_artifact.path` (a relative path
-  inside `--models-root`) equals `model_artifact.sha256`.
-- `model_path_matches_runtime`: that file is the one `AI_TRADING_MODEL_PATH`
-  names.
 
 The report's `observed` block lists the values the checkout computed.
 
@@ -103,12 +103,10 @@ Safe deploy order (as `aiuser`, outside market hours):
    PYTHONPATH=<candidate-checkout> /home/aiuser/ai-trading-bot/venv/bin/python \
      -m ai_trading.tools.release_identity --pre-migration \
      --spec <scratch>/release_spec.json \
-     --models-root /var/lib/ai-trading-bot/models \
      --output <scratch>/pre_migration.json
    PYTHONPATH=<candidate-checkout> /home/aiuser/ai-trading-bot/venv/bin/python \
      -m ai_trading.tools.release_identity \
      --spec <scratch>/release_spec.json \
-     --models-root /var/lib/ai-trading-bot/models \
      --output <scratch>/preflight.json
    ```
 
@@ -146,6 +144,68 @@ backup, start the service. After five failed starts within 300 seconds, run
 
 See [RELEASE_IDENTITY.md](RELEASE_IDENTITY.md) for the reviewed-evidence
 requirements.
+
+### Deploying day-sleeve step 2 (legacy model removal and unit change)
+
+Day-sleeve step 2 removes the legacy `trained_model.pkl` load, its shadow
+scoring, the ML-signal liveness leg, the release check's model pin and the
+`warn_if_model_missing` ConfigSpec (which changes `resolved_config_hash`).
+It also changes `packaging/systemd/ai-trading.service`, which only the owner
+can install. Order matters:
+
+- New code under the old unit starts: the release check still accepts
+  `--models-root` (ignored) and a spec that still has `model_artifact`.
+- Old code under the new unit does not start: code before step 2 requires
+  `--models-root`, so both `release_identity` `ExecStartPre` lines exit `2`
+  and systemd keeps retrying until the start limit. So install the new unit
+  only after the step 2 code is checked out, and reinstall the old unit
+  before rolling the code back past step 2.
+
+Procedure (as `aiuser` unless `sudo` is shown, outside market hours, market
+closed and flat or with the owner's approval of open exposure):
+
+1. From a clean checkout of the candidate commit, run the dry run in "Safe
+   deploy order" step 1 against a scratch copy of the live spec with
+   `tested_commit_sha` set to the candidate. The config hash changes in
+   this release, so `config_hash` fails in the dry run; copy
+   `observed.resolved_config_hash` from the report into the scratch spec and
+   rerun until both phases pass. Leave `model_artifact` in place; it is
+   ignored.
+2. Back up the live spec and the installed unit:
+   `cp -p /var/lib/ai-trading-bot/runtime/release_spec.json /var/lib/ai-trading-bot/runtime/release_spec.<old-sha>.bak.json`
+   and `cp -p /etc/systemd/system/ai-trading.service /home/aiuser/ai-trading.service.<old-sha>.bak`.
+3. `sudo systemctl stop ai-trading.service`.
+4. `git -C /home/aiuser/ai-trading-bot checkout --detach <candidate-sha>`;
+   confirm `git -C /home/aiuser/ai-trading-bot status --porcelain` is empty.
+5. Edit the live spec: set `tested_commit_sha` to the candidate and
+   `resolved_config_hash` to the value from step 1. No other field changes.
+6. `sudo systemctl start ai-trading.service`. This still runs the old unit,
+   which passes `--models-root`; the new code ignores it. Check both
+   `release_identity_*.json` reports pass, `curl -sS http://127.0.0.1:9001/healthz`
+   shows `model_liveness.ml_status` `no_model_expected`, and the journal has
+   `RELEASE_IDENTITY_MODELS_ROOT_IGNORED` and no tracebacks.
+7. Install the new unit (it may also be left for a later restart):
+   `sudo install -m 0644 /home/aiuser/ai-trading-bot/packaging/systemd/ai-trading.service /etc/systemd/system/ai-trading.service`,
+   then `sudo systemctl daemon-reload`. Confirm with
+   `systemctl cat ai-trading.service | grep -c models-root` (expect `0`).
+   The unit takes effect at the next start:
+   `sudo systemctl restart ai-trading.service`, then repeat the checks in
+   step 6 (the ignored-flag log line no longer appears).
+
+Rollback:
+
+- Before step 7 (old unit still installed): stop the service, check out the
+  previous commit, restore the spec backup, start.
+- After step 7: stop the service, reinstall the old unit first
+  (`sudo install -m 0644 /home/aiuser/ai-trading.service.<old-sha>.bak /etc/systemd/system/ai-trading.service`
+  and `sudo systemctl daemon-reload`), then check out the previous commit,
+  restore the spec backup and start. If the service hit the start limit,
+  run `sudo systemctl reset-failed ai-trading.service` first.
+
+`--models-root` support and the ignored `model_artifact` field can be
+dropped from `release_identity` once the new unit is installed, the live spec
+no longer has `model_artifact`, and no rollback target older than step 2 is
+kept.
 
 ### Important Paths
 
@@ -640,6 +700,31 @@ exposure; held positions are frozen). It never changes `ok`, `status` or the
 HTTP code, and it authorizes no promotion. The day-sleeve model readiness gate
 (`day_sleeve_model`, `required_model_stale`) was removed with the model. The
 market-close recap includes the same summary.
+
+`model_liveness` has no ML-signal leg: no ML model serves runtime decisions,
+so it reports `ml_expected: false` and `ml_status: "no_model_expected"`
+instead of ML ages. The RL-signal leg (`USE_RL_AGENT` with a loaded RL agent)
+and the after-hours-training leg are unchanged, and only the RL-signal leg can
+trigger the canary auto-rollback (flag file, kill switch, optional command).
+
+Orders, decision records and TCA rows carry `model_id` `rule_scorer` and
+`model_version` `score_from_bars` (unless `AI_TRADING_MODEL_ID` /
+`AI_TRADING_MODEL_VERSION` override them). Rows written before November 25,
+2026 carry the legacy `trained_model.pkl` file name and its `mtime_ns:size`
+signature; neither identified a model that made the decision.
+
+Each prerank pass refreshes the quote status for up to
+`AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_LIMIT` selected symbols (default 10)
+plus `AI_TRADING_ML_SHADOW_EXTRA_SYMBOLS`, before the primary-feed de-risk
+gate reads it. It used to run inside the legacy model's shadow scoring and
+keeps that code's switches: `AI_TRADING_ML_SHADOW_ENABLED`,
+`AI_TRADING_ML_SHADOW_PRERANK_SIGNAL_ENABLED` and
+`AI_TRADING_ML_SHADOW_QUOTE_PREFETCH_ENABLED`. Turning
+`AI_TRADING_ML_SHADOW_ENABLED` off turns the refresh off, which can leave a
+stale or synthetic quote from an earlier order in the status the de-risk gate
+reads. No shadow predictions are written any more
+(`ml_shadow_predictions.jsonl` stops growing), so the phase-1 health check
+skips its shadow-artifact check for lack of ML activity.
 
 Important `attention_flags` include:
 

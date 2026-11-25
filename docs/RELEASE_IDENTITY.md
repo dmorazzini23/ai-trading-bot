@@ -12,15 +12,18 @@ review, release specification and restart checks.
 
 The preflight compares one reviewed release specification with the current
 checkout, effective sanitized configuration, launch profile, applied OMS
-migration, migration head and exact configured model file. It returns nonzero
+migration and migration head. It returns nonzero
 and writes a blocked report if any field is missing or differs. The database
 query is read-only, and the report contains hashes and revision IDs but no
-database URL, credentials or model bytes.
+database URL or credentials.
 The specification accepts only the documented fields, so accidental extra
 values are rejected rather than copied into the report or recovery bundle.
+Since November 25, 2026 the runtime serves no ML model and the check has no
+model pin. A `model_artifact` entry in an older specification is accepted and
+ignored, as is the `--models-root` option that older installed units pass.
 
 Example release specification (replace every placeholder from reviewed CI,
-configuration and model-promotion evidence):
+configuration and migration evidence):
 
 ```json
 {
@@ -28,23 +31,18 @@ configuration and model-promotion evidence):
   "tested_commit_sha": "<40-character CI-passed commit SHA>",
   "resolved_config_hash": "<tested sanitized config hash>",
   "launch_profile_hash": "<tested launch-profile hash>",
-  "schema_revision": "20260506_0001",
-  "model_artifact": {
-    "path": "trained_model.pkl",
-    "sha256": "<approved artifact SHA-256>"
-  }
+  "schema_revision": "20260506_0001"
 }
 ```
 
 Run as `aiuser` from the checkout with the exact environment that the packaged
-service will use. First verify code/config/model and a readable existing schema
+service will use. First verify code/config and a readable existing schema
 before migration:
 
 ```bash
 ./venv/bin/python -m ai_trading.tools.release_identity \
   --pre-migration \
   --spec /var/lib/ai-trading-bot/runtime/release_spec.json \
-  --models-root /var/lib/ai-trading-bot/models \
   --output /var/lib/ai-trading-bot/runtime/release_identity_pre_migration.json
 ```
 
@@ -54,15 +52,12 @@ tested checkout's migration head:
 ```bash
 ./venv/bin/python -m ai_trading.tools.release_identity \
   --spec /var/lib/ai-trading-bot/runtime/release_spec.json \
-  --models-root /var/lib/ai-trading-bot/models \
   --output /var/lib/ai-trading-bot/runtime/release_identity_preflight.json
 ```
 
 The expected commit must have the required CI workflows passing. The verifier
 checks the SHA and a clean checkout, but it cannot independently authenticate
-GitHub CI from an offline host. The model file must be under `--models-root`,
-must match `AI_TRADING_MODEL_PATH`, and must match the expected SHA-256. A
-missing model identity blocks the preflight, including in paper mode. The
+GitHub CI from an offline host. The
 pre-migration phase requires a readable existing Alembic revision in the
 checkout's migration history and a matching expected head; it permits an older
 applied revision on that path. The final phase
