@@ -1350,13 +1350,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="When true, missing ML models raise immediately instead of falling back to neutral mode.",
     ),
     ConfigSpec(
-        field="warn_if_model_missing",
-        env=("AI_TRADING_WARN_IF_MODEL_MISSING",),
-        cast="bool",
-        default=False,
-        description="Controls whether missing ML models emit warnings during startup checks.",
-    ),
-    ConfigSpec(
         field="health_tick_seconds",
         env=("HEALTH_TICK_SECONDS", "AI_TRADING_HEALTH_TICK_SECONDS"),
         cast="float",
