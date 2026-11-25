@@ -1,4 +1,5 @@
 import logging
+import sys
 import types
 
 from ai_trading import main
@@ -16,7 +17,7 @@ class _DummyMetric:
         return None
 
 
-def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
+def _patch_main_runtime(monkeypatch) -> None:
     monkeypatch.setenv("SCHEDULER_ITERATIONS", "2")
     monkeypatch.setenv("ALLOW_AFTER_HOURS", "1")
 
@@ -80,6 +81,10 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
 
     monkeypatch.setattr(main, "Thread", _InlineThread)
 
+
+def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
+    _patch_main_runtime(monkeypatch)
+
     calls = {"count": 0}
     replay_triggers: list[dict[str, object]] = []
 
@@ -135,3 +140,27 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
     detail_payload = scheduler_replays[0].get("detail")
     detail = detail_payload if isinstance(detail_payload, dict) else {}
     assert detail.get("cycle_index") == detail.get("iteration")
+
+
+def test_scheduler_trades_when_watchdog_module_cannot_load(monkeypatch, caplog):
+    _patch_main_runtime(monkeypatch)
+    calls = {"count": 0}
+
+    def _run_cycle_stub():
+        calls["count"] += 1
+
+    monkeypatch.setattr(main, "run_cycle", _run_cycle_stub)
+    # A None entry in sys.modules makes the watchdog import raise ImportError.
+    monkeypatch.setitem(sys.modules, "ai_trading.monitoring.decision_loop_watchdog", None)
+
+    with caplog.at_level(logging.ERROR, logger=main.logger.name):
+        main.main(["--iterations", "2", "--interval", "1"])
+
+    assert calls["count"] == 3  # warm-up + two scheduler iterations still run
+    unavailable = [
+        record
+        for record in caplog.records
+        if "DECISION_LOOP_WATCHDOG_UNAVAILABLE" in record.getMessage()
+    ]
+    assert len(unavailable) == 1
+    assert unavailable[0].levelno == logging.ERROR

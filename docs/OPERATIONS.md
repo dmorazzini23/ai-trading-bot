@@ -712,17 +712,30 @@ trigger the canary auto-rollback (flag file, kill switch, optional command).
 A watchdog thread (`ai_trading/monitoring/decision_loop_watchdog.py`, checks
 every 30 s) watches the scheduler loop in `ai_trading.main`, which records
 progress each time an iteration finishes (including closed-market, halted and
-failed cycles). During the regular NYSE session only (holidays and half-day
-afternoons excluded), if no iteration has finished for more than 900 s it logs
-`ALERT_DECISION_LOOP_STALLED` at ERROR with `seconds_since_progress`,
-`last_cycle_index` and `last_progress_ts`, repeated at most every 30 minutes
-while the stall lasts. The journal alerts below send it to Slack as a new error.
-`DECISION_LOOP_RECOVERED` (WARNING, with `stalled_seconds`) follows once an
-iteration finishes again. The health payload carries `decision_loop` and, while
-stalled, the attention flag `decision_loop_stalled`; neither changes `ok`,
-`status` or the HTTP code. Normal market-hours spacing is about 95 s (worst
-seen 123 s, Nov 17-25, 2026); the watchdog starts with the loop, so the first
-900 s after a start never alert.
+failed cycles). Ages use the monotonic clock. During the regular NYSE session
+only (holidays and half-day afternoons excluded), if no iteration has finished
+for longer than the threshold it logs `ALERT_DECISION_LOOP_STALLED` at ERROR
+with `seconds_since_progress`, `threshold_seconds`, `last_cycle_index` and
+`last_progress_ts`, repeated every 30 minutes while the stall lasts. The
+journal alerts below send it to Slack as a new error; Slack holds repeats of
+one error type back an hour, so repeats reach Slack at most hourly.
+`DECISION_LOOP_RECOVERED` (with `stalled_seconds`) is logged once an iteration
+finishes again; it is WARNING and does not reach Slack.
+
+The threshold is `max(900 s, 3 x the largest loop interval)`, from the open
+interval, the closed-market interval and the autotune ceiling when the loop
+starts. With today's settings (85 s, 300 s, 180 s) it is 900 s; normal
+market-hours spacing is about 95 s (worst seen 123 s, Nov 17-25, 2026). The
+health payload carries `decision_loop` (`monitored`, `thread_alive`,
+`stall_threshold_seconds`, `seconds_since_progress`, `stalled`, ...) and,
+while stalled, the attention flag `decision_loop_stalled`; neither changes
+`ok`, `status` or the HTTP code. `monitored: false` with `armed: true` means
+the watchdog thread has died: no stall alerts will come until a restart.
+
+Not alerted: the first threshold period after the loop starts; a hang during
+startup before the loop begins; and a stall that begins less than the
+threshold (15 minutes) before a session closes, which alerts only if it is
+still stalled when the next session opens.
 
 The alert never halts trading, writes the kill switch or rollback flag, cancels
 orders or blocks submissions. The position stop-loss backstop runs inside this
@@ -736,8 +749,11 @@ loop, so while it is stalled no backstop exits happen. What to do:
 3. Check open positions at the broker; with the backstop not running, handle
    any position past its stop by hand if needed.
 4. If the loop does not resume, restart the service
-   (`sudo systemctl restart ai-trading.service`) and confirm `CYCLE_TIMING`
-   lines and `DECISION_LOOP_RECOVERED` or a cleared flag.
+   (`sudo systemctl restart ai-trading.service`). A restarted process never
+   logs `DECISION_LOOP_RECOVERED`; confirm `DECISION_LOOP_WATCHDOG_STARTED` in
+   the journal, new `CYCLE_TIMING` lines, and a fresh `decision_loop` block in
+   `/healthz` (`monitored: true`, small `seconds_since_progress`,
+   `stalled: false`).
 
 Orders, decision records and TCA rows carry `model_id` `rule_scorer` and
 `model_version` `score_from_bars` (unless `AI_TRADING_MODEL_ID` /

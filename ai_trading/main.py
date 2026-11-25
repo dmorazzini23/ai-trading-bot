@@ -4332,17 +4332,32 @@ def main(argv: list[str] | None = None) -> None:
             logger.warning("TRADE_UPDATES_STREAM_START_FAILED", exc_info=True)
     # Alert-only stall watchdog: its own thread checks that this loop keeps
     # finishing iterations during the regular session; it never halts trading.
-    from ai_trading.monitoring.decision_loop_watchdog import (
-        note_decision_loop_progress,
-        start_decision_loop_watchdog,
-        stop_decision_loop_watchdog,
-    )
-
-    if not test_mode:
-        try:
-            start_decision_loop_watchdog()
-        except MAIN_FALLBACK_EXC:
-            logger.warning("DECISION_LOOP_WATCHDOG_START_FAILED", exc_info=True)
+    # If it cannot load, the loop still trades with progress notes skipped.
+    note_loop_progress: Callable[..., None] | None = None
+    stop_loop_watchdog: Callable[[], None] | None = None
+    try:
+        from ai_trading.monitoring.decision_loop_watchdog import (
+            note_decision_loop_progress,
+            start_decision_loop_watchdog,
+            stop_decision_loop_watchdog,
+        )
+    except MAIN_FALLBACK_EXC:
+        logger.error("DECISION_LOOP_WATCHDOG_UNAVAILABLE", exc_info=True)
+    else:
+        note_loop_progress = note_decision_loop_progress
+        stop_loop_watchdog = stop_decision_loop_watchdog
+        if not test_mode:
+            autotune_max_s = (
+                _coerce_int_like(interval_autotune_settings.get("max_interval_s"), interval)
+                if bool(interval_autotune_settings.get("enabled", False))
+                else interval
+            )
+            try:
+                start_decision_loop_watchdog(
+                    loop_interval_seconds=float(max(interval, closed_interval, autotune_max_s)),
+                )
+            except MAIN_FALLBACK_EXC:
+                logger.warning("DECISION_LOOP_WATCHDOG_START_FAILED", exc_info=True)
     count = 0
     # Track HTTP profile to reduce retries when market is closed
     _http_closed_profile = None  # None=unknown, True=closed, False=open
@@ -4683,7 +4698,8 @@ def main(argv: list[str] | None = None) -> None:
                     },
                 )
                 count = cycle_index
-                note_decision_loop_progress(cycle_index=cycle_index)
+                if note_loop_progress is not None:
+                    note_loop_progress(cycle_index=cycle_index)
                 try:
                     backoff_seconds = int(effective_interval)
                 except MAIN_FALLBACK_EXC:
@@ -4698,7 +4714,8 @@ def main(argv: list[str] | None = None) -> None:
             if budget is None:
                 continue
             count = cycle_index
-            note_decision_loop_progress(cycle_index=cycle_index)
+            if note_loop_progress is not None:
+                note_loop_progress(cycle_index=cycle_index)
             try:
                 budget_elapsed_ms = float(max(0.0, budget.elapsed_ms()))
                 budget_limit_ms = float(max(0.0, budget.ms))
@@ -4820,7 +4837,11 @@ def main(argv: list[str] | None = None) -> None:
         return
     finally:
         trade_updates_running.clear()
-        stop_decision_loop_watchdog()
+        if stop_loop_watchdog is not None:
+            try:
+                stop_loop_watchdog()
+            except MAIN_FALLBACK_EXC:
+                logger.warning("DECISION_LOOP_WATCHDOG_STOP_FAILED", exc_info=True)
         if should_stop():
             try:
                 logger.info("SERVICE_SHUTDOWN_CLEANUP_START")
