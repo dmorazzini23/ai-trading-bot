@@ -2,7 +2,8 @@
 
 The runtime serves no ML model, so the check no longer pins a model artifact.
 A spec written before that change still carries a ``model_artifact`` entry; it
-is accepted and ignored so the deploy needs only the commit SHA edited. The
+is accepted and ignored, so a deploy edits only the spec's commit SHA and, when
+the resolved config changed, its config hash. The
 ``--models-root`` option is accepted and ignored for the same reason, while the
 installed systemd unit may still pass it. Both can be removed once the live
 spec and the installed unit no longer carry them.

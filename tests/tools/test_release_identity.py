@@ -85,7 +85,7 @@ def test_release_identity_matches_exact_code_config_and_schema(
 def test_release_identity_accepts_spec_written_with_legacy_model_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The live spec still has ``model_artifact``; only the SHA changes at deploy."""
+    """The live spec still has ``model_artifact``; the field is ignored, not required."""
 
     database_url = _sqlite_schema(tmp_path / "oms.db", "rev-current")
     commit = "c" * 40
