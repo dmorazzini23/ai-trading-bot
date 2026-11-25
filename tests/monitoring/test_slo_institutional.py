@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+import pytest
+
+from ai_trading.monitoring import slo as slo_module
 from ai_trading.monitoring.slo import SLOStatus, get_slo_monitor, record_execution_drift, record_order_pacing_cap_hit_rate, record_order_reject_rate, record_realized_slippage
+
+
+@pytest.fixture(autouse=True)
+def _fresh_global_slo_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests record samples on the process-wide monitor. Give each test its
+    # own and restore the original afterwards so later tests (for example the
+    # netting gate tests, which read reject rate and drift) see no leaked samples.
+    monkeypatch.setattr(slo_module, "_global_slo_monitor", None)
 
 
 def test_default_slo_contains_reject_and_execution_drift() -> None:
