@@ -24,10 +24,12 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX fallback
     fcntl = None  # type: ignore[assignment]
 
-_METRIC_ML_SIGNAL = "ml_signal"
+# No ML model serves runtime decisions, so there is no ML-signal heartbeat leg:
+# a model that does not exist cannot go stale, alert or trip the canary rollback.
 _METRIC_RL_SIGNAL = "rl_signal"
 _METRIC_AFTER_HOURS = "after_hours_training"
-_CRITICAL_CANARY_METRICS = {_METRIC_ML_SIGNAL, _METRIC_RL_SIGNAL}
+_CRITICAL_CANARY_METRICS = {_METRIC_RL_SIGNAL}
+_ML_LIVENESS_STATUS = {"ml_expected": False, "ml_status": "no_model_expected"}
 _CANARY_ROLLBACK_FLAG_DEFAULT = "runtime/canary_rollback.flag"
 _KILL_SWITCH_DEFAULT = "runtime/kill_switch"
 
@@ -136,8 +138,6 @@ def _resolve_liveness_runtime_path(
 
 
 def _event_for_metric(metric: str) -> str:
-    if metric == _METRIC_ML_SIGNAL:
-        return "ML_SIGNAL"
     if metric == _METRIC_RL_SIGNAL:
         return "RL_SIGNALS_EMITTED"
     if metric == _METRIC_AFTER_HOURS:
@@ -194,20 +194,6 @@ def _latest_after_hours_artifact_timestamp() -> datetime | None:
         return None
 
 
-def _ml_liveness_expected_default() -> bool:
-    """Return whether ML signal heartbeat should be enforced by default."""
-
-    if not _env_bool("AI_TRADING_MODEL_LIVENESS_ENFORCE_ML", True):
-        return False
-    bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
-    if bot_engine_module is None:
-        return True
-    use_ml = getattr(bot_engine_module, "USE_ML", None)
-    if use_ml is None:
-        return True
-    return bool(use_ml)
-
-
 class _ModelLivenessMonitor:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -231,7 +217,6 @@ class _ModelLivenessMonitor:
         phase: str | None = None,
         execution_gate_open: bool | None = None,
         warmup_complete: bool | None = None,
-        ml_expected: bool | None = None,
         rl_expected: bool | None = None,
         now: datetime | None = None,
     ) -> list[_LivenessBreach]:
@@ -252,24 +237,12 @@ class _ModelLivenessMonitor:
             0.0,
             _env_float("AI_TRADING_MODEL_LIVENESS_ALERT_COOLDOWN_SECONDS", 300.0),
         )
-        if ml_expected is None:
-            enforce_ml = _ml_liveness_expected_default()
-        else:
-            enforce_ml = bool(ml_expected) and _env_bool(
-                "AI_TRADING_MODEL_LIVENESS_ENFORCE_ML",
-                True,
-            )
         enforce_rl_cfg = _env_bool("USE_RL_AGENT", False)
         if rl_expected is None:
             enforce_rl = bool(enforce_rl_cfg)
         else:
             enforce_rl = bool(enforce_rl_cfg) and bool(rl_expected)
         thresholds: dict[str, float] = {}
-        if enforce_signal_liveness and enforce_ml:
-            thresholds[_METRIC_ML_SIGNAL] = max(
-                1.0,
-                _env_float("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", 5400.0),
-            )
         if enforce_signal_liveness and enforce_rl:
             thresholds[_METRIC_RL_SIGNAL] = max(
                 1.0,
@@ -291,22 +264,11 @@ class _ModelLivenessMonitor:
 
         breaches: list[_LivenessBreach] = []
         with self._lock:
-            last_ml_signal_ts = self._last_seen.get(_METRIC_ML_SIGNAL)
             last_rl_signal_ts = self._last_seen.get(_METRIC_RL_SIGNAL)
-            ml_age_s = (
-                max(0.0, (now_utc - last_ml_signal_ts).total_seconds())
-                if last_ml_signal_ts is not None
-                else None
-            )
             rl_age_s = (
                 max(0.0, (now_utc - last_rl_signal_ts).total_seconds())
                 if last_rl_signal_ts is not None
                 else None
-            )
-            ml_since_start_s = (
-                None
-                if last_ml_signal_ts is not None
-                else max(0.0, (now_utc - self._started_at).total_seconds())
             )
             rl_since_start_s = (
                 None
@@ -314,31 +276,17 @@ class _ModelLivenessMonitor:
                 else max(0.0, (now_utc - self._started_at).total_seconds())
             )
             base_context = {
-                "last_ml_signal_ts": (
-                    last_ml_signal_ts.isoformat()
-                    if isinstance(last_ml_signal_ts, datetime)
-                    else None
-                ),
+                **_ML_LIVENESS_STATUS,
                 "last_rl_signal_ts": (
                     last_rl_signal_ts.isoformat()
                     if isinstance(last_rl_signal_ts, datetime)
                     else None
                 ),
-                "ml_age_s": round(float(ml_age_s), 3) if ml_age_s is not None else None,
                 "rl_age_s": round(float(rl_age_s), 3) if rl_age_s is not None else None,
-                "ml_since_start_s": (
-                    round(float(ml_since_start_s), 3)
-                    if ml_since_start_s is not None
-                    else None
-                ),
                 "rl_since_start_s": (
                     round(float(rl_since_start_s), 3)
                     if rl_since_start_s is not None
                     else None
-                ),
-                "ml_max_age_s": round(
-                    float(thresholds.get(_METRIC_ML_SIGNAL, 0.0)),
-                    3,
                 ),
                 "rl_max_age_s": round(
                     float(thresholds.get(_METRIC_RL_SIGNAL, 0.0)),
@@ -349,7 +297,6 @@ class _ModelLivenessMonitor:
                 "phase": str(phase or "unknown"),
                 "execution_gate_open": bool(execution_gate_open),
                 "warmup_complete": bool(warmup_complete),
-                "ml_enforced": bool(enforce_ml),
                 "rl_enforced": bool(enforce_rl),
             }
             for metric, threshold_seconds in thresholds.items():
@@ -494,22 +441,11 @@ class _ModelLivenessMonitor:
             now_utc = now_utc.replace(tzinfo=UTC)
         now_utc = now_utc.astimezone(UTC)
         with self._lock:
-            ml_ts = self._last_seen.get(_METRIC_ML_SIGNAL)
             rl_ts = self._last_seen.get(_METRIC_RL_SIGNAL)
-            ml_age_s = (
-                max(0.0, (now_utc - ml_ts).total_seconds())
-                if ml_ts is not None
-                else None
-            )
             rl_age_s = (
                 max(0.0, (now_utc - rl_ts).total_seconds())
                 if rl_ts is not None
                 else None
-            )
-            ml_since_start_s = (
-                None
-                if ml_ts is not None
-                else max(0.0, (now_utc - self._started_at).total_seconds())
             )
             rl_since_start_s = (
                 None
@@ -517,23 +453,13 @@ class _ModelLivenessMonitor:
                 else max(0.0, (now_utc - self._started_at).total_seconds())
             )
             return {
-                "last_ml_signal_ts": ml_ts.isoformat() if ml_ts is not None else None,
+                **_ML_LIVENESS_STATUS,
                 "last_rl_signal_ts": rl_ts.isoformat() if rl_ts is not None else None,
-                "ml_age_s": round(float(ml_age_s), 3) if ml_age_s is not None else None,
                 "rl_age_s": round(float(rl_age_s), 3) if rl_age_s is not None else None,
-                "ml_since_start_s": (
-                    round(float(ml_since_start_s), 3)
-                    if ml_since_start_s is not None
-                    else None
-                ),
                 "rl_since_start_s": (
                     round(float(rl_since_start_s), 3)
                     if rl_since_start_s is not None
                     else None
-                ),
-                "ml_max_age_s": round(
-                    max(1.0, _env_float("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", 5400.0)),
-                    3,
                 ),
                 "rl_max_age_s": round(
                     max(1.0, _env_float("AI_TRADING_RL_SIGNAL_MAX_AGE_SECONDS", 5400.0)),
@@ -543,10 +469,6 @@ class _ModelLivenessMonitor:
 
 
 _MONITOR = _ModelLivenessMonitor()
-
-
-def note_ml_signal(*, now: datetime | None = None) -> None:
-    _MONITOR.record(_METRIC_ML_SIGNAL, now=now)
 
 
 def note_rl_signals_emitted(*, now: datetime | None = None) -> None:
@@ -564,7 +486,6 @@ def check_model_liveness(
     phase: str | None = None,
     execution_gate_open: bool | None = None,
     warmup_complete: bool | None = None,
-    ml_expected: bool | None = None,
     rl_expected: bool | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
@@ -576,7 +497,6 @@ def check_model_liveness(
             phase=phase,
             execution_gate_open=execution_gate_open,
             warmup_complete=warmup_complete,
-            ml_expected=ml_expected,
             rl_expected=rl_expected,
             now=now,
         )
@@ -621,6 +541,5 @@ __all__ = [
     "get_model_liveness_snapshot",
     "maybe_trigger_canary_auto_rollback",
     "note_after_hours_training_complete",
-    "note_ml_signal",
     "note_rl_signals_emitted",
 ]

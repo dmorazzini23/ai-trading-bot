@@ -4569,12 +4569,8 @@ def main(argv: list[str] | None = None) -> None:
                             and not broker_execution_blocked
                         )
                         bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
-                        ml_expected = True
                         rl_expected = False
                         if bot_engine_module is not None:
-                            ml_marker = getattr(bot_engine_module, "USE_ML", None)
-                            if ml_marker is not None:
-                                ml_expected = bool(ml_marker)
                             rl_expected = bool(getattr(bot_engine_module, "RL_AGENT", None))
                         if not rl_expected:
                             try:
@@ -4587,7 +4583,6 @@ def main(argv: list[str] | None = None) -> None:
                             phase=phase,
                             execution_gate_open=execution_gate_open,
                             warmup_complete=warmup_complete,
-                            ml_expected=ml_expected,
                             rl_expected=rl_expected,
                         )
                         for breach in liveness_breaches:

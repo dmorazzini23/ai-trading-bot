@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-import types
 from datetime import datetime, timedelta
 
 import pytest
@@ -64,20 +62,9 @@ def test_liveness_env_parse_metric_defaults_and_disabled_paths(
         model_liveness._parse_rollback_command('""')
     assert model_liveness._event_for_metric("custom_metric") == "custom_metric"
 
-    monkeypatch.setattr(model_liveness, "get_env", lambda *_args, **_kwargs: False)
-    assert model_liveness._ml_liveness_expected_default() is False
-
-    def enabled_get_env(name: str, default: object = None, **_kwargs: object) -> object:
-        if name == "AI_TRADING_MODEL_LIVENESS_ENFORCE_ML":
-            return True
-        return default
-
-    monkeypatch.setattr(model_liveness, "get_env", enabled_get_env)
-    monkeypatch.delitem(sys.modules, "ai_trading.core.bot_engine", raising=False)
-    assert model_liveness._ml_liveness_expected_default() is True
-    module = types.ModuleType("ai_trading.core.bot_engine")
-    monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", module)
-    assert model_liveness._ml_liveness_expected_default() is True
+    # The ML leg is gone; nothing in the module decides whether ML is expected.
+    assert not hasattr(model_liveness, "_ml_liveness_expected_default")
+    assert model_liveness._CRITICAL_CANARY_METRICS == {"rl_signal"}
 
     from ai_trading.config.management import get_env as config_get_env
 
@@ -93,23 +80,22 @@ def test_liveness_naive_timestamps_stale_reason_snapshot_and_rollbacks(
 ) -> None:
     _set_liveness_env(monkeypatch)
     now = datetime(2026, 4, 27, 14, 0)
-    model_liveness.note_ml_signal(now=now - timedelta(seconds=5))
+    model_liveness.note_rl_signals_emitted(now=now - timedelta(seconds=5))
     breaches = model_liveness.check_model_liveness(
         market_open=True,
-        ml_expected=True,
-        rl_expected=False,
+        rl_expected=True,
         now=now,
     )
     assert breaches[0]["reason"] == "stale"
-    assert breaches[0]["last_ml_signal_ts"].endswith("+00:00")
+    assert breaches[0]["last_rl_signal_ts"].endswith("+00:00")
 
     snapshot = model_liveness._MONITOR.snapshot(now=now + timedelta(seconds=1))
-    assert snapshot["ml_age_s"] == 6.0
+    assert snapshot["rl_age_s"] == 6.0
 
     payload = [
         {
-            "metric": "ml_signal",
-            "event": "ML_SIGNAL",
+            "metric": "rl_signal",
+            "event": "RL_SIGNALS_EMITTED",
             "age_seconds": 5.0,
             "threshold_seconds": 1.0,
             "severity": "warning",

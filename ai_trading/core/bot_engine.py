@@ -139,7 +139,7 @@ from ai_trading.portfolio.allocation import (
     update_allocation_weights,
 )
 from ai_trading.monitoring.alerts import evaluate_runtime_alert_thresholds
-from ai_trading.monitoring.model_liveness import note_ml_signal, note_rl_signals_emitted
+from ai_trading.monitoring.model_liveness import note_rl_signals_emitted
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
     LiquidityRegime,
@@ -15480,8 +15480,6 @@ class SignalManager:
                 if float(shadow_payload["probability_delta"]) >= divergence_threshold:
                     logger.info("ML_SHADOW_DIVERGENCE", extra=shadow_payload)
 
-            # Record that ML produced a decision payload even when filtered to no-trade.
-            note_ml_signal()
             if pred != 1:
                 logger.info(
                     "ML_SIGNAL_NO_POSITIVE_EDGE",

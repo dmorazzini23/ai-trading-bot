@@ -22,21 +22,21 @@ def _set_default_liveness_env(monkeypatch) -> None:
     model_liveness._reset_model_liveness_state_for_tests()
 
 
-def test_model_liveness_breaches_when_signals_are_stale(monkeypatch) -> None:
+def test_model_liveness_breaches_when_rl_signals_are_stale(monkeypatch) -> None:
     _set_default_liveness_env(monkeypatch)
 
     now = datetime.now(UTC) + timedelta(seconds=2)
     breaches = model_liveness.check_model_liveness(
         market_open=True,
         signals_expected_now=True,
-        ml_expected=True,
         rl_expected=True,
         now=now,
     )
     metrics = {entry["metric"] for entry in breaches}
 
-    assert "ml_signal" in metrics
-    assert "rl_signal" in metrics
+    # No ML model serves runtime decisions: there is no ML heartbeat to go stale.
+    assert metrics == {"rl_signal"}
+    assert all(entry["ml_expected"] is False for entry in breaches)
 
 
 def test_model_liveness_skips_intraday_checks_when_market_closed(monkeypatch) -> None:
@@ -48,23 +48,37 @@ def test_model_liveness_skips_intraday_checks_when_market_closed(monkeypatch) ->
     assert breaches == []
 
 
-def test_recorded_ml_signal_suppresses_ml_breach(monkeypatch) -> None:
+def test_ml_leg_never_breaches_even_when_never_observed(monkeypatch) -> None:
     _set_default_liveness_env(monkeypatch)
-    monkeypatch.setenv("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", "10")
-    base = datetime.now(UTC)
-    model_liveness.note_ml_signal(now=base)
+    monkeypatch.setenv("AI_TRADING_MODEL_LIVENESS_ENFORCE_ML", "1")
+    monkeypatch.setenv("USE_RL_AGENT", "0")
+    assert not hasattr(model_liveness, "note_ml_signal")
 
     breaches = model_liveness.check_model_liveness(
         market_open=True,
         signals_expected_now=True,
-        ml_expected=True,
+        execution_gate_open=True,
+        warmup_complete=True,
+        now=datetime.now(UTC) + timedelta(days=1),
+    )
+
+    assert breaches == []
+
+
+def test_recorded_rl_signal_suppresses_rl_breach(monkeypatch) -> None:
+    _set_default_liveness_env(monkeypatch)
+    monkeypatch.setenv("AI_TRADING_RL_SIGNAL_MAX_AGE_SECONDS", "10")
+    base = datetime.now(UTC)
+    model_liveness.note_rl_signals_emitted(now=base)
+
+    breaches = model_liveness.check_model_liveness(
+        market_open=True,
+        signals_expected_now=True,
         rl_expected=True,
         now=base + timedelta(seconds=2),
     )
-    metrics = {entry["metric"] for entry in breaches}
 
-    assert "ml_signal" not in metrics
-    assert "rl_signal" in metrics
+    assert breaches == []
 
 
 def test_after_hours_training_liveness_is_monitored_when_enabled(monkeypatch) -> None:
@@ -80,16 +94,51 @@ def test_after_hours_training_liveness_is_monitored_when_enabled(monkeypatch) ->
     assert "after_hours_training" in metrics
 
 
-def test_model_liveness_snapshot_uses_since_start_when_no_signal(monkeypatch) -> None:
+def test_model_liveness_snapshot_says_no_ml_model_is_expected(monkeypatch) -> None:
     _set_default_liveness_env(monkeypatch)
     snapshot = model_liveness.get_model_liveness_snapshot()
 
-    assert snapshot["last_ml_signal_ts"] is None
-    assert snapshot["ml_age_s"] is None
-    assert float(snapshot["ml_since_start_s"]) >= 0.0
+    assert snapshot["ml_expected"] is False
+    assert snapshot["ml_status"] == "no_model_expected"
+    for key in ("last_ml_signal_ts", "ml_age_s", "ml_since_start_s", "ml_max_age_s"):
+        assert key not in snapshot
+    assert snapshot["last_rl_signal_ts"] is None
+    assert snapshot["rl_age_s"] is None
+    assert float(snapshot["rl_since_start_s"]) >= 0.0
+
+
+def test_ml_breach_cannot_trigger_canary_rollback_or_kill_switch(monkeypatch, tmp_path) -> None:
+    _set_default_liveness_env(monkeypatch)
+    rollback_flag = tmp_path / "canary_rollback.flag"
+    kill_switch = tmp_path / "kill_switch.flag"
+    monkeypatch.setenv("AI_TRADING_CANARY_SYMBOLS", "AAPL")
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_FLAG_PATH", str(rollback_flag))
+    monkeypatch.setenv("AI_TRADING_KILL_SWITCH_PATH", str(kill_switch))
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_SET_KILL_SWITCH", "1")
+    monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_COMMAND", "")
+    model_liveness._reset_model_liveness_state_for_tests()
+
+    result = model_liveness.maybe_trigger_canary_auto_rollback(
+        [
+            {
+                "metric": "ml_signal",
+                "event": "ML_SIGNAL",
+                "age_seconds": 120.0,
+                "threshold_seconds": 60.0,
+                "severity": "critical",
+                "reason": "stale",
+            }
+        ],
+        now=datetime.now(UTC),
+    )
+
+    assert result is None
+    assert not rollback_flag.exists()
+    assert not kill_switch.exists()
 
 
 def test_canary_auto_rollback_writes_flag_and_respects_cooldown(monkeypatch, tmp_path) -> None:
+    """The RL-signal leg still writes the rollback flag and the kill switch."""
     _set_default_liveness_env(monkeypatch)
     rollback_flag = tmp_path / "canary_rollback.flag"
     kill_switch = tmp_path / "kill_switch.flag"
@@ -102,8 +151,8 @@ def test_canary_auto_rollback_writes_flag_and_respects_cooldown(monkeypatch, tmp
 
     breach_payload = [
         {
-            "metric": "ml_signal",
-            "event": "ML_SIGNAL",
+            "metric": "rl_signal",
+            "event": "RL_SIGNALS_EMITTED",
             "age_seconds": 120.0,
             "threshold_seconds": 60.0,
             "severity": "critical",
@@ -149,8 +198,8 @@ def test_canary_auto_rollback_resolves_default_files_under_runtime_root(
     result = model_liveness.maybe_trigger_canary_auto_rollback(
         [
             {
-                "metric": "ml_signal",
-                "event": "ML_SIGNAL",
+                "metric": "rl_signal",
+                "event": "RL_SIGNALS_EMITTED",
                 "age_seconds": 120.0,
                 "threshold_seconds": 60.0,
                 "severity": "critical",
@@ -200,8 +249,8 @@ def test_canary_auto_rollback_runs_command_without_shell(monkeypatch, tmp_path) 
 
     breach_payload = [
         {
-            "metric": "ml_signal",
-            "event": "ML_SIGNAL",
+            "metric": "rl_signal",
+            "event": "RL_SIGNALS_EMITTED",
             "age_seconds": 120.0,
             "threshold_seconds": 60.0,
             "severity": "critical",

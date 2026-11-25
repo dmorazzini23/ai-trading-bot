@@ -19,16 +19,15 @@ def _set_liveness_defaults(monkeypatch) -> None:
     model_liveness._reset_model_liveness_state_for_tests()
 
 
-def _install_bot_engine_module(monkeypatch, *, use_ml: bool, rl_agent: object | None = None) -> None:
+def _install_bot_engine_module(monkeypatch, *, rl_agent: object | None = None) -> None:
     module = types.ModuleType("ai_trading.core.bot_engine")
-    module.USE_ML = use_ml  # type: ignore[attr-defined]
     module.RL_AGENT = rl_agent  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", module)
 
 
 def test_liveness_skips_when_signals_not_expected(monkeypatch) -> None:
     _set_liveness_defaults(monkeypatch)
-    _install_bot_engine_module(monkeypatch, use_ml=True)
+    _install_bot_engine_module(monkeypatch)
 
     breaches = model_liveness.check_model_liveness(
         market_open=True,
@@ -41,7 +40,7 @@ def test_liveness_skips_when_signals_not_expected(monkeypatch) -> None:
 
 def test_after_hours_training_liveness_ignores_signal_market_gates(monkeypatch) -> None:
     _set_liveness_defaults(monkeypatch)
-    _install_bot_engine_module(monkeypatch, use_ml=True)
+    _install_bot_engine_module(monkeypatch)
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MAX_AGE_SECONDS", "60")
     model_liveness._reset_model_liveness_state_for_tests()
@@ -63,7 +62,7 @@ def test_after_hours_training_liveness_seeds_from_durable_artifact(
     tmp_path,
 ) -> None:
     _set_liveness_defaults(monkeypatch)
-    _install_bot_engine_module(monkeypatch, use_ml=True)
+    _install_bot_engine_module(monkeypatch)
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MAX_AGE_SECONDS", "60")
     artifact = tmp_path / "after_hours_training_latest.json"
@@ -92,9 +91,12 @@ def test_after_hours_training_liveness_seeds_from_durable_artifact(
     assert breaches == []
 
 
-def test_liveness_does_not_enforce_ml_when_model_disabled(monkeypatch) -> None:
+def test_liveness_never_enforces_ml_even_with_stale_use_ml_marker(monkeypatch) -> None:
     _set_liveness_defaults(monkeypatch)
-    _install_bot_engine_module(monkeypatch, use_ml=False)
+    _install_bot_engine_module(monkeypatch)
+    # An old-style marker on the module must not bring the ML leg back.
+    monkeypatch.setattr(sys.modules["ai_trading.core.bot_engine"], "USE_ML", True, raising=False)
+    monkeypatch.setenv("AI_TRADING_MODEL_LIVENESS_ENFORCE_ML", "1")
 
     breaches = model_liveness.check_model_liveness(
         market_open=True,
@@ -107,7 +109,8 @@ def test_liveness_does_not_enforce_ml_when_model_disabled(monkeypatch) -> None:
 
 def test_liveness_payload_includes_phase_and_age_fields(monkeypatch) -> None:
     _set_liveness_defaults(monkeypatch)
-    _install_bot_engine_module(monkeypatch, use_ml=True)
+    _install_bot_engine_module(monkeypatch)
+    monkeypatch.setenv("USE_RL_AGENT", "1")
 
     breaches = model_liveness.check_model_liveness(
         market_open=True,
@@ -115,19 +118,19 @@ def test_liveness_payload_includes_phase_and_age_fields(monkeypatch) -> None:
         phase="active",
         execution_gate_open=True,
         warmup_complete=True,
+        rl_expected=True,
         now=datetime.now(UTC) + timedelta(seconds=5),
     )
 
-    assert breaches
+    assert [breach["metric"] for breach in breaches] == ["rl_signal"]
     breach = breaches[0]
-    assert breach["metric"] == "ml_signal"
     assert breach["severity"] == "warning"
-    assert "last_ml_signal_ts" in breach
-    assert "ml_age_s" in breach
-    assert "ml_since_start_s" in breach
-    assert "ml_max_age_s" in breach
-    assert breach["ml_age_s"] is None
-    assert float(breach["ml_since_start_s"]) >= 0.0
+    assert breach["ml_expected"] is False
+    assert breach["ml_status"] == "no_model_expected"
+    assert "last_rl_signal_ts" in breach
+    assert breach["rl_age_s"] is None
+    assert float(breach["rl_since_start_s"]) >= 0.0
+    assert breach["rl_max_age_s"] == 1.0
     assert breach["market_open"] is True
     assert breach["signals_expected_now"] is True
     assert breach["phase"] == "active"
@@ -137,19 +140,22 @@ def test_liveness_payload_includes_phase_and_age_fields(monkeypatch) -> None:
 
 def test_liveness_alert_cooldown_suppresses_repeat(monkeypatch) -> None:
     _set_liveness_defaults(monkeypatch)
-    _install_bot_engine_module(monkeypatch, use_ml=True)
+    _install_bot_engine_module(monkeypatch)
     monkeypatch.setenv("AI_TRADING_MODEL_LIVENESS_ALERT_COOLDOWN_SECONDS", "60")
+    monkeypatch.setenv("USE_RL_AGENT", "1")
     model_liveness._reset_model_liveness_state_for_tests()
 
     first_now = datetime.now(UTC) + timedelta(seconds=5)
     first = model_liveness.check_model_liveness(
         market_open=True,
         signals_expected_now=True,
+        rl_expected=True,
         now=first_now,
     )
     second = model_liveness.check_model_liveness(
         market_open=True,
         signals_expected_now=True,
+        rl_expected=True,
         now=first_now + timedelta(seconds=10),
     )
 

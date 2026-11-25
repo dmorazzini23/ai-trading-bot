@@ -249,13 +249,8 @@ def test_clear_transient_halt_state_keeps_non_transient_halt() -> None:
 
 
 def test_record_netting_model_liveness_emits_rl_only_when_enabled(monkeypatch) -> None:
-    calls: dict[str, int] = {"ml": 0, "rl": 0}
-
-    monkeypatch.setattr(
-        bot_engine,
-        "note_ml_signal",
-        lambda **_kwargs: calls.__setitem__("ml", calls["ml"] + 1),
-    )
+    calls: dict[str, int] = {"rl": 0}
+    assert not hasattr(bot_engine, "note_ml_signal")
     monkeypatch.setattr(
         bot_engine,
         "note_rl_signals_emitted",
@@ -266,17 +261,12 @@ def test_record_netting_model_liveness_emits_rl_only_when_enabled(monkeypatch) -
 
     bot_engine._record_netting_model_liveness(proposals_total=3)
 
-    assert calls == {"ml": 0, "rl": 1}
+    assert calls == {"rl": 1}
 
 
 def test_record_netting_model_liveness_skips_when_no_proposals(monkeypatch) -> None:
-    calls: dict[str, int] = {"ml": 0, "rl": 0}
-
-    monkeypatch.setattr(
-        bot_engine,
-        "note_ml_signal",
-        lambda **_kwargs: calls.__setitem__("ml", calls["ml"] + 1),
-    )
+    calls: dict[str, int] = {"rl": 0}
+    assert not hasattr(bot_engine, "note_ml_signal")
     monkeypatch.setattr(
         bot_engine,
         "note_rl_signals_emitted",
@@ -287,5 +277,5 @@ def test_record_netting_model_liveness_skips_when_no_proposals(monkeypatch) -> N
 
     bot_engine._record_netting_model_liveness(proposals_total=0)
 
-    assert calls == {"ml": 0, "rl": 0}
+    assert calls == {"rl": 0}
 
