@@ -1,6 +1,45 @@
 # Current handoff
 
-## November 24: main deployed (`1553f2b60`) (start here)
+## November 25: exit-order fixes, day-sleeve step 1 and readiness block deployed (`7ade302ee`) (start here)
+
+- **Running service:** `7ade302ee` since Wed Nov 25 00:30 UTC (closed, flat,
+  no open orders), owner-approved. Config hash unchanged (`3084db64...`);
+  `release_identity` pre-check passed both phases on this commit.
+- **Carries:** `claude/exit-order-gaps`, `claude/day-sleeve-retire` (step 1)
+  and `claude/readiness-no-strategy`, described in the next section, which
+  were merged after it was written.
+- **Readiness block:** `paper_sampling.qualified_strategy_available()`
+  returns False in code (not an env var or ConfigSpec).
+  `live_capital_readiness` always adds the blocking reason
+  `no_qualified_strategy`; the `paper_only` status no longer appears.
+  `daily_research_pipeline._trade_allowed` does not read it (owner decision:
+  left alone).
+- **Pre-deploy:** full suite on this commit: 6,852 passed, 2 skipped, 8
+  failed. The 8 (`tests/scripts/test_research_automation_script.py`,
+  `tests/tools/test_runtime_backup_sync.py`) run `./venv/bin/python` and
+  failed only because the worktree had no `venv` link; with the link, all
+  17 tests in those files pass. Independent pre-deploy review: no blocking
+  finding. A new worktree needs `ln -s /home/aiuser/ai-trading-bot/venv venv`.
+- **Startup:** all four markers, no tracebacks, `NRestarts=0`. `/healthz`
+  is now `healthy`; `operating_mode.mode` is `paper_rule_sampling`,
+  `strategy_state` `no_qualified_strategy`. `required_model_stale` and the
+  `day_sleeve_model` key are gone; `replay_live_parity_gate_failed` stays.
+- **Rollback:** stop, `git checkout --detach 1553f2b60`, restore
+  `runtime/release_spec.1553f2b60.bak.json`, start.
+- **First session (Nov 25) to check:** orders carry the
+  `rule_paper_sampling` label; `POSITION_BACKSTOP_ARMED` per position;
+  any `PENDING_CANCEL_HOLD_LONG`; closing-order fills.
+- **`.env` names now unread (not yet removed, needs the owner's say):**
+  `AI_TRADING_DAY_SLEEVE_ML_ENABLED`, `AI_TRADING_DAY_SLEEVE_ML_BLEND_WEIGHT`,
+  `AI_TRADING_HEALTH_REQUIRE_DAY_SLEEVE_MODEL`,
+  `AI_TRADING_PAPER_ALLOW_SHADOW_MODEL`,
+  `AI_TRADING_PAPER_SAMPLING_STALE_MODEL_DIAGNOSTICS_ENABLED`, and the
+  pending-new replace/ladder/hard-timeout names listed in
+  `docs/OPERATIONS.md`.
+- **Next:** day-sleeve step 2 (legacy `trained_model.pkl` load, release-check
+  model pin, unit `--models-root`) needs a unit install by the owner.
+
+## November 24: main deployed (`1553f2b60`)
 
 - **Running service:** `1553f2b60` since Tue Nov 24 21:07 UTC (closed, flat,
   no open orders), owner-approved. Adds the unread-settings cleanup
