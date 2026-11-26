@@ -829,11 +829,27 @@ is raised exactly as before:
   `["replay_counterfactual"]`; when the service reason is
   `replay_live_parity_gate_failed`, that result must be the evaluation that
   set the reason (a reason left over from an earlier evaluation keeps the
-  flag).
+  flag);
+- the cycle's result is bound to the replay artifact health is reading: the
+  policy hash the cycle expected is a non-empty string and equals the policy
+  hash of health's current replay artifact. The health snapshot checks no
+  expected hash itself, so a new artifact with a different (or missing)
+  policy hash keeps the flag and reports `replay_contract` in
+  `parity_failed_checks`. A new artifact with the same hash may still be
+  withheld; health's own freshness and violation checks cover it.
 
 The cycle publishes its result in a separate runtime-state record
 (`observe_replay_live_parity_runtime_gate`); the service status itself is
-unchanged. In paper mode (monitor-only or enforced) the
+unchanged. A failure to publish is logged as
+`REPLAY_PARITY_RUNTIME_GATE_PUBLISH_FAILED` and never changes the cycle. The
+record carries the expected policy hash, the evaluated artifact's policy hash,
+path and timestamp, `evaluated_at` (when the gate was computed; for a cached
+gate this is earlier than publication) and `published_at`. Record age is
+deliberately not a condition: the cycle does not evaluate while the market is
+closed, halted or skipped, so an age limit would raise the flag every night
+and weekend. Binding to the artifact's policy hash is what stops a frozen
+record from covering an artifact the cycle never evaluated. In paper mode
+(monitor-only or enforced) the
 `replay_live_parity_gate` health block gains these fields:
 
 - `parity_ok` — true only when the health snapshot and the cycle's result
@@ -841,8 +857,14 @@ unchanged. In paper mode (monitor-only or enforced) the
   cycle's result is present and usable;
 - `parity_failed_checks` — the union of non-economics failed checks from the
   health snapshot and the cycle's result;
-- `runtime_failed_checks` and `runtime_gate_evaluated_at` — the cycle's own
-  failed checks (`null` when unknown) and when it evaluated them;
+- `runtime_failed_checks` — the cycle's own failed checks (`null` when
+  unknown);
+- `runtime_gate_evaluated_at` and `runtime_gate_published_at` — when the
+  cycle computed its gate and when it published the record;
+- `runtime_expected_policy_hash`, `runtime_replay_policy_hash` and
+  `runtime_replay_artifact_ts` — the hash the cycle expected and the artifact
+  it evaluated; `health_replay_policy_hash` — the policy hash of the artifact
+  health is reading;
 - `attention_flag_withhold_blockers` — every condition above that is not
   met (empty when the flag was withheld);
 - `replay_economics` — `check`, `required`, `available`, `qualified`,

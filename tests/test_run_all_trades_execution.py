@@ -729,3 +729,135 @@ def test_reset_all_states_clears_runtime_replay_gate_record(monkeypatch) -> None
     assert "replay_live_parity_runtime_gate" not in service_before
     runtime_state.reset_all_states()
     assert runtime_state.observe_replay_live_parity_runtime_gate() is None
+
+
+def test_cached_replay_gate_record_keeps_original_evaluation_time(monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from ai_trading.telemetry import runtime_state
+
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_CYCLE_TTL_SEC", "300")
+    monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", None)
+    monkeypatch.setattr(
+        bot_engine.runtime_state, "update_service_status", lambda **_kwargs: None
+    )
+    execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["updated_mono"] = (
+        execution_module.time.monotonic() - 120.0
+    )
+    execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = {
+        "enabled": True,
+        "available": True,
+        "ok": False,
+        "reason": "replay_counterfactual",
+        "failed_checks": ["replay_counterfactual"],
+        "thresholds": {"expected_policy_hash": "hash-a"},
+        "observed": {"replay_policy_hash": "hash-a"},
+        "replay_governance": {"path": "/replay/a.json", "ts": "2026-11-25T21:00:00+00:00"},
+    }
+
+    gate = execution_module._evaluate_replay_live_parity_gate(
+        state=SimpleNamespace(effective_policy_hash="hash-a"),
+        runtime=SimpleNamespace(),
+        be=bot_engine,
+    )
+
+    assert gate["cache_age_s"] >= 120.0
+    record = runtime_state.observe_replay_live_parity_runtime_gate()
+    assert record is not None
+    evaluated = datetime.fromisoformat(record["evaluated_at"].replace("Z", "+00:00"))
+    published = datetime.fromisoformat(record["published_at"].replace("Z", "+00:00"))
+    assert 115.0 <= (published - evaluated).total_seconds() <= 130.0
+    assert (datetime.now(UTC) - published).total_seconds() < 30.0
+    assert record["expected_policy_hash"] == "hash-a"
+    assert record["replay_policy_hash"] == "hash-a"
+    assert record["replay_artifact_path"] == "/replay/a.json"
+    assert record["replay_artifact_ts"] == "2026-11-25T21:00:00+00:00"
+
+
+def test_raising_runtime_gate_publish_does_not_change_the_cycle(monkeypatch) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_CYCLE_TTL_SEC", "300")
+    cached_gate = {
+        "enabled": True,
+        "available": True,
+        "ok": False,
+        "status": "fail",
+        "reason": "replay_violations",
+        "failed_checks": ["replay_violations"],
+    }
+    execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["updated_mono"] = (
+        execution_module.time.monotonic()
+    )
+    execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = dict(cached_gate)
+
+    def _raise(**_kwargs):
+        raise RuntimeError("publish failed")
+
+    monkeypatch.setattr(runtime_state, "update_replay_live_parity_runtime_gate", _raise)
+    updates: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "update_service_status",
+        lambda **kwargs: updates.append(kwargs),
+    )
+    warnings: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "logger",
+        SimpleNamespace(
+            warning=lambda msg, *args, **kwargs: warnings.append((msg, kwargs.get("extra", {}))),
+            debug=lambda *args, **kwargs: None,
+            info=lambda *args, **kwargs: None,
+        ),
+    )
+    state = SimpleNamespace()
+
+    gate = execution_module._evaluate_replay_live_parity_gate(
+        state=state, runtime=SimpleNamespace(), be=bot_engine
+    )
+
+    assert {key: gate[key] for key in cached_gate} == cached_gate
+    assert state.replay_live_parity_gate == gate
+    assert updates == [
+        {"status": "degraded", "reason": "replay_live_parity_gate_failed"}
+    ]
+    assert [msg for msg, _extra in warnings] == [
+        "REPLAY_PARITY_RUNTIME_GATE_PUBLISH_FAILED",
+        "REPLAY_LIVE_PARITY_GATE_BLOCKED",
+    ]
+    assert warnings[0][1] == {"error": "publish failed", "error_type": "RuntimeError"}
+    assert warnings[1][1] == {
+        "reason": "replay_violations",
+        "failed_checks": ["replay_violations"],
+    }
+
+
+def test_raising_disabled_path_publish_returns_disabled_gate(monkeypatch) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "0")
+
+    def _raise(**_kwargs):
+        raise RuntimeError("publish failed")
+
+    monkeypatch.setattr(runtime_state, "update_replay_live_parity_runtime_gate", _raise)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "logger",
+        SimpleNamespace(warning=lambda msg, *args, **kwargs: warnings.append(msg)),
+    )
+
+    gate = execution_module._evaluate_replay_live_parity_gate(
+        state=SimpleNamespace(), runtime=SimpleNamespace(), be=bot_engine
+    )
+
+    assert gate == {"enabled": False, "available": False, "ok": True, "status": "disabled"}
+    assert warnings == ["REPLAY_PARITY_RUNTIME_GATE_PUBLISH_FAILED"]

@@ -397,9 +397,18 @@ def _paper_mode_withhold_blockers(
 
 
 def _runtime_replay_gate_withhold_blockers(
-    record: Any, *, service_reason_normalized: str
+    record: Any,
+    *,
+    service_reason_normalized: str,
+    health_replay_policy_hash: str,
 ) -> list[str]:
-    """Reasons the trading cycle's own gate does not confirm economics-only."""
+    """Reasons the trading cycle's own gate does not confirm economics-only.
+
+    The health snapshot has no expected policy hash, so the cycle's result only
+    counts for a replay artifact whose policy hash equals the hash the cycle
+    expected. A later artifact with that same hash is still covered by
+    health's own freshness and violation checks.
+    """
 
     if not isinstance(record, Mapping):
         return ["runtime_gate_missing"]
@@ -418,6 +427,11 @@ def _runtime_replay_gate_withhold_blockers(
         and _normalized_token(record.get("service_reason")) != REPLAY_PARITY_ATTENTION_FLAG
     ):
         blockers.append("runtime_gate_stale_for_service_reason")
+    expected_hash = record.get("expected_policy_hash")
+    if not isinstance(expected_hash, str) or not expected_hash.strip():
+        blockers.append("runtime_expected_policy_hash_missing")
+    elif health_replay_policy_hash != expected_hash.strip():
+        blockers.append("replay_policy_hash_mismatch")
     return blockers
 
 
@@ -1926,9 +1940,19 @@ def build_runtime_health_payload(
                 launch_profile_name=launch_profile_name,
             )
         )
+        health_observed_raw = replay_live_parity_gate.get("observed")
+        health_replay_policy_hash = str(
+            (
+                health_observed_raw.get("replay_policy_hash")
+                if isinstance(health_observed_raw, Mapping)
+                else ""
+            )
+            or ""
+        ).strip()
         runtime_blockers = _runtime_replay_gate_withhold_blockers(
             runtime_gate_record,
             service_reason_normalized=service_reason_normalized,
+            health_replay_policy_hash=health_replay_policy_hash,
         )
         withhold_blockers.extend(runtime_blockers)
         replay_attention_flag_withheld = bool(
@@ -1942,7 +1966,10 @@ def build_runtime_health_payload(
                 if flag != REPLAY_PARITY_ATTENTION_FLAG
             ]
         parity_failed_union = list(replay_parity_failed_checks)
-        for check in runtime_failed_checks or []:
+        runtime_union_checks = list(runtime_failed_checks or [])
+        if "replay_policy_hash_mismatch" in runtime_blockers:
+            runtime_union_checks.append("replay_contract")
+        for check in runtime_union_checks:
             if check != REPLAY_ECONOMICS_CHECK and check not in parity_failed_union:
                 parity_failed_union.append(check)
         runtime_parity_ok = not [
@@ -1954,6 +1981,9 @@ def build_runtime_health_payload(
             for check in runtime_failed_checks or []
             if check != REPLAY_ECONOMICS_CHECK
         ]
+        runtime_record_map = (
+            runtime_gate_record if isinstance(runtime_gate_record, Mapping) else {}
+        )
         replay_live_parity_gate_payload = {
             **replay_live_parity_gate,
             "parity_ok": bool(
@@ -1963,11 +1993,14 @@ def build_runtime_health_payload(
             ),
             "parity_failed_checks": parity_failed_union,
             "runtime_failed_checks": runtime_failed_checks,
-            "runtime_gate_evaluated_at": (
-                runtime_gate_record.get("evaluated_at")
-                if isinstance(runtime_gate_record, Mapping)
-                else None
+            "runtime_gate_evaluated_at": runtime_record_map.get("evaluated_at"),
+            "runtime_gate_published_at": runtime_record_map.get("published_at"),
+            "runtime_expected_policy_hash": runtime_record_map.get(
+                "expected_policy_hash"
             ),
+            "runtime_replay_policy_hash": runtime_record_map.get("replay_policy_hash"),
+            "runtime_replay_artifact_ts": runtime_record_map.get("replay_artifact_ts"),
+            "health_replay_policy_hash": health_replay_policy_hash or None,
             "attention_flag_withhold_blockers": withhold_blockers,
             "replay_economics": _replay_economics_summary(
                 replay_live_parity_gate,

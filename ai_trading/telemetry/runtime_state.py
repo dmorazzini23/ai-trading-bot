@@ -355,11 +355,16 @@ def update_replay_live_parity_runtime_gate(
     gate: dict[str, Any],
     required: bool,
     service_reason: str | None,
+    evaluated_at: str | None = None,
 ) -> None:
     """Record the trading cycle's own replay/live parity gate result.
 
     ``service_reason`` is the service-status reason this same evaluation set
     (``None`` when it set none), which ties the record to that reason.
+    ``evaluated_at`` is when the gate was computed (earlier than the publish
+    time when the cycle reused its cached gate). The record also carries the
+    policy hash the gate expected and the replay artifact it evaluated, so a
+    reader can tell whether a later artifact is the one this result covers.
     """
 
     raw_failed = gate.get("failed_checks")
@@ -368,6 +373,13 @@ def update_replay_live_parity_runtime_gate(
         if isinstance(raw_failed, (list, tuple))
         else None
     )
+    thresholds_raw = gate.get("thresholds")
+    thresholds = thresholds_raw if isinstance(thresholds_raw, dict) else {}
+    observed_raw = gate.get("observed")
+    observed = observed_raw if isinstance(observed_raw, dict) else {}
+    replay_raw = gate.get("replay_governance")
+    replay = replay_raw if isinstance(replay_raw, dict) else {}
+    published_at = _now_iso()
     record: dict[str, Any] = {
         "enabled": bool(gate.get("enabled", False)),
         "available": bool(gate.get("available", False)),
@@ -377,7 +389,13 @@ def update_replay_live_parity_runtime_gate(
         "error": gate.get("error"),
         "required": bool(required),
         "service_reason": service_reason,
-        "evaluated_at": _now_iso(),
+        "expected_policy_hash": str(thresholds.get("expected_policy_hash") or "").strip()
+        or None,
+        "replay_policy_hash": str(observed.get("replay_policy_hash") or "").strip() or None,
+        "replay_artifact_path": replay.get("path"),
+        "replay_artifact_ts": replay.get("ts"),
+        "evaluated_at": evaluated_at or published_at,
+        "published_at": published_at,
     }
     with _LOCK:
         global _replay_live_parity_runtime_gate
