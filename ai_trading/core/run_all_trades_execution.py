@@ -14,6 +14,7 @@ from ai_trading.governance.entry_control import (
     REPLAY_LIVE_PARITY_GATE_ATTR,
     build_replay_live_entry_control,
 )
+from ai_trading.telemetry import runtime_state
 
 _REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
     "updated_mono": 0.0,
@@ -102,7 +103,16 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
         )
     )
     if not enabled and not required:
-        return {"enabled": False, "available": False, "ok": True, "status": "disabled"}
+        disabled_gate: dict[str, Any] = {
+            "enabled": False,
+            "available": False,
+            "ok": True,
+            "status": "disabled",
+        }
+        runtime_state.update_replay_live_parity_runtime_gate(
+            gate=disabled_gate, required=required, service_reason=None
+        )
+        return disabled_gate
     ttl_seconds = _replay_live_parity_gate_cache_ttl_seconds()
     now_mono = time.monotonic()
     cached_gate = _REPLAY_LIVE_PARITY_GATE_CACHE.get("gate")
@@ -139,7 +149,16 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
             _REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = dict(gate)
     setattr(state, "replay_live_parity_gate", gate)
     setattr(runtime, "replay_live_parity_gate", gate)
-    if required and gate.get("enabled", False) and not bool(gate.get("ok")):
+    sets_failed_reason = bool(
+        required and gate.get("enabled", False) and not bool(gate.get("ok"))
+    )
+    # Display-only record for the health payload; it changes no decision here.
+    runtime_state.update_replay_live_parity_runtime_gate(
+        gate=gate,
+        required=required,
+        service_reason="replay_live_parity_gate_failed" if sets_failed_reason else None,
+    )
+    if sets_failed_reason:
         be.logger.warning(
             "REPLAY_LIVE_PARITY_GATE_BLOCKED",
             extra={

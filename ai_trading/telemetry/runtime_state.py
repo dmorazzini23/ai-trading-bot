@@ -23,6 +23,8 @@ __all__ = [
     "reset_broker_status",
     "update_service_status",
     "observe_service_status",
+    "update_replay_live_parity_runtime_gate",
+    "observe_replay_live_parity_runtime_gate",
     "reset_all_states",
 ]
 
@@ -125,6 +127,9 @@ _quote_status: dict[str, Any] = _fresh_quote_state()
 _quote_status_by_symbol: dict[str, dict[str, Any]] = {}
 _broker_status: dict[str, Any] = _fresh_broker_state()
 _service_status: dict[str, Any] = _fresh_service_status()
+# Last replay/live parity gate result evaluated by the trading cycle. Kept
+# apart from the service status so service-status readers are unaffected.
+_replay_live_parity_runtime_gate: dict[str, Any] | None = None
 
 
 def _merge_state(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -343,6 +348,45 @@ def update_service_status(
 def observe_service_status() -> dict[str, Any]:
     with _LOCK:
         return _clone_state(_service_status)
+
+
+def update_replay_live_parity_runtime_gate(
+    *,
+    gate: dict[str, Any],
+    required: bool,
+    service_reason: str | None,
+) -> None:
+    """Record the trading cycle's own replay/live parity gate result.
+
+    ``service_reason`` is the service-status reason this same evaluation set
+    (``None`` when it set none), which ties the record to that reason.
+    """
+
+    raw_failed = gate.get("failed_checks")
+    failed_checks = (
+        [str(item) for item in raw_failed if str(item).strip()]
+        if isinstance(raw_failed, (list, tuple))
+        else None
+    )
+    record: dict[str, Any] = {
+        "enabled": bool(gate.get("enabled", False)),
+        "available": bool(gate.get("available", False)),
+        "ok": bool(gate.get("ok", False)),
+        "reason": gate.get("reason"),
+        "failed_checks": failed_checks,
+        "error": gate.get("error"),
+        "required": bool(required),
+        "service_reason": service_reason,
+        "evaluated_at": _now_iso(),
+    }
+    with _LOCK:
+        global _replay_live_parity_runtime_gate
+        _replay_live_parity_runtime_gate = record
+
+
+def observe_replay_live_parity_runtime_gate() -> dict[str, Any] | None:
+    with _LOCK:
+        return _clone_state(_replay_live_parity_runtime_gate)
 
 
 def update_quote_status(
@@ -585,8 +629,10 @@ def reset_all_states() -> None:
 
     with _LOCK:
         global _provider_state, _quote_status, _quote_status_by_symbol, _broker_status, _service_status
+        global _replay_live_parity_runtime_gate
         _provider_state = _fresh_provider_state()
         _quote_status = _fresh_quote_state()
         _quote_status_by_symbol = {}
         _broker_status = _fresh_broker_state()
         _service_status = _fresh_service_status()
+        _replay_live_parity_runtime_gate = None

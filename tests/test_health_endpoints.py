@@ -1415,9 +1415,11 @@ _PARITY_CHECK_NAMES = (
     "oms_lifecycle_parity_available",
     "oms_lifecycle_parity_consistent",
 )
+_PARITY_REASON = "replay_live_parity_gate_failed"
+_ECONOMICS_ONLY = object()
 
 
-def _replay_gate_with_failures(*failed: str) -> dict:
+def _replay_gate_with_failures(*failed: str, counterfactual_available: bool = True) -> dict:
     checks = {name: name not in failed for name in _PARITY_CHECK_NAMES}
     failed_checks = [name for name in _PARITY_CHECK_NAMES if name in failed]
     return {
@@ -1431,7 +1433,7 @@ def _replay_gate_with_failures(*failed: str) -> dict:
         "thresholds": {"require_counterfactual_passed": True},
         "observed": {
             "replay_counterfactual_passed": "replay_counterfactual" not in failed,
-            "replay_counterfactual_available": True,
+            "replay_counterfactual_available": counterfactual_available,
             "replay_counterfactual_candidate_samples": 92,
             "replay_counterfactual_required_samples": 250,
             "replay_counterfactual_candidate_net_edge_bps": -5.69594400285975,
@@ -1451,7 +1453,34 @@ def _replay_gate_with_failures(*failed: str) -> dict:
     }
 
 
-def _build_replay_scoped_payload(monkeypatch, *, mode: str, gate: dict, service_state: dict):
+def _runtime_record(
+    failed_checks,
+    *,
+    service_reason=_PARITY_REASON,
+    available: bool = True,
+    error=None,
+) -> dict:
+    return {
+        "enabled": True,
+        "available": available,
+        "ok": not failed_checks,
+        "reason": failed_checks[0] if failed_checks else "ok",
+        "failed_checks": failed_checks,
+        "error": error,
+        "required": True,
+        "service_reason": service_reason,
+        "evaluated_at": "2026-11-26T00:00:00Z",
+    }
+
+
+def _build_replay_scoped_payload(
+    monkeypatch,
+    *,
+    mode: str,
+    gate: dict,
+    service_state: dict,
+    runtime_record=_ECONOMICS_ONLY,
+):
     if mode == "live":
         monkeypatch.setenv("EXECUTION_MODE", "live")
         monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "live_canary")
@@ -1461,6 +1490,14 @@ def _build_replay_scoped_payload(monkeypatch, *, mode: str, gate: dict, service_
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
     monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "0")
     monkeypatch.setattr(runtime_state, "observe_service_status", lambda: dict(service_state))
+    if runtime_record is _ECONOMICS_ONLY:
+        runtime_record = _runtime_record(
+            ["replay_counterfactual"],
+            service_reason=service_state.get("reason")
+            if service_state.get("reason") == _PARITY_REASON
+            else None,
+        )
+    monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", runtime_record)
     monkeypatch.setattr(
         health_payload_module,
         "_replay_live_parity_gate_snapshot",
@@ -1475,12 +1512,33 @@ def _build_replay_scoped_payload(monkeypatch, *, mode: str, gate: dict, service_
 
 _REPLAY_SERVICE_STATES = [
     {"status": "ready", "reason": "market_closed"},
-    {"status": "degraded", "reason": "replay_live_parity_gate_failed"},
+    {"status": "degraded", "reason": _PARITY_REASON},
 ]
+_PAPER_ENTRY_CONTROL = {
+    "execution_mode": "paper",
+    "stage": "shadow",
+    "replay_gate_ok": False,
+    "replay_gate_required": True,
+    "replay_gate_enforced": False,
+    "paper_evidence_allowed": True,
+    "live_new_exposure_allowed": False,
+    "risk_reducing_orders_allowed": True,
+    "reason": "replay_counterfactual",
+    "failed_checks": ["replay_counterfactual"],
+}
+
+
+def _assert_paper_decisions_unchanged(payload) -> None:
+    assert payload["ok"] is True
+    assert payload["status"] == "healthy"
+    assert payload["readiness_failures"] == []
+    assert payload["entry_control"] == _PAPER_ENTRY_CONTROL
+    assert payload["replay_live_parity_gate"]["ok"] is False
+    assert payload["replay_live_parity_gate"]["failed_checks"] == ["replay_counterfactual"]
 
 
 @pytest.mark.parametrize("service_state", _REPLAY_SERVICE_STATES)
-def test_paper_counterfactual_only_failure_withholds_parity_flag(
+def test_paper_economics_only_in_both_gates_withholds_parity_flag(
     monkeypatch, service_state
 ) -> None:
     gate = _replay_gate_with_failures("replay_counterfactual")
@@ -1488,29 +1546,15 @@ def test_paper_counterfactual_only_failure_withholds_parity_flag(
         monkeypatch, mode="paper", gate=gate, service_state=service_state
     )
 
-    assert "replay_live_parity_gate_failed" not in payload["attention_flags"]
-    # Everything that drives decisions is exactly what it was before.
-    assert payload["ok"] is True
-    assert payload["status"] == "healthy"
-    assert payload["readiness_failures"] == []
-    assert payload["entry_control"] == {
-        "execution_mode": "paper",
-        "stage": "shadow",
-        "replay_gate_ok": False,
-        "replay_gate_required": True,
-        "replay_gate_enforced": False,
-        "paper_evidence_allowed": True,
-        "live_new_exposure_allowed": False,
-        "risk_reducing_orders_allowed": True,
-        "reason": "replay_counterfactual",
-        "failed_checks": ["replay_counterfactual"],
-    }
+    assert _PARITY_REASON not in payload["attention_flags"]
+    _assert_paper_decisions_unchanged(payload)
     block = payload["replay_live_parity_gate"]
-    assert block["ok"] is False
-    assert block["failed_checks"] == ["replay_counterfactual"]
     assert {key: block[key] for key in gate} == gate
     assert block["parity_ok"] is True
     assert block["parity_failed_checks"] == []
+    assert block["runtime_failed_checks"] == ["replay_counterfactual"]
+    assert block["runtime_gate_evaluated_at"] == "2026-11-26T00:00:00Z"
+    assert block["attention_flag_withhold_blockers"] == []
     assert block["replay_economics"] == {
         "check": "replay_counterfactual",
         "required": True,
@@ -1522,7 +1566,7 @@ def test_paper_counterfactual_only_failure_withholds_parity_flag(
         "min_net_edge_bps": 0.0,
         "failed_criteria": ["candidate_net_edge_positive", "sample_size"],
         "reason": "insufficient_samples",
-        "withheld_attention_flag": "replay_live_parity_gate_failed",
+        "withheld_attention_flag": _PARITY_REASON,
         "summary": (
             "Replay economics not qualified: 92 of 250 capped samples, net edge "
             "-5.70 bps (minimum 0.00 bps). Paper mode: informational, not a "
@@ -1543,7 +1587,7 @@ def test_paper_counterfactual_only_failure_withholds_parity_flag(
         ("oms_lifecycle_parity_consistent", "replay_counterfactual"),
     ],
 )
-def test_paper_real_parity_failure_keeps_parity_flag(
+def test_paper_real_parity_failure_in_health_gate_keeps_parity_flag(
     monkeypatch, failed, service_state
 ) -> None:
     gate = _replay_gate_with_failures(*failed)
@@ -1551,7 +1595,7 @@ def test_paper_real_parity_failure_keeps_parity_flag(
         monkeypatch, mode="paper", gate=gate, service_state=service_state
     )
 
-    assert "replay_live_parity_gate_failed" in payload["attention_flags"]
+    assert _PARITY_REASON in payload["attention_flags"]
     assert payload["ok"] is True
     assert payload["readiness_failures"] == []
     assert payload["entry_control"]["stage"] == "shadow"
@@ -1564,10 +1608,96 @@ def test_paper_real_parity_failure_keeps_parity_flag(
     assert block["parity_failed_checks"] == [
         name for name in gate["failed_checks"] if name != "replay_counterfactual"
     ]
+    assert "health_gate_not_economics_only" in block["attention_flag_withhold_blockers"]
     assert block["replay_economics"]["withheld_attention_flag"] is None
-    assert block["replay_economics"]["qualified"] is (
-        "replay_counterfactual" not in failed
+
+
+@pytest.mark.parametrize(
+    ("runtime_record", "blocker"),
+    [
+        (
+            _runtime_record(["replay_contract", "replay_counterfactual"]),
+            "runtime_gate_not_economics_only",
+        ),
+        (None, "runtime_gate_missing"),
+        (_runtime_record(None), "runtime_failed_checks_unknown"),
+        (
+            _runtime_record([], available=False, error="pool exhausted"),
+            "runtime_gate_error",
+        ),
+        (
+            _runtime_record(["replay_counterfactual"], service_reason=None),
+            "runtime_gate_stale_for_service_reason",
+        ),
+    ],
+)
+def test_paper_runtime_gate_must_confirm_economics_only(
+    monkeypatch, runtime_record, blocker
+) -> None:
+    gate = _replay_gate_with_failures("replay_counterfactual")
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=gate,
+        service_state={"status": "degraded", "reason": _PARITY_REASON},
+        runtime_record=runtime_record,
     )
+
+    assert _PARITY_REASON in payload["attention_flags"]
+    _assert_paper_decisions_unchanged(payload)
+    block = payload["replay_live_parity_gate"]
+    assert blocker in block["attention_flag_withhold_blockers"]
+    assert block["parity_ok"] is False
+    assert block["replay_economics"]["withheld_attention_flag"] is None
+
+
+def test_paper_runtime_contract_failure_is_reported_in_parity_union(monkeypatch) -> None:
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "degraded", "reason": _PARITY_REASON},
+        runtime_record=_runtime_record(["replay_contract", "replay_counterfactual"]),
+    )
+
+    block = payload["replay_live_parity_gate"]
+    assert block["runtime_failed_checks"] == ["replay_contract", "replay_counterfactual"]
+    assert block["parity_failed_checks"] == ["replay_contract"]
+    assert block["parity_ok"] is False
+
+
+def test_paper_missing_runtime_gate_keeps_flag_without_service_reason(monkeypatch) -> None:
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
+        runtime_record=None,
+    )
+
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert payload["replay_live_parity_gate"]["runtime_failed_checks"] is None
+    assert payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"] == [
+        "runtime_gate_missing"
+    ]
+
+
+def test_paper_counterfactual_unavailable_keeps_parity_flag(monkeypatch) -> None:
+    gate = _replay_gate_with_failures(
+        "replay_counterfactual", counterfactual_available=False
+    )
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=gate,
+        service_state={"status": "ready", "reason": "market_closed"},
+    )
+
+    assert _PARITY_REASON in payload["attention_flags"]
+    block = payload["replay_live_parity_gate"]
+    assert block["replay_economics"]["reason"] == "counterfactual_unavailable"
+    assert "economics_counterfactual_unavailable" in block["attention_flag_withhold_blockers"]
+    _assert_paper_decisions_unchanged(payload)
 
 
 def test_paper_unavailable_replay_gate_keeps_parity_flag(monkeypatch) -> None:
@@ -1579,35 +1709,126 @@ def test_paper_unavailable_replay_gate_keeps_parity_flag(monkeypatch) -> None:
         service_state={"status": "ready", "reason": "market_closed"},
     )
 
-    assert "replay_live_parity_gate_failed" in payload["attention_flags"]
+    assert _PARITY_REASON in payload["attention_flags"]
     assert payload["replay_live_parity_gate"]["parity_ok"] is False
     assert payload["replay_live_parity_gate"]["replay_economics"]["reason"] == (
         "counterfactual_unavailable"
     )
 
 
-def test_paper_enforced_counterfactual_only_failure_keeps_parity_flag(monkeypatch) -> None:
-    gate = _replay_gate_with_failures("replay_counterfactual")
-    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "1")
-    monkeypatch.setenv("EXECUTION_MODE", "paper")
-    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
-    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
-    monkeypatch.setattr(
-        health_payload_module,
-        "_replay_live_parity_gate_snapshot",
-        lambda **_kwargs: gate,
+def test_paper_unresolved_launch_profile_keeps_parity_flag(monkeypatch) -> None:
+    def _raise():
+        raise RuntimeError("profile unavailable")
+
+    monkeypatch.setattr(health_payload_module, "resolve_launch_profile", _raise)
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
     )
+
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert "launch_profile_unresolved" in (
+        payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"]
+    )
+    assert payload["readiness_failures"] == []
+    assert payload["entry_control"]["replay_gate_enforced"] is False
+
+
+def test_paper_unset_execution_mode_keeps_parity_flag(monkeypatch) -> None:
+    baseline = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
+    )
+    for name in (
+        "EXECUTION_MODE",
+        "AI_TRADING_EXECUTION_MODE",
+        "AI_TRADING_EXECUTION_IMPL",
+        "EXECUTION_IMPL",
+    ):
+        monkeypatch.delenv(name, raising=False)
     payload = health_payload_module.build_runtime_health_payload(
         force_ok_for_pytest=False,
         healthy_status_mode="healthy",
         ok_mode="connectivity",
     )
 
-    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
-    assert "replay_live_parity_gate_failed" in payload["attention_flags"]
-    assert payload["replay_live_parity_gate"]["replay_economics"][
-        "withheld_attention_flag"
-    ] is None
+    assert _PARITY_REASON not in baseline["attention_flags"]
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert "execution_mode_not_explicit_paper" in (
+        payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"]
+    )
+    assert payload["readiness_failures"] == baseline["readiness_failures"]
+
+
+def test_paper_runtime_paper_inference_disagreeing_keeps_parity_flag(monkeypatch) -> None:
+    import ai_trading.config.management as config_management
+
+    monkeypatch.setattr(
+        config_management, "get_trading_config", lambda: SimpleNamespace(paper=False)
+    )
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
+    )
+
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert "runtime_paper_inference_not_paper" in (
+        payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"]
+    )
+    assert payload["readiness_failures"] == []
+
+
+def test_paper_garbage_enforcement_setting_keeps_parity_flag(monkeypatch) -> None:
+    baseline = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
+    )
+    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "maybe")
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert _PARITY_REASON not in baseline["attention_flags"]
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert "paper_enforcement_setting_not_false" in (
+        payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"]
+    )
+    # The existing setting parse is unchanged: garbage still means not enforced.
+    assert payload["readiness_failures"] == []
+    assert payload["entry_control"] == baseline["entry_control"]
+
+
+def test_paper_enforced_counterfactual_only_failure_keeps_parity_flag(monkeypatch) -> None:
+    gate = _replay_gate_with_failures("replay_counterfactual")
+    _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=gate,
+        service_state={"status": "ready", "reason": "market_closed"},
+    )
+    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "1")
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    assert payload["readiness_failures"] == [_PARITY_REASON]
+    assert _PARITY_REASON in payload["attention_flags"]
+    block = payload["replay_live_parity_gate"]
+    assert block["replay_economics"]["withheld_attention_flag"] is None
+    assert "replay_gate_not_monitor_only" in block["attention_flag_withhold_blockers"]
+    assert block["parity_ok"] is True
 
 
 @pytest.mark.parametrize("service_state", _REPLAY_SERVICE_STATES)
@@ -1617,11 +1838,11 @@ def test_live_counterfactual_only_failure_is_unchanged(monkeypatch, service_stat
         monkeypatch, mode="live", gate=gate, service_state=service_state
     )
 
-    assert "replay_live_parity_gate_failed" in payload["attention_flags"]
+    assert _PARITY_REASON in payload["attention_flags"]
     assert payload["ok"] is False
     assert payload["status"] == "degraded"
-    assert payload["reason"] == "replay_live_parity_gate_failed"
-    assert payload["readiness_failures"] == ["replay_live_parity_gate_failed"]
+    assert payload["reason"] == _PARITY_REASON
+    assert payload["readiness_failures"] == [_PARITY_REASON]
     assert payload["entry_control"]["stage"] == "shadow"
     assert payload["entry_control"]["replay_gate_enforced"] is True
     assert payload["entry_control"]["live_new_exposure_allowed"] is False
@@ -1629,6 +1850,99 @@ def test_live_counterfactual_only_failure_is_unchanged(monkeypatch, service_stat
     # The live gate block is passed through untouched.
     assert payload["replay_live_parity_gate"] == gate
     assert "replay_economics" not in payload["replay_live_parity_gate"]
+
+
+def test_paper_policy_hash_mismatch_seen_only_by_runtime_keeps_flag(monkeypatch) -> None:
+    """End to end with the real gate: health and the cycle disagree on the hash."""
+
+    from ai_trading.core import bot_engine
+    from ai_trading.core import run_all_trades_execution as execution_module
+    from ai_trading.governance import replay_live_parity
+
+    replay_snapshot = {
+        "available": True,
+        "fresh": True,
+        "source_data_available": True,
+        "source_data_fresh": True,
+        "violations_count": 0,
+        "schema_version": replay_live_parity.REPLAY_GOVERNANCE_SCHEMA_VERSION,
+        "policy_hash": "hash-a",
+        "counterfactual": {
+            "passed": False,
+            "candidate": {"sample_count": 92, "net_edge_bps": -5.7},
+            "required": {"min_samples": 250, "min_net_edge_bps": 0.0},
+            "checks": {"sample_size": False, "candidate_net_edge_positive": False},
+        },
+    }
+    lifecycle = {"enabled": True, "available": True, "ok": True, "total_violations": 0}
+    monkeypatch.setattr(
+        replay_live_parity,
+        "_load_latest_replay_governance_snapshot",
+        lambda: dict(replay_snapshot),
+    )
+    monkeypatch.setattr(
+        "ai_trading.tools.runtime_performance_report.summarize_oms_lifecycle_parity",
+        lambda: dict(lifecycle),
+    )
+    monkeypatch.setattr(
+        health_payload_module, "_oms_lifecycle_parity_snapshot", lambda: dict(lifecycle)
+    )
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER", "0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.delenv("AI_TRADING_EFFECTIVE_POLICY_HASH", raising=False)
+    # The autouse stub replaces observe_service_status; read the real state
+    # the cycle writes instead.
+    monkeypatch.setattr(runtime_state, "_service_status", {"status": "ready"})
+    monkeypatch.setattr(
+        runtime_state, "observe_service_status", lambda: dict(runtime_state._service_status)
+    )
+    monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", None)
+    monkeypatch.setitem(execution_module._REPLAY_LIVE_PARITY_GATE_CACHE, "gate", None)
+    monkeypatch.setitem(execution_module._REPLAY_LIVE_PARITY_GATE_CACHE, "updated_mono", 0.0)
+
+    runtime_gate = execution_module._evaluate_replay_live_parity_gate(
+        state=SimpleNamespace(effective_policy_hash="hash-b"),
+        runtime=SimpleNamespace(),
+        be=bot_engine,
+    )
+    assert runtime_gate["failed_checks"] == ["replay_contract", "replay_counterfactual"]
+    assert runtime_state.observe_service_status()["reason"] == _PARITY_REASON
+
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+
+    block = payload["replay_live_parity_gate"]
+    assert block["failed_checks"] == ["replay_counterfactual"]
+    assert block["runtime_failed_checks"] == ["replay_contract", "replay_counterfactual"]
+    assert block["parity_failed_checks"] == ["replay_contract"]
+    assert block["parity_ok"] is False
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert payload["readiness_failures"] == []
+
+    # Once the cycle agrees the only failure is economics, the flag is withheld.
+    monkeypatch.setitem(execution_module._REPLAY_LIVE_PARITY_GATE_CACHE, "gate", None)
+    monkeypatch.setitem(execution_module._REPLAY_LIVE_PARITY_GATE_CACHE, "updated_mono", 0.0)
+    execution_module._evaluate_replay_live_parity_gate(
+        state=SimpleNamespace(effective_policy_hash="hash-a"),
+        runtime=SimpleNamespace(),
+        be=bot_engine,
+    )
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["replay_live_parity_gate"]["runtime_failed_checks"] == [
+        "replay_counterfactual"
+    ]
+    assert payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"] == []
+    assert _PARITY_REASON not in payload["attention_flags"]
 
 
 @pytest.mark.parametrize(

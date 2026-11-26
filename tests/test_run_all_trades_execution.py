@@ -599,3 +599,133 @@ def test_execute_cycle_runs_netting_when_config_disables_it(monkeypatch) -> None
     ):
         assert not hasattr(bot_engine, legacy_entry), legacy_entry
 
+
+
+@pytest.mark.parametrize(
+    ("required", "cached_gate", "expected_reason"),
+    [
+        (
+            True,
+            {
+                "enabled": True,
+                "available": True,
+                "ok": False,
+                "reason": "replay_contract",
+                "failed_checks": ["replay_contract", "replay_counterfactual"],
+            },
+            "replay_live_parity_gate_failed",
+        ),
+        (
+            False,
+            {
+                "enabled": True,
+                "available": True,
+                "ok": False,
+                "reason": "replay_counterfactual",
+                "failed_checks": ["replay_counterfactual"],
+            },
+            None,
+        ),
+        (
+            True,
+            {"enabled": True, "available": True, "ok": True, "reason": "ok", "failed_checks": []},
+            None,
+        ),
+    ],
+)
+def test_replay_live_parity_gate_publishes_runtime_record_without_changing_status(
+    monkeypatch, required, cached_gate, expected_reason
+) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    _clear_parity_cache()
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1" if required else "0"
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_CYCLE_TTL_SEC", "300")
+    execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["updated_mono"] = (
+        execution_module.time.monotonic()
+    )
+    execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = dict(cached_gate)
+    monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", None)
+    service_before = runtime_state.observe_service_status()
+    updates: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "update_service_status",
+        lambda **kwargs: updates.append(kwargs),
+    )
+
+    gate = execution_module._evaluate_replay_live_parity_gate(
+        state=SimpleNamespace(),
+        runtime=SimpleNamespace(),
+        be=bot_engine,
+    )
+
+    record = runtime_state.observe_replay_live_parity_runtime_gate()
+    assert record is not None
+    assert record["failed_checks"] == cached_gate["failed_checks"]
+    assert record["available"] is True
+    assert record["ok"] is cached_gate["ok"]
+    assert record["required"] is required
+    assert record["service_reason"] == expected_reason
+    assert record["error"] is None
+    assert record["evaluated_at"]
+    # The service status updates and the returned gate are exactly as before.
+    expected_updates = (
+        [{"status": "degraded", "reason": "replay_live_parity_gate_failed"}]
+        if expected_reason
+        else []
+    )
+    assert updates == expected_updates
+    assert gate["failed_checks"] == cached_gate["failed_checks"]
+    assert runtime_state.observe_service_status() == service_before
+
+
+def test_replay_live_parity_gate_error_publishes_unavailable_runtime_record(monkeypatch) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    _clear_parity_cache()
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
+    monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", None)
+    monkeypatch.setattr(
+        bot_engine.runtime_state, "update_service_status", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "ai_trading.tools.runtime_performance_report.summarize_oms_lifecycle_parity",
+        lambda: (_ for _ in ()).throw(TimeoutError("pool exhausted")),
+    )
+
+    execution_module._evaluate_replay_live_parity_gate(
+        state=SimpleNamespace(), runtime=SimpleNamespace(), be=bot_engine
+    )
+
+    record = runtime_state.observe_replay_live_parity_runtime_gate()
+    assert record is not None
+    assert record["available"] is False
+    assert record["error"] == "pool exhausted"
+    assert record["service_reason"] == "replay_live_parity_gate_failed"
+
+
+def test_reset_all_states_clears_runtime_replay_gate_record(monkeypatch) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    for name in (
+        "_provider_state",
+        "_quote_status",
+        "_quote_status_by_symbol",
+        "_broker_status",
+        "_service_status",
+    ):
+        monkeypatch.setattr(runtime_state, name, getattr(runtime_state, name))
+    monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", None)
+    runtime_state.update_replay_live_parity_runtime_gate(
+        gate={"enabled": True, "available": True, "ok": True, "failed_checks": []},
+        required=True,
+        service_reason=None,
+    )
+    assert runtime_state.observe_replay_live_parity_runtime_gate() is not None
+    service_before = runtime_state.observe_service_status()
+    assert "replay_live_parity_runtime_gate" not in service_before
+    runtime_state.reset_all_states()
+    assert runtime_state.observe_replay_live_parity_runtime_gate() is None
