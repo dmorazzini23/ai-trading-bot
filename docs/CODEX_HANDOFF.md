@@ -1,6 +1,35 @@
 # Current handoff
 
-## November 25 (late): leftover model code removal and liveness alert fix deployed (`11fe01837`) (start here)
+## November 26: backstop first-cycle fix and paper-only parity flag scoping deployed (`892b254f4`) (start here)
+
+- **Running bot:** `892b254f4` since 04:46:07 UTC November 26 (market closed,
+  flat at deploy), no restarts, health `healthy`. Config hash unchanged
+  (`043df350…`); only the commit changed in the release spec. Full suite on
+  this commit: 6,912 passed, 2 skipped.
+- **Deployed:** the position backstop takes a new position's entry basis from
+  the broker rows the current cycle already read (at most 600 s old), so it
+  arms on the first cycle that sees the position; the fill-to-next-cycle gap
+  (up to about 96 s) remains. In paper only, the attention flag
+  `replay_live_parity_gate_failed` is withheld when the economics check
+  (`replay_counterfactual`) is the sole, fully evidenced failure; the gate,
+  readiness and the real-money entry block are unchanged (see
+  `docs/OPERATIONS.md`).
+- **Expected:** the parity flag shows after any restart until the first
+  open-market cycle publishes its record, then clears. `/control-plane` and
+  the standalone health process still show it.
+- **Rollback:** stop, `git checkout --detach 11fe01837`, restore
+  `runtime/release_spec.11fe01837.bak.json`, start.
+- **Not yet traded:** none of the code deployed since the November 25 close
+  has traded a session; first is Friday November 27 (half day, closes
+  18:00 UTC). Check then: `POSITION_BACKSTOP_ARMED` on a new position's first
+  cycle, the parity flag clearing, no `ALERT_DECISION_LOOP_STALLED`.
+- **Owner still to do:** install the packaged unit (commands in the next
+  section).
+- **In progress (not merged):** `claude/earnings-trial-runner` (offline runner
+  and draft contract; nothing registered; owner decision sheet being
+  prepared).
+
+## November 25 (late): leftover model code removal and liveness alert fix deployed (`11fe01837`)
 
 - **Running bot:** `11fe01837` since 23:27:28 UTC November 25, no restarts,
   health `healthy`. Config hash
