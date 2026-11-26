@@ -822,8 +822,13 @@ is raised exactly as before:
   own paper inference (`paper`) is true;
 - the health snapshot is enabled and available and its failed checks are
   exactly `["replay_counterfactual"]`, and that counterfactual was actually
-  evaluated and failed its economics criteria (a replay artifact with no
-  counterfactual block, reason `counterfactual_unavailable`, keeps the flag);
+  evaluated and failed its economics criteria: in the replay artifact,
+  `counterfactual.passed` is a real `false`, the candidate `sample_count` and
+  `net_edge_bps` and the required `min_samples` and `min_net_edge_bps` are
+  present and numeric (not defaulted), and at least one economics criterion
+  in `counterfactual.checks` failed. A replay artifact with no counterfactual
+  block (reason `counterfactual_unavailable`) or without that evaluation data
+  (blocker `economics_counterfactual_not_evaluated`) keeps the flag;
 - the trading cycle's own published gate result is present, enabled and
   available, not from its error path, and its failed checks are exactly
   `["replay_counterfactual"]`; when the service reason is

@@ -435,6 +435,50 @@ def _runtime_replay_gate_withhold_blockers(
     return blockers
 
 
+def _is_real_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _replay_counterfactual_evaluated(gate: Mapping[str, Any]) -> bool:
+    """True only when the replay artifact holds a genuinely evaluated failure.
+
+    ``passed`` must be a real ``False``, the sample-size and net-edge inputs
+    must be present and numeric in the artifact (not defaulted by the gate),
+    and at least one economics criterion must have failed.
+    """
+
+    governance = gate.get("replay_governance")
+    if not isinstance(governance, Mapping):
+        return False
+    counterfactual = governance.get("counterfactual")
+    if not isinstance(counterfactual, Mapping) or counterfactual.get("passed") is not False:
+        return False
+    candidate = counterfactual.get("candidate")
+    required = counterfactual.get("required")
+    criteria = counterfactual.get("checks")
+    if not (
+        isinstance(candidate, Mapping)
+        and isinstance(required, Mapping)
+        and isinstance(criteria, Mapping)
+    ):
+        return False
+    if not all(
+        _is_real_number(value)
+        for value in (
+            candidate.get("sample_count"),
+            candidate.get("net_edge_bps"),
+            required.get("min_samples"),
+            required.get("min_net_edge_bps"),
+        )
+    ):
+        return False
+    return any(passed is not True for passed in criteria.values())
+
+
 def _running_policy_hash_blockers(
     running: Any,
     *,
@@ -1984,6 +2028,8 @@ def build_runtime_health_payload(
             withhold_blockers.append("health_gate_not_economics_only")
         if economics_reason not in _REPLAY_ECONOMICS_FAILURE_REASONS:
             withhold_blockers.append(f"economics_{economics_reason}")
+        elif not _replay_counterfactual_evaluated(replay_live_parity_gate):
+            withhold_blockers.append("economics_counterfactual_not_evaluated")
         withhold_blockers.extend(
             _paper_mode_withhold_blockers(
                 launch_profile=launch_profile,

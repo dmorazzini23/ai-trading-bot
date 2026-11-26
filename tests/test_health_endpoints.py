@@ -1447,6 +1447,8 @@ def _replay_gate_with_failures(
         "replay_governance": {
             "counterfactual": {
                 "passed": "replay_counterfactual" not in failed,
+                "candidate": {"sample_count": 92, "net_edge_bps": -5.69594400285975},
+                "required": {"min_samples": 250, "min_net_edge_bps": 0.0},
                 "checks": {
                     "candidate_net_edge_positive": False,
                     "drawdown_non_regression": True,
@@ -1738,6 +1740,63 @@ def test_paper_counterfactual_unavailable_keeps_parity_flag(monkeypatch) -> None
     assert block["replay_economics"]["reason"] == "counterfactual_unavailable"
     assert "economics_counterfactual_unavailable" in block["attention_flag_withhold_blockers"]
     _assert_paper_decisions_unchanged(payload)
+
+
+@pytest.mark.parametrize(
+    "counterfactual",
+    [
+        {"passed": None},
+        {"passed": "yes"},
+        {"passed": False},
+        {
+            "passed": False,
+            "candidate": {"sample_count": "92", "net_edge_bps": -5.7},
+            "required": {"min_samples": 250, "min_net_edge_bps": 0.0},
+            "checks": {"sample_size": False},
+        },
+        {
+            "passed": False,
+            "candidate": {"sample_count": 92, "net_edge_bps": -5.7},
+            "required": {"min_samples": 250, "min_net_edge_bps": 0.0},
+            "checks": {},
+        },
+    ],
+)
+def test_paper_counterfactual_without_real_evaluation_keeps_flag(
+    replay_end_to_end, counterfactual
+) -> None:
+    e2e = replay_end_to_end
+    snapshot = _replay_artifact_snapshot("hash-a", ts="2026-11-25T21:00:00+00:00", name="a")
+    snapshot["counterfactual"] = counterfactual
+    e2e.artifact["snapshot"] = snapshot
+    runtime_gate = e2e.run_cycle("hash-a")
+    assert runtime_gate["failed_checks"] == ["replay_counterfactual"]
+    payload = e2e.health()
+
+    block = payload["replay_live_parity_gate"]
+    assert block["failed_checks"] == ["replay_counterfactual"]
+    blockers = block["attention_flag_withhold_blockers"]
+    assert blockers and all(blocker.startswith("economics_") for blocker in blockers)
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert payload["readiness_failures"] == []
+    assert payload["entry_control"]["paper_evidence_allowed"] is True
+
+
+def test_paper_null_counterfactual_reports_not_evaluated(replay_end_to_end) -> None:
+    e2e = replay_end_to_end
+    snapshot = _replay_artifact_snapshot("hash-a", ts="2026-11-25T21:00:00+00:00", name="a")
+    snapshot["counterfactual"] = {"passed": False}
+    e2e.artifact["snapshot"] = snapshot
+    e2e.run_cycle("hash-a")
+    block = e2e.health()["replay_live_parity_gate"]
+
+    # Missing net-edge inputs default to 0.0 in the gate, which would read as an
+    # evaluated economics failure without this check.
+    assert block["replay_economics"]["reason"] == "net_edge_not_above_minimum"
+    assert block["replay_economics"]["failed_criteria"] == []
+    assert block["attention_flag_withhold_blockers"] == [
+        "economics_counterfactual_not_evaluated"
+    ]
 
 
 def test_paper_unavailable_replay_gate_keeps_parity_flag(monkeypatch) -> None:
