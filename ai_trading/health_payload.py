@@ -435,6 +435,56 @@ def _runtime_replay_gate_withhold_blockers(
     return blockers
 
 
+def _running_policy_hash_blockers(
+    running: Any,
+    *,
+    expected_policy_hash: Any,
+    health_replay_policy_hash: str,
+) -> list[str]:
+    """The running policy hash must match what the cycle and health checked.
+
+    The running hash can be recompiled without a replay gate evaluation (for
+    example while the market is closed, or while the cycle reuses its cached
+    gate), so a cycle result only counts for the hash still running.
+    """
+
+    running_hash = running.get("policy_hash") if isinstance(running, Mapping) else None
+    if not isinstance(running_hash, str) or not running_hash.strip():
+        return ["running_policy_hash_missing"]
+    running_hash = running_hash.strip()
+    expected = expected_policy_hash.strip() if isinstance(expected_policy_hash, str) else ""
+    if running_hash != expected or running_hash != health_replay_policy_hash:
+        return ["running_policy_hash_mismatch"]
+    return []
+
+
+def _oms_lifecycle_limits_blockers() -> list[str]:
+    """Health and the cycle must scan the same number of OMS lifecycle rows.
+
+    Each limit is read exactly as its own call site reads it.
+    """
+
+    try:
+        health_limit = int(
+            get_env(
+                "AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_LIMIT",
+                5000,
+                cast=int,
+                resolve_aliases=False,
+            )
+        )
+        cycle_limit = int(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_LIMIT",
+                5000,
+                cast=int,
+            )
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return ["oms_lifecycle_limits_unreadable"]
+    return [] if health_limit == cycle_limit else ["oms_lifecycle_limits_differ"]
+
+
 def _env_bool(name: str, default: bool) -> bool:
     try:
         from ai_trading.config.management import get_env
@@ -1955,6 +2005,23 @@ def build_runtime_health_payload(
             health_replay_policy_hash=health_replay_policy_hash,
         )
         withhold_blockers.extend(runtime_blockers)
+        running_policy_record = _safe_observe(
+            runtime_state.observe_running_effective_policy_hash, None
+        )
+        running_policy_map = (
+            running_policy_record if isinstance(running_policy_record, Mapping) else {}
+        )
+        running_blockers = _running_policy_hash_blockers(
+            running_policy_record,
+            expected_policy_hash=(
+                runtime_gate_record.get("expected_policy_hash")
+                if isinstance(runtime_gate_record, Mapping)
+                else None
+            ),
+            health_replay_policy_hash=health_replay_policy_hash,
+        )
+        withhold_blockers.extend(running_blockers)
+        withhold_blockers.extend(_oms_lifecycle_limits_blockers())
         replay_attention_flag_withheld = bool(
             not withhold_blockers
             and REPLAY_PARITY_ATTENTION_FLAG in attention_flags
@@ -1967,12 +2034,15 @@ def build_runtime_health_payload(
             ]
         parity_failed_union = list(replay_parity_failed_checks)
         runtime_union_checks = list(runtime_failed_checks or [])
-        if "replay_policy_hash_mismatch" in runtime_blockers:
+        if (
+            "replay_policy_hash_mismatch" in runtime_blockers
+            or "running_policy_hash_mismatch" in running_blockers
+        ):
             runtime_union_checks.append("replay_contract")
         for check in runtime_union_checks:
             if check != REPLAY_ECONOMICS_CHECK and check not in parity_failed_union:
                 parity_failed_union.append(check)
-        runtime_parity_ok = not [
+        runtime_parity_ok = not running_blockers and not [
             blocker
             for blocker in runtime_blockers
             if blocker != "runtime_gate_not_economics_only"
@@ -2001,6 +2071,8 @@ def build_runtime_health_payload(
             "runtime_replay_policy_hash": runtime_record_map.get("replay_policy_hash"),
             "runtime_replay_artifact_ts": runtime_record_map.get("replay_artifact_ts"),
             "health_replay_policy_hash": health_replay_policy_hash or None,
+            "running_policy_hash": running_policy_map.get("policy_hash"),
+            "running_policy_hash_published_at": running_policy_map.get("published_at"),
             "attention_flag_withhold_blockers": withhold_blockers,
             "replay_economics": _replay_economics_summary(
                 replay_live_parity_gate,

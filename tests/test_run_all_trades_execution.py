@@ -861,3 +861,81 @@ def test_raising_disabled_path_publish_returns_disabled_gate(monkeypatch) -> Non
 
     assert gate == {"enabled": False, "available": False, "ok": True, "status": "disabled"}
     assert warnings == ["REPLAY_PARITY_RUNTIME_GATE_PUBLISH_FAILED"]
+
+
+def _stub_policy_compiler(monkeypatch, policy_hash: str) -> object:
+    policy = SimpleNamespace(
+        policy_hash=policy_hash,
+        trading_mode="paper",
+        objective=SimpleNamespace(objective_name="demo"),
+    )
+    monkeypatch.setattr(bot_engine, "compile_effective_policy", lambda _cfg: policy)
+    monkeypatch.setattr(bot_engine, "startup_policy_diff", lambda _policy: [])
+    return policy
+
+
+def test_policy_compile_publishes_running_policy_hash(monkeypatch) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    monkeypatch.setattr(runtime_state, "_running_effective_policy", None)
+    policy = _stub_policy_compiler(monkeypatch, "hash-a")
+    state = SimpleNamespace()
+
+    result = bot_engine._compile_effective_policy_runtime(
+        SimpleNamespace(), state, config_hash="config-hash"
+    )
+
+    assert result is policy
+    assert state.effective_policy_hash == "hash-a"
+    record = runtime_state.observe_running_effective_policy_hash()
+    assert record is not None
+    assert record["policy_hash"] == "hash-a"
+    assert record["published_at"]
+    assert isinstance(record["published_monotonic"], float)
+    for name in (
+        "_provider_state",
+        "_quote_status",
+        "_quote_status_by_symbol",
+        "_broker_status",
+        "_service_status",
+        "_replay_live_parity_runtime_gate",
+    ):
+        monkeypatch.setattr(runtime_state, name, getattr(runtime_state, name))
+    runtime_state.reset_all_states()
+    assert runtime_state.observe_running_effective_policy_hash() is None
+
+
+def test_raising_running_policy_hash_publish_does_not_change_compile(monkeypatch) -> None:
+    from ai_trading.telemetry import runtime_state
+
+    policy = _stub_policy_compiler(monkeypatch, "hash-a")
+
+    def _raise(_policy_hash):
+        raise RuntimeError("publish failed")
+
+    monkeypatch.setattr(runtime_state, "update_running_effective_policy_hash", _raise)
+    warnings: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "logger",
+        SimpleNamespace(
+            warning=lambda msg, *args, **kwargs: warnings.append((msg, kwargs.get("extra", {}))),
+            info=lambda *args, **kwargs: None,
+        ),
+    )
+    state = SimpleNamespace()
+
+    result = bot_engine._compile_effective_policy_runtime(
+        SimpleNamespace(), state, config_hash="config-hash"
+    )
+
+    assert result is policy
+    assert state._effective_policy is policy
+    assert state.effective_policy_hash == "hash-a"
+    assert state.effective_policy_config_hash == "config-hash"
+    assert warnings == [
+        (
+            "EFFECTIVE_POLICY_HASH_PUBLISH_FAILED",
+            {"error": "publish failed", "error_type": "RuntimeError"},
+        )
+    ]

@@ -836,7 +836,22 @@ is raised exactly as before:
   expected hash itself, so a new artifact with a different (or missing)
   policy hash keeps the flag and reports `replay_contract` in
   `parity_failed_checks`. A new artifact with the same hash may still be
-  withheld; health's own freshness and violation checks cover it.
+  withheld; health's own freshness and violation checks cover it;
+- the running effective policy hash, which the worker publishes every time it
+  compiles the policy (including off-hours runs that never evaluate the
+  gate), is non-empty and equals both the cycle's expected hash and the
+  health artifact's policy hash. A recompiled policy the gate has not yet
+  re-evaluated, whether the market is closed or the cycle is reusing its
+  cached gate, keeps the flag and reports `replay_contract`;
+- health and the cycle scan the same number of OMS lifecycle rows
+  (`AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_LIMIT` equals
+  `AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_LIMIT`).
+
+The cycle's result exists only in the running process's memory. After a
+restart the flag shows until the first open-market cycle evaluates the gate,
+so after an off-hours restart it stays up until the next session. A
+standalone health process (`RUN_HEALTHCHECK=1`) never has the cycle's result
+and always shows the flag.
 
 The cycle publishes its result in a separate runtime-state record
 (`observe_replay_live_parity_runtime_gate`); the service status itself is
@@ -864,7 +879,9 @@ record from covering an artifact the cycle never evaluated. In paper mode
 - `runtime_expected_policy_hash`, `runtime_replay_policy_hash` and
   `runtime_replay_artifact_ts` — the hash the cycle expected and the artifact
   it evaluated; `health_replay_policy_hash` — the policy hash of the artifact
-  health is reading;
+  health is reading; `running_policy_hash` and
+  `running_policy_hash_published_at` — the policy hash the worker last
+  compiled and when;
 - `attention_flag_withhold_blockers` — every condition above that is not
   met (empty when the flag was withheld);
 - `replay_economics` — `check`, `required`, `available`, `qualified`,

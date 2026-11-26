@@ -1491,6 +1491,7 @@ def _build_replay_scoped_payload(
     gate: dict,
     service_state: dict,
     runtime_record=_ECONOMICS_ONLY,
+    running_policy_hash: str | None = "hash-a",
 ):
     if mode == "live":
         monkeypatch.setenv("EXECUTION_MODE", "live")
@@ -1509,6 +1510,17 @@ def _build_replay_scoped_payload(
             else None,
         )
     monkeypatch.setattr(runtime_state, "_replay_live_parity_runtime_gate", runtime_record)
+    monkeypatch.setattr(
+        runtime_state,
+        "_running_effective_policy",
+        None
+        if running_policy_hash is None
+        else {
+            "policy_hash": running_policy_hash,
+            "published_at": "2026-11-26T00:03:00Z",
+            "published_monotonic": 1.0,
+        },
+    )
     monkeypatch.setattr(
         health_payload_module,
         "_replay_live_parity_gate_snapshot",
@@ -1705,7 +1717,8 @@ def test_paper_missing_runtime_gate_keeps_flag_without_service_reason(monkeypatc
     assert _PARITY_REASON in payload["attention_flags"]
     assert payload["replay_live_parity_gate"]["runtime_failed_checks"] is None
     assert payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"] == [
-        "runtime_gate_missing"
+        "runtime_gate_missing",
+        "running_policy_hash_mismatch",
     ]
 
 
@@ -1889,7 +1902,10 @@ def test_paper_health_snapshot_without_policy_hash_keeps_flag(monkeypatch) -> No
 
     assert _PARITY_REASON in payload["attention_flags"]
     block = payload["replay_live_parity_gate"]
-    assert block["attention_flag_withhold_blockers"] == ["replay_policy_hash_mismatch"]
+    assert block["attention_flag_withhold_blockers"] == [
+        "replay_policy_hash_mismatch",
+        "running_policy_hash_mismatch",
+    ]
     assert block["parity_failed_checks"] == ["replay_contract"]
     assert block["parity_ok"] is False
     assert block["health_replay_policy_hash"] is None
@@ -1908,7 +1924,10 @@ def test_paper_policy_hash_mismatch_with_cycle_record_is_a_contract_failure(
 
     block = payload["replay_live_parity_gate"]
     assert _PARITY_REASON in payload["attention_flags"]
-    assert block["attention_flag_withhold_blockers"] == ["replay_policy_hash_mismatch"]
+    assert block["attention_flag_withhold_blockers"] == [
+        "replay_policy_hash_mismatch",
+        "running_policy_hash_mismatch",
+    ]
     assert block["parity_failed_checks"] == ["replay_contract"]
     assert block["parity_ok"] is False
     assert block["runtime_expected_policy_hash"] == "hash-a"
@@ -1947,7 +1966,8 @@ def replay_end_to_end(monkeypatch):
     from ai_trading.governance import replay_live_parity
 
     artifact = {"snapshot": _replay_artifact_snapshot("hash-a", ts="2026-11-25T21:00:00+00:00", name="a")}
-    lifecycle = {"enabled": True, "available": True, "ok": True, "total_violations": 0}
+    cycle_lifecycle = {"enabled": True, "available": True, "ok": True, "total_violations": 0}
+    health_lifecycle = dict(cycle_lifecycle)
     monkeypatch.setattr(
         replay_live_parity,
         "_load_latest_replay_governance_snapshot",
@@ -1955,11 +1975,28 @@ def replay_end_to_end(monkeypatch):
     )
     monkeypatch.setattr(
         "ai_trading.tools.runtime_performance_report.summarize_oms_lifecycle_parity",
-        lambda: dict(lifecycle),
+        lambda: dict(cycle_lifecycle),
     )
     monkeypatch.setattr(
-        health_payload_module, "_oms_lifecycle_parity_snapshot", lambda: dict(lifecycle)
+        health_payload_module,
+        "_oms_lifecycle_parity_snapshot",
+        lambda: dict(health_lifecycle),
     )
+    # The real compile path publishes the running hash; only the policy
+    # compiler itself is stubbed so the hash can be chosen.
+    compiled = {"hash": ""}
+    monkeypatch.setattr(
+        bot_engine,
+        "compile_effective_policy",
+        lambda _cfg: SimpleNamespace(
+            policy_hash=compiled["hash"],
+            trading_mode="paper",
+            objective=SimpleNamespace(objective_name="demo"),
+        ),
+    )
+    monkeypatch.setattr(bot_engine, "startup_policy_diff", lambda _policy: [])
+    monkeypatch.setattr(runtime_state, "_running_effective_policy", None)
+    worker_state = SimpleNamespace(effective_policy_hash="")
     monkeypatch.setenv("EXECUTION_MODE", "paper")
     monkeypatch.setenv("AI_TRADING_LAUNCH_PROFILE", "paper_trade")
     monkeypatch.setenv("AI_TRADING_HEALTH_REQUIRE_REPLAY_LIVE_PARITY_GATE", "1")
@@ -1976,11 +2013,21 @@ def replay_end_to_end(monkeypatch):
     monkeypatch.setitem(execution_module._REPLAY_LIVE_PARITY_GATE_CACHE, "gate", None)
     monkeypatch.setitem(execution_module._REPLAY_LIVE_PARITY_GATE_CACHE, "updated_mono", 0.0)
 
-    def run_cycle(running_hash: str) -> dict:
-        execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = None
-        execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["updated_mono"] = 0.0
+    def compile_policy(policy_hash: str) -> object:
+        """What the worker prelude does on every run, even with the market closed."""
+
+        compiled["hash"] = policy_hash
+        return bot_engine._compile_effective_policy_runtime(
+            SimpleNamespace(), worker_state, config_hash="config-hash"
+        )
+
+    def run_cycle(running_hash: str, *, use_cache: bool = False) -> dict:
+        compile_policy(running_hash)
+        if not use_cache:
+            execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = None
+            execution_module._REPLAY_LIVE_PARITY_GATE_CACHE["updated_mono"] = 0.0
         return execution_module._evaluate_replay_live_parity_gate(
-            state=SimpleNamespace(effective_policy_hash=running_hash),
+            state=worker_state,
             runtime=SimpleNamespace(),
             be=bot_engine,
         )
@@ -1992,7 +2039,14 @@ def replay_end_to_end(monkeypatch):
             ok_mode="connectivity",
         )
 
-    return SimpleNamespace(artifact=artifact, run_cycle=run_cycle, health=health)
+    return SimpleNamespace(
+        artifact=artifact,
+        run_cycle=run_cycle,
+        compile_policy=compile_policy,
+        health=health,
+        cycle_lifecycle=cycle_lifecycle,
+        state=worker_state,
+    )
 
 
 def test_paper_policy_hash_mismatch_seen_only_by_runtime_keeps_flag(replay_end_to_end) -> None:
@@ -2041,7 +2095,11 @@ def test_paper_frozen_cycle_record_does_not_cover_new_artifact_hash(replay_end_t
     assert block["failed_checks"] == ["replay_counterfactual"]
     assert block["health_replay_policy_hash"] == "hash-c"
     assert block["runtime_expected_policy_hash"] == "hash-a"
-    assert block["attention_flag_withhold_blockers"] == ["replay_policy_hash_mismatch"]
+    assert block["running_policy_hash"] == "hash-a"
+    assert block["attention_flag_withhold_blockers"] == [
+        "replay_policy_hash_mismatch",
+        "running_policy_hash_mismatch",
+    ]
     assert block["parity_failed_checks"] == ["replay_contract"]
     assert block["parity_ok"] is False
     assert _PARITY_REASON in payload["attention_flags"]
@@ -2074,7 +2132,8 @@ def test_paper_cycle_without_expected_policy_hash_keeps_flag(replay_end_to_end) 
     block = payload["replay_live_parity_gate"]
     assert block["runtime_expected_policy_hash"] is None
     assert block["attention_flag_withhold_blockers"] == [
-        "runtime_expected_policy_hash_missing"
+        "runtime_expected_policy_hash_missing",
+        "running_policy_hash_missing",
     ]
     assert block["parity_ok"] is False
     assert _PARITY_REASON in payload["attention_flags"]
@@ -2109,6 +2168,124 @@ def test_paper_disabled_cycle_gate_keeps_flag(replay_end_to_end, monkeypatch) ->
     assert "runtime_failed_checks_unknown" in block["attention_flag_withhold_blockers"]
     assert "runtime_expected_policy_hash_missing" in block["attention_flag_withhold_blockers"]
     assert block["parity_ok"] is False
+
+
+def test_paper_running_policy_change_while_idle_keeps_flag(replay_end_to_end) -> None:
+    """Scenario A: the policy recompiles with the market closed; no gate run."""
+
+    e2e = replay_end_to_end
+    e2e.run_cycle("hash-a")
+    payload = e2e.health()
+    assert _PARITY_REASON not in payload["attention_flags"]
+    assert payload["replay_live_parity_gate"]["running_policy_hash"] == "hash-a"
+
+    e2e.compile_policy("hash-b")
+    assert e2e.state.effective_policy_hash == "hash-b"
+    payload = e2e.health()
+
+    block = payload["replay_live_parity_gate"]
+    assert block["running_policy_hash"] == "hash-b"
+    assert block["runtime_expected_policy_hash"] == "hash-a"
+    assert block["health_replay_policy_hash"] == "hash-a"
+    assert block["attention_flag_withhold_blockers"] == ["running_policy_hash_mismatch"]
+    assert block["parity_failed_checks"] == ["replay_contract"]
+    assert block["parity_ok"] is False
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert payload["readiness_failures"] == []
+    assert payload["entry_control"]["paper_evidence_allowed"] is True
+
+
+def test_paper_running_policy_change_with_cached_cycle_gate_keeps_flag(
+    replay_end_to_end, monkeypatch
+) -> None:
+    """Scenario B: the cycle keeps reusing a gate cached under the old hash."""
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_GATE_CYCLE_TTL_SEC", "300")
+    e2e = replay_end_to_end
+    e2e.run_cycle("hash-a")
+    assert _PARITY_REASON not in e2e.health()["attention_flags"]
+
+    gate = e2e.run_cycle("hash-b", use_cache=True)
+    assert "cache_age_s" in gate
+    assert gate["failed_checks"] == ["replay_counterfactual"]
+    record = runtime_state.observe_replay_live_parity_runtime_gate()
+    assert record is not None and record["expected_policy_hash"] == "hash-a"
+    payload = e2e.health()
+
+    block = payload["replay_live_parity_gate"]
+    assert block["running_policy_hash"] == "hash-b"
+    assert "running_policy_hash_mismatch" in block["attention_flag_withhold_blockers"]
+    assert block["parity_failed_checks"] == ["replay_contract"]
+    assert _PARITY_REASON in payload["attention_flags"]
+
+
+@pytest.mark.parametrize("running", [None, "", "   "])
+def test_paper_missing_running_policy_hash_keeps_flag(monkeypatch, running) -> None:
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
+        running_policy_hash=running,
+    )
+
+    block = payload["replay_live_parity_gate"]
+    assert block["attention_flag_withhold_blockers"] == ["running_policy_hash_missing"]
+    assert block["parity_ok"] is False
+    assert _PARITY_REASON in payload["attention_flags"]
+    _assert_paper_decisions_unchanged(payload)
+
+
+def test_paper_differing_oms_lifecycle_limits_keep_flag(monkeypatch) -> None:
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_LIMIT", "100")
+    monkeypatch.setenv("AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_LIMIT", "5000")
+    payload = _build_replay_scoped_payload(
+        monkeypatch,
+        mode="paper",
+        gate=_replay_gate_with_failures("replay_counterfactual"),
+        service_state={"status": "ready", "reason": "market_closed"},
+    )
+
+    block = payload["replay_live_parity_gate"]
+    assert block["attention_flag_withhold_blockers"] == ["oms_lifecycle_limits_differ"]
+    assert _PARITY_REASON in payload["attention_flags"]
+    _assert_paper_decisions_unchanged(payload)
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_LIMIT", "5000")
+    payload = health_payload_module.build_runtime_health_payload(
+        force_ok_for_pytest=False,
+        healthy_status_mode="healthy",
+        ok_mode="connectivity",
+    )
+    assert payload["replay_live_parity_gate"]["attention_flag_withhold_blockers"] == []
+    assert _PARITY_REASON not in payload["attention_flags"]
+
+
+def test_paper_lifecycle_failure_seen_only_by_cycle_keeps_flag(
+    replay_end_to_end, monkeypatch
+) -> None:
+    monkeypatch.setenv("AI_TRADING_REPLAY_LIVE_PARITY_REQUIRE_OMS_LIFECYCLE_PARITY", "1")
+    e2e = replay_end_to_end
+    e2e.cycle_lifecycle.update({"ok": False, "total_violations": 3})
+
+    runtime_gate = e2e.run_cycle("hash-a")
+    assert runtime_gate["failed_checks"] == [
+        "replay_counterfactual",
+        "oms_lifecycle_parity_consistent",
+    ]
+    payload = e2e.health()
+
+    block = payload["replay_live_parity_gate"]
+    assert block["failed_checks"] == ["replay_counterfactual"]
+    assert block["runtime_failed_checks"] == [
+        "replay_counterfactual",
+        "oms_lifecycle_parity_consistent",
+    ]
+    assert block["attention_flag_withhold_blockers"] == ["runtime_gate_not_economics_only"]
+    assert block["parity_failed_checks"] == ["oms_lifecycle_parity_consistent"]
+    assert block["parity_ok"] is False
+    assert _PARITY_REASON in payload["attention_flags"]
+    assert payload["readiness_failures"] == []
 
 
 @pytest.mark.parametrize(
