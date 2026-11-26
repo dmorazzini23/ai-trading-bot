@@ -598,6 +598,13 @@ def _operational_state(health: dict[str, Any]) -> str:
     if reason == "health_payload_unavailable" or health.get("health_error"):
         return "monitoring_unavailable"
     flags = {str(flag).strip().lower() for flag in health.get("attention_flags") or []}
+    # Paper health withholds the replay parity flag when only the replay
+    # economics check fails; it still blocks qualification, so keep the label.
+    replay_gate = health.get("replay_live_parity_gate")
+    economics = replay_gate.get("replay_economics") if isinstance(replay_gate, dict) else None
+    withheld_flag = economics.get("withheld_attention_flag") if isinstance(economics, dict) else None
+    if withheld_flag:
+        flags.add(str(withheld_flag).strip().lower())
     if flags & {"oms_invariants_failed", "oms_lifecycle_parity_failed", "service_halt_active", "execution_incident"}:
         return "execution_incident"
     broker = health.get("broker") or {}

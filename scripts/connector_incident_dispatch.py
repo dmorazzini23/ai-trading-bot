@@ -424,6 +424,13 @@ def format_preflight_report(report: Mapping[str, Any]) -> dict[str, Any]:
     flags = [fmt.humanize(flag) for flag in report.get("attention_flags") or []]
     reason = fmt.humanize(report.get("reason"))
     title = f"Market preflight · {verdict}"
+    replay_gate = report.get("replay_live_parity_gate")
+    economics = replay_gate.get("replay_economics") if isinstance(replay_gate, Mapping) else None
+    economics_text = (
+        f"Informational: {economics.get('summary')}"
+        if isinstance(economics, Mapping) and economics.get("summary")
+        else ""
+    )
     return fmt.message(
         fmt.fallback_text(severity, title, reason, f"{len(flags)} flags"),
         [
@@ -447,6 +454,7 @@ def format_preflight_report(report: Mapping[str, Any]) -> dict[str, Any]:
                 ]
             ),
             fmt.section_block(f"*Open flags*\n{fmt.bullets(flags)}"),
+            fmt.context_block(economics_text),
             fmt.context_block(
                 "A blocked verdict reflects model/replay gates, not service liveness.",
                 fmt.now_label(),

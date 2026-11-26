@@ -6,6 +6,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import RLock
+from time import monotonic
 from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
@@ -23,6 +24,10 @@ __all__ = [
     "reset_broker_status",
     "update_service_status",
     "observe_service_status",
+    "update_replay_live_parity_runtime_gate",
+    "observe_replay_live_parity_runtime_gate",
+    "update_running_effective_policy_hash",
+    "observe_running_effective_policy_hash",
     "reset_all_states",
 ]
 
@@ -125,6 +130,12 @@ _quote_status: dict[str, Any] = _fresh_quote_state()
 _quote_status_by_symbol: dict[str, dict[str, Any]] = {}
 _broker_status: dict[str, Any] = _fresh_broker_state()
 _service_status: dict[str, Any] = _fresh_service_status()
+# Last replay/live parity gate result evaluated by the trading cycle. Kept
+# apart from the service status so service-status readers are unaffected.
+_replay_live_parity_runtime_gate: dict[str, Any] | None = None
+# Effective policy hash the running worker last compiled; published on every
+# compile, independent of whether the replay gate was evaluated.
+_running_effective_policy: dict[str, Any] | None = None
 
 
 def _merge_state(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -343,6 +354,81 @@ def update_service_status(
 def observe_service_status() -> dict[str, Any]:
     with _LOCK:
         return _clone_state(_service_status)
+
+
+def update_replay_live_parity_runtime_gate(
+    *,
+    gate: dict[str, Any],
+    required: bool,
+    service_reason: str | None,
+    evaluated_at: str | None = None,
+) -> None:
+    """Record the trading cycle's own replay/live parity gate result.
+
+    ``service_reason`` is the service-status reason this same evaluation set
+    (``None`` when it set none), which ties the record to that reason.
+    ``evaluated_at`` is when the gate was computed (earlier than the publish
+    time when the cycle reused its cached gate). The record also carries the
+    policy hash the gate expected and the replay artifact it evaluated, so a
+    reader can tell whether a later artifact is the one this result covers.
+    """
+
+    raw_failed = gate.get("failed_checks")
+    failed_checks = (
+        [str(item) for item in raw_failed if str(item).strip()]
+        if isinstance(raw_failed, (list, tuple))
+        else None
+    )
+    thresholds_raw = gate.get("thresholds")
+    thresholds = thresholds_raw if isinstance(thresholds_raw, dict) else {}
+    observed_raw = gate.get("observed")
+    observed = observed_raw if isinstance(observed_raw, dict) else {}
+    replay_raw = gate.get("replay_governance")
+    replay = replay_raw if isinstance(replay_raw, dict) else {}
+    published_at = _now_iso()
+    record: dict[str, Any] = {
+        "enabled": bool(gate.get("enabled", False)),
+        "available": bool(gate.get("available", False)),
+        "ok": bool(gate.get("ok", False)),
+        "reason": gate.get("reason"),
+        "failed_checks": failed_checks,
+        "error": gate.get("error"),
+        "required": bool(required),
+        "service_reason": service_reason,
+        "expected_policy_hash": str(thresholds.get("expected_policy_hash") or "").strip()
+        or None,
+        "replay_policy_hash": str(observed.get("replay_policy_hash") or "").strip() or None,
+        "replay_artifact_path": replay.get("path"),
+        "replay_artifact_ts": replay.get("ts"),
+        "evaluated_at": evaluated_at or published_at,
+        "published_at": published_at,
+    }
+    with _LOCK:
+        global _replay_live_parity_runtime_gate
+        _replay_live_parity_runtime_gate = record
+
+
+def observe_replay_live_parity_runtime_gate() -> dict[str, Any] | None:
+    with _LOCK:
+        return _clone_state(_replay_live_parity_runtime_gate)
+
+
+def update_running_effective_policy_hash(policy_hash: str) -> None:
+    """Record the effective policy hash the worker just compiled."""
+
+    record = {
+        "policy_hash": str(policy_hash or "").strip() or None,
+        "published_at": _now_iso(),
+        "published_monotonic": monotonic(),
+    }
+    with _LOCK:
+        global _running_effective_policy
+        _running_effective_policy = record
+
+
+def observe_running_effective_policy_hash() -> dict[str, Any] | None:
+    with _LOCK:
+        return _clone_state(_running_effective_policy)
 
 
 def update_quote_status(
@@ -585,8 +671,11 @@ def reset_all_states() -> None:
 
     with _LOCK:
         global _provider_state, _quote_status, _quote_status_by_symbol, _broker_status, _service_status
+        global _replay_live_parity_runtime_gate, _running_effective_policy
         _provider_state = _fresh_provider_state()
         _quote_status = _fresh_quote_state()
         _quote_status_by_symbol = {}
         _broker_status = _fresh_broker_state()
         _service_status = _fresh_service_status()
+        _replay_live_parity_runtime_gate = None
+        _running_effective_policy = None

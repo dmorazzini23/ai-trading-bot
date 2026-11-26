@@ -69,7 +69,7 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
 def _safe_nonnegative_int(value: Any) -> int:
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -246,6 +246,287 @@ def _build_contract_gate_status(
         if snapshot.get("total_violations") is not None:
             gate["total_violations"] = snapshot.get("total_violations")
     return gate
+
+
+# The replay gate's ``replay_counterfactual`` check is an economics test (enough
+# capped samples with a positive net edge), not a replay/live parity test.
+REPLAY_ECONOMICS_CHECK = "replay_counterfactual"
+REPLAY_PARITY_ATTENTION_FLAG = "replay_live_parity_gate_failed"
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _replay_economics_summary(
+    gate: Mapping[str, Any],
+    *,
+    withheld_attention_flag: str | None,
+) -> dict[str, Any]:
+    """Describe the replay counterfactual (economics) check for display only.
+
+    Never changes the gate's ``ok`` or ``failed_checks``.
+    """
+
+    observed_raw = gate.get("observed")
+    observed = observed_raw if isinstance(observed_raw, Mapping) else {}
+    thresholds_raw = gate.get("thresholds")
+    thresholds = thresholds_raw if isinstance(thresholds_raw, Mapping) else {}
+    governance_raw = gate.get("replay_governance")
+    governance = governance_raw if isinstance(governance_raw, Mapping) else {}
+    counterfactual_raw = governance.get("counterfactual")
+    counterfactual = counterfactual_raw if isinstance(counterfactual_raw, Mapping) else {}
+    criteria_raw = counterfactual.get("checks")
+    criteria = criteria_raw if isinstance(criteria_raw, Mapping) else {}
+
+    qualified = observed.get("replay_counterfactual_passed") is True
+    available = observed.get("replay_counterfactual_available") is True
+    required = thresholds.get("require_counterfactual_passed") is not False
+    sample_size = _safe_nonnegative_int(
+        observed.get("replay_counterfactual_candidate_samples")
+    )
+    min_samples = _safe_nonnegative_int(
+        observed.get("replay_counterfactual_required_samples")
+    )
+    net_edge_bps = _finite_float_or_none(
+        observed.get("replay_counterfactual_candidate_net_edge_bps")
+    )
+    min_net_edge_bps = _finite_float_or_none(
+        observed.get("replay_counterfactual_required_net_edge_bps")
+    )
+    failed_criteria = [
+        str(name) for name, passed in criteria.items() if passed is not True
+    ]
+    if qualified:
+        reason = "qualified"
+    elif not available:
+        reason = "counterfactual_unavailable"
+    elif not required:
+        reason = "not_required"
+    elif min_samples and sample_size < min_samples:
+        reason = "insufficient_samples"
+    elif (
+        net_edge_bps is not None
+        and min_net_edge_bps is not None
+        and net_edge_bps <= min_net_edge_bps
+    ):
+        reason = "net_edge_not_above_minimum"
+    else:
+        reason = "counterfactual_not_passed"
+    edge_text = f"{net_edge_bps:.2f}" if net_edge_bps is not None else "n/a"
+    min_edge_text = f"{min_net_edge_bps:.2f}" if min_net_edge_bps is not None else "n/a"
+    summary = (
+        f"Replay economics {'qualified' if qualified else 'not qualified'}: "
+        f"{sample_size} of {min_samples} capped samples, net edge {edge_text} bps "
+        f"(minimum {min_edge_text} bps)."
+    )
+    if withheld_attention_flag:
+        summary += (
+            " Paper mode: informational, not a parity failure, so the replay "
+            "parity attention flag is not raised."
+        )
+    return {
+        "check": REPLAY_ECONOMICS_CHECK,
+        "required": required,
+        "available": available,
+        "qualified": qualified,
+        "sample_size": sample_size,
+        "min_samples": min_samples,
+        "net_edge_bps": net_edge_bps,
+        "min_net_edge_bps": min_net_edge_bps,
+        "failed_criteria": failed_criteria,
+        "reason": reason,
+        "withheld_attention_flag": withheld_attention_flag,
+        "summary": summary,
+    }
+
+
+_REPLAY_ECONOMICS_FAILURE_REASONS = frozenset(
+    {"insufficient_samples", "net_edge_not_above_minimum", "counterfactual_not_passed"}
+)
+_PAPER_EXECUTION_MODES = frozenset({"paper", "sim", "simulation"})
+_EXPLICIT_FALSE_TOKENS = frozenset({"", "0", "false", "no", "off"})
+
+
+def _paper_mode_withhold_blockers(
+    *, launch_profile: Any, launch_profile_name: str
+) -> list[str]:
+    """Reasons paper mode is not positively evidenced; any keeps the flag.
+
+    Used only to decide whether the replay parity flag may be withheld.
+    """
+
+    blockers: list[str] = []
+    if launch_profile is None or launch_profile_name in {"", "unknown"}:
+        blockers.append("launch_profile_unresolved")
+    elif launch_profile_name.startswith("live_"):
+        blockers.append("launch_profile_live")
+    try:
+        # Raw variable only: the config default must not count as evidence.
+        raw_mode = get_env("EXECUTION_MODE", None, cast=str, resolve_aliases=False)
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        raw_mode = None
+    if _normalized_token(raw_mode) not in _PAPER_EXECUTION_MODES:
+        blockers.append("execution_mode_not_explicit_paper")
+    try:
+        from ai_trading.config.management import get_trading_config
+
+        config_paper = getattr(get_trading_config(), "paper", None)
+    except _HEALTH_FALLBACK_EXC:
+        config_paper = None
+    if config_paper is not True:
+        blockers.append("runtime_paper_inference_not_paper")
+    try:
+        raw_enforce = get_env(
+            "AI_TRADING_HEALTH_REPLAY_GATE_ENFORCE_IN_PAPER",
+            None,
+            cast=str,
+            resolve_aliases=False,
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        raw_enforce = "unreadable"
+    if _normalized_token(raw_enforce) not in _EXPLICIT_FALSE_TOKENS:
+        blockers.append("paper_enforcement_setting_not_false")
+    return blockers
+
+
+def _runtime_replay_gate_withhold_blockers(
+    record: Any,
+    *,
+    service_reason_normalized: str,
+    health_replay_policy_hash: str,
+) -> list[str]:
+    """Reasons the trading cycle's own gate does not confirm economics-only.
+
+    The health snapshot has no expected policy hash, so the cycle's result only
+    counts for a replay artifact whose policy hash equals the hash the cycle
+    expected. A later artifact with that same hash is still covered by
+    health's own freshness and violation checks.
+    """
+
+    if not isinstance(record, Mapping):
+        return ["runtime_gate_missing"]
+    blockers: list[str] = []
+    if record.get("error"):
+        blockers.append("runtime_gate_error")
+    if record.get("enabled") is not True or record.get("available") is not True:
+        blockers.append("runtime_gate_unavailable")
+    runtime_failed = record.get("failed_checks")
+    if not isinstance(runtime_failed, list):
+        blockers.append("runtime_failed_checks_unknown")
+    elif runtime_failed != [REPLAY_ECONOMICS_CHECK]:
+        blockers.append("runtime_gate_not_economics_only")
+    if (
+        service_reason_normalized == REPLAY_PARITY_ATTENTION_FLAG
+        and _normalized_token(record.get("service_reason")) != REPLAY_PARITY_ATTENTION_FLAG
+    ):
+        blockers.append("runtime_gate_stale_for_service_reason")
+    expected_hash = record.get("expected_policy_hash")
+    if not isinstance(expected_hash, str) or not expected_hash.strip():
+        blockers.append("runtime_expected_policy_hash_missing")
+    elif health_replay_policy_hash != expected_hash.strip():
+        blockers.append("replay_policy_hash_mismatch")
+    return blockers
+
+
+def _is_real_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _replay_counterfactual_evaluated(gate: Mapping[str, Any]) -> bool:
+    """True only when the replay artifact holds a genuinely evaluated failure.
+
+    ``passed`` must be a real ``False``, the sample-size and net-edge inputs
+    must be present and numeric in the artifact (not defaulted by the gate),
+    and at least one economics criterion must have failed.
+    """
+
+    governance = gate.get("replay_governance")
+    if not isinstance(governance, Mapping):
+        return False
+    counterfactual = governance.get("counterfactual")
+    if not isinstance(counterfactual, Mapping) or counterfactual.get("passed") is not False:
+        return False
+    candidate = counterfactual.get("candidate")
+    required = counterfactual.get("required")
+    criteria = counterfactual.get("checks")
+    if not (
+        isinstance(candidate, Mapping)
+        and isinstance(required, Mapping)
+        and isinstance(criteria, Mapping)
+    ):
+        return False
+    if not all(
+        _is_real_number(value)
+        for value in (
+            candidate.get("sample_count"),
+            candidate.get("net_edge_bps"),
+            required.get("min_samples"),
+            required.get("min_net_edge_bps"),
+        )
+    ):
+        return False
+    return any(passed is not True for passed in criteria.values())
+
+
+def _running_policy_hash_blockers(
+    running: Any,
+    *,
+    expected_policy_hash: Any,
+    health_replay_policy_hash: str,
+) -> list[str]:
+    """The running policy hash must match what the cycle and health checked.
+
+    The running hash can be recompiled without a replay gate evaluation (for
+    example while the market is closed, or while the cycle reuses its cached
+    gate), so a cycle result only counts for the hash still running.
+    """
+
+    running_hash = running.get("policy_hash") if isinstance(running, Mapping) else None
+    if not isinstance(running_hash, str) or not running_hash.strip():
+        return ["running_policy_hash_missing"]
+    running_hash = running_hash.strip()
+    expected = expected_policy_hash.strip() if isinstance(expected_policy_hash, str) else ""
+    if running_hash != expected or running_hash != health_replay_policy_hash:
+        return ["running_policy_hash_mismatch"]
+    return []
+
+
+def _oms_lifecycle_limits_blockers() -> list[str]:
+    """Health and the cycle must scan the same number of OMS lifecycle rows.
+
+    Each limit is read exactly as its own call site reads it.
+    """
+
+    try:
+        health_limit = int(
+            get_env(
+                "AI_TRADING_HEALTH_OMS_LIFECYCLE_PARITY_LIMIT",
+                5000,
+                cast=int,
+                resolve_aliases=False,
+            )
+        )
+        cycle_limit = int(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_OMS_LIFECYCLE_PARITY_LIMIT",
+                5000,
+                cast=int,
+            )
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS:
+        return ["oms_lifecycle_limits_unreadable"]
+    return [] if health_limit == cycle_limit else ["oms_lifecycle_limits_differ"]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1709,6 +1990,145 @@ def build_runtime_health_payload(
         if isinstance(failed_checks_raw, (list, tuple, set))
         else []
     )
+    # Display only: in monitor-only paper mode, the parity attention flag is
+    # withheld when both the health snapshot and the trading cycle's own gate
+    # fail only the economics (counterfactual) check. The gate's
+    # ok/failed_checks, readiness and entry control are computed as before.
+    replay_parity_failed_checks = [
+        check for check in failed_checks if check != REPLAY_ECONOMICS_CHECK
+    ]
+    replay_economics_only_failure = bool(
+        replay_gate_enabled
+        and replay_gate_available
+        and not replay_gate_ok
+        and failed_checks == [REPLAY_ECONOMICS_CHECK]
+    )
+    replay_live_parity_gate_payload: dict[str, Any] = replay_live_parity_gate
+    if paper_evidence_mode and replay_gate_enabled:
+        runtime_gate_record = _safe_observe(
+            runtime_state.observe_replay_live_parity_runtime_gate, None
+        )
+        runtime_failed_raw = (
+            runtime_gate_record.get("failed_checks")
+            if isinstance(runtime_gate_record, Mapping)
+            else None
+        )
+        runtime_failed_checks = (
+            [str(item) for item in runtime_failed_raw]
+            if isinstance(runtime_failed_raw, list)
+            else None
+        )
+        economics_reason = _replay_economics_summary(
+            replay_live_parity_gate, withheld_attention_flag=None
+        )["reason"]
+        withhold_blockers: list[str] = []
+        if not replay_gate_monitor_only:
+            withhold_blockers.append("replay_gate_not_monitor_only")
+        if not replay_economics_only_failure:
+            withhold_blockers.append("health_gate_not_economics_only")
+        if economics_reason not in _REPLAY_ECONOMICS_FAILURE_REASONS:
+            withhold_blockers.append(f"economics_{economics_reason}")
+        elif not _replay_counterfactual_evaluated(replay_live_parity_gate):
+            withhold_blockers.append("economics_counterfactual_not_evaluated")
+        withhold_blockers.extend(
+            _paper_mode_withhold_blockers(
+                launch_profile=launch_profile,
+                launch_profile_name=launch_profile_name,
+            )
+        )
+        health_observed_raw = replay_live_parity_gate.get("observed")
+        health_replay_policy_hash = str(
+            (
+                health_observed_raw.get("replay_policy_hash")
+                if isinstance(health_observed_raw, Mapping)
+                else ""
+            )
+            or ""
+        ).strip()
+        runtime_blockers = _runtime_replay_gate_withhold_blockers(
+            runtime_gate_record,
+            service_reason_normalized=service_reason_normalized,
+            health_replay_policy_hash=health_replay_policy_hash,
+        )
+        withhold_blockers.extend(runtime_blockers)
+        running_policy_record = _safe_observe(
+            runtime_state.observe_running_effective_policy_hash, None
+        )
+        running_policy_map = (
+            running_policy_record if isinstance(running_policy_record, Mapping) else {}
+        )
+        running_blockers = _running_policy_hash_blockers(
+            running_policy_record,
+            expected_policy_hash=(
+                runtime_gate_record.get("expected_policy_hash")
+                if isinstance(runtime_gate_record, Mapping)
+                else None
+            ),
+            health_replay_policy_hash=health_replay_policy_hash,
+        )
+        withhold_blockers.extend(running_blockers)
+        withhold_blockers.extend(_oms_lifecycle_limits_blockers())
+        replay_attention_flag_withheld = bool(
+            not withhold_blockers
+            and REPLAY_PARITY_ATTENTION_FLAG in attention_flags
+        )
+        if replay_attention_flag_withheld:
+            attention_flags = [
+                flag
+                for flag in attention_flags
+                if flag != REPLAY_PARITY_ATTENTION_FLAG
+            ]
+        parity_failed_union = list(replay_parity_failed_checks)
+        runtime_union_checks = list(runtime_failed_checks or [])
+        if (
+            "replay_policy_hash_mismatch" in runtime_blockers
+            or "running_policy_hash_mismatch" in running_blockers
+        ):
+            runtime_union_checks.append("replay_contract")
+        for check in runtime_union_checks:
+            if check != REPLAY_ECONOMICS_CHECK and check not in parity_failed_union:
+                parity_failed_union.append(check)
+        runtime_parity_ok = not running_blockers and not [
+            blocker
+            for blocker in runtime_blockers
+            if blocker != "runtime_gate_not_economics_only"
+        ] and not [
+            check
+            for check in runtime_failed_checks or []
+            if check != REPLAY_ECONOMICS_CHECK
+        ]
+        runtime_record_map = (
+            runtime_gate_record if isinstance(runtime_gate_record, Mapping) else {}
+        )
+        replay_live_parity_gate_payload = {
+            **replay_live_parity_gate,
+            "parity_ok": bool(
+                replay_gate_available
+                and (replay_gate_ok or replay_economics_only_failure)
+                and runtime_parity_ok
+            ),
+            "parity_failed_checks": parity_failed_union,
+            "runtime_failed_checks": runtime_failed_checks,
+            "runtime_gate_evaluated_at": runtime_record_map.get("evaluated_at"),
+            "runtime_gate_published_at": runtime_record_map.get("published_at"),
+            "runtime_expected_policy_hash": runtime_record_map.get(
+                "expected_policy_hash"
+            ),
+            "runtime_replay_policy_hash": runtime_record_map.get("replay_policy_hash"),
+            "runtime_replay_artifact_ts": runtime_record_map.get("replay_artifact_ts"),
+            "health_replay_policy_hash": health_replay_policy_hash or None,
+            "running_policy_hash": running_policy_map.get("policy_hash"),
+            "running_policy_hash_published_at": running_policy_map.get("published_at"),
+            "attention_flag_withhold_blockers": withhold_blockers,
+            "replay_economics": _replay_economics_summary(
+                replay_live_parity_gate,
+                withheld_attention_flag=(
+                    REPLAY_PARITY_ATTENTION_FLAG
+                    if replay_attention_flag_withheld
+                    else None
+                ),
+            ),
+        }
     if replay_gate_failure:
         entry_stage = "shadow"
     elif paper_evidence_mode:
@@ -1789,7 +2209,7 @@ def build_runtime_health_payload(
         "database": database_readiness,
         "oms_invariants": oms_invariants,
         "oms_lifecycle_parity": oms_lifecycle_parity,
-        "replay_live_parity_gate": replay_live_parity_gate,
+        "replay_live_parity_gate": replay_live_parity_gate_payload,
         "trade_updates_stream": trade_updates_stream,
         "readiness_gates": readiness_gates,
         "readiness_failures": readiness_failures,

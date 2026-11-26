@@ -4,6 +4,7 @@ from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
 import importlib
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_trading.config.management import get_env
@@ -14,11 +15,40 @@ from ai_trading.governance.entry_control import (
     REPLAY_LIVE_PARITY_GATE_ATTR,
     build_replay_live_entry_control,
 )
+from ai_trading.telemetry import runtime_state
 
 _REPLAY_LIVE_PARITY_GATE_CACHE: dict[str, Any] = {
     "updated_mono": 0.0,
     "gate": None,
 }
+
+
+def _publish_replay_live_parity_runtime_gate(
+    *,
+    be: Any,
+    gate: dict[str, Any],
+    required: bool,
+    service_reason: str | None,
+    evaluated_at: str | None,
+) -> None:
+    """Record the cycle's gate for the health display; never affects the cycle."""
+
+    try:
+        runtime_state.update_replay_live_parity_runtime_gate(
+            gate=gate,
+            required=required,
+            service_reason=service_reason,
+            evaluated_at=evaluated_at,
+        )
+    except AI_TRADING_FALLBACK_EXCEPTIONS as exc:
+        be.logger.warning(
+            "REPLAY_PARITY_RUNTIME_GATE_PUBLISH_FAILED",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
+
+
+def _utc_iso(moment: datetime) -> str:
+    return moment.isoformat().replace("+00:00", "Z")
 
 
 def _replay_live_parity_gate_cache_ttl_seconds() -> float:
@@ -102,7 +132,20 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
         )
     )
     if not enabled and not required:
-        return {"enabled": False, "available": False, "ok": True, "status": "disabled"}
+        disabled_gate: dict[str, Any] = {
+            "enabled": False,
+            "available": False,
+            "ok": True,
+            "status": "disabled",
+        }
+        _publish_replay_live_parity_runtime_gate(
+            be=be,
+            gate=disabled_gate,
+            required=required,
+            service_reason=None,
+            evaluated_at=_utc_iso(datetime.now(UTC)),
+        )
+        return disabled_gate
     ttl_seconds = _replay_live_parity_gate_cache_ttl_seconds()
     now_mono = time.monotonic()
     cached_gate = _REPLAY_LIVE_PARITY_GATE_CACHE.get("gate")
@@ -115,7 +158,12 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
     ):
         gate = dict(cached_gate)
         gate["cache_age_s"] = round(float(cached_age), 3)
+        # The cache stamp is taken when the cached gate was evaluated.
+        evaluated_at = _utc_iso(
+            datetime.now(UTC) - timedelta(seconds=max(0.0, float(cached_age)))
+        )
     if gate is None:
+        evaluated_at = _utc_iso(datetime.now(UTC))
         try:
             from ai_trading.governance.replay_live_parity import summarize_replay_live_parity_gate
             from ai_trading.tools.runtime_performance_report import summarize_oms_lifecycle_parity
@@ -139,7 +187,18 @@ def _evaluate_replay_live_parity_gate(*, state: Any, runtime: Any, be: Any) -> d
             _REPLAY_LIVE_PARITY_GATE_CACHE["gate"] = dict(gate)
     setattr(state, "replay_live_parity_gate", gate)
     setattr(runtime, "replay_live_parity_gate", gate)
-    if required and gate.get("enabled", False) and not bool(gate.get("ok")):
+    sets_failed_reason = bool(
+        required and gate.get("enabled", False) and not bool(gate.get("ok"))
+    )
+    # Display-only record for the health payload; it changes no decision here.
+    _publish_replay_live_parity_runtime_gate(
+        be=be,
+        gate=gate,
+        required=required,
+        service_reason="replay_live_parity_gate_failed" if sets_failed_reason else None,
+        evaluated_at=evaluated_at,
+    )
+    if sets_failed_reason:
         be.logger.warning(
             "REPLAY_LIVE_PARITY_GATE_BLOCKED",
             extra={

@@ -26673,6 +26673,15 @@ def _compile_effective_policy_runtime(
     setattr(state, "_effective_policy", policy)
     state.effective_policy_hash = str(policy.policy_hash)
     state.effective_policy_config_hash = resolved_config_hash
+    # Display-only: lets health compare the running hash with the replay
+    # artifact even while the cycle is not evaluating the replay gate.
+    try:
+        runtime_state.update_running_effective_policy_hash(str(policy.policy_hash))
+    except BOT_ENGINE_FALLBACK_EXC as exc:
+        logger.warning(
+            "EFFECTIVE_POLICY_HASH_PUBLISH_FAILED",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
     if previous_hash != policy.policy_hash:
         logger.info(
             "EFFECTIVE_POLICY_COMPILED",
