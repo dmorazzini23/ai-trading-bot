@@ -1,6 +1,38 @@
 # Current handoff
 
-## November 26: backstop first-cycle fix and paper-only parity flag scoping deployed (`892b254f4`) (start here)
+## November 27: unreachable `SignalManager.evaluate` path removed and deployed (`768800ff5`) (start here)
+
+- **Running bot:** `768800ff5` since 22:54:39 UTC November 27 (market closed,
+  flat at deploy), no restarts, health `healthy`. Config hash unchanged
+  (`043df350…`). Full suite on this commit: 6,888 passed, 2 skipped. The
+  packaged systemd unit is installed (owner, 04:24 UTC November 27).
+- **Deployed:** `SignalManager.evaluate`, `evaluate_signal_and_confirm`, the
+  per-indicator `signal_*` methods, the signal weight loader, the meta seed
+  helpers and the bot_engine `load_global_signal_performance` (1,655 lines,
+  with the tests that covered only them). Independent review: merge as is.
+- **`.env`:** nine unread `AI_TRADING_META_*` weighting names removed (1,608
+  lines). `AI_TRADING_REGIME_SIGNAL_ROUTING_ENABLED` is still set and still a
+  Settings field, but nothing consumes it.
+- **Rollback:** stop, `git checkout --detach 892b254f4`, restore
+  `runtime/release_spec.892b254f4.bak.json`, start.
+- **November 27 session on `892b254f4` (half day):** clean. Backstop armed on
+  the first cycle for every new position, the paper parity flag cleared, the
+  stall alert stayed quiet, the bot ended flat. The end-of-day exit was not
+  exercised (positions closed on reversals).
+- **Open finding, not caused by this change:** `BotState.current_regime` is
+  frozen at `"sideways"`. Its only writer, `check_market_regime`, has no
+  caller. Live readers: `netting_symbol_prelude.py` (exit-pressure context),
+  `update_bot_mode`, telemetry. Do not delete `check_market_regime` as dead
+  code before the owner decides between wiring it back in and removing the
+  field; an investigation is in progress.
+- **Still dead, left in place for a later batch:** the `SignalManager` shell,
+  `_fetch_sentiment_ctx` and its helpers, the six-hourly `update_signal_weights`
+  job (writes a file nothing reads), the `bot_signals_evaluated_total` metric.
+- **In progress (not merged):** `claude/earnings-trial-runner` (runner, draft
+  contract, and the decision sheet with the owner's November 26 approvals;
+  nothing registered; waits on Sharadar data).
+
+## November 26: backstop first-cycle fix and paper-only parity flag scoping deployed (`892b254f4`)
 
 - **Running bot:** `892b254f4` since 04:46:07 UTC November 26 (market closed,
   flat at deploy), no restarts, health `healthy`. Config hash unchanged
