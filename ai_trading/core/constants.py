@@ -9,6 +9,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 MARKET_TIMEZONE = ZoneInfo("America/New_York")
+# Fixed historical label, not a detected regime. The removed
+# ``BotState.current_regime`` field was never written on the netting path, so
+# every record carried its "sideways" default; keep writing it unchanged.
+RECORDED_MARKET_REGIME_LABEL = "sideways"
 MARKET_HOURS = {
     'PRE_MARKET_START': time(4, 0),
     'MARKET_OPEN': time(9, 30),

@@ -10,7 +10,7 @@ from ai_trading.core.netting_symbol_prelude import prepare_netting_symbol_prelud
 def _base_kwargs() -> dict[str, Any]:
     bar_ts = datetime(2026, 4, 19, 15, 29, tzinfo=UTC)
     return {
-        "state": SimpleNamespace(current_regime="sideways"),
+        "state": SimpleNamespace(),
         "symbol": "AAPL",
         "now": datetime(2026, 4, 19, 15, 30, tzinfo=UTC),
         "current_shares": 5,
@@ -84,3 +84,24 @@ def test_prepare_netting_symbol_prelude_scales_capital_ramp() -> None:
     assert result.target_dollars == 400.0
     assert "CAPITAL_RAMP_SCALE" in result.gates_added
     assert result.snapshot_updates["capital_ramp"]["multiplier"] == 0.4
+
+
+def test_prepare_netting_symbol_prelude_passes_fixed_sideways_regime_label() -> None:
+    """The exit-pressure context always received "sideways"; it still does."""
+    captured: list[dict[str, Any]] = []
+    kwargs = _base_kwargs()
+    # A state carrying an unrelated regime attribute must not change the label.
+    kwargs["state"] = SimpleNamespace(current_regime="trending")
+    kwargs["alpha_time_stop_enabled"] = True
+    kwargs["alpha_time_stop_sec"] = 60.0
+    kwargs["position_opened_at_func"] = lambda state, symbol: datetime(
+        2026, 4, 19, 15, 0, tzinfo=UTC
+    )
+    kwargs["exit_policy_pressure_context_func"] = (
+        lambda *args, **inner: captured.append(dict(inner)) or {}
+    )
+
+    prepare_netting_symbol_prelude(**cast(Any, kwargs))
+
+    assert len(captured) == 1
+    assert captured[0]["regime"] == "sideways"

@@ -709,7 +709,7 @@ def build_decision_journal(record: Any) -> DecisionJournalEntry:
         }
     for target_key, source_keys in {
         "session_regime": ("session_regime", "session_bucket"),
-        "market_regime": ("market_regime", "current_regime", "regime_profile"),
+        "market_regime": ("market_regime", "regime_profile"),
         "regime_profile": ("regime_profile", "regime_signal_profile"),
         "volatility_regime": ("volatility_regime",),
         "trend_regime": ("trend_regime",),

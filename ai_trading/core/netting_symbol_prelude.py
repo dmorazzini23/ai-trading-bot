@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Callable, Collection, Mapping
 
 from ai_trading.config.management import get_env
+from ai_trading.core.constants import RECORDED_MARKET_REGIME_LABEL
 from ai_trading.core.netting_position_backstop import exit_override_gate
 
 
@@ -129,7 +130,7 @@ def prepare_netting_symbol_prelude(
             exit_policy_context = exit_policy_pressure_context_func(
                 state,
                 symbol=symbol,
-                regime=str(getattr(state, "current_regime", "sideways") or "sideways"),
+                regime=RECORDED_MARKET_REGIME_LABEL,
                 side=side_for_exit_policy,
                 now=now,
                 position_age_seconds=float(position_age_seconds),

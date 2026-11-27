@@ -100,6 +100,7 @@ from ai_trading.alpaca_api import (
     is_alpaca_service_available,
 )
 from ai_trading.utils.base import is_market_open as _is_market_open_base
+from ai_trading.core.constants import RECORDED_MARKET_REGIME_LABEL
 from ai_trading.core.enums import OrderSide as CoreOrderSide
 from ai_trading.core.dependency_breakers import DependencyBreakers
 from ai_trading.core.errors import ErrorAction, ErrorCategory, ErrorInfo, classify_exception
@@ -1747,9 +1748,7 @@ def _record_prerank_shadow_snapshot(
         "quote_status": _ml_shadow_quote_snapshot(),
         "session_regime": _session_bucket_from_ts(datetime.now(UTC)),
         "regime_profile": get_regime_signal_profile(),
-        "market_regime": _normalize_regime_name(
-            getattr(getattr(runtime, "state", None), "current_regime", "sideways")
-        ),
+        "market_regime": RECORDED_MARKET_REGIME_LABEL,
     }
     _record_shadow_prediction(payload)
 
@@ -9622,7 +9621,6 @@ class BotState:
         week_start_equity (Optional[tuple[date, float]]): Weekly equity baseline for performance tracking
         last_drawdown (float): Most recent portfolio drawdown percentage (-1.0 to 0.0)
         running (bool): Current execution state of the trading loop
-        current_regime (str): Detected market regime ('bull', 'bear', 'sideways', 'volatile')
         mode_obj (BotMode): Trading mode configuration (conservative/balanced/aggressive)
         position_cache (Dict[str, int]): Cached broker positions to avoid redundant API calls
         last_run_at (Optional[datetime]): Timestamp of last trading cycle execution
@@ -9633,10 +9631,9 @@ class BotState:
     Examples:
         >>> state = BotState()
         >>> state.running = True
-        >>> state.current_regime = "bull"
         >>> state.position_cache['AAPL'] = 100  # 100 shares long
-        >>> logging.info(f"Bot running: {state.running}, Regime: {state.current_regime}")
-        Bot running: True, Regime: bull
+        >>> logging.info(f"Bot running: {state.running}")
+        Bot running: True
 
     Note:
         This class uses dataclass fields with default factories to ensure proper
@@ -9650,7 +9647,6 @@ class BotState:
 
     # Operational State
     running: bool = False
-    current_regime: str = "sideways"
     mode_obj: BotMode = field(default_factory=lambda: BotMode(_resolve_runtime_trading_mode()))
 
     # Position Management
@@ -16894,104 +16890,6 @@ def detect_regime(df: pd.DataFrame) -> str:
 regime_model = None
 
 
-def _market_breadth(ctx: BotContext) -> float:
-    syms = load_tickers(TICKERS_FILE)[:20]
-    up = 0
-    total = 0
-    for sym in syms:
-        df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is None or len(df) < 2:
-            continue
-        total += 1
-        if df["close"].iloc[-1] > df["close"].iloc[-2]:
-            up += 1
-    return up / total if total else 0.5
-
-
-def detect_regime_state(ctx: BotContext) -> str:
-    """
-    Inspect recent returns/volatility/volume breadth to classify the regime.
-    NOTE: Previously this used a free/global `ctx`. We now pass the explicit
-    runtime.
-    """
-    try:
-        df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
-        if df is None or len(df) < 200:
-            return "sideways"
-        atr14 = ta.atr(df["high"], df["low"], df["close"], length=14).iloc[-1]
-        atr50 = ta.atr(df["high"], df["low"], df["close"], length=50).iloc[-1]
-        high_vol = atr50 > 0 and atr14 / atr50 > 1.5
-        sma50 = df["close"].rolling(50).mean().iloc[-1]
-        sma200 = df["close"].rolling(200).mean().iloc[-1]
-        trend = sma50 - sma200
-        breadth = _market_breadth(ctx)
-        if high_vol:
-            return "high_volatility"
-        if abs(trend) / sma200 < 0.005:
-            return "sideways"
-        if trend > 0 and breadth > 0.55:
-            return "trending"
-        if trend < 0 and breadth < 0.45:
-            return "mean_reversion"
-        return "sideways"
-    except (KeyError, ValueError, TypeError) as e:
-        logger.warning(
-            "REGIME_DETECT_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        return "sideways"
-
-
-def _regime_allows_trading(regime: Any) -> bool:
-    """Return whether trading should proceed for the resolved regime."""
-
-    allow_trading_attr = getattr(regime, "allow_trading", None)
-    if allow_trading_attr is not None:
-        return bool(allow_trading_attr)
-
-    regime_name_raw: Any = regime
-    if isinstance(regime, Mapping):
-        if "allow_trading" in regime:
-            return bool(regime.get("allow_trading"))
-        regime_name_raw = regime.get("name", regime_name_raw)
-
-    normalized_regime = _normalize_regime_name(regime_name_raw)
-    blocked_raw = str(get_env("AI_TRADING_BLOCKED_REGIMES", "", cast=str) or "").strip()
-    blocked_regimes = {
-        _normalize_regime_name(token)
-        for token in blocked_raw.split(",")
-        if token and token.strip()
-    }
-    if normalized_regime in blocked_regimes:
-        return False
-    if normalized_regime in {"blocked", "disabled", "halt", "risk_off"}:
-        return False
-    return True
-
-
-def check_market_regime(runtime: BotContext, state: BotState) -> bool:
-    """
-    Evaluate the current market regime and update state.current_regime.
-    Returns True/False indicating whether trading is allowed under this regime.
-    """
-    try:
-        # AI-AGENT-REF: pass runtime explicitly into regime detection
-        state.current_regime = detect_regime_state(runtime)
-        trading_allowed = _regime_allows_trading(state.current_regime)
-        if not trading_allowed:
-            logger.info(
-                "REGIME_BLOCKED",
-                extra={"regime": _normalize_regime_name(state.current_regime)},
-            )
-        return trading_allowed
-    except (KeyError, ValueError, TypeError) as e:
-        logger.warning(
-            "REGIME_DETECT_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        return False
-
-
 def _safe_env_int(key: str, default: int) -> int:
     try:
         value = int(get_env(key, str(default), cast=int))
@@ -17247,11 +17145,8 @@ def update_bot_mode(state: BotState) -> None:
 
         avg_r = _average_reward()
         dd = _current_drawdown()
-        regime = state.current_regime
         if dd > 0.05 or avg_r < -0.01:
             new_mode = "conservative"
-        elif avg_r > 0.05 and regime == "trending":
-            new_mode = "aggressive"
         else:
             new_mode = "balanced"
 
@@ -17275,7 +17170,7 @@ def update_bot_mode(state: BotState) -> None:
                 "new_mode": new_mode,
                 "avg_reward": avg_r,
                 "drawdown": dd,
-                "regime": regime,
+                "regime": RECORDED_MARKET_REGIME_LABEL,
                 "precedence_policy": str(getattr(cfg, "trading_mode_precedence", "strict_mode")),
             },
         )
@@ -26502,9 +26397,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         payload["execution_profile"] = (
             "paper_sampling_passive" if paper_sampling_passive else "standard"
         )
-        payload["market_regime"] = _normalize_regime_name(
-            getattr(state, "current_regime", "")
-        )
+        payload["market_regime"] = RECORDED_MARKET_REGIME_LABEL
         return payload
 
     def _decision_replay_entry_control() -> Mapping[str, Any] | None:

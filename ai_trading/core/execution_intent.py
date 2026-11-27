@@ -57,7 +57,6 @@ def _regime_context_from_snapshot(
     )
     market_regime = (
         _safe_text(config_snapshot.get("market_regime"))
-        or _safe_text(config_snapshot.get("current_regime"))
         or regime_profile
     )
     volatility_regime = _safe_text(config_snapshot.get("volatility_regime"))

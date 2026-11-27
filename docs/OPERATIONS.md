@@ -599,6 +599,15 @@ approval before restarting, or startup is refused. The config snapshot hash
 changes too, so on the first paper cycle the burn-in counters reset with reason
 `config_hash_changed` (see `ai_trading/governance/rollout.py`).
 
+Since the removal of the never-written `BotState.current_regime` field and its
+uncalled detector (`check_market_regime`), nothing reads
+`AI_TRADING_BLOCKED_REGIMES` any more; it can be deleted from `.env`. Decision
+records and shadow prerank snapshots still write `market_regime: "sideways"`,
+a fixed historical label rather than a detected regime, and adaptive mode
+switching (`update_bot_mode`) chooses only between `conservative` and
+`balanced`, as it already did in practice. This change touches no ConfigSpec
+or Settings field, so the resolved config hash is unchanged.
+
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
 evaluation continue, and the replay-blocked decision source is retained as

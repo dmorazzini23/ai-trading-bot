@@ -458,7 +458,6 @@ class DecisionRecorder:
             primary_debug.get("regime"),
             quote_snapshot.get("market_regime"),
             config_payload.get("market_regime"),
-            config_payload.get("current_regime"),
         )
         if market_regime:
             normalized_market_regime = market_regime.lower()
