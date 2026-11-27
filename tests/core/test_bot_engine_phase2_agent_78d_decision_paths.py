@@ -772,6 +772,11 @@ def test_get_latest_price_disabled_invalid_and_deferred_backup_paths(
     assert bot_engine.get_price_source("NVDA") == "latest_close_used"
 
 
+def _fetch_sentiment(engine: Any, ticker: str) -> float:
+    # The removed _fetch_sentiment_ctx wrapper called fetch_sentiment exactly so.
+    return engine.fetch_sentiment(SimpleNamespace(), ticker, ttl_s=600, session=engine.http)
+
+
 def test_sentiment_fetch_cache_circuit_rate_limit_and_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -818,10 +823,10 @@ def test_sentiment_fetch_cache_circuit_rate_limit_and_success(
             return {"articles": [{"title": "Good", "description": "Strong demand"}]}
 
     monkeypatch.setattr(bot_engine.http, "get", lambda *args, **kwargs: Response())
-    assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "AAPL") == pytest.approx(0.42)
+    assert _fetch_sentiment(bot_engine, "AAPL") == pytest.approx(0.42)
 
     bot_engine._SENTIMENT_CACHE["AAPL"] = (995.0, 0.7)
-    assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "AAPL") == 0.7
+    assert _fetch_sentiment(bot_engine, "AAPL") == 0.7
 
     class RateLimited(Response):
         status_code = 429
@@ -829,13 +834,13 @@ def test_sentiment_fetch_cache_circuit_rate_limit_and_success(
     bot_engine._SENTIMENT_CACHE.clear()
     sentiment_mod._sentiment_cache.clear()
     monkeypatch.setattr(bot_engine.http, "get", lambda *args, **kwargs: RateLimited())
-    assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "MSFT") == 0.0
+    assert _fetch_sentiment(bot_engine, "MSFT") == 0.0
     assert bot_engine._SENTIMENT_CACHE["MSFT"][1] == 0.0
 
     bot_engine._SENTIMENT_CACHE["TSLA"] = (999.0, -0.3)
     sentiment_mod._sentiment_cache["TSLA"] = (999.0, -0.3)
     monkeypatch.setattr(sentiment_mod, "_check_sentiment_circuit_breaker", lambda: False)
-    assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "TSLA") == -0.3
+    assert _fetch_sentiment(bot_engine, "TSLA") == -0.3
 
 
 def test_sentiment_missing_key_and_request_fallback(
@@ -854,7 +859,7 @@ def test_sentiment_missing_key_and_request_fallback(
     monkeypatch.setattr(sentiment_mod, "get_settings", lambda: missing_settings)
     monkeypatch.setattr(bot_engine, "get_news_api_key", lambda: None)
     with pytest.raises(RuntimeError, match="missing_api_key"):
-        bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "AAPL")
+        _fetch_sentiment(bot_engine, "AAPL")
 
     settings = SimpleNamespace(
         sentiment_api_key="key",
@@ -874,7 +879,7 @@ def test_sentiment_missing_key_and_request_fallback(
         raise bot_engine.requests.exceptions.RequestException("down")
 
     monkeypatch.setattr(bot_engine.http, "get", raise_request)
-    assert bot_engine._fetch_sentiment_ctx(SimpleNamespace(), "MSFT") == 0.0
+    assert _fetch_sentiment(bot_engine, "MSFT") == 0.0
     assert bot_engine._SENTIMENT_CACHE["MSFT"][1] == 0.0
 
 

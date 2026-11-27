@@ -1098,7 +1098,6 @@ def ensure_alpaca_attached(ctx: Any) -> None:
 from ai_trading.config.settings import (
     sentiment_retry_max,
     sentiment_backoff_base,
-    sentiment_backoff_strategy,
 )
 from ai_trading.data.provider_monitor import (
     activate_data_kill_switch,
@@ -1114,7 +1113,6 @@ _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 SENTIMENT_SUCCESS_TTL_SEC: int = int(get_env("SENTIMENT_SUCCESS_TTL_SEC", "900"))
 SENTIMENT_MAX_RETRIES: int = sentiment_retry_max()
 SENTIMENT_BACKOFF_BASE: float = sentiment_backoff_base()
-SENTIMENT_BACKOFF_STRATEGY: str = sentiment_backoff_strategy()
 SENTIMENT_MAX_CALLS_PER_MIN: int = int(get_env("SENTIMENT_MAX_CALLS_PER_MIN", "0"))
 _SENTIMENT_CALL_TIMES: deque[float] = deque()
 
@@ -5159,14 +5157,6 @@ def fetch_sentiment(
     return _cache_sentiment_score(ticker, max(-1.0, min(1.0, score)))
 
 
-def _sentiment_evidence_is_authoritative(ticker: str) -> bool:
-    try:
-        evidence = _canonical_sentiment_module().get_sentiment_evidence(ticker)
-    except (AttributeError, RuntimeError, ValueError, TypeError):
-        return False
-    return bool(isinstance(evidence, Mapping) and evidence.get("authoritative") is True)
-
-
 def _runtime_execution_mode() -> str:
     try:
         raw = get_env("EXECUTION_MODE", "sim")
@@ -6414,7 +6404,6 @@ from ai_trading.utils.retry import (
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    wait_random,
 )
 
 # AI-AGENT-REF: lazy ichimoku setup to avoid pandas_ta import in tests
@@ -6920,7 +6909,6 @@ _METRICS_READY = False
 orders_total = None
 order_failures = None
 daily_drawdown = None
-signals_evaluated = None
 run_all_trades_duration = None
 minute_cache_hit = None
 minute_cache_miss = None
@@ -6943,7 +6931,7 @@ rl_eval_skips_total = None
 
 def _init_metrics() -> None:
     """Create/register metrics once; tolerate partial imports & re-imports."""
-    global _METRICS_READY, orders_total, order_failures, daily_drawdown, signals_evaluated
+    global _METRICS_READY, orders_total, order_failures, daily_drawdown
     global run_all_trades_duration, minute_cache_hit, minute_cache_miss, daily_cache_hit, daily_cache_miss
     global event_cooldown_hits, slippage_total, slippage_count, weekly_drawdown, skipped_duplicates, skipped_cooldown
     global sentiment_api_failures, sentiment_cb_state
@@ -6954,9 +6942,6 @@ def _init_metrics() -> None:
     orders_total = get_counter("bot_orders_total", "Total orders sent")
     order_failures = get_counter("bot_order_failures", "Order submission failures")
     daily_drawdown = get_gauge("bot_daily_drawdown", "Current daily drawdown fraction")
-    signals_evaluated = get_counter(
-        "bot_signals_evaluated_total", "Total signals evaluated"
-    )
     run_all_trades_duration = get_histogram(
         "run_all_trades_duration_seconds", "Time spent in run_all_trades"
     )
@@ -13605,10 +13590,7 @@ def validate_open_orders(ctx: Any) -> None:
     audit_positions(ctx)
 
 
-# ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
-_LAST_PRICE: dict[str, float] = {}
-PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
-SENTIMENT_TTL_SEC = 600  # 10 minutes
+# ─── F. SIGNAL HELPER FUNCTIONS ───────────────────────────────────────────────
 # AI-AGENT-REF: Enhanced sentiment caching for rate limiting
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
 
@@ -13630,14 +13612,6 @@ _SENTIMENT_CIRCUIT_BREAKER: _SentimentCircuitBreakerState = {
 }  # closed, open, half-open
 # AI-AGENT-REF: Enhanced sentiment circuit breaker thresholds for better resilience
 SENTIMENT_RECOVERY_TIMEOUT = 900  # Audit: 15-minute (900s) recovery window for sentiment circuit breaker
-if SENTIMENT_BACKOFF_STRATEGY.lower() == "fixed":
-    _SENTIMENT_WAIT = wait_random(SENTIMENT_BACKOFF_BASE, SENTIMENT_BACKOFF_BASE * 2)
-else:
-    _SENTIMENT_WAIT = wait_exponential(
-        multiplier=SENTIMENT_BACKOFF_BASE,
-        min=SENTIMENT_BACKOFF_BASE,
-        max=SENTIMENT_RECOVERY_TIMEOUT,  # capped by updated recovery timeout
-    ) + wait_random(0, SENTIMENT_BACKOFF_BASE)
 
 
 _REGIME_SIGNAL_COMPONENTS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -13680,55 +13654,6 @@ def _normalize_regime_name(raw_regime: Any) -> str:
     return normalized or "sideways"
 
 
-class SignalManager:
-    def __init__(self) -> None:
-        self._cycle_trade_log: pd.DataFrame | None = None
-        self._cycle_trade_log_source: str | None = None
-        self._cycle_trade_log_cycle_id: int | None = None
-
-    def begin_cycle(self) -> None:
-        """Cache the trade log once per active trading cycle."""
-
-        cycle_id = _GLOBAL_CYCLE_ID
-        if cycle_id is None:
-            _reset_cycle_cache()
-            cycle_id = _GLOBAL_CYCLE_ID
-        if self._cycle_trade_log_cycle_id == cycle_id:
-            return
-        frame_source = _read_trade_log(TRADE_LOG_FILE, return_source=True)
-        if isinstance(frame_source, tuple):
-            frame, source = frame_source
-        else:
-            frame, source = frame_source, "local"
-        self._cycle_trade_log = frame
-        self._cycle_trade_log_source = source or "local"
-        self._cycle_trade_log_cycle_id = cycle_id
-        rows = len(frame) if frame is not None else 0
-        logger.info(
-            "TRADE_LOG_CACHED | rows=%s source=%s",
-            rows,
-            self._cycle_trade_log_source,
-        )
-
-    def get_cycle_trade_log(
-        self, columns: Sequence[str] | None = None
-    ) -> tuple[pd.DataFrame | None, str | None]:
-        """Return a shallow copy of the cached trade log for the active cycle."""
-
-        frame = self._cycle_trade_log
-        if frame is None:
-            return None, self._cycle_trade_log_source
-        if columns:
-            available = [col for col in columns if col in frame.columns]
-            if available:
-                subset = frame.loc[:, available].copy(deep=False)
-            else:
-                subset = frame.copy(deep=False)
-        else:
-            subset = frame.copy(deep=False)
-        return subset, self._cycle_trade_log_source
-
-
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
 @dataclass
 class BotContext:
@@ -13737,7 +13662,6 @@ class BotContext:
     # Separate market data client
     data_client: Any
     data_fetcher: DataFetcher
-    signal_manager: SignalManager
     trade_logger: TradeLogger
     sem: Semaphore
     volume_threshold: int
@@ -13778,7 +13702,6 @@ class BotContext:
 
 
 data_fetcher: DataFetcher | None = None
-signal_manager = SignalManager()
 # AI-AGENT-REF: Singleton initialized at import to ensure trade log availability
 _TRADE_LOGGER_SINGLETON = None
 _TRADE_LOG_FALLBACK_PATH: str | None = None
@@ -14187,7 +14110,6 @@ class LazyBotContext:
             api=trading_client,
             data_client=data_client,
             data_fetcher=fetcher,
-            signal_manager=signal_manager,
             trade_logger=get_trade_logger(),
             sem=Semaphore(4),
             volume_threshold=int(get_volume_threshold()),
@@ -14287,11 +14209,6 @@ class LazyBotContext:
     def data_fetcher(self):
         self._ensure_initialized()
         return self._context.data_fetcher
-
-    @property
-    def signal_manager(self):
-        self._ensure_initialized()
-        return self._context.signal_manager
 
     @property
     def risk_engine(self):
@@ -14752,16 +14669,6 @@ def _record_sentiment_failure(
     sentiment_cb_state.set(state_val)
     if escalate_provider_failure:
         provider_monitor.record_failure("sentiment", reason, error)
-
-
-@retry(
-    stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),
-    wait=_SENTIMENT_WAIT,
-    retry=retry_if_exception_type((requests.exceptions.RequestException,)),
-)
-def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
-    """Compatibility wrapper for the canonical sentiment implementation."""
-    return fetch_sentiment(ctx, ticker, ttl_s=SENTIMENT_TTL_SEC, session=http)
 
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
@@ -16400,143 +16307,6 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.exception("MODEL_LOAD_FAILED: %s", e)
         return None
-
-
-def update_signal_weights() -> None:
-    try:
-        import pandas as pd  # type: ignore
-    except ImportError:
-        return
-    try:
-        df = _read_trade_log(
-            TRADE_LOG_FILE,
-            usecols=[
-                "entry_price",
-                "exit_price",
-                "signal_tags",
-                "side",
-                "confidence",
-                "exit_time",
-            ],
-        )
-        if df is None:
-            logger.warning("No trades log found; skipping weight update.")
-            return
-        df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
-        direction = np.where(df["side"] == "buy", 1, -1)
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
-        df["confidence"] = df.get("confidence", 0.5)
-        df["reward"] = df["pnl"] * df["confidence"]
-        optimize_signals(df, config)
-        recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-        recent_mask = recent_cut >= (datetime.now(UTC) - timedelta(days=30))
-        df_recent = df[recent_mask]
-
-        df_tags = df.assign(tag=df["signal_tags"].str.split("+")).explode("tag")
-        df_recent_tags = df_recent.assign(
-            tag=df_recent["signal_tags"].str.split("+")
-        ).explode("tag")
-        stats_all = df_tags.groupby("tag")["reward"].agg(list).to_dict()
-        stats_recent = df_recent_tags.groupby("tag")["reward"].agg(list).to_dict()
-
-        new_weights = {}
-        for tag, pnls in stats_all.items():
-            overall_wr = float(np.mean([1 if p > 0 else 0 for p in pnls])) if pnls else 0.0
-            recent_wr = float(
-                np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])])
-                if stats_recent.get(tag)
-                else overall_wr
-            )
-            weight = 0.7 * recent_wr + 0.3 * overall_wr
-            if recent_wr < 0.4:
-                weight *= 0.5
-            new_weights[tag] = round(weight, 3)
-
-        ALPHA = 0.2
-        if os.path.exists(SIGNAL_WEIGHTS_FILE):
-            try:
-                old_df = pd.read_csv(
-                    SIGNAL_WEIGHTS_FILE,
-                    on_bad_lines="skip",
-                    engine="python",
-                    usecols=["signal_name", "weight"],
-                )
-                if old_df.empty:
-                    logger.debug(
-                        "Loaded DataFrame from %s is empty after parsing/fallback",
-                        SIGNAL_WEIGHTS_FILE,
-                    )
-                    old = {}
-                else:
-                    old = old_df.set_index("signal_name")["weight"].to_dict()
-            except ValueError as e:
-                if "usecols" in str(e).lower():
-                    logger.warning(
-                        "Signal weights CSV missing expected columns, trying fallback read"
-                    )
-                    try:
-                        # Fallback: read all columns and try to map
-                        old_df = pd.read_csv(
-                            SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python"
-                        )
-                        if "signal" in old_df.columns:
-                            # Old format with 'signal' column
-                            old = old_df.set_index("signal")["weight"].to_dict()
-                        elif "signal_name" in old_df.columns:
-                            # New format with 'signal_name' column
-                            old = old_df.set_index("signal_name")["weight"].to_dict()
-                        else:
-                            logger.error(
-                                "Signal weights CSV has unexpected format: %s",
-                                old_df.columns.tolist(),
-                            )
-                            old = {}
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ) as fallback_e:  # AI-AGENT-REF: narrow exception
-                        logger.error(
-                            "Failed to load signal weights with fallback: %s",
-                            fallback_e,
-                        )
-                        old = {}
-                else:
-                    logger.error("Failed to load signal weights: %s", e)
-                    old = {}
-        else:
-            old = {}
-        merged: dict[str, float] = {}
-        for tag, w in new_weights.items():
-            current_weight = _safe_float(w)
-            if current_weight is None:
-                current_weight = 0.0
-            historical_weight = _safe_float(old.get(tag, current_weight))
-            if historical_weight is None:
-                historical_weight = current_weight
-            merged[tag] = round((ALPHA * current_weight) + ((1 - ALPHA) * historical_weight), 3)
-        out_df = pd.DataFrame.from_dict(
-            merged, orient="index", columns=["weight"]
-        ).reset_index()
-        out_df.columns = ["signal_name", "weight"]
-        out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
-        logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.exception(f"update_signal_weights failed: {e}")
 
 
 def run_meta_learning_weight_optimizer(

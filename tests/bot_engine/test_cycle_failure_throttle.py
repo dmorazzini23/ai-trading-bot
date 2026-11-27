@@ -138,7 +138,6 @@ def _stub_runtime(monkeypatch):
         ),
         execution_engine=None,
         drawdown_circuit_breaker=None,
-        signal_manager=types.SimpleNamespace(begin_cycle=lambda: None),
         portfolio_weights={},
         data_fetcher=types.SimpleNamespace(_minute_timestamps={}),
         model=None,
@@ -163,7 +162,6 @@ def _patch_minimal_runtime(monkeypatch) -> None:
     monkeypatch.setattr(be.CFG, "log_market_fetch", False, raising=False)
     monkeypatch.setattr(be, "list_open_orders", lambda _api: [])
     monkeypatch.setattr(be, "_handle_pending_orders", lambda *_a, **_k: False)
-    monkeypatch.setattr(be, "signal_manager", types.SimpleNamespace(begin_cycle=lambda: None))
     monkeypatch.setattr(be, "_run_netting_cycle", lambda *_a, **_k: None)
     monkeypatch.setattr(be, "check_halt_flag", lambda _rt: False)
     monkeypatch.setattr(be, "_log_loop_heartbeat", lambda *_a, **_k: None)

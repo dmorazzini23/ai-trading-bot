@@ -949,10 +949,6 @@ def get_trade_cooldown_min() -> int:
     return _to_int(getattr(get_settings(), "trade_cooldown_min", 15), 15)
 
 
-def get_regime_signal_routing_enabled() -> bool:
-    return _to_bool(getattr(get_settings(), "regime_signal_routing_enabled", False), False)
-
-
 def get_regime_signal_profile() -> str:
     profile = str(getattr(get_settings(), "regime_signal_profile", "balanced") or "balanced")
     normalized = profile.strip().lower()

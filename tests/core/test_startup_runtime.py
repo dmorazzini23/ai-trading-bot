@@ -256,6 +256,7 @@ def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):
     from ai_trading.core import bot_engine
 
     scheduled_jobs: list[Callable[[], object]] = []
+    hourly_jobs: list[str] = []
     info_events: list[object] = []
     stream_thread_starts: list[str] = []
     run_calls: list[str] = []
@@ -270,6 +271,7 @@ def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):
 
         @property
         def hours(self):
+            hourly_jobs.append("hours")
             return self
 
         @property
@@ -307,7 +309,6 @@ def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):
     monkeypatch.setattr(bot_engine, "_update_risk_engine_exposure", lambda: None)
     monkeypatch.setattr(bot_engine, "_emit_periodic_metrics", lambda: None)
     monkeypatch.setattr(bot_engine, "get_env", lambda _name, default=None, cast=None: default)
-    monkeypatch.setattr(bot_engine, "update_signal_weights", lambda: None)
     monkeypatch.setattr(bot_engine, "update_bot_mode", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot_engine, "adaptive_risk_scaling", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot_engine, "get_rebalance_interval_min", lambda: 15)
@@ -330,6 +331,9 @@ def test_configure_main_runtime_jobs_is_idempotent(monkeypatch):
 
     assert first_job_count > 0
     assert len(scheduled_jobs) == first_job_count
+    # The six-hourly update_signal_weights job (the only hourly one) is gone.
+    assert hourly_jobs == []
+    assert not hasattr(bot_engine, "update_signal_weights")
     assert len(stream_thread_starts) == 1
     assert run_calls == ["run"]
     assert ctx._runtime_jobs_configured is True

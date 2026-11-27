@@ -487,9 +487,6 @@ def configure_main_runtime_jobs(ctx: Any) -> None:
         be.schedule.every(reference_reconcile_minutes).minutes.do(
             lambda: Thread(target=_run_reference_reconcile_with_guard, daemon=True).start()
         )
-        be.schedule.every(6).hours.do(
-            lambda: Thread(target=be.update_signal_weights, daemon=True).start()
-        )
         be.schedule.every(30).minutes.do(
             lambda: Thread(target=be.update_bot_mode, args=(be.state,), daemon=True).start()
         )

@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import ai_trading.core.bot_engine as bot_engine
-from ai_trading.core.bot_engine import SignalManager, BotState
 
 pd = pytest.importorskip("pandas")
 

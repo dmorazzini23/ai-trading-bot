@@ -2,7 +2,6 @@
 from __future__ import annotations
 from ai_trading.exception_family import AI_TRADING_FALLBACK_EXCEPTIONS
 
-from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ai_trading.logging import get_logger
@@ -77,23 +76,4 @@ def psar(df: Any) -> Any:
     return df
 
 
-def composite_signal_confidence(confidences: Mapping[str, float] | Iterable[float]) -> float:
-    """Combine signal confidences into a composite score.
-
-    Parameters
-    ----------
-    confidences : Mapping[str, float] | Iterable[float]
-        Mapping of signal labels to confidence values. If an iterable is
-        provided, it is converted into a mapping using enumeration.
-
-    Returns
-    -------
-    float
-        Sum of confidence values.
-    """
-    if not isinstance(confidences, Mapping):
-        confidences = {str(i): c for i, c in enumerate(confidences)}
-    return float(sum(float(c) for c in confidences.values()))
-
-
-__all__ = ["psar", "composite_signal_confidence"]
+__all__ = ["psar"]

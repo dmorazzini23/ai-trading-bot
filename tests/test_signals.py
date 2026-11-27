@@ -118,13 +118,6 @@ def test_psar_close_numeric(sample_df):
     assert "psar_long" in out.columns
 
 
-def test_composite_signal_confidence_dict_and_list():
-    conf_dict = {"a": 0.5, "b": 0.25}
-    conf_list = [0.5, 0.25]
-    assert ind.composite_signal_confidence(conf_dict) == pytest.approx(0.75)
-    assert ind.composite_signal_confidence(conf_list) == pytest.approx(0.75)
-
-
 def test_calculate_macd_accepts_dataframe_with_close_column():
     df = pd.DataFrame(
         {

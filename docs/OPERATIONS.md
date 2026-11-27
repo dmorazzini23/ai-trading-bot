@@ -608,6 +608,16 @@ switching (`update_bot_mode`) chooses only between `conservative` and
 `balanced`, as it already did in practice. This change touches no ConfigSpec
 or Settings field, so the resolved config hash is unchanged.
 
+The follow-up removal of the `SignalManager` shell and the code only it
+reached also removed the six-hourly `update_signal_weights` job (it rewrote
+`signal_weights.csv`, which nothing reads), the `bot_signals_evaluated_total`
+metric (never incremented; it no longer appears on `/metrics`) and the
+`get_regime_signal_routing_enabled` getter. With the getter gone nothing reads
+`AI_TRADING_REGIME_SIGNAL_ROUTING_ENABLED` (alias
+`REGIME_SIGNAL_ROUTING_ENABLED`); it can be deleted from `.env`. Its Settings
+field `regime_signal_routing_enabled` is kept so the configuration is
+unchanged.
+
 A failed replay/live parity gate does not stop paper or simulation evidence
 collection. Market data, model inference, decision journaling, and paper
 evaluation continue, and the replay-blocked decision source is retained as

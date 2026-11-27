@@ -65,7 +65,6 @@ class BotRuntime:
     api: Any = None
     data_client: Any = None
     data_fetcher: Any = None
-    signal_manager: Any = None
     risk_engine: Any = None
     capital_scaler: Any = None
     execution_engine: Any = None
@@ -249,7 +248,6 @@ def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any, **kwarg
     runtime.api = getattr(lazy_context, 'api', None)
     runtime.data_client = getattr(lazy_context, 'data_client', None)
     runtime.data_fetcher = getattr(lazy_context, 'data_fetcher', None)
-    runtime.signal_manager = getattr(lazy_context, 'signal_manager', None)
     runtime.risk_engine = getattr(lazy_context, 'risk_engine', None)
     runtime.capital_scaler = getattr(lazy_context, 'capital_scaler', None)
     runtime.execution_engine = getattr(lazy_context, 'execution_engine', None)
