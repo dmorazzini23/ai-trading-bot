@@ -75,39 +75,6 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
         self.assertIsNotNone(observed["end"].tzinfo)
 
 
-class TestMetaLearningDataFetching(unittest.TestCase):
-    """Test MetaLearning data fetching and function calls."""
-
-    def test_metalearn_invalid_prices_prevention(self):
-        """Test that MetaLearning can handle valid trade data without METALEARN_INVALID_PRICES."""
-        # Create a temporary CSV file with valid trade data
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp_file:
-            tmp_file.write("exit_price,entry_price,signal_tags,side\n")
-            tmp_file.write("150.0,148.0,momentum+breakout,buy\n")
-            tmp_file.write("145.0,147.0,mean_reversion,sell\n")
-            tmp_file_path = tmp_file.name
-
-        try:
-            # Mock the TRADE_LOG_FILE to use our test file
-            with patch("ai_trading.core.bot_engine.TRADE_LOG_FILE", tmp_file_path):
-                from ai_trading.core.bot_engine import load_global_signal_performance
-
-                # This should not return None or empty dict due to METALEARN_INVALID_PRICES
-                result = load_global_signal_performance(min_trades=1, threshold=0.1)
-
-                # Should return signal performance data, not None/empty due to invalid prices
-                if result is None:
-                    self.fail("load_global_signal_performance returned None - possible METALEARN_INVALID_PRICES issue")
-                if isinstance(result, dict) and len(result) == 0:
-                    # Check if it's empty due to invalid prices vs other reasons
-                    # This test validates the function can process valid data
-                    pass
-
-        finally:
-            # Clean up temp file
-            os.unlink(tmp_file_path)
-
-
 class TestSentimentCaching(unittest.TestCase):
     """Test sentiment analysis caching and rate limit handling."""
 

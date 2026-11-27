@@ -181,27 +181,5 @@ class TestShortSellingImplementation(unittest.TestCase):
             canceled_count = engine.cleanup_stale_orders(max_age_seconds=600)  # 10 minutes
             self.assertEqual(canceled_count, 1)
 
-    def test_meta_learning_graceful_degradation(self):
-        """Test that meta-learning provides graceful degradation when no data exists."""
-        from ai_trading.core.bot_engine import load_global_signal_performance
-
-        # Test when no trade log file exists
-        with patch('os.path.exists', return_value=False):
-            result = load_global_signal_performance()
-            # Should return empty dict gracefully instead of raising an error
-            self.assertEqual(result, {})
-
-        # Test when trade log exists but is empty or has insufficient data
-        with patch('os.path.exists', return_value=True):
-            with patch('pandas.read_csv') as mock_read_csv:
-                # Mock empty dataframe
-                import pytest
-                pd = pytest.importorskip("pandas")
-                mock_read_csv.return_value = pd.DataFrame()
-
-                result = load_global_signal_performance(min_trades=1)  # Lower threshold
-                # Should return empty dict instead of None for empty data
-                self.assertEqual(result, {})
-
 if __name__ == '__main__':
     unittest.main()

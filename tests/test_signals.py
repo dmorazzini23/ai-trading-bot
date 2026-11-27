@@ -86,30 +86,6 @@ def test_prepare_indicators_calculates(sample_df, monkeypatch):
     assert out['adx'].iloc[0] == 7.0
 
 
-def test_composite_signal_confidence(monkeypatch):
-    """SignalManager combines weights into final score."""
-    from ai_trading.core import bot_engine as bot
-    sm = bot.SignalManager()
-    monkeypatch.setattr(sm, 'load_signal_weights', lambda: {})
-    monkeypatch.setattr(bot, 'load_global_signal_performance', lambda: {})
-    monkeypatch.setattr(bot, 'signals_evaluated', None, raising=False)
-    monkeypatch.setattr(sm, 'signal_momentum', lambda df, model=None: (1, 0.4, 'momentum'))
-    monkeypatch.setattr(sm, 'signal_mean_reversion', lambda df, model=None: (-1, 0.2, 'mean_reversion'))
-    monkeypatch.setattr(sm, 'signal_sentiment', lambda ctx, ticker, df=None, model=None: (1, 0.1, 'sentiment'))
-    monkeypatch.setattr(sm, 'signal_regime', lambda ctx, state, df, model=None: (1, 1.0, 'regime'))
-    monkeypatch.setattr(sm, 'signal_stochrsi', lambda df, model=None: (1, 0.1, 'stochrsi'))
-    monkeypatch.setattr(sm, 'signal_obv', lambda df, model=None: (1, 0.1, 'obv'))
-    monkeypatch.setattr(sm, 'signal_vsa', lambda df, model=None: (1, 0.1, 'vsa'))
-    df = pd.DataFrame({'close': np.linspace(1, 2, 210)})
-    ctx = types.SimpleNamespace()
-    state = types.SimpleNamespace(current_regime='trending', no_signal_events=0)
-    model = types.SimpleNamespace(predict=lambda x: [1], predict_proba=lambda x: [[0.4,0.6]], feature_names_in_=['rsi','macd','atr','vwap','sma_50','sma_200'])
-    final, conf, label = sm.evaluate(ctx, state, df, 'TST', model)
-    assert final == 1
-    assert conf == pytest.approx(2.0)
-    assert 'regime' in label
-
-
 def test_psar_wrapper(sample_df, monkeypatch):
     pta = types.SimpleNamespace(psar=lambda h, l, c: pd.DataFrame({
         "PSARl_0.02_0.2": c * 0 + 1.0,

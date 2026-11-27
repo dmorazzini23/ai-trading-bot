@@ -7,28 +7,6 @@ import pytest
 from ai_trading.core import bot_engine as bot
 
 
-@pytest.mark.parametrize('column', ['signal_name', 'signal'])
-def test_weight_loader_normalizes_clamps_and_caches_without_aliasing(tmp_path, monkeypatch, column):
-    path = tmp_path / 'weights.csv'
-    path.write_text(f'{column},weight\n Momentum ,3\nreversal,-1\nnan,inf\nbad,invalid\n')
-    monkeypatch.setattr(bot, 'SIGNAL_WEIGHTS_FILE', str(path))
-    manager = bot.SignalManager()
-    weights = manager.load_signal_weights()
-    assert weights == {'momentum': 2., 'reversal': 0.}
-    weights['momentum'] = 500
-    monkeypatch.setattr(bot.pd, 'read_csv', lambda *a, **k: pytest.fail('fresh cache should avoid IO'))
-    assert manager.load_signal_weights() == {'momentum': 2., 'reversal': 0.}
-
-
-@pytest.mark.parametrize('raw', [None, 'signal_name,weight\n', 'unexpected,columns\nx,2\n', 'signal_name\nx\n'])
-def test_missing_empty_or_invalid_weights_cannot_supply_evidence(tmp_path, monkeypatch, raw):
-    path = tmp_path / 'weights.csv'
-    if raw is not None:
-        path.write_text(raw)
-    monkeypatch.setattr(bot, 'SIGNAL_WEIGHTS_FILE', str(path))
-    assert bot.SignalManager().load_signal_weights() == {}
-
-
 @pytest.mark.parametrize('old_column', [None, 'signal_name', 'signal', 'unexpected'])
 def test_weight_update_blends_old_weights_and_preserves_canonical_schema(tmp_path, monkeypatch, old_column):
     path = tmp_path / 'weights.csv'

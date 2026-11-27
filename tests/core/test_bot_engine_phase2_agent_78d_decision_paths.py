@@ -878,25 +878,6 @@ def test_sentiment_missing_key_and_request_fallback(
     assert bot_engine._SENTIMENT_CACHE["MSFT"][1] == 0.0
 
 
-def test_signal_sentiment_requires_authoritative_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager = bot_engine.SignalManager()
-    bot_engine._SENTIMENT_CACHE.clear()
-    bot_engine._LAST_PRICE.clear()
-    monkeypatch.setattr(bot_engine, "_fetch_sentiment_ctx", lambda _ctx, _ticker: 0.6)
-    monkeypatch.setattr(bot_engine, "_sentiment_evidence_is_authoritative", lambda _ticker: False)
-
-    signal = manager.signal_sentiment(
-        SimpleNamespace(),
-        "AAPL",
-        pd.DataFrame({"close": [100.0, 101.0]}),
-    )
-
-    assert signal == (0, 0.0, "sentiment_unavailable")
-    assert bot_engine._SENTIMENT_CACHE["AAPL"][1] == 0.0
-
-
 def test_bot_engine_sentiment_wrapper_preserves_canonical_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

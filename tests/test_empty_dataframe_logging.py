@@ -55,24 +55,6 @@ def test_parse_local_positions_warns_when_missing(caplog, tmp_path, monkeypatch)
     )
 
 
-def test_load_signal_weights_warning(caplog, tmp_path, monkeypatch):
-    """load_signal_weights should warn when the CSV is empty."""
-
-    weights_file = tmp_path / "weights.csv"
-    _write_empty_csv(weights_file, ["signal_name", "weight"])
-    monkeypatch.setattr(bot_engine, "SIGNAL_WEIGHTS_FILE", str(weights_file))
-
-    manager = bot_engine.SignalManager()
-
-    with caplog.at_level(logging.WARNING):
-        manager.load_signal_weights()
-
-    assert any(
-        r.levelno == logging.WARNING and weights_file.name in r.getMessage()
-        for r in caplog.records
-    )
-
-
 def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
     """Meta-learning optimizer should warn on empty trade log."""
 

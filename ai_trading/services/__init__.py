@@ -17,10 +17,7 @@ from ai_trading.services.reconciliation import (
     reconcile_position_targets,
 )
 from ai_trading.services.risk_approval import RiskApprovalService
-from ai_trading.services.signal import (
-    evaluate_signal_and_confirm,
-    generate_directional_signals,
-)
+from ai_trading.services.signal import generate_directional_signals
 
 __all__ = [
     "ControlPlaneService",
@@ -31,7 +28,6 @@ __all__ = [
     "ReconciliationService",
     "compute_portfolio_weights",
     "ensure_portfolio_weights",
-    "evaluate_signal_and_confirm",
     "generate_directional_signals",
     "require_success",
     "reconcile_position_targets",

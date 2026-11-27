@@ -26,10 +26,7 @@ from ai_trading.services.risk_approval import (
     load_policy_runtime_toggles,
     write_policy_runtime_toggles,
 )
-from ai_trading.services.signal import (
-    evaluate_signal_and_confirm,
-    generate_directional_signals,
-)
+from ai_trading.services.signal import generate_directional_signals
 
 
 def _request_snapshot(order_data: Any) -> tuple[str, float, str]:
@@ -61,28 +58,6 @@ def test_generate_directional_signals_matches_price_deltas() -> None:
     result = generate_directional_signals(df)
 
     assert result.tolist() == [0, 1, -1, 0]
-
-
-def test_evaluate_signal_and_confirm_enforces_threshold() -> None:
-    logger = _DummyLogger()
-    ctx = types.SimpleNamespace(
-        signal_manager=types.SimpleNamespace(
-            evaluate=lambda *_args: (1, 0.25, "momentum")
-        )
-    )
-
-    result = evaluate_signal_and_confirm(
-        ctx,
-        types.SimpleNamespace(),
-        "AAPL",
-        pd.DataFrame({"price": [1, 2]}),
-        model=None,
-        conf_threshold=0.5,
-        logger=logger,
-    )
-
-    assert result == (-1, 0.0, "")
-    assert logger.messages[0][0] == "SKIP_LOW_SIGNAL"
 
 
 def test_ensure_portfolio_weights_requires_canonical_weights(monkeypatch) -> None:
