@@ -1,36 +1,65 @@
 # Current handoff
 
-## November 27: unreachable `SignalManager.evaluate` path removed and deployed (`768800ff5`) (start here)
+## November 28: never-written regime field and second ring of dead signal code removed and deployed (`541e4b1bf`) (start here)
 
-- **Running bot:** `768800ff5` since 22:54:39 UTC November 27 (market closed,
-  flat at deploy), no restarts, health `healthy`. Config hash unchanged
-  (`043df350…`). Full suite on this commit: 6,888 passed, 2 skipped. The
-  packaged systemd unit is installed (owner, 04:24 UTC November 27).
-- **Deployed:** `SignalManager.evaluate`, `evaluate_signal_and_confirm`, the
+- **Running bot:** `541e4b1bf` since 03:23:16 UTC November 28 (Saturday,
+  market closed, flat at deploy), no restarts, health `healthy`, no errors in
+  the first four minutes. Config hash unchanged (`043df350…`). Full suite on
+  this commit: 6,896 passed, 2 skipped. Independent review: merge as is.
+- **Deployed, commit 1 (`d9a82fbcf`):** `BotState.current_regime` and its
+  never-called writer `check_market_regime` are gone, with `detect_regime_state`,
+  `_market_breadth` and `_regime_allows_trading`. The field had not been
+  written on the netting path since `755709bcd` (February 13, 2026). By the
+  owner's decision the recorded value is kept: non-submitted decision records
+  and the exit-pressure context still carry `"sideways"`, now from
+  `RECORDED_MARKET_REGIME_LABEL` in `ai_trading/core/constants.py`. It is a
+  fixed historical label, not a detected regime. Submitted records still carry
+  the regime signal profile (`"conservative"`). Dropping the field from
+  non-submitted records would be a separate change that needs the owner's word.
+- **Deployed, commit 2 (`541e4b1bf`):** the `SignalManager` class and its
+  context attributes, `_fetch_sentiment_ctx` and helpers, the six-hourly
+  `update_signal_weights` job, the `bot_signals_evaluated_total` metric (it is
+  no longer on `/metrics`), `get_regime_signal_routing_enabled` (the Settings
+  field stays), `meta_learning.core.load_global_signal_performance`,
+  `composite_signal_confidence`.
+- **Correction to the November 27 notes:** the six-hourly weights job and
+  `update_bot_mode` were only ever scheduled from `bot_engine.main()`, which
+  the service (`python -m ai_trading`) never runs. Neither was a running job,
+  and no reader of the frozen field affected trading.
+- **`.env`:** `AI_TRADING_REGIME_SIGNAL_ROUTING_ENABLED` removed after the
+  release check passed without it (1,607 lines). The running process started
+  with the line still present; the hash is the same either way.
+- **Rollback:** stop, `git checkout --detach 768800ff5`, restore
+  `runtime/release_spec.768800ff5.bak.json`, start.
+- **Not yet exercised:** neither this commit nor `768800ff5` has traded a
+  session. The first is Monday November 30 (14:30 UTC).
+- **Open, not investigated:** `PRETRADE_RISK_METRIC_UNAVAILABLE` (drawdown,
+  `gate_not_enforced_for_order`) logged once on November 25 and once on
+  November 27. Exit orders were not matched to a `rule_paper_sampling` label
+  in the November 27 review.
+- **Still without a caller, left in place:** `bot_engine.fetch_sentiment`,
+  `is_high_vol_regime`, `_VOL_STATS` (never written), `execution_flow.execute_entry`,
+  the legacy `bot_engine.main()` scheduler path.
+- **In progress (not merged):** `claude/earnings-trial-runner` (runner, draft
+  contract, and the decision sheet with the owner's November 26 approvals;
+  nothing registered; waits on Sharadar data).
+
+## November 27: unreachable `SignalManager.evaluate` path removed and deployed (`768800ff5`)
+
+- **Deployed 22:54:39 UTC November 27** (market closed, flat). Config hash
+  unchanged. Full suite: 6,888 passed, 2 skipped. Independent review: merge
+  as is.
+- **Removed:** `SignalManager.evaluate`, `evaluate_signal_and_confirm`, the
   per-indicator `signal_*` methods, the signal weight loader, the meta seed
   helpers and the bot_engine `load_global_signal_performance` (1,655 lines,
-  with the tests that covered only them). Independent review: merge as is.
-- **`.env`:** nine unread `AI_TRADING_META_*` weighting names removed (1,608
-  lines). `AI_TRADING_REGIME_SIGNAL_ROUTING_ENABLED` is still set and still a
-  Settings field, but nothing consumes it.
-- **Rollback:** stop, `git checkout --detach 892b254f4`, restore
-  `runtime/release_spec.892b254f4.bak.json`, start.
+  with the tests that covered only them).
+- **`.env`:** nine unread `AI_TRADING_META_*` weighting names removed.
+- **Rollback from this commit:** stop, `git checkout --detach 892b254f4`,
+  restore `runtime/release_spec.892b254f4.bak.json`, start.
 - **November 27 session on `892b254f4` (half day):** clean. Backstop armed on
   the first cycle for every new position, the paper parity flag cleared, the
   stall alert stayed quiet, the bot ended flat. The end-of-day exit was not
   exercised (positions closed on reversals).
-- **Open finding, not caused by this change:** `BotState.current_regime` is
-  frozen at `"sideways"`. Its only writer, `check_market_regime`, has no
-  caller. Live readers: `netting_symbol_prelude.py` (exit-pressure context),
-  `update_bot_mode`, telemetry. Do not delete `check_market_regime` as dead
-  code before the owner decides between wiring it back in and removing the
-  field; an investigation is in progress.
-- **Still dead, left in place for a later batch:** the `SignalManager` shell,
-  `_fetch_sentiment_ctx` and its helpers, the six-hourly `update_signal_weights`
-  job (writes a file nothing reads), the `bot_signals_evaluated_total` metric.
-- **In progress (not merged):** `claude/earnings-trial-runner` (runner, draft
-  contract, and the decision sheet with the owner's November 26 approvals;
-  nothing registered; waits on Sharadar data).
 
 ## November 26: backstop first-cycle fix and paper-only parity flag scoping deployed (`892b254f4`)
 
